@@ -1,0 +1,14 @@
+name = "HexComponentsAPI"
+uuid = "a2289db6-e3a5-4e05-9c21-8734dce2bbd4"
+authors = ["Christos Lillis <christos.lillis@gmail.com>"]
+version = "0.1.0"
+
+[deps]
+Accessors = "7d9f7c33-5ae7-4f3b-8dc6-eff91059b697"
+HexElements = "2f6a9512-4d00-40fa-a3ea-0a7372983a4b"
+HexFluids = "98a914a9-3572-461b-8ee2-d8d3de40252c"
+HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
+[compat]
+Accessors = "0.1.42"

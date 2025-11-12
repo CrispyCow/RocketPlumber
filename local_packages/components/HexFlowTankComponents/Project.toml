@@ -1,0 +1,18 @@
+name = "HexFlowTankComponents"
+uuid = "609e9a39-c1ed-488c-b014-91800377b13c"
+version = "0.1.0"
+authors = ["Christos Lillis <christos.lillis@gmail.com>"]
+
+[deps]
+Accessors = "7d9f7c33-5ae7-4f3b-8dc6-eff91059b697"
+FlowEngine = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
+HexComponentsAPI = "a2289db6-e3a5-4e05-9c21-8734dce2bbd4"
+HexElements = "2f6a9512-4d00-40fa-a3ea-0a7372983a4b"
+HexFlowBasicComponents = "32458d45-9755-4715-857d-57f99caca23f"
+HexFlowRendering = "4ae3e4b3-9148-4249-9c49-b5ebbd5f9e90"
+HexFluids = "98a914a9-3572-461b-8ee2-d8d3de40252c"
+HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"
+RenderEngine = "e4d19546-dba0-4e1b-bafa-713bf6e720c9"
+
+[compat]
+Accessors = "0.1.42"

@@ -1,0 +1,14 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Run HexFlow (3 threads)",
+            "type": "shell",
+            "command": "julia --threads=3 --project=. src/repl_launch.jl",
+            "presentation": {
+                "reveal": "always"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

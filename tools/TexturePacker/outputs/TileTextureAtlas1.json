@@ -1,0 +1,1058 @@
+{
+    "MoveArrow_arrow_head": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            128,
+            148
+        ],
+        "uv_scale": [
+            0.07692307692307693,
+            0.0889423076923077
+        ],
+        "uv_offset": [
+            0.17668269230769232,
+            0.7223557692307693
+        ],
+        "crop_offset": [
+            -64,
+            0
+        ]
+    },
+    "TurboPump1_smoke_3": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            108,
+            130
+        ],
+        "uv_scale": [
+            0.06490384615384616,
+            0.078125
+        ],
+        "uv_offset": [
+            0.5817307692307693,
+            0.7223557692307693
+        ],
+        "crop_offset": [
+            -30,
+            94
+        ]
+    },
+    "BigPipes_Edge": {
+        "original_size": [
+            225,
+            75
+        ],
+        "cropped_size": [
+            225,
+            75
+        ],
+        "uv_scale": [
+            0.13521634615384615,
+            0.045072115384615384
+        ],
+        "uv_offset": [
+            0.7584134615384616,
+            0.8149038461538461
+        ],
+        "crop_offset": [
+            0,
+            0
+        ]
+    },
+    "ElectroTransferPump_static": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            510,
+            197
+        ],
+        "uv_scale": [
+            0.30649038461538464,
+            0.11838942307692307
+        ],
+        "uv_offset": [
+            0.001201923076923077,
+            0.6015625
+        ],
+        "crop_offset": [
+            -1,
+            44.5
+        ]
+    },
+    "TurboPump1_rotor": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            137,
+            137
+        ],
+        "uv_scale": [
+            0.08233173076923077,
+            0.08233173076923077
+        ],
+        "uv_offset": [
+            0.4140625,
+            0.7223557692307693
+        ],
+        "crop_offset": [
+            -6.5,
+            -103.5
+        ]
+    },
+    "GasTank1_base": {
+        "original_size": [
+            512,
+            464
+        ],
+        "cropped_size": [
+            441,
+            464
+        ],
+        "uv_scale": [
+            0.26502403846153844,
+            0.27884615384615385
+        ],
+        "uv_offset": [
+            0.2770432692307692,
+            0.001201923076923077
+        ],
+        "crop_offset": [
+            34.5,
+            0.0
+        ]
+    },
+    "BigPipes_Edge_fluidmask": {
+        "original_size": [
+            139,
+            40
+        ],
+        "cropped_size": [
+            139,
+            40
+        ],
+        "uv_scale": [
+            0.08353365384615384,
+            0.02403846153846154
+        ],
+        "uv_offset": [
+            0.8786057692307693,
+            0.8737980769230769
+        ],
+        "crop_offset": [
+            0,
+            0
+        ]
+    },
+    "AllNozzles_TinyNozzle": {
+        "original_size": [
+            513,
+            444
+        ],
+        "cropped_size": [
+            268,
+            94
+        ],
+        "uv_scale": [
+            0.16105769230769232,
+            0.056490384615384616
+        ],
+        "uv_offset": [
+            0.001201923076923077,
+            0.8149038461538461
+        ],
+        "crop_offset": [
+            122.5,
+            0.0
+        ]
+    },
+    "ElectroTransferPump_fluidmask": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            96,
+            52
+        ],
+        "uv_scale": [
+            0.057692307692307696,
+            0.03125
+        ],
+        "uv_offset": [
+            0.18629807692307693,
+            0.8737980769230769
+        ],
+        "crop_offset": [
+            -48,
+            0
+        ]
+    },
+    "AllNozzles_SwitchedTinyNozzle_bkg": {
+        "original_size": [
+            513,
+            444
+        ],
+        "cropped_size": [
+            268,
+            94
+        ],
+        "uv_scale": [
+            0.16105769230769232,
+            0.056490384615384616
+        ],
+        "uv_offset": [
+            0.16466346153846154,
+            0.8149038461538461
+        ],
+        "crop_offset": [
+            122.5,
+            0.0
+        ]
+    },
+    "TurboPump1_vibepart": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            117,
+            334
+        ],
+        "uv_scale": [
+            0.0703125,
+            0.20072115384615385
+        ],
+        "uv_offset": [
+            0.8581730769230769,
+            0.001201923076923077
+        ],
+        "crop_offset": [
+            105.5,
+            0.0
+        ]
+    },
+    "GasTank1_fluidmask": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            148,
+            148
+        ],
+        "uv_scale": [
+            0.0889423076923077,
+            0.0889423076923077
+        ],
+        "uv_offset": [
+            0.08533653846153846,
+            0.7223557692307693
+        ],
+        "crop_offset": [
+            0,
+            0
+        ]
+    },
+    "AllNozzles_MediumNozzle": {
+        "original_size": [
+            513,
+            444
+        ],
+        "cropped_size": [
+            273,
+            212
+        ],
+        "uv_scale": [
+            0.1640625,
+            0.12740384615384615
+        ],
+        "uv_offset": [
+            0.38100961538461536,
+            0.46334134615384615
+        ],
+        "crop_offset": [
+            120,
+            0
+        ]
+    },
+    "LiquidTank1_base": {
+        "original_size": [
+            512,
+            464
+        ],
+        "cropped_size": [
+            455,
+            464
+        ],
+        "uv_scale": [
+            0.2734375,
+            0.27884615384615385
+        ],
+        "uv_offset": [
+            0.001201923076923077,
+            0.001201923076923077
+        ],
+        "crop_offset": [
+            27.5,
+            0.0
+        ]
+    },
+    "test_stalled": {
+        "original_size": [
+            500,
+            433
+        ],
+        "cropped_size": [
+            345,
+            200
+        ],
+        "uv_scale": [
+            0.20733173076923078,
+            0.1201923076923077
+        ],
+        "uv_offset": [
+            0.5474759615384616,
+            0.46334134615384615
+        ],
+        "crop_offset": [
+            2.5,
+            -17.5
+        ]
+    },
+    "DecompChamber1_frame": {
+        "original_size": [
+            513,
+            444
+        ],
+        "cropped_size": [
+            512,
+            226
+        ],
+        "uv_scale": [
+            0.3076923076923077,
+            0.13581730769230768
+        ],
+        "uv_offset": [
+            0.001201923076923077,
+            0.46334134615384615
+        ],
+        "crop_offset": [
+            -0.5,
+            0.0
+        ]
+    },
+    "DecompChamber1_liquid_fluidmask_2": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            159,
+            171
+        ],
+        "uv_scale": [
+            0.09555288461538461,
+            0.10276442307692307
+        ],
+        "uv_offset": [
+            0.4104567307692308,
+            0.6015625
+        ],
+        "crop_offset": [
+            -17.5,
+            -6.5
+        ]
+    },
+    "ElectroPump1_vibe": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            94,
+            260
+        ],
+        "uv_scale": [
+            0.056490384615384616,
+            0.15625
+        ],
+        "uv_offset": [
+            0.3112980769230769,
+            0.2824519230769231
+        ],
+        "crop_offset": [
+            102,
+            0
+        ]
+    },
+    "DecompChamber1_liquid_fluidmask_1": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            136,
+            150
+        ],
+        "uv_scale": [
+            0.08173076923076923,
+            0.09014423076923077
+        ],
+        "uv_offset": [
+            0.001201923076923077,
+            0.7223557692307693
+        ],
+        "crop_offset": [
+            -6,
+            0
+        ]
+    },
+    "ElectroPump1_chargemask": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            150,
+            60
+        ],
+        "uv_scale": [
+            0.09014423076923077,
+            0.036057692307692304
+        ],
+        "uv_offset": [
+            0.001201923076923077,
+            0.8737980769230769
+        ],
+        "crop_offset": [
+            -38,
+            73
+        ]
+    },
+    "AllNozzles_SmallNozzle": {
+        "original_size": [
+            513,
+            444
+        ],
+        "cropped_size": [
+            274,
+            155
+        ],
+        "uv_scale": [
+            0.16466346153846154,
+            0.09314903846153846
+        ],
+        "uv_offset": [
+            0.6778846153846154,
+            0.6015625
+        ],
+        "crop_offset": [
+            119.5,
+            -0.5
+        ]
+    },
+    "TurboPump1_smoke_1": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            117,
+            142
+        ],
+        "uv_scale": [
+            0.0703125,
+            0.08533653846153846
+        ],
+        "uv_offset": [
+            0.25600961538461536,
+            0.7223557692307693
+        ],
+        "crop_offset": [
+            -35.5,
+            96.0
+        ]
+    },
+    "MoveArrow_dash": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            64,
+            32
+        ],
+        "uv_scale": [
+            0.038461538461538464,
+            0.019230769230769232
+        ],
+        "uv_offset": [
+            0.001201923076923077,
+            0.9122596153846154
+        ],
+        "crop_offset": [
+            0,
+            0
+        ]
+    },
+    "ShipSurface_basic": {
+        "original_size": [
+            518,
+            449
+        ],
+        "cropped_size": [
+            518,
+            449
+        ],
+        "uv_scale": [
+            0.3112980769230769,
+            0.2698317307692308
+        ],
+        "uv_offset": [
+            0.5444711538461539,
+            0.001201923076923077
+        ],
+        "crop_offset": [
+            0,
+            0
+        ]
+    },
+    "BigAdjustableValve_fluidmask": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            104,
+            90
+        ],
+        "uv_scale": [
+            0.0625,
+            0.054086538461538464
+        ],
+        "uv_offset": [
+            0.328125,
+            0.8149038461538461
+        ],
+        "crop_offset": [
+            0,
+            0
+        ]
+    },
+    "BigPipes_Tile_fluidmask": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            373,
+            40
+        ],
+        "uv_scale": [
+            0.22415865384615385,
+            0.02403846153846154
+        ],
+        "uv_offset": [
+            0.6520432692307693,
+            0.8737980769230769
+        ],
+        "crop_offset": [
+            -2.5,
+            0.0
+        ]
+    },
+    "MoveArrow_arrow_start": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            128,
+            128
+        ],
+        "uv_scale": [
+            0.07692307692307693,
+            0.07692307692307693
+        ],
+        "uv_offset": [
+            0.6490384615384616,
+            0.7223557692307693
+        ],
+        "crop_offset": [
+            0,
+            0
+        ]
+    },
+    "Node_frame": {
+        "original_size": [
+            105,
+            121
+        ],
+        "cropped_size": [
+            105,
+            121
+        ],
+        "uv_scale": [
+            0.06310096153846154,
+            0.07271634615384616
+        ],
+        "uv_offset": [
+            0.7283653846153846,
+            0.7223557692307693
+        ],
+        "crop_offset": [
+            0,
+            0
+        ]
+    },
+    "ElectroTransferPump_rotor": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            111,
+            112
+        ],
+        "uv_scale": [
+            0.06670673076923077,
+            0.0673076923076923
+        ],
+        "uv_offset": [
+            0.7938701923076923,
+            0.7223557692307693
+        ],
+        "crop_offset": [
+            75.5,
+            0.0
+        ]
+    },
+    "LiquidTank1_fluidmask": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            220,
+            100
+        ],
+        "uv_scale": [
+            0.13221153846153846,
+            0.06009615384615385
+        ],
+        "uv_offset": [
+            0.8629807692307693,
+            0.7223557692307693
+        ],
+        "crop_offset": [
+            0,
+            0
+        ]
+    },
+    "BigAdjustableValve_static": {
+        "original_size": [
+            514,
+            444
+        ],
+        "cropped_size": [
+            514,
+            241
+        ],
+        "uv_scale": [
+            0.3088942307692308,
+            0.14483173076923078
+        ],
+        "uv_offset": [
+            0.6808894230769231,
+            0.2824519230769231
+        ],
+        "crop_offset": [
+            0,
+            -36.5
+        ]
+    },
+    "ScrapPipes_Edge": {
+        "original_size": [
+            203,
+            43
+        ],
+        "cropped_size": [
+            203,
+            43
+        ],
+        "uv_scale": [
+            0.1219951923076923,
+            0.025841346153846152
+        ],
+        "uv_offset": [
+            0.5276442307692307,
+            0.8737980769230769
+        ],
+        "crop_offset": [
+            0,
+            0
+        ]
+    },
+    "AllNozzles_SwitchedTinyNozzle_valve": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            36,
+            69
+        ],
+        "uv_scale": [
+            0.021634615384615384,
+            0.04146634615384615
+        ],
+        "uv_offset": [
+            0.8960336538461539,
+            0.8149038461538461
+        ],
+        "crop_offset": [
+            163,
+            -20.5
+        ]
+    },
+    "BigAdjustableValve_setpointarrows": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            140,
+            20
+        ],
+        "uv_scale": [
+            0.08413461538461539,
+            0.01201923076923077
+        ],
+        "uv_offset": [
+            0.06430288461538461,
+            0.9122596153846154
+        ],
+        "crop_offset": [
+            0,
+            49
+        ]
+    },
+    "TurboPump1_fluidmask": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            134,
+            134
+        ],
+        "uv_scale": [
+            0.08052884615384616,
+            0.08052884615384616
+        ],
+        "uv_offset": [
+            0.4987980769230769,
+            0.7223557692307693
+        ],
+        "crop_offset": [
+            -7,
+            -102
+        ]
+    },
+    "BigAdjustableValve_valvebody": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            112,
+            221
+        ],
+        "uv_scale": [
+            0.0673076923076923,
+            0.1328125
+        ],
+        "uv_offset": [
+            0.3112980769230769,
+            0.46334134615384615
+        ],
+        "crop_offset": [
+            0,
+            59.5
+        ]
+    },
+    "ScrapPipes_Tile": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            464,
+            43
+        ],
+        "uv_scale": [
+            0.27884615384615385,
+            0.025841346153846152
+        ],
+        "uv_offset": [
+            0.24639423076923078,
+            0.8737980769230769
+        ],
+        "crop_offset": [
+            0,
+            -0.5
+        ]
+    },
+    "ElectroTransferPump_chargemask": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            150,
+            60
+        ],
+        "uv_scale": [
+            0.09014423076923077,
+            0.036057692307692304
+        ],
+        "uv_offset": [
+            0.09375,
+            0.8737980769230769
+        ],
+        "crop_offset": [
+            8,
+            93
+        ]
+    },
+    "DecompChamber1_liquid_fluidmask_4": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            133,
+            169
+        ],
+        "uv_scale": [
+            0.07992788461538461,
+            0.1015625
+        ],
+        "uv_offset": [
+            0.5084134615384616,
+            0.6015625
+        ],
+        "crop_offset": [
+            -4.5,
+            3.5
+        ]
+    },
+    "TurboPump1_smoke_2": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            141,
+            160
+        ],
+        "uv_scale": [
+            0.08473557692307693,
+            0.09615384615384616
+        ],
+        "uv_offset": [
+            0.5907451923076923,
+            0.6015625
+        ],
+        "crop_offset": [
+            -33.5,
+            106.0
+        ]
+    },
+    "DecompChamber1_gas_fluidmask": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            159,
+            150
+        ],
+        "uv_scale": [
+            0.09555288461538461,
+            0.09014423076923077
+        ],
+        "uv_offset": [
+            0.8449519230769231,
+            0.6015625
+        ],
+        "crop_offset": [
+            -17.5,
+            0.0
+        ]
+    },
+    "ElectroPump1_rotor": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            138,
+            138
+        ],
+        "uv_scale": [
+            0.0829326923076923,
+            0.0829326923076923
+        ],
+        "uv_offset": [
+            0.32872596153846156,
+            0.7223557692307693
+        ],
+        "crop_offset": [
+            -28,
+            -70
+        ]
+    },
+    "ElectroPump1_static": {
+        "original_size": [
+            513,
+            444
+        ],
+        "cropped_size": [
+            513,
+            247
+        ],
+        "uv_scale": [
+            0.3082932692307692,
+            0.1484375
+        ],
+        "uv_offset": [
+            0.3701923076923077,
+            0.2824519230769231
+        ],
+        "crop_offset": [
+            0,
+            -0.5
+        ]
+    },
+    "TurboPump1_static": {
+        "original_size": [
+            512,
+            445
+        ],
+        "cropped_size": [
+            512,
+            297
+        ],
+        "uv_scale": [
+            0.3076923076923077,
+            0.17848557692307693
+        ],
+        "uv_offset": [
+            0.001201923076923077,
+            0.2824519230769231
+        ],
+        "crop_offset": [
+            0,
+            -74
+        ]
+    },
+    "DecompChamber1_liquid_fluidmask_3": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            163,
+            180
+        ],
+        "uv_scale": [
+            0.09795673076923077,
+            0.10817307692307693
+        ],
+        "uv_offset": [
+            0.31009615384615385,
+            0.6015625
+        ],
+        "crop_offset": [
+            -19.5,
+            -3.0
+        ]
+    },
+    "AllNozzles_SwitchedTinyNozzle_fluidmask": {
+        "original_size": [
+            512,
+            444
+        ],
+        "cropped_size": [
+            33,
+            28
+        ],
+        "uv_scale": [
+            0.019831730769230768,
+            0.016826923076923076
+        ],
+        "uv_offset": [
+            0.042067307692307696,
+            0.9122596153846154
+        ],
+        "crop_offset": [
+            163.5,
+            0.0
+        ]
+    },
+    "BigPipes_Tile": {
+        "original_size": [
+            519,
+            444
+        ],
+        "cropped_size": [
+            513,
+            76
+        ],
+        "uv_scale": [
+            0.3082932692307692,
+            0.04567307692307692
+        ],
+        "uv_offset": [
+            0.44771634615384615,
+            0.8149038461538461
+        ],
+        "crop_offset": [
+            -3,
+            0
+        ]
+    },
+    "Node_pressuremask": {
+        "original_size": [
+            87,
+            87
+        ],
+        "cropped_size": [
+            87,
+            87
+        ],
+        "uv_scale": [
+            0.05228365384615385,
+            0.05228365384615385
+        ],
+        "uv_offset": [
+            0.39302884615384615,
+            0.8149038461538461
+        ],
+        "crop_offset": [
+            0,
+            0
+        ]
+    }
+}

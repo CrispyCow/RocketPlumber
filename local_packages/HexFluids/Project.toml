@@ -1,0 +1,7 @@
+name = "HexFluids"
+uuid = "98a914a9-3572-461b-8ee2-d8d3de40252c"
+authors = ["Christos Lillis <christos.lillis@gmail.com>"]
+version = "0.1.0"
+
+[deps]
+HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"

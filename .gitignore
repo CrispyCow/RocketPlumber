@@ -1,0 +1,10 @@
+# This gets created by CImGui but is not required across instances
+imgui.ini
+
+# Build outputs (timestamped build directories)
+build/outputs/
+
+# Artifacts
+# Note: Keep Artifacts.toml tracked (it defines artifact bindings)
+!local_packages/HexFlowRendering/Artifacts.toml
+

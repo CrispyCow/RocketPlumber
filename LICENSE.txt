@@ -1,0 +1,15 @@
+Copyright (c) 2025 Christos Lillis. All Rights Reserved.
+
+PERSONAL USE LICENSE
+
+Permission is granted to download, use, and modify this software for 
+personal, non-commercial purposes only. You may study, experiment with, 
+and make changes to the source code for your own use.
+
+You may NOT distribute this software or any modifications thereof in any
+form, including but not limited to: source code, compiled/packaged executables, 
+or derivative works.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, 
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.

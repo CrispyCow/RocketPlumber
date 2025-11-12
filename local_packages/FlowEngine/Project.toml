@@ -1,0 +1,16 @@
+name = "FlowEngine"
+uuid = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
+authors = ["Christos Lillis <christos.lillis@gmail.com>"]
+version = "0.1.0"
+
+[deps]
+HexComponentsAPI = "a2289db6-e3a5-4e05-9c21-8734dce2bbd4"
+HexElements = "2f6a9512-4d00-40fa-a3ea-0a7372983a4b"
+HexFluids = "98a914a9-3572-461b-8ee2-d8d3de40252c"
+HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+SmallCollections = "2b935e18-93d6-40ac-ae34-fe54c09f00e1"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+
+[compat]
+SmallCollections = "0.4.1"

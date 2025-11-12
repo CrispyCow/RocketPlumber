@@ -1,0 +1,13 @@
+name = "HexFlowControl"
+uuid = "c4f7b3e2-9a5d-4c8e-b1f2-3e8d9a5c7f1b"
+version = "0.1.0"
+authors = ["Christos Lillis <christos.lillis@gmail.com>"]
+
+[deps]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+GLFW = "f7f18e0c-5ee9-5ccd-a5bf-e8befd85ed98"
+HexComponentsAPI = "a2289db6-e3a5-4e05-9c21-8734dce2bbd4"
+HexElements = "2f6a9512-4d00-40fa-a3ea-0a7372983a4b"
+HexFluids = "98a914a9-3572-461b-8ee2-d8d3de40252c"
+HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"

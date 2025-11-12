@@ -1,0 +1,15 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "julia",
+            "name": "Launch HexFlow REPL (JULIA_NUM_THREADS=3)",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/repl_launch.jl",
+            "env": {
+                "JULIA_NUM_THREADS": "3"
+            },
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

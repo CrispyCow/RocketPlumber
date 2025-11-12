@@ -1,0 +1,19 @@
+{
+    "customLocalFormatters.formatters": [
+        {
+            "command": "julia --project=@runic --startup-file=no -e \"using Runic; exit(Runic.main(ARGS))\"",
+            "languages": ["julia"]
+        }
+    ],
+
+    // Ensure the integrated terminal (and VS Code-launched tasks) default to 3 Julia threads
+    "terminal.integrated.env.windows": {
+        "JULIA_NUM_THREADS": "3"
+    },
+    "terminal.integrated.env.linux": {
+        "JULIA_NUM_THREADS": "3"
+    },
+    "terminal.integrated.env.osx": {
+        "JULIA_NUM_THREADS": "3"
+    }
+}

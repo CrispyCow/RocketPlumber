@@ -1,0 +1,11 @@
+name = "HexElements"
+uuid = "2f6a9512-4d00-40fa-a3ea-0a7372983a4b"
+version = "0.1.0"
+authors = ["Christos Lillis <christos.lillis@gmail.com>"]
+
+[deps]
+HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"
+StructEquality = "6ec83bb0-ed9f-11e9-3b4c-2b04cb4e219c"
+
+[compat]
+StructEquality = "2.1.0"
