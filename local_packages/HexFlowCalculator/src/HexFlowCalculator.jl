@@ -14,6 +14,7 @@ export FlowCalculatorSnapshot, FlowCalculatorSharedState, FlowCalculatorIPC, Tim
 export CommandStatus, APPLIED, REJECTED, QUEUED_FAILED
 export MapEditCommand, SetTileCommand, SetPipeBehaviorCommand, MoveCommand
 export DeleteAtCommand, ClickTileCommand, AddShipSurfaceCommand, RemoveShipSurfaceCommand
+export MapOverrideCommand
 export CommandQueue
 
 # Function exports - Setup
@@ -24,6 +25,7 @@ export create_command_queue
 export create_set_tile_command, create_set_pipe_behavior_command, create_move_command
 export create_delete_command, create_click_tile_command
 export create_add_ship_surface_command, create_remove_ship_surface_command
+export create_map_override_command
 export try_enqueue_command!
 
 # Function exports - Main loop
@@ -171,6 +173,14 @@ end
     response_channel::Union{Nothing, Channel{CommandStatus}}
 end
 @struct_hash_equal RemoveShipSurfaceCommand
+
+"""Replace the entire GameMap with a provided GameMap"""
+@kwdef struct MapOverrideCommand <: MapEditCommand
+    id::UInt64
+    new_map::GameMap
+    response_channel::Union{Nothing, Channel{CommandStatus}}
+end
+@struct_hash_equal MapOverrideCommand
 
 # ===============================================================
 # Thread-Safe Snapshot Storage
@@ -467,6 +477,35 @@ function apply_mapedit_command!(
     return nothing
 end
 
+function apply_mapedit_command!(
+        gamemap::GameMap,
+        command::MapOverrideCommand,
+        threadsafe_console_push::Function
+    )
+    # Deepcopy the provided map to avoid sharing mutable state
+    newmap = deepcopy(command.new_map)
+
+    # Replace contents of existing gamemap by clearing and copying entries
+    empty!(gamemap.tiles)
+    empty!(gamemap.pipe_behaviors)
+    empty!(gamemap.ship_surface)
+
+    for (coord, comp) in newmap.tiles
+        gamemap.tiles[coord] = deepcopy(comp)
+    end
+
+    for (edge, pipebehav) in newmap.pipe_behaviors
+        gamemap.pipe_behaviors[edge] = deepcopy(pipebehav)
+    end
+
+    for coord in newmap.ship_surface
+        push!(gamemap.ship_surface, coord)
+    end
+
+    threadsafe_console_push("Map override applied with $(length(newmap.ship_surface)) surfaces, $(length(newmap.tiles)) tiles, and $(length(newmap.pipe_behaviors)) pipes")
+    return nothing
+end
+
 """
 Process a single map edit command using sandbox validation.
 Validates changes on a copy before applying to the real gamemap.
@@ -637,6 +676,19 @@ function create_remove_ship_surface_command(
     return RemoveShipSurfaceCommand(
         id = cq.next_command_id(),
         coord = coord,
+        response_channel = response_channel
+    )
+end
+
+"""Create a MapOverrideCommand to replace the current map with `new_map`."""
+function create_map_override_command(
+        cq::CommandQueue,
+        new_map::GameMap;
+        response_channel::Union{Nothing, Channel} = nothing
+    )::MapOverrideCommand
+    return MapOverrideCommand(
+        id = cq.next_command_id(),
+        new_map = deepcopy(new_map),
         response_channel = response_channel
     )
 end

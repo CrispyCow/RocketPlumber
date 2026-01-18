@@ -256,68 +256,66 @@ end
 # ===============================================================
 
 "Returns tiles which touch to the input vertex, CCW from the Q_POS axis."
-function get_tiles(vertex::VertexCoord)::Vector{TileCoord}
-    other_tiles = Vector{TileCoord}(undef, 3)
+function get_tiles(vertex::VertexCoord)::NTuple{3, TileCoord}
     proper_vertex = to_proper(vertex)
     base_tile = proper_vertex.tile
 
-
     if proper_vertex.dir == Q_POS
-        other_tiles[1] = base_tile + TileCoord(1, -1)
-        other_tiles[2] = base_tile
-        other_tiles[3] = base_tile + TileCoord(1, 0)
+        neighbors = (
+            base_tile + TileCoord(1, -1),
+            base_tile,
+            base_tile + TileCoord(1, 0),
+        )
     elseif proper_vertex.dir == Q_NEG
-        other_tiles[1] = base_tile
-        other_tiles[2] = base_tile + TileCoord(-1, 0)
-        other_tiles[3] = base_tile + TileCoord(-1, 1)
+        neighbors = (
+            base_tile,
+            base_tile + TileCoord(-1, 0),
+            base_tile + TileCoord(-1, 1),
+        )
     else
         error("to_proper returned an improper vertex in get_tiles")
     end
 
-    return other_tiles
+    return neighbors
 end
 
 "Returns vertices able to be connected by edges to the input vertex."
-function get_vertexes(vertex::VertexCoord)::Vector{VertexCoord}
-    other_vertexes = Vector{VertexCoord}(undef, 3)
+function get_vertexes(vertex::VertexCoord)::NTuple{3, VertexCoord}
     proper_vertex = to_proper(vertex)
 
     if proper_vertex.dir == Q_POS
-        other_vertexes[1] = VertexCoord(proper_vertex.tile + TileCoord(2, -1), Q_NEG)
-        other_vertexes[2] = VertexCoord(proper_vertex.tile + TileCoord(1, -1), Q_NEG)
-        other_vertexes[3] = VertexCoord(proper_vertex.tile + TileCoord(1, 0), Q_NEG)
+        neighbors = (
+            VertexCoord(proper_vertex.tile + TileCoord(2, -1), Q_NEG),
+            VertexCoord(proper_vertex.tile + TileCoord(1, -1), Q_NEG),
+            VertexCoord(proper_vertex.tile + TileCoord(1, 0), Q_NEG),
+        )
     elseif proper_vertex.dir == Q_NEG
-        other_vertexes[1] = VertexCoord(proper_vertex.tile - TileCoord(2, -1), Q_POS)
-        other_vertexes[2] = VertexCoord(proper_vertex.tile - TileCoord(1, -1), Q_POS)
-        other_vertexes[3] = VertexCoord(proper_vertex.tile - TileCoord(1, 0), Q_POS)
+        neighbors = (
+            VertexCoord(proper_vertex.tile - TileCoord(2, -1), Q_POS),
+            VertexCoord(proper_vertex.tile - TileCoord(1, -1), Q_POS),
+            VertexCoord(proper_vertex.tile - TileCoord(1, 0), Q_POS),
+        )
     else
         error("to_proper returned an improper vertex in get_vertexes")
     end
 
-    return other_vertexes
+    return neighbors
 end
 
 "Returns adjacent edges for a tile in proper form."
-function get_edges(tile::TileCoord)::Vector{EdgeCoord}
-    edges = Vector{EdgeCoord}(undef, 6)
-
-    for (i, _) in enumerate(edges)
+function get_edges(tile::TileCoord)::NTuple{6, EdgeCoord}
+    return ntuple(i -> begin
         V1 = to_proper(VertexCoord(tile, HexAxis(i - 1)))
         V2 = to_proper(VertexCoord(tile, HexAxis(i % length(instances(HexAxis)))))
-        edges[i] = to_proper(EdgeCoord(V1, V2))
-    end
-
-    return edges
+        to_proper(EdgeCoord(V1, V2))
+    end, 6)
 end
 
 "Returns connected edges for a vertex in proper form."
-function get_edges(vertex::VertexCoord)::Vector{EdgeCoord}
-    edges = Vector{EdgeCoord}(undef, 3)
+function get_edges(vertex::VertexCoord)::NTuple{3, EdgeCoord}
     proper_vertex = to_proper(vertex)
-    other_vertexes::Vector{VertexCoord} = get_vertexes(proper_vertex)
-
-    edges = map(other_vertex -> to_proper(EdgeCoord(proper_vertex, other_vertex)), other_vertexes)
-    return edges
+    other_vertexes = get_vertexes(proper_vertex)
+    return ntuple(i -> to_proper(EdgeCoord(proper_vertex, other_vertexes[i])), 3)
 end
 
 """
@@ -639,6 +637,15 @@ end
 "Equality comparison between AxialCoord and TileCoord."
 function Base.:(==)(a::AxialCoord, b::TileCoord)
     return a.q == b.q && a.r == b.r
+end
+
+# Componentwise approximate comparison for coordinate types
+function Base.isapprox(a::CartesianCoord, b::CartesianCoord; kwargs...)
+    return isapprox(a.x, b.x; kwargs...) && isapprox(a.y, b.y; kwargs...)
+end
+
+function Base.isapprox(a::AxialCoord, b::AxialCoord; kwargs...)
+    return isapprox(a.q, b.q; kwargs...) && isapprox(a.r, b.r; kwargs...)
 end
 
 

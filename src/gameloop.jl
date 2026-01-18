@@ -161,6 +161,7 @@ function ui_rendering!(
         ui_toolbar_render!(inputstate, GLFW.GetWindowSize(window), flowcalc_ipc.console_see)
         ui_propertybox_render!(inputstate, snapshot.gamemap, snapshot.derived, snapshot.mna, GLFW.GetWindowSize(window))
         ui_pause_menu_render!(inputstate, snapshot, window)
+        ui_dev_utils_menu_render!(inputstate, flowcalc_ipc, GLFW.GetWindowSize(window))
 
         # Render hint box if hint data exists and is visible
         if !isnothing(tutorial_hint) && tutorial_hint.is_visible
@@ -708,6 +709,128 @@ function ui_pause_menu_render!(inputstate::InputState, snapshot::FlowCalculatorS
     return nothing
 end
 
+function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}})
+    # Guard clause to check if dev utils menu is active
+    if !inputstate.dev_utils_menu_active
+        return nothing
+    end
+
+    win_float = to_float(winsize)
+    ui_window("Developer Utilities", (win_float.width - propertyboxwidth, 0.0), (propertyboxwidth, win_float.height - toolbarheight))
+
+    button_width = propertyboxwidth - 50.0
+    button_height = 20.0
+
+    if (CImGui.CollapsingHeader("Tools"))
+        if CImGui.Button("Clear Map", (button_width, button_height))
+            @info "Clearing map..."
+            new_map = GameMap()
+            # Create MapOverrideCommand and enqueue it
+            cmd = create_map_override_command(flowcalc_ipc.command_queue, deepcopy(new_map))
+            try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+        end
+    end
+
+    if (CImGui.CollapsingHeader("Proc Gen"))
+        uint32_one::UInt32 = 1
+        int64_one::Int64 = 1
+
+        # shared config inputs
+        seed::UInt32 = haskey(inputstate.gui_inputs, :proc_gen_seed) ? inputstate.gui_inputs[:proc_gen_seed] : 999
+        @cref CImGui.InputScalar("Random Seed", CImGui.ImGuiDataType_U32, &seed, &uint32_one)
+        inputstate.gui_inputs[:proc_gen_seed] = seed
+
+        if (CImGui.TreeNode("Random Walk Surface Gen"))
+
+            # local config inputs
+            steps::Int64 = haskey(inputstate.gui_inputs, :surface_walk_steps) ? inputstate.gui_inputs[:surface_walk_steps] : 3
+            @cref CImGui.InputScalar("Walk Steps", CImGui.ImGuiDataType_S64, &steps, &int64_one)
+            inputstate.gui_inputs[:surface_walk_steps] = steps
+
+            stacks::Int64 = haskey(inputstate.gui_inputs, :surface_walk_stacks) ? inputstate.gui_inputs[:surface_walk_stacks] : 20
+            @cref CImGui.InputScalar("Walk stacks", CImGui.ImGuiDataType_S64, &stacks, &int64_one)
+            inputstate.gui_inputs[:surface_walk_stacks] = stacks
+
+            # surface creation
+            CImGui.Separator()
+            if CImGui.Button("Create Surface", (button_width, button_height))
+                @info "Creating Surface..."
+                new_map = GameMap()
+                stacked_random_tile_walk!(new_map.ship_surface, TileCoord(0, 0), steps, stacks, seed)
+
+                cmd = create_map_override_command(flowcalc_ipc.command_queue, deepcopy(new_map))
+                try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+            end
+            CImGui.TreePop()
+        end
+
+        if (CImGui.TreeNode("Place Components"))
+            tileset_names::Vector{String} = [
+                "Simple Cold Gas",
+                "Electric Monoprop",
+                "Turbine Monoprop",
+            ]
+            tilesets::Vector{ShipComponentSet} = [
+                shipset_simple_cold_gas,
+                shipset_electric_monoprop,
+                shipset_turbine_monoprop,
+            ]
+
+            tileset_index::Int32 = haskey(inputstate.gui_inputs, :tileset_index) ? inputstate.gui_inputs[:tileset_index] : 0
+            @cref CImGui.ListBox("Tileset", &tileset_index, tileset_names)
+            inputstate.gui_inputs[:tileset_index] = tileset_index
+
+            if CImGui.Button("Place Tileset")
+                tileset_index_oneindexed = tileset_index + 1
+                @info "Placing Components from $(tileset_names[tileset_index_oneindexed])..."
+                tilesetmap::GameMap = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
+                place_shipset!(tilesetmap, tilesets[tileset_index_oneindexed], seed)
+
+                cmd = create_map_override_command(flowcalc_ipc.command_queue, deepcopy(tilesetmap))
+                try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+            end
+            CImGui.TreePop()
+        end
+
+        if (CImGui.TreeNode("Place Big Pipes"))
+            # local config inputs
+            big_pipe_density::Float64 = haskey(inputstate.gui_inputs, :big_pipe_density) ? inputstate.gui_inputs[:big_pipe_density] : 0.05
+            @cref CImGui.InputDouble("Pipe Density", &big_pipe_density, 0.01, 0.1, "%.3f")
+            inputstate.gui_inputs[:big_pipe_density] = big_pipe_density
+
+            if CImGui.Button("Place Big Pipes", (button_width, button_height))
+                @info "Placing Big Pipes..."
+                bigpipemap::GameMap = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
+                place_random_pipes!(bigpipemap, BigPipeBehav(), seed; pipe_density = big_pipe_density)
+
+                cmd = create_map_override_command(flowcalc_ipc.command_queue, deepcopy(bigpipemap))
+                try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+            end
+            CImGui.TreePop()
+        end
+
+        if (CImGui.TreeNode("Place Scrap Pipes"))
+            # local config inputs
+            scrap_pipe_density::Float64 = haskey(inputstate.gui_inputs, :scrap_pipe_density) ? inputstate.gui_inputs[:scrap_pipe_density] : 0.05
+            @cref CImGui.InputDouble("Pipe Density", &scrap_pipe_density, 0.01, 0.1, "%.3f")
+            inputstate.gui_inputs[:scrap_pipe_density] = scrap_pipe_density
+
+            if CImGui.Button("Place Scrap Pipes", (button_width, button_height))
+                @info "Placing Scrap Pipes..."
+                scrappipemap::GameMap = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
+                place_random_pipes!(scrappipemap, ScrapPipeBehav(), seed; pipe_density = scrap_pipe_density)
+
+                cmd = create_map_override_command(flowcalc_ipc.command_queue, deepcopy(scrappipemap))
+                try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+            end
+            CImGui.TreePop()
+        end
+    end
+
+    CImGui.End()
+    return nothing
+end
+
 """
 Renders the hint/tutorial popup window.
 Displays hints with navigation buttons and completion tracking.
@@ -827,8 +950,8 @@ function enter_gameloop(window::GLFW.Window; map_source::Union{Nothing, String, 
     glClearColor(0.114, 0.161, 0.318, 1.0) # Set background colour to space cadet blue
 
     ui_loadingscreen_render(window, "Starting FlowCalculator")
-    flowcalc_task = Threads.@spawn flowcalculator_loop!(g_flowcalc_ipc, deepcopy(initial_snapshot))
-    @info "FlowCalculator task spawned: $(flowcalc_task)"
+    g_flowcalc_task = Threads.@spawn flowcalculator_loop!(g_flowcalc_ipc, deepcopy(initial_snapshot))
+    @info "FlowCalculator task spawned: $(g_flowcalc_task)"
 
     #= Main Loop =#
     ui_loadingscreen_render(window, "Entering main loop")

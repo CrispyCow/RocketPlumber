@@ -1,0 +1,22 @@
+name = "HexFlowProcGen"
+uuid = "46cebafd-6e5b-4504-9515-23fc742129ca"
+version = "0.1.0"
+authors = ["Christos Lillis <christos.lillis@gmail.com>"]
+
+[deps]
+FlowEngine = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
+HexComponentsAPI = "a2289db6-e3a5-4e05-9c21-8734dce2bbd4"
+HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+SquirrelNoise = "2e7baeb9-be7b-428c-bdac-8e70268c90fc"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[compat]
+Random = "1.11.0"
+Test = "1.11.0"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

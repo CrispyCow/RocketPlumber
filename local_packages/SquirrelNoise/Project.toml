@@ -1,0 +1,12 @@
+name = "SquirrelNoise"
+uuid = "2e7baeb9-be7b-428c-bdac-8e70268c90fc"
+version = "0.1.0"
+authors = ["Christos Lillis <christos.lillis@gmail.com>"]
+
+[deps]
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[compat]
+Random = "1.11.0"
+Test = "1.11.0"

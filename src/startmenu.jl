@@ -2,16 +2,20 @@
 # Start Menu UI Helpers
 # ===============================================================
 
+@kwdef mutable struct StartMenuState
+    action::Symbol = :none
+end
+
 """
 Renders the start menu with centered menu box and buttons.
-Returns a symbol indicating what action should be taken:
+Mutates state.action to indicate what action should be taken:
 - :none - continue showing menu
 - :new_map - launch new map
 - :test_map - launch test map
 - :quit - exit application
 Must be called within ui_renderwrap.
 """
-function ui_start_menu_render(window::GLFW.Window)
+function ui_start_menu_render!(state::StartMenuState, window::GLFW.Window)
     winsize = GLFW.GetWindowSize(window)
     win_w, win_h = Float64(winsize.width), Float64(winsize.height)
 
@@ -65,8 +69,13 @@ function ui_start_menu_render(window::GLFW.Window)
 
     CImGui.End()
 
-    return action
+    if state.action == :none # prioritises any existing non-none action
+        state.action = action
+    end
+    return nothing
 end
+
+
 
 # ===============================================================
 # Start Menu Loop
@@ -77,6 +86,7 @@ Enters the start menu loop, rendering the menu in a vsynced loop
 until window close is requested.
 """
 function enter_start_menu(window::GLFW.Window)
+    state = StartMenuState()
     GLFW.SetWindowTitle(window, "Rocket Plumber")
     GLFW.SwapInterval(1) # Enable VSync
     glClearColor(0.2, 0.2, 0.2, 1.0) # Set background color to dark gray
@@ -86,11 +96,11 @@ function enter_start_menu(window::GLFW.Window)
         glClear(GL_COLOR_BUFFER_BIT)
 
         # Render UI and capture action
-        action_ref = Ref{Symbol}(:none)
+        state.action = :none
         ui_renderwrap() do
-            action_ref[] = ui_start_menu_render(window)
+            ui_start_menu_render!(state, window)
         end
-        action = action_ref[]
+        action = state.action
 
         GLFW.SwapBuffers(window)
         GLFW.PollEvents()

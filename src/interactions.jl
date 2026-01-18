@@ -54,6 +54,8 @@ function poll_keys!(inputstate::InputState, window::GLFW.Window)
 
     # ` key to toggle editor mode
     get_inrising!(inputstate, GLFW.KEY_GRAVE_ACCENT, window) && (inputstate.editor_mode = !inputstate.editor_mode)
+    # \ key to toggle dev utils menu
+    get_inrising!(inputstate, GLFW.KEY_BACKSLASH, window) && (inputstate.dev_utils_menu_active = !inputstate.dev_utils_menu_active)
 
     # Number keys 1-4 for standard placement modes
     get_inrising!(inputstate, GLFW.KEY_1, window) && (inputstate.placementmode = INSPECT)

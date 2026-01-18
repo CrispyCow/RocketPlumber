@@ -1,7 +1,7 @@
 name = "FlowEngine"
 uuid = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
-authors = ["Christos Lillis <christos.lillis@gmail.com>"]
 version = "0.1.0"
+authors = ["Christos Lillis <christos.lillis@gmail.com>"]
 
 [deps]
 HexComponentsAPI = "a2289db6-e3a5-4e05-9c21-8734dce2bbd4"

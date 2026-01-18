@@ -18,7 +18,7 @@ export count_tiles, count_pipes, count_surface_tiles
 export clear_all_tiles!, clear_all_pipes!, clear_ship_surface!
 export is_on_ship_surface, add_ship_surface_tile!, remove_ship_surface_tile!, get_all_ship_surface_coords
 export can_place_component_at, can_place_pipe_at, can_remove_surface_at, is_node_on_ship_surface
-export get_all_ship_edge_coords, count_edge_tiles, find_ship_surface_edgetiles!
+export get_all_ship_edge_coords, get_ship_surface, count_edge_tiles, find_ship_surface_edgetiles!
 
 const CONST_RESISTOR = HexElements.CONST_RESISTOR
 const CONST_CURRENT = HexElements.CONST_CURRENT
@@ -97,6 +97,9 @@ end
 
 "Iterate over all tiles (returns pairs of TileCoord => ComponentOnTile)"
 get_all_tiles(gamemap::GameMap) = gamemap.tiles
+
+"Return set of all ship surface coordinates"
+get_ship_surface(gamemap::GameMap) = gamemap.ship_surface
 
 # Pipe access
 "Get the pipe behavior at an edge coordinate, or nothing if no pipe exists"
@@ -178,18 +181,24 @@ count_edge_tiles(derivedmapstate::DerivedMapState)::Int = length(derivedmapstate
     return count(adj_tile -> adj_tile in surface_set, adjacent_tiles)
 end
 
-"Update the ship_surface_edge set in DerivedMapState with tiles that are on the boundary of the ship."
-function find_ship_surface_edgetiles!(derivedmapstate::DerivedMapState, gamemap::GameMap)
+"Update a set with tiles that are on the boundary of the ship."
+function find_ship_surface_edgetiles!(edgesurface::Set{TileCoord}, gamemap::GameMap)
     surface_set = get_all_ship_surface_coords(gamemap)
 
-    empty!(derivedmapstate.ship_surface_edge)
+    empty!(edgesurface)
 
     for tile in surface_set
         if count_surfacetile_adjacencies(surface_set, tile) != 6
-            push!(derivedmapstate.ship_surface_edge, tile)
+            push!(edgesurface, tile)
         end
     end
 
+    return nothing
+end
+
+"Update the ship_surface_edge set in DerivedMapState with tiles that are on the boundary of the ship."
+function find_ship_surface_edgetiles!(derivedmapstate::DerivedMapState, gamemap::GameMap)
+    find_ship_surface_edgetiles!(derivedmapstate.ship_surface_edge, gamemap)
     return nothing
 end
 

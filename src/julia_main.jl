@@ -120,12 +120,12 @@ verify_required_artifacts()
 # Packages
 using LinearAlgebra, StaticArrays
 using ModernGL, GLFW, JLD2, CSyntax.CRef
-using TimerOutputs, Accessors, CSyntax, Printf
+using TimerOutputs, Accessors, Printf, CSyntax
 using FilePathsBase, NativeFileDialog
 import CImGui, CImGui.lib
 # Custom Packages (working title: HexFlow; project: Rocket Plumber)
 using HexFrame, HexElements, HexFluids, HexFlowTelemetry
-using HexComponentsAPI, FlowEngine, RenderEngine
+using HexComponentsAPI, FlowEngine, RenderEngine, HexFlowProcGen
 using HexFlowControl, HexFlowCalculator, HexFlowRendering
 
 # ===============================================================

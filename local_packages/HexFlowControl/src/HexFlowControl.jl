@@ -43,6 +43,7 @@ end
     pendingpipebehavior::PipeBehavior
     selectedcoord::Union{Nothing, TileCoord, EdgeCoord} = nothing
     last_command_time::Float64 = 0.0
+    gui_inputs::Dict{Symbol, Any} = Dict{Symbol, Any}()  # for storing ImGui input field states
     # last key states
     last_keystates::Dict{GLFW.Key, Bool} = Dict{GLFW.Key, Bool}()
     last_mousestates::Dict{GLFW.MouseButton, Bool} = Dict{GLFW.MouseButton, Bool}()
@@ -50,6 +51,7 @@ end
     is_paused::Bool = false # FlowCalculator loop pause
     escape_menu_active::Bool = false
     editor_mode::Bool = false
+    dev_utils_menu_active::Bool = false
     # loop status
     should_exit_gameloop::Bool = false
     return_symbol::Symbol = :default

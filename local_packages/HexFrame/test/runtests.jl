@@ -129,14 +129,14 @@ using HexFrame
     end
 
     @testset "getting edges for a tile" begin
-        desired_array = [
+        desired_array = (
             EdgeCoord(VertexCoord(Number[1, -1], HexFrame.Q_NEG), VertexCoord(Number[0, 0], HexFrame.Q_POS)),
             EdgeCoord(VertexCoord(Number[-1, 0], HexFrame.Q_POS), VertexCoord(Number[1, -1], HexFrame.Q_NEG)),
             EdgeCoord(VertexCoord(Number[0, 0], HexFrame.Q_NEG), VertexCoord(Number[-1, 0], HexFrame.Q_POS)),
             EdgeCoord(VertexCoord(Number[0, 0], HexFrame.Q_NEG), VertexCoord(Number[-1, 1], HexFrame.Q_POS)),
             EdgeCoord(VertexCoord(Number[-1, 1], HexFrame.Q_POS), VertexCoord(Number[1, 0], HexFrame.Q_NEG)),
             EdgeCoord(VertexCoord(Number[1, 0], HexFrame.Q_NEG), VertexCoord(Number[0, 0], HexFrame.Q_POS)),
-        ]
+        )
         @test get_edges(TileCoord(0, 0)) == desired_array
     end
 
@@ -159,8 +159,8 @@ using HexFrame
     end
 
     @testset "get_tiles for a vertex" begin
-        @test get_tiles(VertexCoord(Number[0, -1], HexFrame.Q_POS)) == [TileCoord(1, -2), TileCoord(0, -1), TileCoord(1, -1)]
-        @test get_tiles(VertexCoord(Number[-1, 2], HexFrame.Q_NEG)) == [TileCoord(-1, 2), TileCoord(-2, 2), TileCoord(-2, 3)]
+        @test get_tiles(VertexCoord(Number[0, -1], HexFrame.Q_POS)) == (TileCoord(1, -2), TileCoord(0, -1), TileCoord(1, -1))
+        @test get_tiles(VertexCoord(Number[-1, 2], HexFrame.Q_NEG)) == (TileCoord(-1, 2), TileCoord(-2, 2), TileCoord(-2, 3))
     end
 
 
