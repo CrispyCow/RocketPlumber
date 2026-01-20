@@ -5,8 +5,62 @@ using HexFrame, FlowEngine, SquirrelNoise, HexComponentsAPI
 
 export random_tile_walk!, random_tile_walk, stacked_random_tile_walk!
 export weighted_roll_noise, pick_from_range, pick_from_options
-export PlacementStrategy, ShipComponentSet, SpawnOptions, roll_component
-export place_shipset!, place_random_pipes!
+export CompPlacementStrategy, ShipComponentSet, CompSpawnOptions, roll_component
+export PipePlacementStrategy, PipeSpawnOptions, roll_pipe
+export place_shipset!, place_random_pipes!, place_connected_pipes!, place_pipeset!
+export ShipGenOptions, generate_ship
+
+
+# =============================================================== #
+# Utilities
+# =============================================================== #
+
+function pick_from_range(min::T, max::T, point, seed::UInt32) where {T <: Real}
+    noise = get_noise_zero_to_one(point, seed)
+    raw = min + noise * (max - min)
+
+    return T <: Integer ? round(T, raw) : T(raw) # ensures uniform sampling for integer types
+end
+
+function pick_from_options(options::Vector{T}, point, seed::UInt32) where {T}
+    return pick_element_from_noise(options, point, seed)
+end
+
+"Selects a weighted random item from `weights` based on and RNG instance"
+function weighted_roll_rng(rng::AbstractRNG, weights::Vector{Tuple{T, Float64}}) where {T}
+    total_weight = sum(w[2] for w in weights)
+    roll = rand(rng) * total_weight
+
+    cumulative = 0.0
+    for (item, weight) in weights
+        cumulative += weight
+        if roll <= cumulative
+            return item
+        end
+    end
+
+    return weights[end][1]  # fallback
+end
+
+"Selects a weighted random item from `weights` based on SquirrelNoise with the given `point` and `seed`."
+function weighted_roll_noise(weights::Vector{Tuple{T, Float64}}, point, seed::UInt32) where {T}
+    total_weight = sum(w[2] for w in weights)
+    roll = get_noise_zero_to_one(point, seed) * total_weight
+
+    cumulative = 0.0
+    for (item, weight) in weights
+        cumulative += weight
+        if roll <= cumulative
+            return item
+        end
+    end
+
+    return weights[end][1]  # Fallback in case of rounding errors
+end
+
+# =============================================================== #
+# Surface Generation
+# =============================================================== #
 
 "Adds to the set `tiles` by performing a random walk starting at `start` for `steps` steps.
  The tile chosen at each step is determined by SquirrelNoise with the given `seed`."
@@ -43,74 +97,26 @@ function stacked_random_tile_walk!(tiles::Set{TileCoord}, start::TileCoord, step
     return nothing
 end
 
-
-"Selects a weighted random item from `weights` based on SquirrelNoise with the given `point` and `seed`."
-function weighted_roll_noise(weights::Vector{Tuple{T, Float64}}, point, seed::UInt32) where {T}
-    total_weight = sum(w[2] for w in weights)
-    roll = get_noise_zero_to_one(point, seed) * total_weight
-
-    cumulative = 0.0
-    for (item, weight) in weights
-        cumulative += weight
-        if roll <= cumulative
-            return item
-        end
-    end
-
-    return weights[end][1]  # Fallback in case of rounding errors
-end
-
-"Selects a weighted random item from `weights` based on and RNG instance"
-function weighted_roll_rng(rng::AbstractRNG, weights::Vector{Tuple{T, Float64}}) where {T}
-    total_weight = sum(w[2] for w in weights)
-    roll = rand(rng) * total_weight
-
-    cumulative = 0.0
-    for (item, weight) in weights
-        cumulative += weight
-        if roll <= cumulative
-            return item
-        end
-    end
-
-    return weights[end][1]  # fallback
-end
-
-
-function pick_from_range(min::T, max::T, point, seed::UInt32) where {T <: Real}
-    noise = get_noise_zero_to_one(point, seed)
-    raw = min + noise * (max - min)
-
-    return T <: Integer ? round(T, raw) : T(raw) # ensures uniform sampling for integer types
-end
-
-function pick_from_options(options::Vector{T}, point, seed::UInt32) where {T}
-    return pick_element_from_noise(options, point, seed)
-end
-
-
 # =============================================================== #
 # component placement
 # =============================================================== #
 
-@enum PlacementStrategy begin
+@enum CompPlacementStrategy begin
     RANDOM_PLACE
     CLUSTERED_PLACE
     NOZZLE_EDGE_PLACE
 end
 
-struct SpawnOptions
+struct CompSpawnOptions
     kind::Symbol
     spawn_count_weights::Vector{Tuple{Int, Float64}}
-    placement::PlacementStrategy
+    placement::CompPlacementStrategy
 end
 
 struct ShipComponentSet
     name::String
-    components::Vector{SpawnOptions}
+    components::Vector{CompSpawnOptions}
 end
-
-#const POSSIBLE_HEXAXIS
 
 "Rolls a component of the given kind symbol, using Val disptached functions"
 roll_component(kind::Symbol, point, seed) =
@@ -274,6 +280,29 @@ function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::
     return (true, "Successfully placed all components")
 end
 
+# =============================================================== #
+# pipe placement
+# =============================================================== #
+
+@enum PipePlacementStrategy begin
+    RANDOM_PIPES
+    ONE_CONNECT_PIPES
+end
+
+struct PipeSpawnOptions
+    kind::Symbol
+    placement::PipePlacementStrategy
+    density::Float64
+end
+
+"Rolls a pipe of the given kind symbol, using Val disptached functions"
+roll_pipe(kind::Symbol, point, seed) =
+    roll_pipe(Val(kind), point, seed)
+
+"Default fallback — triggers for unknown kind"
+roll_pipe(::Val{K}, point, seed) where {K} =
+    error("Unknown pipe kind: $K")
+
 "allocated set of all edgecoords for the given set of tiles"
 function get_all_edgecoords_of_tiles(tiles::Set{TileCoord})
     edgecoords = Set{EdgeCoord}()
@@ -286,11 +315,13 @@ function get_all_edgecoords_of_tiles(tiles::Set{TileCoord})
 end
 
 "randomly chooses to place a pipe at the given edge based on noise and pipe density"
-function noise_pipe_place_helper!(map::GameMap, edge::EdgeCoord, pipe_behav::PipeBehavior, seed::UInt32; pipe_density)
+
+function noise_pipe_place_helper!(map::GameMap, edge::EdgeCoord, pipe_kind::Symbol, seed::UInt32; pipe_density)
     used_pipe_density = clamp(pipe_density, 0.0, 1.0)
-    hashed_edge = UInt32(hash(edge, hash(pipe_behav)) & typemax(UInt32)) # mix in pipe behavior to vary placement
+    hashed_edge = UInt32(hash(edge, hash(pipe_kind)) & typemax(UInt32)) # mix in pipe kind to vary placement
     roll = get_noise_zero_to_one(hashed_edge, seed)
     if roll <= used_pipe_density
+        pipe_behav = roll_pipe(pipe_kind, hashed_edge, seed)
         set_pipe!(map, edge, pipe_behav)
     end
 
@@ -298,16 +329,16 @@ function noise_pipe_place_helper!(map::GameMap, edge::EdgeCoord, pipe_behav::Pip
 end
 
 "randomly chooses to place pipes at the given edges based on noise and pipe density"
-function noise_pipe_place_helper!(map::GameMap, edges, pipe_behav::PipeBehavior, seed::UInt32; pipe_density)
+function noise_pipe_place_helper!(map::GameMap, edges, pipe_kind::Symbol, seed::UInt32; pipe_density)
     for edgecoord in edges
-        noise_pipe_place_helper!(map, edgecoord, pipe_behav, seed; pipe_density = pipe_density)
+        noise_pipe_place_helper!(map, edgecoord, pipe_kind, seed; pipe_density = pipe_density)
     end
 
     return nothing
 end
 
 "places pipes randomly on canidate edges that connect to 1 and only 1 existing node on the map based on pipe density"
-function place_connected_pipes!(map::GameMap, pipe_behav::PipeBehavior, seed::UInt32; pipe_density)
+function place_connected_pipes!(map::GameMap, pipe_kind::Symbol, seed::UInt32; pipe_density)
     ship_surface = deepcopy(get_ship_surface(map))
     available_edgecoords = get_all_edgecoords_of_tiles(ship_surface)
     all_nodes = Set(keys(list_nodes(list_elements(map))))
@@ -327,13 +358,13 @@ function place_connected_pipes!(map::GameMap, pipe_behav::PipeBehavior, seed::UI
     end
 
     # place pipes based on density
-    noise_pipe_place_helper!(map, available_edgecoords, pipe_behav, seed; pipe_density = pipe_density)
+    noise_pipe_place_helper!(map, available_edgecoords, pipe_kind, seed; pipe_density = pipe_density)
 
     return nothing
 end
 
 "places pipes randomly on on canidate edges that do not connect 2 nodes based on pipe density"
-function place_random_pipes!(map::GameMap, pipe_behav::PipeBehavior, seed::UInt32; pipe_density)
+function place_random_pipes!(map::GameMap, pipe_kind::Symbol, seed::UInt32; pipe_density)
     ship_surface = deepcopy(get_ship_surface(map))
     available_edgecoords = get_all_edgecoords_of_tiles(ship_surface)
     all_nodes = Set(keys(list_nodes(list_elements(map))))
@@ -349,9 +380,63 @@ function place_random_pipes!(map::GameMap, pipe_behav::PipeBehavior, seed::UInt3
     end
 
     # place pipes based on density
-    noise_pipe_place_helper!(map, available_edgecoords, pipe_behav, seed; pipe_density = pipe_density)
+    noise_pipe_place_helper!(map, available_edgecoords, pipe_kind, seed; pipe_density = pipe_density)
 
     return nothing
+end
+
+function place_pipeset!(map::GameMap, pipe_options::PipeSpawnOptions, seed::UInt32)
+    if pipe_options.placement == RANDOM_PIPES
+        place_random_pipes!(map, pipe_options.kind, seed; pipe_density = pipe_options.density)
+    elseif pipe_options.placement == ONE_CONNECT_PIPES
+        place_connected_pipes!(map, pipe_options.kind, seed; pipe_density = pipe_options.density)
+    else
+        error("Unknown pipe placement strategy for pipe $(pipe_options.kind)")
+    end
+
+    return nothing
+end
+
+function place_pipeset!(map::GameMap, pipe_options::AbstractArray{PipeSpawnOptions}, seed::UInt32)
+    for pipe_option in pipe_options
+        place_pipeset!(map, pipe_option, seed)
+    end
+
+    return nothing
+end
+
+# =============================================================== #
+# Ship Generation
+# =============================================================== #
+
+@kwdef struct ShipGenOptions
+    name::String
+    surface_gen_steps::Int
+    surface_gen_stacks::Int
+    component_sets::Vector{ShipComponentSet}
+    pipe_sets::Vector{PipeSpawnOptions}
+end
+
+function generate_ship(ship::ShipGenOptions, seed::UInt32)::GameMap
+    map = GameMap()
+    
+    # generate ship surface
+    stacked_random_tile_walk!(get_ship_surface(map), TileCoord(0, 0), ship.surface_gen_steps, ship.surface_gen_stacks, seed)
+
+    # place components
+    for shipset in ship.component_sets
+        success, message = place_shipset!(map, shipset, seed)
+        if !success
+            @warn "Ship generation did not complete component placement:\n$message"
+        end
+    end
+
+    # place pipes
+    for pipeset in ship.pipe_sets
+        place_pipeset!(map, pipeset, seed)
+    end
+
+    return map
 end
 
 end # module HexFlowProcGen

@@ -15,5 +15,11 @@
     },
     "terminal.integrated.env.osx": {
         "JULIA_NUM_THREADS": "3"
+    },
+    "chat.tools.terminal.autoApprove": {
+        "/^julia --threads=3 --project=\\. src/julia_main\\.jl$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
     }
 }

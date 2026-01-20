@@ -127,6 +127,7 @@ import CImGui, CImGui.lib
 using HexFrame, HexElements, HexFluids, HexFlowTelemetry
 using HexComponentsAPI, FlowEngine, RenderEngine, HexFlowProcGen
 using HexFlowControl, HexFlowCalculator, HexFlowRendering
+using SquirrelNoise
 
 # ===============================================================
 # Load All Source Files Upfront

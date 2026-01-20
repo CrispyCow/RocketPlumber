@@ -129,6 +129,7 @@ const component_list::Vector{ComponentBehavior} = ComponentBehavior[
 # Component Procedural Generation Rules
 # ==============================================================
 
+# component roll functions
 import HexFlowProcGen: roll_component
 # Specializations for each component type
 function roll_component(::Val{:TinyNozzle_comp}, point, seed)
@@ -242,6 +243,16 @@ function roll_component(::Val{:BasicDecompChamber_comp}, point, seed)
     )
 end
 
+# pipe roll functions
+import HexFlowProcGen: roll_pipe
+# Specializations for each pipe type
+function roll_pipe(::Val{:ScrapPipe_pipe}, point, seed)
+    return ScrapPipeBehav()
+end
+
+function roll_pipe(::Val{:BigPipe_pipe}, point, seed)
+    return BigPipeBehav()
+end
 
 # Ship Component Sets
 
@@ -252,35 +263,84 @@ const RANDOM_PLACE = HexFlowProcGen.RANDOM_PLACE
 const shipset_simple_cold_gas = ShipComponentSet(
     "Simple Cold Gas",
     [
-        SpawnOptions(:TriGasTank_comp, [(1, 100.0), (2, 200.0), (3, 200.0)], CLUSTERED_PLACE),
-        SpawnOptions(:SwitchedTinyNozzle_comp, [(1, 50.0), (2, 100.0), (3, 20.0), (4, 20.0)], NOZZLE_EDGE_PLACE),
-        SpawnOptions(:TinyNozzle_comp, [(0, 80.0), (2, 10.0), (3, 10.0)], NOZZLE_EDGE_PLACE),
+        CompSpawnOptions(:TriGasTank_comp, [(1, 100.0), (2, 200.0), (3, 200.0)], CLUSTERED_PLACE),
+        CompSpawnOptions(:SwitchedTinyNozzle_comp, [(1, 50.0), (2, 100.0), (3, 20.0), (4, 20.0)], NOZZLE_EDGE_PLACE),
+        CompSpawnOptions(:TinyNozzle_comp, [(0, 80.0), (2, 10.0), (3, 10.0)], NOZZLE_EDGE_PLACE),
     ]
 )
 
 const shipset_electric_monoprop = ShipComponentSet(
     "Electric Monoprop",
     [
-        SpawnOptions(:TriLiquidTank_comp, [(1, 100.0), (2, 200.0), (3, 200.0)], CLUSTERED_PLACE),
-        SpawnOptions(:ElecTurboPump_comp, [(1, 100.0), (2, 100.0)], RANDOM_PLACE),
-        SpawnOptions(:BasicDecompChamber_comp, [(1, 100.0), (2, 20.0)], RANDOM_PLACE),
-        SpawnOptions(:SmallNozzle_comp, [(1, 100.0), (2, 10.0)], NOZZLE_EDGE_PLACE),
+        CompSpawnOptions(:TriLiquidTank_comp, [(1, 100.0), (2, 200.0), (3, 200.0)], CLUSTERED_PLACE),
+        CompSpawnOptions(:ElecTurboPump_comp, [(1, 100.0), (2, 100.0)], RANDOM_PLACE),
+        CompSpawnOptions(:BasicDecompChamber_comp, [(1, 100.0), (2, 20.0)], RANDOM_PLACE),
+        CompSpawnOptions(:SmallNozzle_comp, [(1, 100.0), (2, 10.0)], NOZZLE_EDGE_PLACE),
     ]
 )
 
 const shipset_turbine_monoprop = ShipComponentSet(
     "Turbine Monoprop",
     [
-        SpawnOptions(:TriLiquidTank_comp, [(1, 20.0), (2, 200.0), (3, 200.0)], CLUSTERED_PLACE),
-        SpawnOptions(:BigAdjustableValve_comp, [(1, 100.0)], RANDOM_PLACE),
-        SpawnOptions(:TurboPump_comp, [(1, 100.0),], RANDOM_PLACE),
-        SpawnOptions(:BasicDecompChamber_comp, [(1, 100.0), (2, 20.0)], RANDOM_PLACE),
-        SpawnOptions(:SmallNozzle_comp, [(1, 100.0), (2, 10.0)], NOZZLE_EDGE_PLACE),
+        CompSpawnOptions(:TriLiquidTank_comp, [(1, 20.0), (2, 200.0), (3, 200.0)], CLUSTERED_PLACE),
+        CompSpawnOptions(:BigAdjustableValve_comp, [(1, 100.0)], RANDOM_PLACE),
+        CompSpawnOptions(:TurboPump_comp, [(1, 100.0),], RANDOM_PLACE),
+        CompSpawnOptions(:BasicDecompChamber_comp, [(1, 100.0), (2, 20.0)], RANDOM_PLACE),
+        CompSpawnOptions(:SmallNozzle_comp, [(1, 100.0), (2, 10.0)], NOZZLE_EDGE_PLACE),
     ]
 )
 
-const shipset_weights = [
-    (shipset_simple_cold_gas, 100.0),
-    (shipset_electric_monoprop, 100.0),
-    (shipset_turbine_monoprop, 50.0),
+ship_gen_tilesets::Vector{ShipComponentSet} = [
+    shipset_simple_cold_gas,
+    shipset_electric_monoprop,
+    shipset_turbine_monoprop,
 ]
+
+standard_pipeoptions::Vector{PipeSpawnOptions} = [
+    PipeSpawnOptions(:BigPipe_pipe, HexFlowProcGen.ONE_CONNECT_PIPES, 0.05),
+    PipeSpawnOptions(:ScrapPipe_pipe, HexFlowProcGen.RANDOM_PIPES, 0.03),
+]
+
+# Ship Configurations
+coldgas_micro_ship = ShipGenOptions(
+    name = "Cold Gas Micro Ship",
+    surface_gen_steps = 2,
+    surface_gen_stacks = 10,
+    component_sets = [shipset_simple_cold_gas],
+    pipe_sets = standard_pipeoptions
+)
+
+monoprop_electric_mini_ship = ShipGenOptions(
+    name = "Electric Monoprop Mini Ship",
+    surface_gen_steps = 3,
+    surface_gen_stacks = 17,
+    component_sets = [shipset_electric_monoprop],
+    pipe_sets = standard_pipeoptions
+)
+monoprop_turbine_mini_ship = ShipGenOptions(
+    name = "Turbine Monoprop Mini Ship",
+    surface_gen_steps = 3,
+    surface_gen_stacks = 17,
+    component_sets = [shipset_turbine_monoprop],
+    pipe_sets = standard_pipeoptions
+)
+
+small_corvette_1 = ShipGenOptions(
+    name = "Small Corvette 1",
+    surface_gen_steps = 4,
+    surface_gen_stacks = 20,
+    component_sets = [shipset_turbine_monoprop, shipset_simple_cold_gas],
+    pipe_sets = standard_pipeoptions
+)
+
+ship_gen_configs = [
+    coldgas_micro_ship,
+    monoprop_electric_mini_ship,
+    monoprop_turbine_mini_ship,
+    small_corvette_1,
+]
+
+
+
+
+

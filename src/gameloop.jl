@@ -320,6 +320,52 @@ function edit_tunables!(tunables_tuple)
     return tuple(cfloat_array...)
 end
 
+"""Helper to enqueue a map-override command on the flow calculator command queue."""
+function enqueue_map_override!(flowcalc_ipc::FlowCalculatorIPC, gamemap::GameMap)
+    cmd = create_map_override_command(flowcalc_ipc.command_queue, deepcopy(gamemap))
+    try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+    return nothing
+end
+
+"""Read and write a `UInt32` scalar from `inputstate.gui_inputs` using ImGui.
+Returns the updated `UInt32` value."""
+function gui_input_u32!(inputstate::InputState, key::Symbol, label::String, default::UInt32)
+    one::UInt32 = UInt32(1)
+    val::UInt32 = haskey(inputstate.gui_inputs, key) ? inputstate.gui_inputs[key] : default
+    @cref CImGui.InputScalar(label, CImGui.ImGuiDataType_U32, &val, &one)
+    inputstate.gui_inputs[key] = val
+    return val
+end
+
+"""Read and write an `Int64` scalar from `inputstate.gui_inputs` using ImGui.
+Returns the updated `Int64` value."""
+function gui_input_s64!(inputstate::InputState, key::Symbol, label::String, default::Int64)
+    one::Int64 = Int64(1)
+    val::Int64 = haskey(inputstate.gui_inputs, key) ? inputstate.gui_inputs[key] : default
+    @cref CImGui.InputScalar(label, CImGui.ImGuiDataType_S64, &val, &one)
+    inputstate.gui_inputs[key] = val
+    return val
+end
+
+"""Read and write a `Float64` double from `inputstate.gui_inputs` using ImGui.
+Optional `fmt` controls the displayed format string.
+Returns the updated `Float64` value."""
+function gui_input_double!(inputstate::InputState, key::Symbol, label::String, default::Float64; step_small::Float64 = 0.01, step_fast::Float64 = 0.1, fmt::String = "%.3f")
+    val::Float64 = haskey(inputstate.gui_inputs, key) ? inputstate.gui_inputs[key] : default
+    @cref CImGui.InputDouble(label, &val, step_small, step_fast, fmt)
+    inputstate.gui_inputs[key] = val
+    return val
+end
+
+"""Read and write an `Int32` listbox selection from `inputstate.gui_inputs`.
+`names` is a Vector{String} shown in the ListBox. Returns updated `Int32` index."""
+function gui_listbox_int!(inputstate::InputState, key::Symbol, label::String, names::Vector{String}, default::Int32)
+    val::Int32 = haskey(inputstate.gui_inputs, key) ? inputstate.gui_inputs[key] : default
+    @cref CImGui.ListBox(label, &val, names)
+    inputstate.gui_inputs[key] = val
+    return val
+end
+
 "Returns mode description text based on current placement mode"
 const MODE_DESCRIPTIONS = Dict(
     TILE => "Configuring TILE for placement...",
@@ -732,24 +778,14 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
     end
 
     if (CImGui.CollapsingHeader("Proc Gen"))
-        uint32_one::UInt32 = 1
-        int64_one::Int64 = 1
-
-        # shared config inputs
-        seed::UInt32 = haskey(inputstate.gui_inputs, :proc_gen_seed) ? inputstate.gui_inputs[:proc_gen_seed] : 999
-        @cref CImGui.InputScalar("Random Seed", CImGui.ImGuiDataType_U32, &seed, &uint32_one)
-        inputstate.gui_inputs[:proc_gen_seed] = seed
+            # shared config inputs
+            seed = gui_input_u32!(inputstate, :proc_gen_seed, "Random Seed", UInt32(999))
 
         if (CImGui.TreeNode("Random Walk Surface Gen"))
 
             # local config inputs
-            steps::Int64 = haskey(inputstate.gui_inputs, :surface_walk_steps) ? inputstate.gui_inputs[:surface_walk_steps] : 3
-            @cref CImGui.InputScalar("Walk Steps", CImGui.ImGuiDataType_S64, &steps, &int64_one)
-            inputstate.gui_inputs[:surface_walk_steps] = steps
-
-            stacks::Int64 = haskey(inputstate.gui_inputs, :surface_walk_stacks) ? inputstate.gui_inputs[:surface_walk_stacks] : 20
-            @cref CImGui.InputScalar("Walk stacks", CImGui.ImGuiDataType_S64, &stacks, &int64_one)
-            inputstate.gui_inputs[:surface_walk_stacks] = stacks
+            steps = gui_input_s64!(inputstate, :surface_walk_steps, "Walk Steps", Int64(3))
+            stacks = gui_input_s64!(inputstate, :surface_walk_stacks, "Walk stacks", Int64(20))
 
             # surface creation
             CImGui.Separator()
@@ -758,73 +794,83 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
                 new_map = GameMap()
                 stacked_random_tile_walk!(new_map.ship_surface, TileCoord(0, 0), steps, stacks, seed)
 
-                cmd = create_map_override_command(flowcalc_ipc.command_queue, deepcopy(new_map))
-                try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+                enqueue_map_override!(flowcalc_ipc, new_map)
             end
             CImGui.TreePop()
         end
 
         if (CImGui.TreeNode("Place Components"))
-            tileset_names::Vector{String} = [
-                "Simple Cold Gas",
-                "Electric Monoprop",
-                "Turbine Monoprop",
-            ]
-            tilesets::Vector{ShipComponentSet} = [
-                shipset_simple_cold_gas,
-                shipset_electric_monoprop,
-                shipset_turbine_monoprop,
-            ]
-
-            tileset_index::Int32 = haskey(inputstate.gui_inputs, :tileset_index) ? inputstate.gui_inputs[:tileset_index] : 0
-            @cref CImGui.ListBox("Tileset", &tileset_index, tileset_names)
-            inputstate.gui_inputs[:tileset_index] = tileset_index
+            tileset_names = getfield.(ship_gen_tilesets, :name)
+            tileset_index = gui_listbox_int!(inputstate, :tileset_index, "Tileset", tileset_names, Int32(0))
 
             if CImGui.Button("Place Tileset")
                 tileset_index_oneindexed = tileset_index + 1
                 @info "Placing Components from $(tileset_names[tileset_index_oneindexed])..."
                 tilesetmap::GameMap = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
-                place_shipset!(tilesetmap, tilesets[tileset_index_oneindexed], seed)
+                place_shipset!(tilesetmap, ship_gen_tilesets[tileset_index_oneindexed], seed)
 
-                cmd = create_map_override_command(flowcalc_ipc.command_queue, deepcopy(tilesetmap))
-                try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+                enqueue_map_override!(flowcalc_ipc, tilesetmap)
             end
             CImGui.TreePop()
         end
 
         if (CImGui.TreeNode("Place Big Pipes"))
             # local config inputs
-            big_pipe_density::Float64 = haskey(inputstate.gui_inputs, :big_pipe_density) ? inputstate.gui_inputs[:big_pipe_density] : 0.05
-            @cref CImGui.InputDouble("Pipe Density", &big_pipe_density, 0.01, 0.1, "%.3f")
-            inputstate.gui_inputs[:big_pipe_density] = big_pipe_density
+            big_pipe_density = gui_input_double!(inputstate, :big_pipe_density, "Pipe Density", 0.05; step_small = 0.01, step_fast = 0.1, fmt = "%.3f")
 
             if CImGui.Button("Place Big Pipes", (button_width, button_height))
                 @info "Placing Big Pipes..."
                 bigpipemap::GameMap = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
-                place_random_pipes!(bigpipemap, BigPipeBehav(), seed; pipe_density = big_pipe_density)
+                place_random_pipes!(bigpipemap, :BigPipe_pipe, seed; pipe_density = big_pipe_density)
 
-                cmd = create_map_override_command(flowcalc_ipc.command_queue, deepcopy(bigpipemap))
-                try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+                enqueue_map_override!(flowcalc_ipc, bigpipemap)
             end
             CImGui.TreePop()
         end
 
         if (CImGui.TreeNode("Place Scrap Pipes"))
             # local config inputs
-            scrap_pipe_density::Float64 = haskey(inputstate.gui_inputs, :scrap_pipe_density) ? inputstate.gui_inputs[:scrap_pipe_density] : 0.05
-            @cref CImGui.InputDouble("Pipe Density", &scrap_pipe_density, 0.01, 0.1, "%.3f")
-            inputstate.gui_inputs[:scrap_pipe_density] = scrap_pipe_density
+            scrap_pipe_density = gui_input_double!(inputstate, :scrap_pipe_density, "Pipe Density", 0.05; step_small = 0.01, step_fast = 0.1, fmt = "%.3f")
 
             if CImGui.Button("Place Scrap Pipes", (button_width, button_height))
                 @info "Placing Scrap Pipes..."
                 scrappipemap::GameMap = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
-                place_random_pipes!(scrappipemap, ScrapPipeBehav(), seed; pipe_density = scrap_pipe_density)
+                place_random_pipes!(scrappipemap, :ScrapPipe_pipe, seed; pipe_density = scrap_pipe_density)
 
-                cmd = create_map_override_command(flowcalc_ipc.command_queue, deepcopy(scrappipemap))
-                try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+                enqueue_map_override!(flowcalc_ipc, scrappipemap)
             end
             CImGui.TreePop()
         end
+
+        if (CImGui.TreeNode("Place Standard Pipe Combo"))
+            if CImGui.Button("Place Pipes", (button_width, button_height))
+                standard_pipes = [
+                    PipeSpawnOptions(:BigPipe_pipe, HexFlowProcGen.ONE_CONNECT_PIPES, 0.05),
+                    PipeSpawnOptions(:ScrapPipe_pipe, HexFlowProcGen.RANDOM_PIPES, 0.05),
+                ]
+
+                @info "Placing Pipe Combo..."
+                combopipemap::GameMap = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
+                place_pipeset!(combopipemap, standard_pipes, seed)
+
+                enqueue_map_override!(flowcalc_ipc, combopipemap)
+            end
+            CImGui.TreePop()
+        end
+
+        if (CImGui.TreeNode("Generate Ship"))
+            shipconfig_names::Vector{String} = getfield.(ship_gen_configs, :name)
+
+            shipconfig_index = gui_listbox_int!(inputstate, :shipconfig_index, "shipconfig", shipconfig_names, Int32(0))
+
+            if CImGui.Button("Create New Ship", (button_width, button_height))
+                shipmap = generate_ship(ship_gen_configs[shipconfig_index + 1], seed)
+
+                enqueue_map_override!(flowcalc_ipc, shipmap)
+            end
+            CImGui.TreePop()
+        end
+
     end
 
     CImGui.End()
