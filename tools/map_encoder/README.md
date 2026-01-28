@@ -26,6 +26,7 @@ julia --project=. tools/map_encoder/encode_map.jl autotest1
 ```
 
 This outputs the complete map structure to stdout with proper formatting, showing:
+- All ships individually with their `components`, `pipe_behaviors`, and `ship_tiles`
 - All components with their types and parameters
 - Tile positions and rotations
 - Pipe connections and conductances
@@ -102,6 +103,9 @@ The `map_encode_instructions.md` file provides comprehensive guidance for AI age
 ```bash
 # 1. Encode a map
 julia --project=. tools/map_encoder/encode_map.jl autotest1
+
+# Multi-ship maps
+For multi-ship JLD2 files the tool will emit per-ship entries. To generate a `mapgen_*.jl` file write to `src/demo_maps/` with a `.jl` extension (example below). The encoder will use the map basename to name the function, so provide a reasonable basename (e.g., `mulitship_example` → `mapgen_mulitship_example`).
 
 # 2. (AI agent creates mapgen_autotest1.jl from the output and instructions)
 

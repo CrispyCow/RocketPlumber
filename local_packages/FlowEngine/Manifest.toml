@@ -2,7 +2,7 @@
 
 julia_version = "1.12.1"
 manifest_format = "2.0"
-project_hash = "3da5608b5717ed0a22f602cda081eadf85144ce4"
+project_hash = "c1ae3949ba890117dcc29552edaa6c225ca570e5"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "MacroTools"]
@@ -93,7 +93,7 @@ uuid = "ade2ca70-3891-5945-98fb-dc099432e06a"
 version = "1.11.0"
 
 [[deps.FlowEngine]]
-deps = ["HexComponentsAPI", "HexElements", "HexFluids", "LinearAlgebra", "SmallCollections", "SparseArrays"]
+deps = ["HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "LinearAlgebra", "SmallCollections", "SparseArrays"]
 path = "."
 uuid = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
 version = "0.1.0"

@@ -1,5 +1,7 @@
 #!/usr/bin/env julia
 
+#NOTE/TODO: This code will need to be refactored once GameMap structure changes
+
 """
 Map Comparison Tool
 
@@ -26,6 +28,10 @@ Note: This script must be run from the project root directory with --project=. t
 # Import required packages from the main project
 using JLD2
 using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowEngine
+# Import HexFlowProcGen because `src/components.jl` references it at top level
+# (e.g., `roll_pipe`, `NOZZLE_EDGE_PLACE`, `shipset_*`). This ensures the
+# `include("src/components.jl")` call succeeds when run from this script.
+using HexFlowProcGen
 
 # Import components to ensure types are available for JLD2 reconstruction  
 include(joinpath(dirname(@__FILE__), "..", "..", "src", "components.jl"))
@@ -50,22 +56,51 @@ function resolve_map_path(input::String)
     end
 end
 
-# Modified loadmap function to accept file paths
+# Modified loadmap function to accept file paths and load multi-ship GameMap
 function loadmap(map_input::Union{Nothing,String})
-    TileDict = Dict{TileCoord,ComponentOnTile}()
-    PipeBehaviorDict = Dict{EdgeCoord,PipeBehavior}()
-    ShipSurface = Set{TileCoord}()
-
     if isnothing(map_input)
         @info "No map loaded..."
+        return GameMap()
     else
         map_path = resolve_map_path(map_input)
-        @load map_path TileDict PipeBehaviorDict ShipSurface
-        @info "Map loaded successfully from: $map_path"
-    end
+        # Open the JLD2 file and look for known top-level keys: `ships` or `stored_gamemap`
+        jldopen(map_path, "r") do f
+            if haskey(f, "ships")
+                ships = read(f, "ships")
+                @info "Map loaded successfully from: $map_path (ships)"
+                return GameMap(ships = ships)
+            elseif haskey(f, "stored_gamemap")
+                gm = read(f, "stored_gamemap")
+                try
+                    if hasproperty(gm, :ships)
+                        @info "Map loaded successfully from: $map_path (stored_gamemap)"
+                        return gm
+                    end
+                catch
+                end
 
-    return GameMap(tiles=TileDict, pipe_behaviors=PipeBehaviorDict, ship_surface=ShipSurface)
+                if isa(gm, Array)
+                    d = Dict{Symbol, ShipMap}()
+                    for p in gm
+                        d[p.first] = p.second
+                    end
+                    @info "Map loaded successfully from: $map_path (stored_gamemap as array)"
+                    return GameMap(ships = d)
+                end
+
+                if isa(gm, Dict) && haskey(gm, :ships)
+                    @info "Map loaded successfully from: $map_path (stored_gamemap as dict)"
+                    return GameMap(ships = gm[:ships])
+                end
+
+                error("Could not interpret stored_gamemap structure in: $map_path")
+            else
+                error("Map file does not contain 'ships' or 'stored_gamemap': $map_path")
+            end
+        end
+    end
 end
+
 
 """
     compare_component_types(comp1::ComponentBehavior, comp2::ComponentBehavior)
@@ -233,39 +268,42 @@ types (like simple pipe structs) are excluded to avoid false positives.
 function check_component_identity(map::GameMap)
     messages = String[]
     
-    # Build map from component object_id to list of tiles using it
-    component_locations = Dict{UInt, Vector{TileCoord}}()
-    
-    for (coord, cot) in map.tiles
-        # Skip types that are safe to share
-        comp_type = typeof(cot.component)
-        if is_safe_to_share(comp_type)
-            continue
+    # Build map from component object_id to list of (ship, tile) using it
+    component_locations = Dict{UInt, Vector{Tuple{Symbol, TileCoord}}}()
+
+    for (ship_name, ship) in map.ships
+        for (coord, cot) in ship.components
+            # Skip types that are safe to share
+            comp_type = typeof(cot.component)
+            if is_safe_to_share(comp_type)
+                continue
+            end
+
+            obj_id = objectid(cot.component)
+            if !haskey(component_locations, obj_id)
+                component_locations[obj_id] = Tuple{Symbol, TileCoord}[]
+            end
+            push!(component_locations[obj_id], (ship_name, coord))
         end
-        
-        obj_id = objectid(cot.component)
-        if !haskey(component_locations, obj_id)
-            component_locations[obj_id] = TileCoord[]
-        end
-        push!(component_locations[obj_id], coord)
     end
-    
+
     # Find any components used at multiple locations
     shared_components = filter(p -> length(p.second) > 1, component_locations)
-    
+
     if !isempty(shared_components)
-        for (obj_id, coords) in shared_components
-            # Get component type name
-            comp = map.tiles[coords[1]].component
+        for (obj_id, locs) in shared_components
+            (s0, c0) = locs[1]
+            comp = map.ships[s0].components[c0].component
             comp_type = typeof(comp)
-            coord_str = join(["TileCoord($(coord.q), $(coord.r))" for coord in coords], ", ")
-            push!(messages, "  ⚠️  $(comp_type) shared between tiles: $coord_str")
+            coord_str = join([string("(:", s, ", TileCoord(", c.q, ", ", c.r, "))") for (s,c) in locs], ", ")
+            push!(messages, "  ⚠️  $(comp_type) shared between components: $coord_str")
         end
     end
-    
+
     # Check for shared pipe behaviors (only for types that aren't safe to share)
-    pipe_locations = Dict{UInt, Vector{EdgeCoord}}()
-    for (edge, pipe) in map.pipe_behaviors
+    pipe_locations = Dict{UInt, Vector{Tuple{Symbol, EdgeCoord}}}()
+    for (ship_name, ship) in map.ships
+        for (edge, pipe) in ship.pipe_behaviors
         # Skip types that are safe to share
         pipe_type = typeof(pipe)
         if is_safe_to_share(pipe_type)
@@ -328,103 +366,139 @@ Compare two GameMaps and return detailed comparison results.
 """
 function compare_maps(original_map::GameMap, generated_map::GameMap; tolerance=1e-6)
     results = Dict{String, Any}()
-    
-    # Compare tile counts
-    orig_tile_count = length(original_map.tiles)
-    gen_tile_count = length(generated_map.tiles)
-    results["tile_count_match"] = orig_tile_count == gen_tile_count
-    results["original_tile_count"] = orig_tile_count
-    results["generated_tile_count"] = gen_tile_count
-    
-    # Compare pipe counts
-    orig_pipe_count = length(original_map.pipe_behaviors)
-    gen_pipe_count = length(generated_map.pipe_behaviors)
+
+    # Ship name comparison
+    orig_ship_names = collect(keys(original_map.ships))
+    gen_ship_names = collect(keys(generated_map.ships))
+    results["ship_names_match"] = Set(orig_ship_names) == Set(gen_ship_names)
+    results["original_ships"] = orig_ship_names
+    results["generated_ships"] = gen_ship_names
+
+    # Flatten components and pipes across ships, keyed by (ship, coord)
+    function flatten_components(map::GameMap)
+        comps = Dict{Tuple{Symbol, TileCoord}, ComponentOnTile}()
+        for (s, ship) in map.ships
+            for (coord, comp) in ship.components
+                comps[(s, coord)] = comp
+            end
+        end
+        return comps
+    end
+
+    function flatten_pipes(map::GameMap)
+        pipes = Dict{Tuple{Symbol, EdgeCoord}, PipeBehavior}()
+        for (s, ship) in map.ships
+            for (edge, pipe) in ship.pipe_behaviors
+                pipes[(s, edge)] = pipe
+            end
+        end
+        return pipes
+    end
+
+    function flatten_surfaces(map::GameMap)
+        tiles = Set{Tuple{Symbol, TileCoord}}()
+        for (s, ship) in map.ships
+            for coord in ship.ship_tiles
+                push!(tiles, (s, coord))
+            end
+        end
+        return tiles
+    end
+
+    orig_comps = flatten_components(original_map)
+    gen_comps = flatten_components(generated_map)
+    orig_component_count = length(orig_comps)
+    gen_component_count = length(gen_comps)
+    results["component_count_match"] = orig_component_count == gen_component_count
+    results["original_component_count"] = orig_component_count
+    results["generated_component_count"] = gen_component_count
+
+    orig_pipes = flatten_pipes(original_map)
+    gen_pipes = flatten_pipes(generated_map)
+    orig_pipe_count = length(orig_pipes)
+    gen_pipe_count = length(gen_pipes)
     results["pipe_count_match"] = orig_pipe_count == gen_pipe_count
     results["original_pipe_count"] = orig_pipe_count
     results["generated_pipe_count"] = gen_pipe_count
-    
-    # Compare tiles in detail
+
+    # Compare components by (ship, coord)
     tile_mismatches = []
     missing_in_generated = []
     extra_in_generated = []
-    
-    for (coord, orig_comp) in original_map.tiles
-        if haskey(generated_map.tiles, coord)
-            gen_comp = generated_map.tiles[coord]
-            
+
+    for ((s, coord), orig_comp) in orig_comps
+        key = (s, coord)
+        if haskey(gen_comps, key)
+            gen_comp = gen_comps[key]
             # Compare component types
             if !compare_component_types(orig_comp.component, gen_comp.component)
-                push!(tile_mismatches, (coord, "Type mismatch", typeof(orig_comp.component), typeof(gen_comp.component)))
+                push!(tile_mismatches, (s, coord, "Type mismatch", typeof(orig_comp.component), typeof(gen_comp.component)))
             end
-            
             # Compare rotations
             if orig_comp.rotation != gen_comp.rotation
-                push!(tile_mismatches, (coord, "Rotation mismatch", orig_comp.rotation, gen_comp.rotation))
+                push!(tile_mismatches, (s, coord, "Rotation mismatch", orig_comp.rotation, gen_comp.rotation))
             end
-            
-            # Compare tunables (with tolerance for floating point)
+            # Compare tunables
             tunable_match, tunable_msg = compare_component_tunables(orig_comp.component, gen_comp.component; tolerance=tolerance)
             if !tunable_match
-                push!(tile_mismatches, (coord, "Tunable mismatch", tunable_msg, ""))
+                push!(tile_mismatches, (s, coord, "Tunable mismatch", tunable_msg, ""))
             end
         else
-            push!(missing_in_generated, coord)
+            push!(missing_in_generated, (s, coord))
         end
     end
-    
-    # Check for extra tiles in generated map
-    for coord in keys(generated_map.tiles)
-        if !haskey(original_map.tiles, coord)
-            push!(extra_in_generated, coord)
+
+    for ((s, coord), _) in gen_comps
+        if !haskey(orig_comps, (s, coord))
+            push!(extra_in_generated, (s, coord))
         end
     end
-    
+
     results["tile_mismatches"] = tile_mismatches
     results["missing_tiles"] = missing_in_generated
     results["extra_tiles"] = extra_in_generated
-    
+
     # Compare pipe behaviors
     pipe_mismatches = []
     missing_pipes = []
     extra_pipes = []
-    
-    for (edge_coord, orig_pipe_behav) in original_map.pipe_behaviors
-        if haskey(generated_map.pipe_behaviors, edge_coord)
-            gen_pipe_behav = generated_map.pipe_behaviors[edge_coord]
-            
-            # Compare pipe behaviors using helper function
+
+    for ((s, edge_coord), orig_pipe_behav) in orig_pipes
+        key = (s, edge_coord)
+        if haskey(gen_pipes, key)
+            gen_pipe_behav = gen_pipes[key]
             pipe_match, pipe_msg = compare_pipe_behaviors(orig_pipe_behav, gen_pipe_behav; tolerance=tolerance)
             if !pipe_match
-                push!(pipe_mismatches, (edge_coord, pipe_msg, typeof(orig_pipe_behav), typeof(gen_pipe_behav)))
+                push!(pipe_mismatches, (s, edge_coord, pipe_msg, typeof(orig_pipe_behav), typeof(gen_pipe_behav)))
             end
         else
-            push!(missing_pipes, (edge_coord, orig_pipe_behav))
+            push!(missing_pipes, (s, edge_coord, orig_pipe_behav))
         end
     end
-    
-    for (edge_coord, gen_pipe_behav) in generated_map.pipe_behaviors
-        if !haskey(original_map.pipe_behaviors, edge_coord)
-            push!(extra_pipes, (edge_coord, gen_pipe_behav))
+
+    for ((s, edge_coord), gen_pipe_behav) in gen_pipes
+        if !haskey(orig_pipes, (s, edge_coord))
+            push!(extra_pipes, (s, edge_coord, gen_pipe_behav))
         end
     end
-    
+
     results["pipe_mismatches"] = pipe_mismatches
     results["missing_pipes"] = missing_pipes
     results["extra_pipes"] = extra_pipes
-    
-    # Compare ship surface
-    orig_surface_count = length(original_map.ship_surface)
-    gen_surface_count = length(generated_map.ship_surface)
-    results["surface_count_match"] = orig_surface_count == gen_surface_count
-    results["original_surface_count"] = orig_surface_count
-    results["generated_surface_count"] = gen_surface_count
-    
-    missing_surface = setdiff(original_map.ship_surface, generated_map.ship_surface)
-    extra_surface = setdiff(generated_map.ship_surface, original_map.ship_surface)
-    
+
+    # Compare ship tiles
+    orig_surfaces = flatten_surfaces(original_map)
+    gen_surfaces = flatten_surfaces(generated_map)
+    results["surface_count_match"] = length(orig_surfaces) == length(gen_surfaces)
+    results["original_surface_count"] = length(orig_surfaces)
+    results["generated_surface_count"] = length(gen_surfaces)
+
+    missing_surface = setdiff(orig_surfaces, gen_surfaces)
+    extra_surface = setdiff(gen_surfaces, orig_surfaces)
+
     results["missing_surface"] = collect(missing_surface)
     results["extra_surface"] = collect(extra_surface)
-    
+
     # Compare circuit elements (with tolerance for floating point precision)
     element_results = compare_elements(original_map, generated_map; tolerance=tolerance)
     results["elements_match"] = element_results.elements_match
@@ -432,33 +506,30 @@ function compare_maps(original_map::GameMap, generated_map::GameMap; tolerance=1
     results["generated_element_count"] = element_results.generated_element_count
     results["missing_elements"] = element_results.missing_elements
     results["extra_elements"] = element_results.extra_elements
-    
+
     # Check for shared component references (critical bug check)
-    # Check both maps to distinguish between real bugs and harmless sharing of immutable data
     orig_identity_valid, orig_identity_msg = check_component_identity(original_map)
     gen_identity_valid, gen_identity_msg = check_component_identity(generated_map)
-    
-    # Only flag as error if generated has sharing that original doesn't
-    # (Some sharing of immutable structs like pipes may be harmless and present in original)
+
     results["identity_check_passed"] = gen_identity_valid || (!gen_identity_valid && !orig_identity_valid)
     results["identity_check_message"] = gen_identity_msg
     results["original_has_shared_refs"] = !orig_identity_valid
-    
+
     # Overall match status
-    results["perfect_match"] = (results["tile_count_match"] && 
-                               results["pipe_count_match"] && 
+    results["perfect_match"] = (results["component_count_match"] &&
+                               results["pipe_count_match"] &&
                                results["surface_count_match"] &&
                                results["elements_match"] &&
                                results["identity_check_passed"] &&
-                               isempty(tile_mismatches) && 
-                               isempty(missing_in_generated) && 
+                               isempty(tile_mismatches) &&
+                               isempty(missing_in_generated) &&
                                isempty(extra_in_generated) &&
                                isempty(pipe_mismatches) &&
                                isempty(missing_pipes) &&
                                isempty(extra_pipes) &&
                                isempty(missing_surface) &&
                                isempty(extra_surface))
-    
+
     return results
 end
 
@@ -478,7 +549,8 @@ function print_comparison_results(results::Dict)
     end
     
     println("📊 SUMMARY:")
-    println("  Tiles: $(results["original_tile_count"]) original, $(results["generated_tile_count"]) generated - $(results["tile_count_match"] ? "✅" : "❌")")
+    println("  Ships: $(length(results["original_ships"])) original, $(length(results["generated_ships"])) generated - $(results["ship_names_match"] ? "✅" : "❌")")
+    println("  Tiles (components): $(results["original_component_count"]) original, $(results["generated_component_count"]) generated - $(results["component_count_match"] ? "✅" : "❌")")
     println("  Pipes: $(results["original_pipe_count"]) original, $(results["generated_pipe_count"]) generated - $(results["pipe_count_match"] ? "✅" : "❌")")
     println("  Ship Surface: $(results["original_surface_count"]) original, $(results["generated_surface_count"]) generated - $(results["surface_count_match"] ? "✅" : "❌")")
     println("  Circuit Elements: $(results["original_element_count"]) original, $(results["generated_element_count"]) generated - $(results["elements_match"] ? "✅" : "❌")")
@@ -599,24 +671,26 @@ function compare_map_files(original_map_input::String, generator_file::String)
     # Strip .jld2 extension and get basename
     map_basename = basename(original_map_input)
     original_mapname = replace(map_basename, ".jld2" => "")
-    
+
     # Load and execute generator function
     println("Loading generator function from: $generator_file")
     if !isfile(generator_file)
         error("Generator file not found: $generator_file")
     end
-    
+
     # Include the generator file to define the function
     include(abspath(generator_file))
-    
-    # Try to call the expected function name
-    function_name = Symbol("mapgen_$original_mapname")
+
+    # Try to call the expected function name exactly as derived from the map basename
+    function_name = Symbol("mapgen_" * replace(original_mapname, ".jld2" => ""))
     if !isdefined(Main, function_name)
-        error("Function $function_name not found in $generator_file. Expected function name: mapgen_$(original_mapname)()")
+        error("Function $function_name not found in $generator_file. Expected function name: $(function_name) in $generator_file")
     end
-    
-    println("Executing generator function: $function_name")
-    generated_map = Base.invokelatest(getfield(Main, function_name))
+    found_fn = getfield(Main, function_name)
+    found_name = string(function_name)
+
+    println("Executing generator function: $found_name")
+    generated_map = Base.invokelatest(found_fn)
     
     # Compare the maps
     results = compare_maps(original_map, generated_map)
@@ -649,5 +723,7 @@ end
 
 # Run main if script is executed directly
 if abspath(PROGRAM_FILE) == @__FILE__
+    main()
+end
     main()
 end

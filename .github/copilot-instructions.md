@@ -2,55 +2,80 @@
 
 Goal: make edits and implement features fast by knowing the project's structure, runtime flow, and key conventions.
 
-- Primary packages: `FlowEngine`, `RenderEngine`, `HexFrame`, `HexElements`, `HexComponentsAPI`, `HexFluids`, `HexFlowControl`, `HexFlowCalculator`, `HexFlowRendering`, `HexFlowTelemetry`.
-- Tools: `TexturePacker` (texture atlas generation), `map_encoder` (map encoding/comparison utilities).
-- Entry-points:
+- **Primary packages**: `FlowEngine`, `RenderEngine`, `HexFrame`, `HexElements`, `HexComponentsAPI`, `HexFluids`, `HexFlowControl`, `HexFlowCalculator`, `HexFlowRendering`, `HexFlowTelemetry`, `HexFlowProcGen`, `SquirrelNoise`.
+- **Tools**: `TexturePacker` (texture atlas generation), `map_encoder` (map encoding/comparison utilities).
+- **Entry-points**:
   - **Development/REPL**: `src/repl_launch.jl` (uses Revise, shows loading screens, suitable for interactive development)
   - **Production/Compilation**: `src/julia_main.jl` (no Revise, loads upfront, defines @main for JuliaC compilation)
-- Dependency layers: Foundation (`HexFrame`, `HexFluids`, `HexElements`) → Core Logic (`HexComponentsAPI`, `FlowEngine`) → Application State (`HexFlowControl`) → Simulation (`HexFlowCalculator`) → Rendering (`HexFlowRendering`) → Scripts (`src/*.jl`)
+- **Dependency layers**: Foundation (`HexFrame`, `HexFluids`, `HexElements`, `SquirrelNoise`) → Core Logic (`HexComponentsAPI`, `FlowEngine`) → Application State (`HexFlowControl`) → Simulation (`HexFlowCalculator`) → Procedural Generation (`HexFlowProcGen`) → Rendering (`HexFlowRendering`) → Scripts (`src/*.jl`)
 
 ## Big-picture architecture
 
-- Data model: `GameMap` (in `local_packages/FlowEngine/src/FlowEngine.jl`) holds `tiles::Dict{TileCoord, ComponentOnTile}`, `pipe_behaviors::Dict{EdgeCoord, PipeBehavior}`, and `ship_surface::Set{TileCoord}`.
-- Derived state: `DerivedMapState` and `MNA_State` are computed from `GameMap` and used for physics/electrical solves.
-- Application state: `GameState`, `InputState`, `ViewState`, `HintData`, and `PlacementModes` enum (in `local_packages/HexFlowControl/src/HexFlowControl.jl`) manage UI, player input, and game progression.
-- Simulation logic: `FlowCalculator` loop, command system, and map update functions (in `local_packages/HexFlowCalculator`) run on background thread.
-- Telemetry: `HexFlowTelemetry` provides diagnostic timing tools (`DiagnosticConfig`, timers for particles/map/MNA) for performance monitoring.
-- Flow: UI/input -> mutate `GameMap` -> `update_components!` -> `update_map!` -> `update_mna!` -> render queue built -> `glrender` in `RenderEngine`.
-- Rendering: `RenderEngine` provides the low-level OpenGL abstraction; `HexFlowRendering` provides game-specific rendering helpers including particle systems. Uses an object-map (`GLObjectMap`) and a command queue of `RenderCommand{Program,Uniforms}`. Programs are identified by empty singleton types (subtypes of `AbstractRenderProgram`) and uniforms are typed structs (subtypes of `AbstractRenderUniforms{P}`). The `RenderCommand` constructor infers the program type from the uniform struct.
+### Data Model (Multi-Ship)
+
+The game supports multiple ships in a single scene. The data model hierarchy is:
+
+- **`GameMap`** (in `local_packages/FlowEngine/src/FlowEngine.jl`): Top-level container holding `ships::Dict{Symbol, ShipMap}`. Always contains at least one ship (`:primary` by default).
+- **`ShipMap`**: Per-ship data structure containing:
+  - `components::Dict{TileCoord, ComponentOnTile}` — tile-placed components
+  - `pipe_behaviors::Dict{EdgeCoord, PipeBehavior}` — edge-placed pipes
+  - `ship_tiles::Set{TileCoord}` — the ship surface defining where components can be placed
+- **`DerivedMapState`** and **`MNA_State`**: Computed from the aggregated `GameMap` for physics/electrical solves.
+
+Ship management functions: `add_ship!`, `remove_ship!`, `get_all_ship_names`, `has_ship`, `get_ship`, `offset_ship!`.
+Convenience helpers for multi-ship queries: `has_component_any_ship`, `get_component_any_ship`, `find_ship_for_surface`, `find_valid_ship_for_placement`, etc.
+
+### Application State
+
+- **`GameState`**, **`InputState`**, **`ViewState`**, **`HintData`**, and **`PlacementModes`** enum (in `local_packages/HexFlowControl/src/HexFlowControl.jl`) manage UI, player input, and game progression.
+- Simulation logic: `FlowCalculator` loop, command system, and map update functions (in `local_packages/HexFlowCalculator`) run on a background thread.
+- Telemetry: `HexFlowTelemetry` provides diagnostic timing tools (`DiagnosticConfig`, `render_loop_timer`, `flowcalc_loop_timer`, `handle_diagnostics`) for performance monitoring.
+
+### Runtime Flow
+
+UI/input → enqueue commands via `FlowCalculatorIPC` → `flowcalculator_loop!` processes commands → `update_components!` → `update_map!` → `update_mna!` → snapshot published → render thread receives snapshot → `tile_queued_render!` builds render queue → `glrender` in `RenderEngine`.
+
+### Rendering Architecture
+
+- **`RenderEngine`**: Low-level OpenGL abstraction. Uses an object-map (`GLObjectMap`) and a command queue of `RenderCommand{Program,Uniforms}`. Programs are identified by empty singleton types (subtypes of `AbstractRenderProgram`) and uniforms are typed structs (subtypes of `AbstractRenderUniforms{P}`). The `RenderCommand` constructor infers the program type from the uniform struct.
+- **`HexFlowRendering`**: Game-specific rendering helpers including particle systems, sprite rendering, and animation functions.
 
 ## Files to inspect for common change tasks
 
-- game loop and integration: `src/repl_launch.jl`, `src/gameloop.jl`
-- window initialization: `src/initial_window_setup.jl` (OpenGL, GLFW, CImGui context setup)
-- start menu and demo system: `src/startmenu.jl`, `src/demo.jl` (tutorial levels and menu navigation)
-- application state types: `local_packages/HexFlowControl/src/HexFlowControl.jl` (`GameState`, `InputState`, `ViewState`, `HintData`, `PlacementModes`, `create_consolebuffer`, `get_viewtransform`)
-- simulation logic: `local_packages/HexFlowCalculator/src/HexFlowCalculator.jl` (flowcalculator loop, commands, map updates, `FlowCalculatorSnapshot`, `FlowCalculatorIPC`)
-- UI functions and input handlers: `src/gameloop.jl` (`user_handler!`, `ui_rendering!`, UI window functions), `src/interactions.jl` (`handle_inputs!`, `poll_keys!`, `flowcalc_*` placement/interaction functions)
-- electrical/flow logic and MNA math: `local_packages/FlowEngine/src/FlowEngine.jl` (look for `MNA_getA`, `MNA_getZ`, `MNA_solve`, `update_map!`, `update_mna!`)
-- low-level GL abstraction: `local_packages/RenderEngine/src/RenderEngine.jl` (look for `GLObjectMap`, `RenderCommand`, `uniforms_type`, `glrender`, `setup_glprog!`, `setup_gltex!`, `setup_glubo!`, `setup_static_glvao!`, `setup_dynamic_glvao!`, `setup_glsprite!`)
-- game-specific rendering: `local_packages/HexFlowRendering/src/HexFlowRendering.jl` (render programs, render helpers, sprite setup, particle systems: `Particle`, `ParticleGroup`, `ParticleManager`, animation functions)
-- telemetry and diagnostics: `local_packages/HexFlowTelemetry/src/HexFlowTelemetry.jl` (`DiagnosticConfig`, `particle_timer`, `map_timer`, `mna_timer`, `handle_diagnostics`)
-- component API: `local_packages/components/HexComponentsAPI/src/HexComponentsAPI.jl`
-- component implementations: `local_packages/components/HexFlow*Components/src/*.jl`
-- component instances: `src/components.jl`
-- texture packing helper: `tools/TexturePacker/src/TexturePacker.jl` (main module with `pack_textures`, `main` function)
-- map encoding tools: `tools/map_encoder/encode_map.jl`, `tools/map_encoder/compare_maps.jl` (utilities for map serialization and comparison)
-- shaders: `local_packages/HexFlowRendering/src/shaders/*.vert`, `*.frag`, and `*.geom`
+- **Game loop and integration**: `src/repl_launch.jl`, `src/gameloop.jl`
+- **Window initialisation**: `src/initial_window_setup.jl` (OpenGL, GLFW, CImGui context setup)
+- **Start menu and demo system**: `src/startmenu.jl`, `src/demo.jl` (tutorial levels and menu navigation)
+- **Demo map generators**: `src/demo_maps/mapgen_*.jl` (procedural map generation for tutorials)
+- **Application state types**: `local_packages/HexFlowControl/src/HexFlowControl.jl` (`GameState`, `InputState`, `ViewState`, `HintData`, `PlacementModes`, `create_consolebuffer`, `get_viewtransform`)
+- **Simulation logic**: `local_packages/HexFlowCalculator/src/HexFlowCalculator.jl` (flowcalculator loop, commands, map updates, `FlowCalculatorSnapshot`, `FlowCalculatorIPC`, `TimingState`)
+- **UI functions and input handlers**: `src/gameloop.jl` (`user_handler!`, `ui_rendering!`, UI window functions), `src/interactions.jl` (`handle_inputs!`, `poll_keys!`, `flowcalc_*` placement/interaction functions)
+- **FlowEngine (data model and MNA)**: `local_packages/FlowEngine/src/FlowEngine.jl` (`GameMap`, `ShipMap`, `DerivedMapState`, `MNA_State`, ship management functions, `MNA_getA`, `MNA_getZ`, `MNA_solve`, `update_map!`, `update_mna!`)
+- **Low-level GL abstraction**: `local_packages/RenderEngine/src/RenderEngine.jl` (`GLObjectMap`, `RenderCommand`, `uniforms_type`, `glrender`, `setup_glprog!`, `setup_gltex!`, `setup_glubo!`, `setup_static_glvao!`, `setup_dynamic_glvao!`, `setup_glsprite!`)
+- **Game-specific rendering**: `local_packages/HexFlowRendering/src/HexFlowRendering.jl` (render programs, render helpers, sprite setup, particle systems: `Particle`, `ParticleGroup`, `ParticleManager`, animation functions)
+- **Telemetry and diagnostics**: `local_packages/HexFlowTelemetry/src/HexFlowTelemetry.jl` (`DiagnosticConfig`, `render_loop_timer`, `flowcalc_loop_timer`, `handle_diagnostics`)
+- **Procedural generation**: `local_packages/HexFlowProcGen/src/HexFlowProcGen.jl` (ship generation, surface walks, component/pipe placement strategies)
+- **Noise/RNG utilities**: `local_packages/SquirrelNoise/src/SquirrelNoise.jl` (deterministic noise functions, `SquirrelRNG`)
+- **Component API**: `local_packages/components/HexComponentsAPI/src/HexComponentsAPI.jl`
+- **Component implementations**: `local_packages/components/HexFlow*Components/src/*.jl`
+- **Component instances**: `src/components.jl`
+- **Texture packing**: `tools/TexturePacker/src/TexturePacker.jl` (module with `pack_textures`, `trim_images`, `main` function)
+- **Map encoding tools**: `tools/map_encoder/encode_map.jl`, `tools/map_encoder/compare_maps.jl` (utilities for map serialisation and comparison)
+- **Shaders**: `local_packages/HexFlowRendering/src/shaders/*.vert`, `*.frag`, and `*.geom`
+- **Render height guide**: `src/render_height.md` (layer system documentation)
 
 ## Project-specific conventions and patterns
 
-- **Rendering Architecture**: `RenderEngine` provides low-level OpenGL abstractions (programs, textures, VAOs, UBOs). `HexFlowRendering` builds on this with game-specific programs (`BaseSpriteRenderProgram`, `LiquidSpriteRenderProgram`, `GasSpriteRenderProgram`, `UntexSpriteRenderProgram`, `ParticleRenderProgram`) and helper functions for tile/pipe rendering.
+- **Rendering Architecture**: `RenderEngine` provides low-level OpenGL abstractions (programs, textures, VAOs, UBOs). `HexFlowRendering` builds on this with game-specific programs (`BaseSpriteRenderProgram`, `LiquidSpriteRenderProgram`, `GasSpriteRenderProgram`, `ParticleRenderProgram`) and helper functions for tile/pipe rendering.
 - **Particle System**: `HexFlowRendering` provides a particle system for visual effects. `Particle` structs are grouped into `ParticleGroup`s, which are managed by a `ParticleManager`. Key functions: `spawn_particles!`, `update_particle_physics!`, `render_particles!`, `thrust_dust_particle_effect!`.
 - **OpenGL Programs**: Represented by zero-sized types (Example: `struct MyProg <: AbstractRenderProgram end`). Each program has a matching uniform struct `MyProgUniforms <: AbstractRenderUniforms{MyProg}` and implements `uniforms_type(::Type{MyProg}) = MyProgUniforms`.
 - **RenderCommand Construction**: Use `RenderCommand(uniforms, :VAOName, draw_height::Int32)`. The constructor automatically infers the program type from the uniforms. Explicit draw heights required — see `src/render_height.md`.
 - **Register GL assets** in the global `GLObjectMap` using: `setup_glprog!`, `setup_gltex!`, `setup_glubo!`, `setup_static_glvao!`, `setup_dynamic_glvao!`, `setup_glsprite!`.
 - **Lookups**: Textures and UBOs use `Symbol` keys; programs use program type; VAOs stored within program data. Errors intentionally use `error(...)` on missing entries.
-- **GameMap Structure**: `tiles::Dict{TileCoord, ComponentOnTile}` and `pipe_behaviors::Dict{EdgeCoord, PipeBehavior}`. All placed components wrapped in `ComponentOnTile` which adds rotation and delegates interface methods.
+- **GameMap Structure**: `GameMap` contains `ships::Dict{Symbol, ShipMap}`. Each `ShipMap` holds `components::Dict{TileCoord, ComponentOnTile}`, `pipe_behaviors::Dict{EdgeCoord, PipeBehavior}`, and `ship_tiles::Set{TileCoord}`. All placed components are wrapped in `ComponentOnTile` which adds rotation and delegates interface methods.
 - To run the app from a shell in the repo root:
   - **Development** (recommended, with hot-reloading): `julia --project=. --threads=2 src/repl_launch.jl`
   - **Production** (testing before compilation): `julia --project=. --threads=2 src/julia_main.jl`
-  This runs the script and performs initialization (OpenGL/GLFW/CImGui setup).
+  This runs the script and performs initialisation (OpenGL/GLFW/CImGui setup).
   Note: The FlowCalculator runs on a background thread and the app behaves correctly only when Julia is started with multiple threads (e.g. --threads=2). If you start Julia without extra threads the render loop will still run but the background simulation task may not execute as expected.
   You should execute these scripts after making changes to quickly surface compile-time and runtime errors, unless you are told not to
 - Electrical model prefers explicit, allocation-conscious data structures (SmallVector, Dict sizing with `sizehint!`, sparse matrices). Keep hot-loop allocations low.
@@ -61,8 +86,6 @@ Goal: make edits and implement features fast by knowing the project's structure,
   - From repo root open Julia REPL with the appropriate project: `cd \Path\To\HexFlow; julia --project=.` then `include("src/repl_launch.jl")` from the REPL. The `src/repl_launch.jl` script uses Revise and expects local packages to be available via the workspace environment.
 - Run the texture packer:
   - `cd tools/TexturePacker; julia --project=. src/TexturePacker.jl` (outputs placed in `tools/TexturePacker/outputs/`).
-- Create/regenerate production artifacts:
-  - `julia --project=. build/create_artifacts.jl` (creates `local_packages/HexFlowRendering/Artifacts.toml` from shaders and texture atlas).
 - Run package tests (per-package Project.toml present):
   - Example: `cd local_packages/HexFrame; julia --project=. -e "using Pkg; Pkg.test()"` or activate root environment and test specific packages via Pkg.
 
@@ -74,9 +97,7 @@ HexFlow uses Julia's artifact system for production assets (shaders, texture atl
 - **Development mode** (`repl_launch.jl`): Assets loaded directly from source files for instant hot-reload during development.
 - **Production mode** (`julia_main.jl`): Assets loaded from artifacts defined in `local_packages/HexFlowRendering/Artifacts.toml`.
 
-Artifacts are created by the build scripts in `build/` (see `build/build_common.jl::create_hexflow_artifacts()`). The build scripts check if artifacts are up-to-date by comparing source file modification times and skip regeneration if current. The `julia_main.jl` entry point verifies that required artifacts exist but does not create them — if artifacts are missing, it provides descriptive error messages with instructions.
-
-To manually regenerate artifacts without a full build: `julia --project=. build/create_artifacts.jl`
+The `julia_main.jl` entry point verifies that required artifacts (`shaders`, `texture_atlas`) exist before loading. If artifacts are missing, it provides descriptive error messages with instructions for regenerating them.
 
 ## What to look for when editing
 
@@ -129,7 +150,7 @@ Both interfaces provide optional methods with sensible defaults (see API package
 
 ## Examples drawn from the codebase
 
-- Render command creation: `RenderCommand(uniforms, :basetile, draw_height::Int32)` (see `RenderEngine` — the inner constructor sets program automatically). See `src/render_height.md` for layer guidance.
+- Render command creation: `RenderCommand(uniforms, :UnitQuad_VAO, draw_height::Int32)` (see `RenderEngine` — the inner constructor sets program automatically). See `src/render_height.md` for layer guidance.
 - Accessing textures: `getid_gltex(g_globjmap, :texname)` and `getdata_glsprite(g_globjmap, :sprite_name)`.
 - Rendering helpers: `render_basic_tile(glmap, :MySprite, rotation, position; colour=..., scale=..., transparency=..., draw_height=...)` from `HexFlowRendering`. Also available: `render_liquid_tile`, `render_gas_tile`, `render_basic_pipe` with similar signatures.
 - Animation functions (from `HexFlowRendering`): `animation_sprite_picker(sprites_tuple, gameticks, speed_div)`, `animation_vibe_offset(gameticks)`, `animation_rotate(gameticks, speed)`.

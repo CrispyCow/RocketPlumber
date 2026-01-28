@@ -12,7 +12,9 @@ This map teaches:
 - Flow control with adjustable valves
 """
 function mapgen_fluidtransfer()
-    map = GameMap()
+    ship = ShipMap()
+    components = Dict{TileCoord, ComponentOnTile}()
+    pipes = Dict{EdgeCoord, PipeBehavior}()
 
     # Create 9 liquid tanks - each needs to be a separate instance
     # Right side tank array (6 tanks)
@@ -167,60 +169,60 @@ function mapgen_fluidtransfer()
 
     # Place components on map
     # Liquid tanks
-    map.tiles[TileCoord(5, -7)] = ComponentOnTile(tank_1, HexFrame.Q_NEG)
-    map.tiles[TileCoord(5, -8)] = ComponentOnTile(tank_2, HexFrame.Q_NEG)
-    map.tiles[TileCoord(6, -7)] = ComponentOnTile(tank_3, HexFrame.Q_NEG)
-    map.tiles[TileCoord(6, -8)] = ComponentOnTile(tank_4, HexFrame.Q_NEG)
-    map.tiles[TileCoord(6, -9)] = ComponentOnTile(tank_5, HexFrame.Q_NEG)
-    map.tiles[TileCoord(7, -8)] = ComponentOnTile(tank_6, HexFrame.Q_NEG)
-    map.tiles[TileCoord(7, -9)] = ComponentOnTile(tank_7, HexFrame.Q_NEG)
-    map.tiles[TileCoord(0, 0)] = ComponentOnTile(dest_tank, HexFrame.Q_NEG)
+    components[TileCoord(5, -7)] = ComponentOnTile(tank_1, HexFrame.Q_NEG)
+    components[TileCoord(5, -8)] = ComponentOnTile(tank_2, HexFrame.Q_NEG)
+    components[TileCoord(6, -7)] = ComponentOnTile(tank_3, HexFrame.Q_NEG)
+    components[TileCoord(6, -8)] = ComponentOnTile(tank_4, HexFrame.Q_NEG)
+    components[TileCoord(6, -9)] = ComponentOnTile(tank_5, HexFrame.Q_NEG)
+    components[TileCoord(7, -8)] = ComponentOnTile(tank_6, HexFrame.Q_NEG)
+    components[TileCoord(7, -9)] = ComponentOnTile(tank_7, HexFrame.Q_NEG)
+    components[TileCoord(0, 0)] = ComponentOnTile(dest_tank, HexFrame.Q_NEG)
 
     # Electric pumps
-    map.tiles[TileCoord(4, -5)] = ComponentOnTile(pump_1, HexFrame.R_NEG)
-    map.tiles[TileCoord(3, -7)] = ComponentOnTile(pump_2, HexFrame.Q_POS)
-    map.tiles[TileCoord(0, -3)] = ComponentOnTile(pump_3, HexFrame.R_NEG)
+    components[TileCoord(4, -5)] = ComponentOnTile(pump_1, HexFrame.R_NEG)
+    components[TileCoord(3, -7)] = ComponentOnTile(pump_2, HexFrame.Q_POS)
+    components[TileCoord(0, -3)] = ComponentOnTile(pump_3, HexFrame.R_NEG)
 
     # Turbopump
-    map.tiles[TileCoord(-4, 2)] = ComponentOnTile(turbopump, HexFrame.Q_POS)
+    components[TileCoord(-4, 2)] = ComponentOnTile(turbopump, HexFrame.Q_POS)
 
     # Decomposition chamber
-    map.tiles[TileCoord(-6, 3)] = ComponentOnTile(decomp, HexFrame.Q_POS)
+    components[TileCoord(-6, 3)] = ComponentOnTile(decomp, HexFrame.Q_POS)
 
     # Nozzles
-    map.tiles[TileCoord(-7, 3)] = ComponentOnTile(nozzle_1, HexFrame.Q_POS)
-    map.tiles[TileCoord(-7, 4)] = ComponentOnTile(nozzle_2, HexFrame.Q_POS)
+    components[TileCoord(-7, 3)] = ComponentOnTile(nozzle_1, HexFrame.Q_POS)
+    components[TileCoord(-7, 4)] = ComponentOnTile(nozzle_2, HexFrame.Q_POS)
 
     # Valve
-    map.tiles[TileCoord(-2, 1)] = ComponentOnTile(valve, HexFrame.Q_POS)
+    components[TileCoord(-2, 1)] = ComponentOnTile(valve, HexFrame.Q_POS)
 
     # Tile-based pipes
-    map.tiles[TileCoord(3, -5)] = ComponentOnTile(pipe_tile_1, HexFrame.R_POS)
-    map.tiles[TileCoord(-5, 2)] = ComponentOnTile(pipe_tile_2, HexFrame.Q_POS)
+    components[TileCoord(3, -5)] = ComponentOnTile(pipe_tile_1, HexFrame.R_POS)
+    components[TileCoord(-5, 2)] = ComponentOnTile(pipe_tile_2, HexFrame.Q_POS)
 
     # Add edge-based pipe behaviors
     # ScrapPipes (2.0 S)
-    map.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(3, -4), HexFrame.Q_NEG), VertexCoord(TileCoord(2, -4), HexFrame.Q_POS))] = ScrapPipeBehav()
-    map.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(0, -2), HexFrame.Q_POS), VertexCoord(TileCoord(2, -3), HexFrame.Q_NEG))] = ScrapPipeBehav()
-    map.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(1, -2), HexFrame.Q_NEG), VertexCoord(TileCoord(0, -2), HexFrame.Q_POS))] = ScrapPipeBehav()
-    map.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(5, -7), HexFrame.Q_NEG), VertexCoord(TileCoord(4, -7), HexFrame.Q_POS))] = ScrapPipeBehav()
-    map.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(1, -3), HexFrame.Q_POS), VertexCoord(TileCoord(3, -4), HexFrame.Q_NEG))] = ScrapPipeBehav()
-    map.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(2, -3), HexFrame.Q_NEG), VertexCoord(TileCoord(1, -3), HexFrame.Q_POS))] = ScrapPipeBehav()
-    map.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(5, -8), HexFrame.Q_NEG), VertexCoord(TileCoord(4, -7), HexFrame.Q_POS))] = ScrapPipeBehav()
-    map.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(3, -6), HexFrame.Q_POS), VertexCoord(TileCoord(5, -7), HexFrame.Q_NEG))] = ScrapPipeBehav()
-    map.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(4, -6), HexFrame.Q_NEG), VertexCoord(TileCoord(3, -6), HexFrame.Q_POS))] = ScrapPipeBehav()
-    map.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(1, -2), HexFrame.Q_NEG), VertexCoord(TileCoord(0, -1), HexFrame.Q_POS))] = ScrapPipeBehav()
-    map.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(-7, 3), HexFrame.Q_POS), VertexCoord(TileCoord(-5, 2), HexFrame.Q_NEG))] = ScrapPipeBehav()
+    pipes[EdgeCoord(VertexCoord(TileCoord(3, -4), HexFrame.Q_NEG), VertexCoord(TileCoord(2, -4), HexFrame.Q_POS))] = ScrapPipeBehav()
+    pipes[EdgeCoord(VertexCoord(TileCoord(0, -2), HexFrame.Q_POS), VertexCoord(TileCoord(2, -3), HexFrame.Q_NEG))] = ScrapPipeBehav()
+    pipes[EdgeCoord(VertexCoord(TileCoord(1, -2), HexFrame.Q_NEG), VertexCoord(TileCoord(0, -2), HexFrame.Q_POS))] = ScrapPipeBehav()
+    pipes[EdgeCoord(VertexCoord(TileCoord(5, -7), HexFrame.Q_NEG), VertexCoord(TileCoord(4, -7), HexFrame.Q_POS))] = ScrapPipeBehav()
+    pipes[EdgeCoord(VertexCoord(TileCoord(1, -3), HexFrame.Q_POS), VertexCoord(TileCoord(3, -4), HexFrame.Q_NEG))] = ScrapPipeBehav()
+    pipes[EdgeCoord(VertexCoord(TileCoord(2, -3), HexFrame.Q_NEG), VertexCoord(TileCoord(1, -3), HexFrame.Q_POS))] = ScrapPipeBehav()
+    pipes[EdgeCoord(VertexCoord(TileCoord(5, -8), HexFrame.Q_NEG), VertexCoord(TileCoord(4, -7), HexFrame.Q_POS))] = ScrapPipeBehav()
+    pipes[EdgeCoord(VertexCoord(TileCoord(3, -6), HexFrame.Q_POS), VertexCoord(TileCoord(5, -7), HexFrame.Q_NEG))] = ScrapPipeBehav()
+    pipes[EdgeCoord(VertexCoord(TileCoord(4, -6), HexFrame.Q_NEG), VertexCoord(TileCoord(3, -6), HexFrame.Q_POS))] = ScrapPipeBehav()
+    pipes[EdgeCoord(VertexCoord(TileCoord(1, -2), HexFrame.Q_NEG), VertexCoord(TileCoord(0, -1), HexFrame.Q_POS))] = ScrapPipeBehav()
+    pipes[EdgeCoord(VertexCoord(TileCoord(-7, 3), HexFrame.Q_POS), VertexCoord(TileCoord(-5, 2), HexFrame.Q_NEG))] = ScrapPipeBehav()
 
     # BigPipes (10.0 S)
-    map.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(-6, 3), HexFrame.Q_NEG), VertexCoord(TileCoord(-7, 4), HexFrame.Q_POS))] = BigPipeBehav()
-    map.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(-6, 3), HexFrame.Q_POS), VertexCoord(TileCoord(-4, 2), HexFrame.Q_NEG))] = BigPipeBehav()
-    map.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(-6, 3), HexFrame.Q_NEG), VertexCoord(TileCoord(-7, 3), HexFrame.Q_POS))] = BigPipeBehav()
-    map.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(-4, 2), HexFrame.Q_POS), VertexCoord(TileCoord(-2, 1), HexFrame.Q_NEG))] = BigPipeBehav()
-    map.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(-2, 1), HexFrame.Q_POS), VertexCoord(TileCoord(0, 0), HexFrame.Q_NEG))] = BigPipeBehav()
+    pipes[EdgeCoord(VertexCoord(TileCoord(-6, 3), HexFrame.Q_NEG), VertexCoord(TileCoord(-7, 4), HexFrame.Q_POS))] = BigPipeBehav()
+    pipes[EdgeCoord(VertexCoord(TileCoord(-6, 3), HexFrame.Q_POS), VertexCoord(TileCoord(-4, 2), HexFrame.Q_NEG))] = BigPipeBehav()
+    pipes[EdgeCoord(VertexCoord(TileCoord(-6, 3), HexFrame.Q_NEG), VertexCoord(TileCoord(-7, 3), HexFrame.Q_POS))] = BigPipeBehav()
+    pipes[EdgeCoord(VertexCoord(TileCoord(-4, 2), HexFrame.Q_POS), VertexCoord(TileCoord(-2, 1), HexFrame.Q_NEG))] = BigPipeBehav()
+    pipes[EdgeCoord(VertexCoord(TileCoord(-2, 1), HexFrame.Q_POS), VertexCoord(TileCoord(0, 0), HexFrame.Q_NEG))] = BigPipeBehav()
 
     # Define ship surface
-    map.ship_surface = Set(
+    surface = Set(
         [
             TileCoord(0, -2),
             TileCoord(2, -4),
@@ -257,5 +259,9 @@ function mapgen_fluidtransfer()
         ]
     )
 
-    return map
+    set_component!(ship, components)
+    set_pipe!(ship, pipes)
+    set_surface_tile!(ship, surface)
+
+    return GameMap(ship)
 end

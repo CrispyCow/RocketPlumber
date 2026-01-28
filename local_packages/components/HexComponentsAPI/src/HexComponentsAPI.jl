@@ -57,7 +57,7 @@ OPTIONAL METHODS:
     collect_effect_particles!(manager, behav::T; kwargs...)::Nothing
     map_rotation(behav::T, rotation::HexAxis)::HexAxis
     can_be_moved(behav::T; kwargs...)::(Bool, String)
-    placement_valid(behav::T; coord::TileCoord, gamemap, rotation::HexAxis, kwargs...)::(Bool, String)
+    placement_valid(behav::T, coord::TileCoord, surface; rotation::HexAxis, kwargs...)::(Bool, String)
     
 """
 abstract type ComponentBehavior end
@@ -121,15 +121,13 @@ map_rotation(behav::T, rotation::HexAxis) where {T <: ComponentBehavior} = rotat
 "Default can_be_moved returns true with empty reason, indicating component can be moved"
 can_be_moved(behav::T; kwargs...) where {T <: ComponentBehavior} = (true, "")
 
-"Default implementation checks if the coordinate is on a ship surface"
-function placement_valid(behav::T; coord::TileCoord, gamemap, rotation::HexAxis, kwargs...) where {T <: ComponentBehavior}
-    if coord in gamemap.ship_surface # Access ship_surface directly to avoid circular dependency on FlowEngine
-        return (true, "")
-    else
-        return (false, "Not on ship surface")
-    end
+"""
+Default implementation of placement_valid just errors.
+Default behavior should be provided by FlowEngine with a concrete surface type GameMap.
+"""
+function placement_valid(behav::T, coord::TileCoord, surface; kwargs...) where {T <: ComponentBehavior}
+    error("placement_valid should be called with GameMap as the surface argument; the method for that is implemented in FlowEngine")
 end
-
 
 # ===============================================================
 # ComponentOnTile Wrapper
@@ -165,7 +163,7 @@ end
 get_thrust(comp::ComponentOnTile; kwargs...) = get_thrust(comp.component; rotation = comp.rotation, kwargs...)
 map_rotation(comp::ComponentOnTile, rotation::HexAxis) = map_rotation(comp.component, rotation)
 can_be_moved(comp::ComponentOnTile; kwargs...) = can_be_moved(comp.component; kwargs...)
-placement_valid(comp::ComponentOnTile; kwargs...) = placement_valid(comp.component; rotation = comp.rotation, kwargs...)
+placement_valid(comp::ComponentOnTile, coord, surface; kwargs...) = placement_valid(comp.component, coord, surface; rotation = comp.rotation, kwargs...)
 
 "General implementation which leverages the existing ComponentBehavior produce_rel_elements function"
 function produce_abs_elements(tilecomp::ComponentOnTile, tile::TileCoord)

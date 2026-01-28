@@ -17,7 +17,9 @@ This map demonstrates a complete spacecraft propulsion architecture with:
 - Redundant systems
 """
 function mapgen_shipdemo()
-    map = GameMap()
+    ship = ShipMap()
+    components = Dict{TileCoord, ComponentOnTile}()
+    pipes = Dict{EdgeCoord, PipeBehavior}()
 
     # === Gas Tanks (Cold Gas for RCS) ===
     # Create separate instances for each gas tank to avoid shared state
@@ -244,14 +246,14 @@ function mapgen_shipdemo()
         sprite = Symbol("AllNozzles_SmallNozzle")
     )
 
-    # === Place Tiles ===
+    # === Place components ===
     # Gas tanks
-    map.tiles[TileCoord(4, 1)] = ComponentOnTile(gas_tank_1, HexFrame.R_POS)
-    map.tiles[TileCoord(5, 0)] = ComponentOnTile(gas_tank_2, HexFrame.S_POS)
-    map.tiles[TileCoord(4, -6)] = ComponentOnTile(gas_tank_3, HexFrame.R_POS)
-    map.tiles[TileCoord(4, 0)] = ComponentOnTile(gas_tank_4, HexFrame.R_POS)
-    map.tiles[TileCoord(4, -5)] = ComponentOnTile(gas_tank_5, HexFrame.R_POS)
-    map.tiles[TileCoord(5, -6)] = ComponentOnTile(
+    components[TileCoord(4, 1)] = ComponentOnTile(gas_tank_1, HexFrame.R_POS)
+    components[TileCoord(5, 0)] = ComponentOnTile(gas_tank_2, HexFrame.S_POS)
+    components[TileCoord(4, -6)] = ComponentOnTile(gas_tank_3, HexFrame.R_POS)
+    components[TileCoord(4, 0)] = ComponentOnTile(gas_tank_4, HexFrame.R_POS)
+    components[TileCoord(4, -5)] = ComponentOnTile(gas_tank_5, HexFrame.R_POS)
+    components[TileCoord(5, -6)] = ComponentOnTile(
         ThevininTankCompBehav(
             GasTankBehavFrag, 3;
             fluid = HexFluids.COLD_GAS,
@@ -263,17 +265,17 @@ function mapgen_shipdemo()
     )
 
     # Liquid tanks
-    map.tiles[TileCoord(5, -4)] = ComponentOnTile(liquid_tank_1, HexFrame.Q_NEG)
-    map.tiles[TileCoord(6, -5)] = ComponentOnTile(liquid_tank_2, HexFrame.Q_NEG)
-    map.tiles[TileCoord(9, -5)] = ComponentOnTile(liquid_tank_3, HexFrame.Q_NEG)
-    map.tiles[TileCoord(6, -4)] = ComponentOnTile(liquid_tank_4, HexFrame.Q_NEG)
-    map.tiles[TileCoord(5, -2)] = ComponentOnTile(liquid_tank_5, HexFrame.Q_NEG)
-    map.tiles[TileCoord(11, -6)] = ComponentOnTile(liquid_tank_6, HexFrame.Q_POS)
-    map.tiles[TileCoord(6, -2)] = ComponentOnTile(liquid_tank_7, HexFrame.Q_NEG)
-    map.tiles[TileCoord(7, -3)] = ComponentOnTile(liquid_tank_8, HexFrame.Q_NEG)
-    map.tiles[TileCoord(5, -3)] = ComponentOnTile(liquid_tank_9, HexFrame.Q_NEG)
-    map.tiles[TileCoord(7, -5)] = ComponentOnTile(liquid_tank_10, HexFrame.Q_NEG)
-    map.tiles[TileCoord(7, -4)] = ComponentOnTile(
+    components[TileCoord(5, -4)] = ComponentOnTile(liquid_tank_1, HexFrame.Q_NEG)
+    components[TileCoord(6, -5)] = ComponentOnTile(liquid_tank_2, HexFrame.Q_NEG)
+    components[TileCoord(9, -5)] = ComponentOnTile(liquid_tank_3, HexFrame.Q_NEG)
+    components[TileCoord(6, -4)] = ComponentOnTile(liquid_tank_4, HexFrame.Q_NEG)
+    components[TileCoord(5, -2)] = ComponentOnTile(liquid_tank_5, HexFrame.Q_NEG)
+    components[TileCoord(11, -6)] = ComponentOnTile(liquid_tank_6, HexFrame.Q_POS)
+    components[TileCoord(6, -2)] = ComponentOnTile(liquid_tank_7, HexFrame.Q_NEG)
+    components[TileCoord(7, -3)] = ComponentOnTile(liquid_tank_8, HexFrame.Q_NEG)
+    components[TileCoord(5, -3)] = ComponentOnTile(liquid_tank_9, HexFrame.Q_NEG)
+    components[TileCoord(7, -5)] = ComponentOnTile(liquid_tank_10, HexFrame.Q_NEG)
+    components[TileCoord(7, -4)] = ComponentOnTile(
         ThevininTankCompBehav(
             LiquidTankBehavFrag, 3;
             fluid = HexFluids.MONOPROP_LIQUID,
@@ -283,7 +285,7 @@ function mapgen_shipdemo()
             series_conductance = 5.0
         ), HexFrame.Q_NEG
     )
-    map.tiles[TileCoord(6, -3)] = ComponentOnTile(
+    components[TileCoord(6, -3)] = ComponentOnTile(
         ThevininTankCompBehav(
             LiquidTankBehavFrag, 3;
             fluid = HexFluids.MONOPROP_LIQUID,
@@ -295,26 +297,26 @@ function mapgen_shipdemo()
     )
 
     # Decomposition chambers
-    map.tiles[TileCoord(-1, -1)] = ComponentOnTile(decomp_1, HexFrame.Q_POS)
-    map.tiles[TileCoord(-1, 1)] = ComponentOnTile(decomp_2, HexFrame.Q_POS)
+    components[TileCoord(-1, -1)] = ComponentOnTile(decomp_1, HexFrame.Q_POS)
+    components[TileCoord(-1, 1)] = ComponentOnTile(decomp_2, HexFrame.Q_POS)
 
     # Pumps
-    map.tiles[TileCoord(1, 0)] = ComponentOnTile(elec_turbopump, HexFrame.Q_POS)
-    map.tiles[TileCoord(1, -2)] = ComponentOnTile(turbopump, HexFrame.Q_POS)
-    map.tiles[TileCoord(8, -5)] = ComponentOnTile(elec_transfer_1, HexFrame.S_NEG)
-    map.tiles[TileCoord(10, -6)] = ComponentOnTile(elec_transfer_2, HexFrame.Q_NEG)
-    map.tiles[TileCoord(8, -4)] = ComponentOnTile(elec_transfer_3, HexFrame.R_NEG)
-    map.tiles[TileCoord(10, -5)] = ComponentOnTile(elec_transfer_4, HexFrame.Q_POS)
+    components[TileCoord(1, 0)] = ComponentOnTile(elec_turbopump, HexFrame.Q_POS)
+    components[TileCoord(1, -2)] = ComponentOnTile(turbopump, HexFrame.Q_POS)
+    components[TileCoord(8, -5)] = ComponentOnTile(elec_transfer_1, HexFrame.S_NEG)
+    components[TileCoord(10, -6)] = ComponentOnTile(elec_transfer_2, HexFrame.Q_NEG)
+    components[TileCoord(8, -4)] = ComponentOnTile(elec_transfer_3, HexFrame.R_NEG)
+    components[TileCoord(10, -5)] = ComponentOnTile(elec_transfer_4, HexFrame.Q_POS)
 
     # Valve
-    map.tiles[TileCoord(3, -3)] = ComponentOnTile(adj_valve, HexFrame.Q_POS)
+    components[TileCoord(3, -3)] = ComponentOnTile(adj_valve, HexFrame.Q_POS)
 
     # RCS Nozzles
-    map.tiles[TileCoord(-3, 2)] = ComponentOnTile(small_nozzle_1, HexFrame.Q_POS)
-    map.tiles[TileCoord(-3, 0)] = ComponentOnTile(small_nozzle_2, HexFrame.Q_POS)
+    components[TileCoord(-3, 2)] = ComponentOnTile(small_nozzle_1, HexFrame.Q_POS)
+    components[TileCoord(-3, 0)] = ComponentOnTile(small_nozzle_2, HexFrame.Q_POS)
 
     # Switched nozzles (create separate instances for each)
-    map.tiles[TileCoord(-2, 4)] = ComponentOnTile(
+    components[TileCoord(-2, 4)] = ComponentOnTile(
         SwitchedNozzleCompBehav(
             throat_area = 0.1,
             connected_node = HexFrame.NODE_Q_POS,
@@ -323,7 +325,7 @@ function mapgen_shipdemo()
             change_rate = 6.0 / 60
         ), HexFrame.R_NEG
     )
-    map.tiles[TileCoord(0, -4)] = ComponentOnTile(
+    components[TileCoord(0, -4)] = ComponentOnTile(
         SwitchedNozzleCompBehav(
             throat_area = 0.1,
             connected_node = HexFrame.NODE_Q_POS,
@@ -332,7 +334,7 @@ function mapgen_shipdemo()
             change_rate = 6.0 / 60
         ), HexFrame.S_NEG
     )
-    map.tiles[TileCoord(0, 3)] = ComponentOnTile(
+    components[TileCoord(0, 3)] = ComponentOnTile(
         SwitchedNozzleCompBehav(
             throat_area = 0.1,
             connected_node = HexFrame.NODE_Q_POS,
@@ -341,7 +343,7 @@ function mapgen_shipdemo()
             change_rate = 6.0 / 60
         ), HexFrame.R_NEG
     )
-    map.tiles[TileCoord(-2, -3)] = ComponentOnTile(
+    components[TileCoord(-2, -3)] = ComponentOnTile(
         SwitchedNozzleCompBehav(
             throat_area = 0.1,
             connected_node = HexFrame.NODE_Q_POS,
@@ -350,7 +352,7 @@ function mapgen_shipdemo()
             change_rate = 6.0 / 60
         ), HexFrame.S_NEG
     )
-    map.tiles[TileCoord(2, 2)] = ComponentOnTile(
+    components[TileCoord(2, 2)] = ComponentOnTile(
         SwitchedNozzleCompBehav(
             throat_area = 0.1,
             connected_node = HexFrame.NODE_Q_POS,
@@ -359,7 +361,7 @@ function mapgen_shipdemo()
             change_rate = 6.0 / 60
         ), HexFrame.R_NEG
     )
-    map.tiles[TileCoord(2, -5)] = ComponentOnTile(
+    components[TileCoord(2, -5)] = ComponentOnTile(
         SwitchedNozzleCompBehav(
             throat_area = 0.1,
             connected_node = HexFrame.NODE_Q_POS,
@@ -370,7 +372,7 @@ function mapgen_shipdemo()
     )
 
     # Tile-based pipes
-    map.tiles[TileCoord(1, 2)] = ComponentOnTile(
+    components[TileCoord(1, 2)] = ComponentOnTile(
         ScrapTilePipeCompBehav(
             BasicElemBehavFrag(
                 RelativeElement(RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG), 2.0, CONST_RESISTOR)
@@ -378,7 +380,7 @@ function mapgen_shipdemo()
         ),
         HexFrame.Q_NEG
     )
-    map.tiles[TileCoord(3, 1)] = ComponentOnTile(
+    components[TileCoord(3, 1)] = ComponentOnTile(
         ScrapTilePipeCompBehav(
             BasicElemBehavFrag(
                 RelativeElement(RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG), 2.0, CONST_RESISTOR)
@@ -386,7 +388,7 @@ function mapgen_shipdemo()
         ),
         HexFrame.Q_NEG
     )
-    map.tiles[TileCoord(-1, 3)] = ComponentOnTile(
+    components[TileCoord(-1, 3)] = ComponentOnTile(
         ScrapTilePipeCompBehav(
             BasicElemBehavFrag(
                 RelativeElement(RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG), 2.0, CONST_RESISTOR)
@@ -394,7 +396,7 @@ function mapgen_shipdemo()
         ),
         HexFrame.Q_NEG
     )
-    map.tiles[TileCoord(1, -4)] = ComponentOnTile(
+    components[TileCoord(1, -4)] = ComponentOnTile(
         ScrapTilePipeCompBehav(
             BasicElemBehavFrag(
                 RelativeElement(RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG), 2.0, CONST_RESISTOR)
@@ -402,7 +404,7 @@ function mapgen_shipdemo()
         ),
         HexFrame.Q_NEG
     )
-    map.tiles[TileCoord(-1, -3)] = ComponentOnTile(
+    components[TileCoord(-1, -3)] = ComponentOnTile(
         ScrapTilePipeCompBehav(
             BasicElemBehavFrag(
                 RelativeElement(RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG), 2.0, CONST_RESISTOR)
@@ -410,7 +412,7 @@ function mapgen_shipdemo()
         ),
         HexFrame.Q_NEG
     )
-    map.tiles[TileCoord(3, -5)] = ComponentOnTile(
+    components[TileCoord(3, -5)] = ComponentOnTile(
         ScrapTilePipeCompBehav(
             BasicElemBehavFrag(
                 RelativeElement(RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG), 2.0, CONST_RESISTOR)
@@ -419,7 +421,7 @@ function mapgen_shipdemo()
         HexFrame.Q_NEG
     )
 
-    map.tiles[TileCoord(0, -2)] = ComponentOnTile(
+    components[TileCoord(0, -2)] = ComponentOnTile(
         BigTilePipeCompBehav(
             BasicElemBehavFrag(
                 RelativeElement(RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG), 10.0, CONST_RESISTOR)
@@ -427,7 +429,7 @@ function mapgen_shipdemo()
         ),
         HexFrame.Q_NEG
     )
-    map.tiles[TileCoord(3, -1)] = ComponentOnTile(
+    components[TileCoord(3, -1)] = ComponentOnTile(
         BigTilePipeCompBehav(
             BasicElemBehavFrag(
                 RelativeElement(RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG), 10.0, CONST_RESISTOR)
@@ -438,84 +440,84 @@ function mapgen_shipdemo()
 
     # === Edge-based Pipes ===
     # BigPipe connections
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(8, -3), HexFrame.Q_NEG),
             VertexCoord(TileCoord(7, -3), HexFrame.Q_POS)
         ),
     ] = BigPipeBehav(10.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(8, -6), HexFrame.Q_NEG),
             VertexCoord(TileCoord(7, -5), HexFrame.Q_POS)
         ),
     ] = BigPipeBehav(10.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(-1, -1), HexFrame.Q_NEG),
             VertexCoord(TileCoord(-2, -1), HexFrame.Q_POS)
         ),
     ] = BigPipeBehav(10.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(-1, -1), HexFrame.Q_POS),
             VertexCoord(TileCoord(1, -2), HexFrame.Q_NEG)
         ),
     ] = BigPipeBehav(10.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(-1, 1), HexFrame.Q_POS),
             VertexCoord(TileCoord(1, 0), HexFrame.Q_NEG)
         ),
     ] = BigPipeBehav(10.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(3, -3), HexFrame.Q_POS),
             VertexCoord(TileCoord(5, -4), HexFrame.Q_NEG)
         ),
     ] = BigPipeBehav(10.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(1, 0), HexFrame.Q_POS),
             VertexCoord(TileCoord(3, -1), HexFrame.Q_NEG)
         ),
     ] = BigPipeBehav(10.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(3, -1), HexFrame.Q_POS),
             VertexCoord(TileCoord(5, -2), HexFrame.Q_NEG)
         ),
     ] = BigPipeBehav(10.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(-3, 2), HexFrame.Q_POS),
             VertexCoord(TileCoord(-1, 1), HexFrame.Q_NEG)
         ),
     ] = BigPipeBehav(10.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(1, -2), HexFrame.Q_POS),
             VertexCoord(TileCoord(3, -3), HexFrame.Q_NEG)
         ),
     ] = BigPipeBehav(10.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(-3, 0), HexFrame.Q_POS),
             VertexCoord(TileCoord(-1, -1), HexFrame.Q_NEG)
         ),
     ] = BigPipeBehav(10.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(-2, -1), HexFrame.Q_POS),
             VertexCoord(TileCoord(0, -2), HexFrame.Q_NEG)
@@ -523,28 +525,28 @@ function mapgen_shipdemo()
     ] = BigPipeBehav(10.0)
 
     # ScrapPipe connections
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(1, 2), HexFrame.Q_POS),
             VertexCoord(TileCoord(3, 1), HexFrame.Q_NEG)
         ),
     ] = ScrapPipeBehav(2.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(-1, 3), HexFrame.Q_POS),
             VertexCoord(TileCoord(1, 2), HexFrame.Q_NEG)
         ),
     ] = ScrapPipeBehav(2.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(1, -4), HexFrame.Q_POS),
             VertexCoord(TileCoord(3, -5), HexFrame.Q_NEG)
         ),
     ] = ScrapPipeBehav(2.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(-1, -3), HexFrame.Q_POS),
             VertexCoord(TileCoord(1, -4), HexFrame.Q_NEG)
@@ -552,7 +554,7 @@ function mapgen_shipdemo()
     ] = ScrapPipeBehav(2.0)
 
     # === Ship Surface ===
-    map.ship_surface = Set(
+    surface = Set(
         [
             TileCoord(2, -4),
             TileCoord(2, 0),
@@ -632,5 +634,13 @@ function mapgen_shipdemo()
         ]
     )
 
-    return map
+    set_component!(map, components)
+    set_pipe!(map, pipes)
+    set_surface_tile!(map, surface)
+
+    set_component!(ship, components)
+    set_pipe!(ship, pipes)
+    set_surface_tile!(ship, surface)
+
+    return GameMap(ship)
 end

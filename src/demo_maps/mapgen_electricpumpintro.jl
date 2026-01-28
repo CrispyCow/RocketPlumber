@@ -9,7 +9,9 @@ This tutorial demonstrates the electric pump component:
 - The electric pump uses stored energy to operate and can be switched on/off
 """
 function mapgen_electricpumpintro()
-    map = GameMap()
+    ship = ShipMap()
+    components = Dict{TileCoord, ComponentOnTile}()
+    pipes = Dict{EdgeCoord, PipeBehavior}()
 
     # Create components with separate instances to avoid state sharing
 
@@ -48,36 +50,36 @@ function mapgen_electricpumpintro()
     )
 
     # Place components on map
-    map.tiles[TileCoord(-5, 0)] = ComponentOnTile(decomp_chamber, HexFrame.Q_POS)
-    map.tiles[TileCoord(-1, 0)] = ComponentOnTile(liquid_tank, HexFrame.Q_NEG)
-    map.tiles[TileCoord(-3, -1)] = ComponentOnTile(electric_pump, HexFrame.Q_POS)
-    map.tiles[TileCoord(-3, 1)] = ComponentOnTile(tile_pipe, HexFrame.Q_POS)
-    map.tiles[TileCoord(-7, 3)] = ComponentOnTile(nozzle, HexFrame.Q_POS)
+    components[TileCoord(-5, 0)] = ComponentOnTile(decomp_chamber, HexFrame.Q_POS)
+    components[TileCoord(-1, 0)] = ComponentOnTile(liquid_tank, HexFrame.Q_NEG)
+    components[TileCoord(-3, -1)] = ComponentOnTile(electric_pump, HexFrame.Q_POS)
+    components[TileCoord(-3, 1)] = ComponentOnTile(tile_pipe, HexFrame.Q_POS)
+    components[TileCoord(-7, 3)] = ComponentOnTile(nozzle, HexFrame.Q_POS)
 
     # Add edge-based pipes (BigPipe with 10.0 S conductance)
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(-3, 1), HexFrame.Q_POS),
             VertexCoord(TileCoord(-1, 0), HexFrame.Q_NEG)
         ),
     ] = BigPipeBehav(10.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(-5, 2), HexFrame.Q_POS),
             VertexCoord(TileCoord(-3, 1), HexFrame.Q_NEG)
         ),
     ] = BigPipeBehav(10.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(-7, 3), HexFrame.Q_POS),
             VertexCoord(TileCoord(-5, 2), HexFrame.Q_NEG)
         ),
     ] = BigPipeBehav(10.0)
 
-    # Define ship surface tiles
-    map.ship_surface = Set(
+    # Define ship surface components
+    surface = Set(
         [
             TileCoord(-4, 0),
             TileCoord(-2, -2),
@@ -105,5 +107,9 @@ function mapgen_electricpumpintro()
         ]
     )
 
-    return map
+    set_component!(ship, components)
+    set_pipe!(ship, pipes)
+    set_surface_tile!(ship, surface)
+
+    return GameMap(ship)
 end

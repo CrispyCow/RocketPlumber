@@ -10,7 +10,9 @@ This map teaches:
 - Complex pipe routing with both edge-based and tile-based pipes
 """
 function mapgen_bigpipeplumbing()
-    map = GameMap()
+    ship = ShipMap()
+    components = Dict{TileCoord, ComponentOnTile}()
+    pipes = Dict{EdgeCoord, PipeBehavior}()
 
     # Create multiple gas tanks
     # Using deepcopy for identical tanks to avoid shared state
@@ -24,14 +26,14 @@ function mapgen_bigpipeplumbing()
     )
 
     # Place four separate tank instances
-    map.tiles[TileCoord(2, -1)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG)
-    map.tiles[TileCoord(3, -1)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG)
-    map.tiles[TileCoord(3, -2)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG)
-    map.tiles[TileCoord(4, -2)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG)
+    components[TileCoord(2, -1)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG)
+    components[TileCoord(3, -1)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG)
+    components[TileCoord(3, -2)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG)
+    components[TileCoord(4, -2)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG)
 
     # Place a tile-based big pipe component
     big_tile_pipe = BigTilePipeCompBehav()
-    map.tiles[TileCoord(0, -1)] = ComponentOnTile(big_tile_pipe, HexFrame.Q_NEG)
+    components[TileCoord(0, -1)] = ComponentOnTile(big_tile_pipe, HexFrame.Q_NEG)
 
     # Create a nozzle for thrust output
     nozzle = BasicNozzleCompBehav(
@@ -39,24 +41,24 @@ function mapgen_bigpipeplumbing()
         throat_area = Float64(0.3f0),  # Float32 -> Float64 to match saved precision
         sprite = Symbol("AllNozzles_SmallNozzle")
     )
-    map.tiles[TileCoord(2, -3)] = ComponentOnTile(nozzle, HexFrame.R_POS)
+    components[TileCoord(2, -3)] = ComponentOnTile(nozzle, HexFrame.R_POS)
 
     # Add edge-based big pipes for high flow connections
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(0, 1), HexFrame.Q_NEG),
             VertexCoord(TileCoord(-1, 1), HexFrame.Q_POS)
         ),
     ] = BigPipeBehav(10.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(2, 0), HexFrame.Q_NEG),
             VertexCoord(TileCoord(1, 1), HexFrame.Q_POS)
         ),
     ] = BigPipeBehav(10.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(2, -2), HexFrame.Q_NEG),
             VertexCoord(TileCoord(1, -1), HexFrame.Q_POS)
@@ -64,7 +66,7 @@ function mapgen_bigpipeplumbing()
     ] = BigPipeBehav(10.0)
 
     # Define ship surface
-    map.ship_surface = Set(
+    surface = Set(
         [
             TileCoord(1, -2),
             TileCoord(4, -2),
@@ -84,5 +86,9 @@ function mapgen_bigpipeplumbing()
         ]
     )
 
-    return map
+    set_component!(ship, components)
+    set_pipe!(ship, pipes)
+    set_surface_tile!(ship, surface)
+
+    return GameMap(ship)
 end

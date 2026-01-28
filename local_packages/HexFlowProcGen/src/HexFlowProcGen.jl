@@ -8,7 +8,7 @@ export weighted_roll_noise, pick_from_range, pick_from_options
 export CompPlacementStrategy, ShipComponentSet, CompSpawnOptions, roll_component
 export PipePlacementStrategy, PipeSpawnOptions, roll_pipe
 export place_shipset!, place_random_pipes!, place_connected_pipes!, place_pipeset!
-export ShipGenOptions, generate_ship
+export ShipGenOptions, generate_ship, encounter_ship!
 
 
 # =============================================================== #
@@ -139,7 +139,7 @@ end
 "Places all components from the given shipset onto the map using the provided seed.
  Returns a tuple indicating success and a message."
 function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::Tuple{Bool, String}
-    existing_components::Set{TileCoord} = Set(keys(get_all_tiles(map)))
+    existing_components::Set{TileCoord} = Set(keys(get_all_components(map)))
 
     ship_surface_edge::Set{TileCoord} = Set{TileCoord}()
     find_ship_surface_edgetiles!(ship_surface_edge, map)
@@ -148,9 +148,9 @@ function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::
         union!(all_tiles_adjacent_to_edgetiles, get_adjacent_tiles_for_tile(edge_tile))
     end
     # tiles adjecent to the edge of the ship but not part of the ship surface are valid for nozzles
-    available_nozzle_tiles = setdiff(all_tiles_adjacent_to_edgetiles, get_ship_surface(map))
+    available_nozzle_tiles = setdiff(all_tiles_adjacent_to_edgetiles, get_all_surface_tiles(map))
     # all surface tiles are valid for everything else
-    available_ship_surface::Set{TileCoord} = Set(get_ship_surface(map))
+    available_ship_surface::Set{TileCoord} = Set(get_all_surface_tiles(map))
     # clear all tiles adjacent to existing components
     for coord in existing_components
         clear_tiles_around_component!(available_nozzle_tiles, coord)
@@ -238,7 +238,7 @@ function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::
             tilecomp = ComponentOnTile(comp_behav, comp_rotation)
 
             for selected_coord in component_location_list
-                set_tile!(map, selected_coord, deepcopy(tilecomp))
+                set_component!(map, selected_coord, deepcopy(tilecomp))
             end
 
         elseif spawn_option.placement == RANDOM_PLACE
@@ -248,7 +248,7 @@ function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::
                 comp_rotation = map_rotation(comp_behav, pick_element_from_rng(instances(HexFrame.HexAxis), prng))
                 tilecomp = ComponentOnTile(comp_behav, comp_rotation)
 
-                set_tile!(map, selected_coord, deepcopy(tilecomp))
+                set_component!(map, selected_coord, deepcopy(tilecomp))
             end
 
         elseif spawn_option.placement == NOZZLE_EDGE_PLACE
@@ -263,9 +263,9 @@ function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::
                     chosen_axis = map_rotation(comp_behav, random_axis)
 
                     # check if placement is valid
-                    valid_pick, reason = placement_valid(comp_behav, coord = selected_coord, gamemap = map, rotation = chosen_axis)
+                    valid_pick, reason = placement_valid(comp_behav, selected_coord, map; rotation = chosen_axis)
                     if valid_pick
-                        set_tile!(map, selected_coord, ComponentOnTile(comp_behav, chosen_axis))
+                        set_component!(map, selected_coord, ComponentOnTile(comp_behav, chosen_axis))
                         break
                     end
                 end
@@ -339,8 +339,8 @@ end
 
 "places pipes randomly on canidate edges that connect to 1 and only 1 existing node on the map based on pipe density"
 function place_connected_pipes!(map::GameMap, pipe_kind::Symbol, seed::UInt32; pipe_density)
-    ship_surface = deepcopy(get_ship_surface(map))
-    available_edgecoords = get_all_edgecoords_of_tiles(ship_surface)
+    ship_tiles = deepcopy(get_all_surface_tiles(map))
+    available_edgecoords = get_all_edgecoords_of_tiles(ship_tiles)
     all_nodes = Set(keys(list_nodes(list_elements(map))))
 
     # keep only edgecoords that would connect to one existing node
@@ -365,8 +365,8 @@ end
 
 "places pipes randomly on on canidate edges that do not connect 2 nodes based on pipe density"
 function place_random_pipes!(map::GameMap, pipe_kind::Symbol, seed::UInt32; pipe_density)
-    ship_surface = deepcopy(get_ship_surface(map))
-    available_edgecoords = get_all_edgecoords_of_tiles(ship_surface)
+    ship_tiles = deepcopy(get_all_surface_tiles(map))
+    available_edgecoords = get_all_edgecoords_of_tiles(ship_tiles)
     all_nodes = Set(keys(list_nodes(list_elements(map))))
 
     # remove any edgecoords that would actually connect 2 existing nodes
@@ -417,26 +417,61 @@ end
     pipe_sets::Vector{PipeSpawnOptions}
 end
 
-function generate_ship(ship::ShipGenOptions, seed::UInt32)::GameMap
-    map = GameMap()
-    
-    # generate ship surface
-    stacked_random_tile_walk!(get_ship_surface(map), TileCoord(0, 0), ship.surface_gen_steps, ship.surface_gen_stacks, seed)
+function generate_ship(ship::ShipGenOptions, seed::UInt32)::ShipMap
+    shipmap = ShipMap()
 
-    # place components
+    # generate ship surface
+    stacked_random_tile_walk!(get_all_surface_tiles(shipmap), TileCoord(0, 0), ship.surface_gen_steps, ship.surface_gen_stacks, seed)
+
+    # place components into a temporary GameMap wrapper for reuse of existing placement logic
     for shipset in ship.component_sets
-        success, message = place_shipset!(map, shipset, seed)
+        success, message = place_shipset!(GameMap(shipmap), shipset, seed)
         if !success
             @warn "Ship generation did not complete component placement:\n$message"
         end
     end
 
-    # place pipes
+    # place pipes (operate via GameMap wrapper)
     for pipeset in ship.pipe_sets
-        place_pipeset!(map, pipeset, seed)
+        place_pipeset!(GameMap(shipmap), pipeset, seed)
     end
 
-    return map
+    return shipmap
+end
+
+"Checks if the surface tiles of the given shipmap overlap with any existing surfaces in the gamemap."
+function _is_surface_overlap(gamemap::GameMap, shipmap::ShipMap)::Bool
+    all_tiles = get_all_surfaces_combined(gamemap)
+    ship_tiles = get_all_surface_tiles(shipmap)
+
+    # Iterate the (assumed-smaller) ship tiles and test membership in the larger set without allocating
+    for t in ship_tiles
+        if t in all_tiles
+            return true
+        end
+    end
+    return false
+end
+
+function encounter_ship!(gamemap::GameMap, shipoptions::ShipGenOptions, seed::UInt32, dir::HexFrame.HexAxis)
+    newship = generate_ship(shipoptions, seed)
+    newship_name = gensym(shipoptions.name)
+
+    # offset ship until no surface overlap
+    offset_newship = deepcopy(newship)
+    while _is_surface_overlap(gamemap, offset_newship)
+        offset = HexFrame.hex_neighbour_tiles[dir]
+        offset_ship!(offset_newship, offset)
+    end
+
+    # add final gap
+    MIN_SPACING = 3
+    hnt = HexFrame.hex_neighbour_tiles[dir]
+    final_offset = TileCoord(hnt.q * MIN_SPACING, hnt.r * MIN_SPACING)
+    offset_ship!(offset_newship, final_offset)
+
+    # add to gamemap
+    add_ship!(gamemap, newship_name, offset_newship)
 end
 
 end # module HexFlowProcGen

@@ -9,7 +9,8 @@ This map teaches:
 - Simple ship surface definition
 """
 function mapgen_basicplumbing()
-    map = GameMap()
+    ship = ShipMap()
+    components = Dict{TileCoord, ComponentOnTile}()
 
     # Create a tri-gas tank with cold gas
     gas_tank = ThevininTankCompBehav(
@@ -28,12 +29,12 @@ function mapgen_basicplumbing()
         sprite = Symbol("AllNozzles_SmallNozzle")
     )
 
-    # Place components on map
-    map.tiles[TileCoord(2, -1)] = ComponentOnTile(gas_tank, HexFrame.R_NEG)
-    map.tiles[TileCoord(-4, 2)] = ComponentOnTile(nozzle, HexFrame.Q_POS)
+    # Place components on ship
+    components[TileCoord(2, -1)] = ComponentOnTile(gas_tank, HexFrame.R_NEG)
+    components[TileCoord(-4, 2)] = ComponentOnTile(nozzle, HexFrame.Q_POS)
 
     # Define ship surface
-    map.ship_surface = Set(
+    surface = Set(
         [
             TileCoord(1, -1),
             TileCoord(-1, 0),
@@ -47,5 +48,8 @@ function mapgen_basicplumbing()
         ]
     )
 
-    return map
+    set_component!(ship, components)
+    set_surface_tile!(ship, surface)
+
+    return GameMap(ship)
 end

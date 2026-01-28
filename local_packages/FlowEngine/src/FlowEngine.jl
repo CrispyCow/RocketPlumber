@@ -1,24 +1,30 @@
 module FlowEngine
 
 using HexFrame, HexElements, HexFluids, HexComponentsAPI
-using SparseArrays, LinearAlgebra, SmallCollections
+import HexComponentsAPI: placement_valid
+
+using SparseArrays, LinearAlgebra, SmallCollections, StructEquality
 
 # Type Exports
-export GameMap, DerivedMapState, MNA_State
+export ShipMap, GameMap, DerivedMapState, MNA_State
 # Function Exports
+export add_ship!, remove_ship!, get_all_ship_names, has_ship, get_ship, offset_ship!
 export add_pipes_abs_element!, abs_element_get_current, update_components!
 export list_elements, list_nodes, prune, ground_search, clear_dangling_dependants
 export fluidtag_nodes, get_node_fluid_tags, build_node_connection_map!, connect_fluidtags!
 export MNA_indexnodes, MNA_splitelements!, MNA_getA, MNA_getZ, MNA_solve
 # GameMap Abstraction Functions
-export get_tile, has_tile, set_tile!, delete_tile!
+export get_component, has_component, set_component!, delete_component!, delete_all_components!
 export get_pipe, has_pipe, set_pipe!, delete_pipe!
-export get_all_tiles, get_all_pipes
-export count_tiles, count_pipes, count_surface_tiles
-export clear_all_tiles!, clear_all_pipes!, clear_ship_surface!
-export is_on_ship_surface, add_ship_surface_tile!, remove_ship_surface_tile!, get_all_ship_surface_coords
+export get_all_components, get_all_pipes
+export count_components, count_pipes, count_surface_tiles
+export delete_all_components!, delete_all_pipes!, delete_all_surface_tiles!
+export is_on_surface_tile, set_surface_tile!, delete_surface_tile!, get_all_surface_tiles
+export has_component_any_ship, get_component_any_ship, has_pipe_any_ship, get_pipe_any_ship, is_on_surface_tile_any_ship
+# Convenience helpers that search all ships (useful for UI and queries where ship is not known)
 export can_place_component_at, can_place_pipe_at, can_remove_surface_at, is_node_on_ship_surface
-export get_all_ship_edge_coords, get_ship_surface, count_edge_tiles, find_ship_surface_edgetiles!
+export get_all_ship_edge_coords, get_all_surface_tiles, get_all_surfaces_combined, count_edge_tiles, find_ship_surface_edgetiles!
+export find_ship_for_surface, find_ships_adjacent_to_coord, would_bridge_ships, find_valid_ship_for_placement, find_ship_with_component, find_ship_with_pipe
 
 const CONST_RESISTOR = HexElements.CONST_RESISTOR
 const CONST_CURRENT = HexElements.CONST_CURRENT
@@ -31,13 +37,26 @@ const V_DEP_VOLTAGE = HexElements.V_DEP_VOLTAGE
 # ===============================================================
 
 """
-Holds the tiles and pipes that make up the game map.
+Holds the tiles and pipes that make up a single ship's map.
 Also includes the ship surface which defines where components can be placed.
 """
-@kwdef mutable struct GameMap
-    tiles::Dict{TileCoord, ComponentOnTile} = Dict{TileCoord, ComponentOnTile}()
+@kwdef mutable struct ShipMap
+    components::Dict{TileCoord, ComponentOnTile} = Dict{TileCoord, ComponentOnTile}()
     pipe_behaviors::Dict{EdgeCoord, PipeBehavior} = Dict{EdgeCoord, PipeBehavior}()
-    ship_surface::Set{TileCoord} = Set{TileCoord}()
+    ship_tiles::Set{TileCoord} = Set{TileCoord}([TileCoord(0, 0)])
+end
+@struct_hash_equal ShipMap
+
+
+"Top-level game map containing multiple named ships.  Always contains at least :primary."
+@kwdef mutable struct GameMap
+    ships::Dict{Symbol, ShipMap} = Dict(:primary => ShipMap())
+end
+@struct_hash_equal GameMap
+
+"Construct a `GameMap` from a single `ShipMap`, using it as `:primary`"
+function GameMap(ship::ShipMap)
+    return GameMap(ships = Dict(:primary => ship))
 end
 
 const ConnectionVect = SmallVector{12, NodeCoord}
@@ -53,6 +72,8 @@ const ConnectionVect = SmallVector{12, NodeCoord}
     nodeprimefluidtags::Dict{NodeCoord, FluidTags} = Dict{NodeCoord, FluidTags}()
     nodeactualfluids::Dict{NodeCoord, FluidTags} = Dict{NodeCoord, FluidTags}()
 end
+@struct_hash_equal DerivedMapState
+
 
 "Holds intermediates and outputs for the Modified Nodal Analysis"
 @kwdef mutable struct MNA_State
@@ -71,102 +92,351 @@ end
     vsource_currents::Dict{ElementID, Float64} = Dict{ElementID, Float64}()
     node_voltages_scaled::Dict{NodeCoord, Float64} = Dict{NodeCoord, Float64}()
 end
+@struct_hash_equal MNA_State
 
 # ===============================================================
-# GameMap Abstraction Functions
+# ShipMap Abstraction Functions
 # ===============================================================
-# These functions provide a clean interface to GameMap internals,
-# making it easier to extend to multi-ship scenarios in the future.
 
-# Tile access
-"Get the component at a tile coordinate, or nothing if no component exists"
-get_tile(gamemap::GameMap, coord::TileCoord) = get(gamemap.tiles, coord, nothing)
+# Tile access for ShipMap
+"Get the component at a tile coordinate on a ShipMap, or nothing if no component exists"
+get_component(ship::ShipMap, coord::TileCoord) = get(ship.components, coord, nothing)
 
-"Check if a component exists at a tile coordinate"
-has_tile(gamemap::GameMap, coord::TileCoord)::Bool = haskey(gamemap.tiles, coord)
+"Check if a component exists at a tile coordinate on a ShipMap"
+has_component(ship::ShipMap, coord::TileCoord)::Bool = haskey(ship.components, coord)
 
-"Set the component at a tile coordinate"
-function set_tile!(gamemap::GameMap, coord::TileCoord, component::ComponentOnTile)
-    return gamemap.tiles[coord] = component
+"Set the component at a tile coordinate on a ShipMap"
+function set_component!(ship::ShipMap, coord::TileCoord, component::ComponentOnTile)
+    ship.components[coord] = component
+    return nothing
 end
 
-"Delete the component at a tile coordinate"
-function delete_tile!(gamemap::GameMap, coord::TileCoord)
-    return delete!(gamemap.tiles, coord)
+"Set multiple components at tile coordinates on a ShipMap"
+function set_component!(ship::ShipMap, components::AbstractDict{TileCoord, ComponentOnTile})
+    for (coord, component) in components
+        ship.components[coord] = component
+    end
+    return nothing
 end
 
-"Iterate over all tiles (returns pairs of TileCoord => ComponentOnTile)"
-get_all_tiles(gamemap::GameMap) = gamemap.tiles
-
-"Return set of all ship surface coordinates"
-get_ship_surface(gamemap::GameMap) = gamemap.ship_surface
-
-# Pipe access
-"Get the pipe behavior at an edge coordinate, or nothing if no pipe exists"
-get_pipe(gamemap::GameMap, coord::EdgeCoord) = get(gamemap.pipe_behaviors, coord, nothing)
-
-"Check if a pipe exists at an edge coordinate"
-has_pipe(gamemap::GameMap, coord::EdgeCoord)::Bool = haskey(gamemap.pipe_behaviors, coord)
-
-"Set the pipe behavior at an edge coordinate"
-function set_pipe!(gamemap::GameMap, coord::EdgeCoord, pipe_behavior::PipeBehavior)
-    return gamemap.pipe_behaviors[coord] = pipe_behavior
+"Delete the component at a tile coordinate on a ShipMap"
+function delete_component!(ship::ShipMap, coord::TileCoord)
+    delete!(ship.components, coord)
+    return nothing
 end
 
-"Delete the pipe at an edge coordinate"
-function delete_pipe!(gamemap::GameMap, coord::EdgeCoord)
-    return delete!(gamemap.pipe_behaviors, coord)
+"Iterate over all components in a ShipMap (returns pairs of TileCoord => ComponentOnTile)"
+get_all_components(ship::ShipMap) = ship.components
+
+# Pipe access for ShipMap
+"Get the pipe behavior at an edge coordinate in a ShipMap, or nothing if no pipe exists"
+get_pipe(ship::ShipMap, coord::EdgeCoord) = get(ship.pipe_behaviors, coord, nothing)
+
+"Check if a pipe exists at an edge coordinate on a ShipMap"
+has_pipe(ship::ShipMap, coord::EdgeCoord)::Bool = haskey(ship.pipe_behaviors, coord)
+
+"Set the pipe behavior at an edge coordinate on a ShipMap"
+function set_pipe!(ship::ShipMap, coord::EdgeCoord, pipe_behavior::PipeBehavior)
+    ship.pipe_behaviors[coord] = pipe_behavior
+    return nothing
 end
 
-"Iterate over all pipes (returns pairs of EdgeCoord => PipeBehavior)"
-get_all_pipes(gamemap::GameMap) = gamemap.pipe_behaviors
-
-# Count functions
-"Get the number of tiles (components) in the map"
-count_tiles(gamemap::GameMap)::Int = length(gamemap.tiles)
-
-"Get the number of pipes in the map"
-count_pipes(gamemap::GameMap)::Int = length(gamemap.pipe_behaviors)
-
-"Get the number of ship surface tiles"
-count_surface_tiles(gamemap::GameMap)::Int = length(gamemap.ship_surface)
-
-# Batch operations
-"Clear all tiles from the map"
-function clear_all_tiles!(gamemap::GameMap)
-    return empty!(gamemap.tiles)
+"Set multiple pipe behaviors at edge coordinates on a ShipMap"
+function set_pipe!(ship::ShipMap, pipes::AbstractDict{EdgeCoord, PipeBehavior})
+    for (coord, pipe_behavior) in pipes
+        ship.pipe_behaviors[coord] = pipe_behavior
+    end
+    return nothing
 end
 
-"Clear all pipes from the map"
-function clear_all_pipes!(gamemap::GameMap)
-    return empty!(gamemap.pipe_behaviors)
+"Delete the pipe at an edge coordinate in a ShipMap"
+function delete_pipe!(ship::ShipMap, coord::EdgeCoord)
+    delete!(ship.pipe_behaviors, coord)
+    return nothing
 end
 
-"Clear the ship surface (remove all surface tiles)"
-function clear_ship_surface!(gamemap::GameMap)
-    return empty!(gamemap.ship_surface)
+"Iterate over all pipes in a ShipMap (returns pairs of EdgeCoord => PipeBehavior)"
+get_all_pipes(ship::ShipMap) = ship.pipe_behaviors
+
+# Count functions for ShipMap
+"Get the number of components in a ShipMap"
+count_components(ship::ShipMap)::Int = length(ship.components)
+
+"Get the number of pipes in a ShipMap"
+count_pipes(ship::ShipMap)::Int = length(ship.pipe_behaviors)
+
+"Get the number of ship surface tiles in a ShipMap"
+count_surface_tiles(ship::ShipMap)::Int = length(ship.ship_tiles)
+
+# Ship surface access for ShipMap
+"Check if a coordinate is on the ship surface of a ShipMap"
+is_on_surface_tile(coord::TileCoord, ship::ShipMap)::Bool = coord in ship.ship_tiles
+
+"Add a tile coordinate to the ship surface on a ShipMap"
+function set_surface_tile!(ship::ShipMap, coord::TileCoord)
+    return push!(ship.ship_tiles, coord)
 end
 
-# Ship surface access (designed for future multi-ship support)
-"Check if a coordinate is on any ship surface"
-is_on_ship_surface(coord::TileCoord, gamemap::GameMap)::Bool = coord in gamemap.ship_surface
-
-"Add a tile coordinate to the ship surface"
-function add_ship_surface_tile!(gamemap::GameMap, coord::TileCoord)
-    return push!(gamemap.ship_surface, coord)
+"Add multiple tile coordinates to the ship surface on a ShipMap"
+function set_surface_tile!(ship::ShipMap, surface::AbstractSet{TileCoord})
+    for coord in surface
+        set_surface_tile!(ship, coord)
+    end
+    return nothing
 end
 
-"Remove a tile coordinate from the ship surface. Returns true if removed, false if didn't exist"
-function remove_ship_surface_tile!(gamemap::GameMap, coord::TileCoord)::Bool
-    if coord in gamemap.ship_surface
-        delete!(gamemap.ship_surface, coord)
+"Remove a tile coordinate from the ship surface on a ShipMap. Returns true if removed, false if didn't exist"
+function delete_surface_tile!(ship::ShipMap, coord::TileCoord)::Bool
+    if coord in ship.ship_tiles
+        delete!(ship.ship_tiles, coord)
         return true
     end
     return false
 end
 
+"Get all ship surface coordinates in a ShipMap (for rendering or iteration)"
+get_all_surface_tiles(ship::ShipMap)::Set{TileCoord} = ship.ship_tiles
+
+# Batch operations for ShipMap
+"Delete all components from a ShipMap"
+function delete_all_components!(ship::ShipMap)
+    return empty!(ship.components)
+end
+
+"Delete all pipes from a ShipMap"
+function delete_all_pipes!(ship::ShipMap)
+    return empty!(ship.pipe_behaviors)
+end
+
+"Delete all surface tiles from a ShipMap"
+function delete_all_surface_tiles!(ship::ShipMap)
+    return empty!(ship.ship_tiles)
+end
+
+# ===============================================================
+# GameMap Abstraction Functions
+# ===============================================================
+# These functions provide a clean, ship-routed interface to map internals.
+# By default operations route to the `:primary` ship unless `ship_name` is supplied.
+
+# Ship management
+"Get a ShipMap by name or throw a descriptive error if it does not exist"
+function _get_ship(gamemap::GameMap, ship_name::Symbol = :primary)::ShipMap
+    if !haskey(gamemap.ships, ship_name)
+        error("Ship '$ship_name' not found. Available ships: $(collect(keys(gamemap.ships)))")
+    end
+    return gamemap.ships[ship_name]
+end
+
+"Add a ShipMap to the GameMap under the provided symbol name; errors if the name already exists"
+function add_ship!(gamemap::GameMap, name::Symbol, shipmap::ShipMap)
+    if haskey(gamemap.ships, name)
+        error("Ship '$name' already exists")
+    end
+    gamemap.ships[name] = shipmap
+    return nothing
+end
+
+"Remove a ship from the GameMap by name (error if attempting to remove :primary)"
+function remove_ship!(gamemap::GameMap, name::Symbol)
+    if name == :primary
+        error("Cannot remove primary ship")
+    end
+    delete!(gamemap.ships, name)
+    return nothing
+end
+
+"Return a vector containing the Symbol names of all ships in the GameMap"
+function get_all_ship_names(gamemap::GameMap)::Vector{Symbol}
+    return collect(keys(gamemap.ships))
+end
+
+"Return true if a ship with the given name exists in the GameMap, false otherwise"
+function has_ship(gamemap::GameMap, name::Symbol)::Bool
+    return haskey(gamemap.ships, name)
+end
+
+"Get the ShipMap associated with `name` or throw if not found"
+function get_ship(gamemap::GameMap, name::Symbol)::ShipMap
+    return _get_ship(gamemap, name)
+end
+
+# Tile access
+"Get the component at a tile coordinate on a specific ship, or nothing if no component exists"
+get_component(gamemap::GameMap, coord::TileCoord; ship_name::Symbol = :primary) = get_component(_get_ship(gamemap, ship_name), coord)
+
+"Check if a component exists at a tile coordinate on a specific ship"
+has_component(gamemap::GameMap, coord::TileCoord; ship_name::Symbol = :primary)::Bool = has_component(_get_ship(gamemap, ship_name), coord)
+
+"Set the component at a tile coordinate on a specific ship"
+function set_component!(gamemap::GameMap, coord::TileCoord, component::ComponentOnTile; ship_name::Symbol = :primary)
+    set_component!(_get_ship(gamemap, ship_name), coord, component)
+    return nothing
+end
+
+"Set multiple components at tile coordinates on a specific ship"
+function set_component!(gamemap::GameMap, components::AbstractDict{TileCoord, ComponentOnTile}; ship_name::Symbol = :primary)
+    set_component!(_get_ship(gamemap, ship_name), components)
+    return nothing
+end
+
+"Delete the component at a tile coordinate on a specific ship"
+function delete_component!(gamemap::GameMap, coord::TileCoord; ship_name::Symbol = :primary)
+    delete_component!(_get_ship(gamemap, ship_name), coord)
+    return nothing
+end
+
+"Iterate over all components for a specific ship (returns pairs of TileCoord => ComponentOnTile)"
+get_all_components(gamemap::GameMap; ship_name::Symbol = :primary) = get_all_components(_get_ship(gamemap, ship_name))
+
+
+# Pipe access
+"Get the pipe behavior at an edge coordinate on a specific ship, or nothing if no pipe exists"
+get_pipe(gamemap::GameMap, coord::EdgeCoord; ship_name::Symbol = :primary) = get_pipe(_get_ship(gamemap, ship_name), coord)
+
+"Check if a pipe exists at an edge coordinate on a specific ship"
+has_pipe(gamemap::GameMap, coord::EdgeCoord; ship_name::Symbol = :primary)::Bool = has_pipe(_get_ship(gamemap, ship_name), coord)
+
+"Set the pipe behavior at an edge coordinate on a specific ship"
+function set_pipe!(gamemap::GameMap, coord::EdgeCoord, pipe_behavior::PipeBehavior; ship_name::Symbol = :primary)
+    set_pipe!(_get_ship(gamemap, ship_name), coord, pipe_behavior)
+    return nothing
+end
+
+"Set multiple pipe behaviors at edge coordinates on a specific ship"
+function set_pipe!(gamemap::GameMap, pipes::AbstractDict{EdgeCoord, PipeBehavior}; ship_name::Symbol = :primary)
+    set_pipe!(_get_ship(gamemap, ship_name), pipes)
+    return nothing
+end
+
+"Delete the pipe at an edge coordinate on a specific ship"
+function delete_pipe!(gamemap::GameMap, coord::EdgeCoord; ship_name::Symbol = :primary)
+    delete_pipe!(_get_ship(gamemap, ship_name), coord)
+    return nothing
+end
+
+"Iterate over all pipes for a specific ship (returns pairs of EdgeCoord => PipeBehavior)"
+get_all_pipes(gamemap::GameMap; ship_name::Symbol = :primary) = get_all_pipes(_get_ship(gamemap, ship_name))
+
+# Convenience helpers that search across all ships
+"Check if any ship contains a component at the given tile coordinate; returns (found::Bool, ship::Union{Symbol, Nothing})"
+function has_component_any_ship(gamemap::GameMap, coord::TileCoord)::Tuple{Bool, Union{Symbol, Nothing}}
+    for (ship_name, ship) in gamemap.ships
+        if has_component(ship, coord)
+            return (true, ship_name)
+        end
+    end
+    return (false, nothing)
+end
+
+"Get the first component found on any ship at the given tile coordinate; returns (component::Union{ComponentOnTile, Nothing}, ship::Union{Symbol, Nothing})"
+function get_component_any_ship(gamemap::GameMap, coord::TileCoord)
+    for (ship_name, ship) in gamemap.ships
+        comp = get_component(ship, coord)
+        if !isnothing(comp)
+            return (comp, ship_name)
+        end
+    end
+    return (nothing, nothing)
+end
+
+"Check if any ship contains a pipe at the given edge coordinate; returns (found::Bool, ship::Union{Symbol, Nothing})"
+function has_pipe_any_ship(gamemap::GameMap, coord::EdgeCoord)::Tuple{Bool, Union{Symbol, Nothing}}
+    for (ship_name, ship) in gamemap.ships
+        if has_pipe(ship, coord)
+            return (true, ship_name)
+        end
+    end
+    return (false, nothing)
+end
+
+"Get the first pipe found on any ship at the given edge coordinate; returns (pipe::Union{PipeBehavior, Nothing}, ship::Union{Symbol, Nothing})"
+function get_pipe_any_ship(gamemap::GameMap, coord::EdgeCoord)
+    for (ship_name, ship) in gamemap.ships
+        p = get_pipe(ship, coord)
+        if !isnothing(p)
+            return (p, ship_name)
+        end
+    end
+    return (nothing, nothing)
+end
+
+"Check whether the coordinate is part of any ship surface; returns (found::Bool, ship::Union{Symbol, Nothing})"
+function is_on_surface_tile_any_ship(coord::TileCoord, gamemap::GameMap)::Tuple{Bool, Union{Symbol, Nothing}}
+    for (ship_name, ship) in gamemap.ships
+        if is_on_surface_tile(coord, ship)
+            return (true, ship_name)
+        end
+    end
+    return (false, nothing)
+end
+
+# Count functions
+"Get the number of components in the ship"
+count_components(gamemap::GameMap; ship_name::Symbol = :primary)::Int = count_components(_get_ship(gamemap, ship_name))
+
+"Get the number of pipes in the ship"
+count_pipes(gamemap::GameMap; ship_name::Symbol = :primary)::Int = count_pipes(_get_ship(gamemap, ship_name))
+
+"Get the number of ship surface tiles for the ship"
+count_surface_tiles(gamemap::GameMap; ship_name::Symbol = :primary)::Int = count_surface_tiles(_get_ship(gamemap, ship_name))
+
+# Batch operations
+"Delete all components from a ship"
+function delete_all_components!(gamemap::GameMap; ship_name::Symbol = :primary)
+    return delete_all_components!(_get_ship(gamemap, ship_name))
+end
+
+"Delete all pipes from a ship"
+function delete_all_pipes!(gamemap::GameMap; ship_name::Symbol = :primary)
+    return delete_all_pipes!(_get_ship(gamemap, ship_name))
+end
+
+"Delete all surface tiles (remove all surface tiles) from a ship"
+function delete_all_surface_tiles!(gamemap::GameMap; ship_name::Symbol = :primary)
+    return delete_all_surface_tiles!(_get_ship(gamemap, ship_name))
+end
+
+# Ship surface access
+"Check if a coordinate is on the ship surface"
+is_on_surface_tile(coord::TileCoord, gamemap::GameMap; ship_name::Symbol = :primary)::Bool = is_on_surface_tile(coord, _get_ship(gamemap, ship_name))
+
+"Default implimentation for placement_valid on a gamemap"
+function placement_valid(behav::T, coord::TileCoord, gamemap::GameMap; ship_name::Symbol = :primary, kwargs...) where {T <: ComponentBehavior}
+    if is_on_surface_tile(coord, gamemap; ship_name = ship_name)
+        return (true, "")
+    else
+        return (false, "Not on ship surface")
+    end
+end
+
+"Add a tile coordinate to the ship surface"
+function set_surface_tile!(gamemap::GameMap, coord::TileCoord; ship_name::Symbol = :primary)
+    return set_surface_tile!(_get_ship(gamemap, ship_name), coord)
+end
+
+"Add multiple tile coordinates to the ship surface"
+function set_surface_tile!(gamemap::GameMap, surface::AbstractSet{TileCoord}; ship_name::Symbol = :primary)
+    set_surface_tile!(_get_ship(gamemap, ship_name), surface)
+    return nothing
+end
+
+"Remove a tile coordinate from the ship surface. Returns true if removed, false if didn't exist"
+function delete_surface_tile!(gamemap::GameMap, coord::TileCoord; ship_name::Symbol = :primary)::Bool
+    return delete_surface_tile!(_get_ship(gamemap, ship_name), coord)
+end
+
 "Get all ship surface coordinates (for rendering or iteration)"
-get_all_ship_surface_coords(gamemap::GameMap)::Set{TileCoord} = gamemap.ship_surface
+get_all_surface_tiles(gamemap::GameMap; ship_name::Symbol = :primary)::Set{TileCoord} = get_all_surface_tiles(_get_ship(gamemap, ship_name))
+
+"Get the combined ship surface coordinates across all ships in the GameMap"
+function get_all_surfaces_combined(gamemap::GameMap)::Set{TileCoord}
+    combined = Set{TileCoord}()
+    for (_, ship) in gamemap.ships
+        union!(combined, get_all_surface_tiles(ship))
+    end
+    return combined
+end
 
 # DerivedMapState ship surface edge access
 "Get all ship surface edge tile coordinates (tiles on the boundary of the ship)"
@@ -181,18 +451,26 @@ count_edge_tiles(derivedmapstate::DerivedMapState)::Int = length(derivedmapstate
     return count(adj_tile -> adj_tile in surface_set, adjacent_tiles)
 end
 
-"Update a set with tiles that are on the boundary of the ship."
-function find_ship_surface_edgetiles!(edgesurface::Set{TileCoord}, gamemap::GameMap)
-    surface_set = get_all_ship_surface_coords(gamemap)
-
+"Update a set with tiles that are on the boundary of a single ShipMap"
+function find_ship_surface_edgetiles!(edgesurface::Set{TileCoord}, ship::ShipMap)
     empty!(edgesurface)
-
-    for tile in surface_set
-        if count_surfacetile_adjacencies(surface_set, tile) != 6
+    for tile in ship.ship_tiles
+        if count_surfacetile_adjacencies(ship.ship_tiles, tile) != 6
             push!(edgesurface, tile)
         end
     end
+    return nothing
+end
 
+"Update a set with tiles that are on the boundary of all ships (combined). Aggregates ship-level results."
+function find_ship_surface_edgetiles!(edgesurface::Set{TileCoord}, gamemap::GameMap)
+    empty!(edgesurface)
+    tmp = Set{TileCoord}()
+    for (_, ship) in gamemap.ships
+        empty!(tmp)
+        find_ship_surface_edgetiles!(tmp, ship)
+        union!(edgesurface, tmp)
+    end
     return nothing
 end
 
@@ -204,13 +482,13 @@ end
 
 # Placement validation
 "Check if a node is connected to the ship surface by verifying that at least one of the tiles adjacent to the node is on the ship surface."
-function is_node_on_ship_surface(node_abs::NodeCoord, gamemap::GameMap)::Tuple{Bool, String}
+function is_node_on_ship_surface(node_abs::NodeCoord, gamemap::GameMap; ship_name::Symbol = :primary)::Tuple{Bool, String}
     # Get the tiles adjacent to this node
     adjacent_tiles = get_adjacent_tiles_for_node(node_abs)
 
-    # Check if any adjacent tile is on the ship surface
+    # Check if any adjacent tile is on the specified ship surface
     for (tile, _) in adjacent_tiles
-        if is_on_ship_surface(tile, gamemap)
+        if is_on_surface_tile(tile, gamemap; ship_name = ship_name)
             return (true, "")
         end
     end
@@ -220,27 +498,27 @@ function is_node_on_ship_surface(node_abs::NodeCoord, gamemap::GameMap)::Tuple{B
 end
 
 "Check if a component can be placed at a coordinate"
-function can_place_component_at(coord::TileCoord, gamemap::GameMap)::Tuple{Bool, String}
-    if !is_on_ship_surface(coord, gamemap)
+function can_place_component_at(coord::TileCoord, gamemap::GameMap; ship_name::Symbol = :primary)::Tuple{Bool, String}
+    if !is_on_surface_tile(coord, gamemap; ship_name = ship_name)
         return (false, "Not on ship surface")
     end
     return (true, "")
 end
 
 "Check if a pipe can be placed at an edge coordinate (both endpoint nodes must be on ship surface)"
-function can_place_pipe_at(coord::EdgeCoord, gamemap::GameMap)::Tuple{Bool, String}
+function can_place_pipe_at(coord::EdgeCoord, gamemap::GameMap; ship_name::Symbol = :primary)::Tuple{Bool, String}
     # Get the two node coordinates for this edge
     v1_node = to_nodecoord(coord.v1)
     v2_node = to_nodecoord(coord.v2)
 
     # Check that the first node is connected to ship surface
-    v1_valid, v1_reason = is_node_on_ship_surface(v1_node, gamemap)
+    v1_valid, v1_reason = is_node_on_ship_surface(v1_node, gamemap; ship_name = ship_name)
     if !v1_valid
         return (false, "Pipe endpoint node at $(coord.v1.tile) is not connected to ship surface")
     end
 
     # Check that the second node is connected to ship surface
-    v2_valid, v2_reason = is_node_on_ship_surface(v2_node, gamemap)
+    v2_valid, v2_reason = is_node_on_ship_surface(v2_node, gamemap; ship_name = ship_name)
     if !v2_valid
         return (false, "Pipe endpoint node at $(coord.v2.tile) is not connected to ship surface")
     end
@@ -249,8 +527,8 @@ function can_place_pipe_at(coord::EdgeCoord, gamemap::GameMap)::Tuple{Bool, Stri
 end
 
 "Check if a surface tile can be removed (must not have a component on it)"
-function can_remove_surface_at(coord::TileCoord, gamemap::GameMap)::Tuple{Bool, String}
-    if has_tile(gamemap, coord)
+function can_remove_surface_at(coord::TileCoord, gamemap::GameMap; ship_name::Symbol = :primary)::Tuple{Bool, String}
+    if has_component(gamemap, coord; ship_name = ship_name)
         return (false, "Surface cannot be deleted under a component, delete component first")
     end
     # TODO: This validation doesn't prevent nozzles from being left floating when their input node's
@@ -264,6 +542,114 @@ end
 # ===============================================================
 # Helper Functions
 # ===============================================================
+
+"Find which ship (if any) owns the surface tile at a coordinate"
+function find_ship_for_surface(gamemap::GameMap, coord::TileCoord)::Union{Symbol, Nothing}
+    for (name, ship) in gamemap.ships
+        if coord in ship.ship_tiles
+            return name
+        end
+    end
+    return nothing
+end
+
+"Find which ship(s) have surfaces adjacent to a coordinate"
+function find_ships_adjacent_to_coord(gamemap::GameMap, coord::TileCoord)::Vector{Symbol}
+    adjacent_tiles = HexFrame.get_adjacent_tiles_for_tile(coord)
+    adjacent_ships = Symbol[]
+    for adj_tile in adjacent_tiles
+        ship_name = find_ship_for_surface(gamemap, adj_tile)
+        if !isnothing(ship_name) && !(ship_name in adjacent_ships)
+            push!(adjacent_ships, ship_name)
+        end
+    end
+    return adjacent_ships
+end
+
+"Check if placing a surface at coord would connect multiple ships (invalid)"
+function would_bridge_ships(gamemap::GameMap, coord::TileCoord)::Bool
+    adjacent_ships = find_ships_adjacent_to_coord(gamemap, coord)
+    return length(adjacent_ships) > 1
+end
+
+"Find which ship a component/pipe should belong to by testing placement_valid on all ships"
+function find_valid_ship_for_placement(
+        component::ComponentBehavior,
+        coord::TileCoord,
+        gamemap::GameMap;
+        rotation::HexAxis
+    )::Union{Symbol, Nothing}
+    for (ship_name, _) in gamemap.ships
+        is_valid, _ = placement_valid(component, coord, gamemap; rotation = rotation, ship_name = ship_name)
+        if is_valid
+            return ship_name
+        end
+    end
+    return nothing
+end
+
+"Find which ship owns a component at a given coordinate (searches all ships)"
+function find_ship_with_component(gamemap::GameMap, coord::TileCoord)::Union{Symbol, Nothing}
+    for (ship_name, ship) in gamemap.ships
+        if haskey(ship.components, coord)
+            return ship_name
+        end
+    end
+    return nothing
+end
+
+"Find which ship owns a pipe at a given edge coordinate (searches all ships)"
+function find_ship_with_pipe(gamemap::GameMap, coord::EdgeCoord)::Union{Symbol, Nothing}
+    for (ship_name, ship) in gamemap.ships
+        if haskey(ship.pipe_behaviors, coord)
+            return ship_name
+        end
+    end
+    return nothing
+end
+
+"Offset all coordinates in a ShipMap in-place by a TileCoord offset."
+function offset_ship!(shipmap::ShipMap, offset::TileCoord)
+    # Offset components
+    new_components = Dict{TileCoord, ComponentOnTile}()
+    sizehint!(new_components, length(shipmap.components))
+    for (coord, comp) in shipmap.components
+        new_coord = TileCoord(coord.q + offset.q, coord.r + offset.r)
+        new_components[new_coord] = comp
+    end
+    empty!(shipmap.components)
+    merge!(shipmap.components, new_components)
+
+    # Offset pipes
+    new_pipes = Dict{EdgeCoord, PipeBehavior}()
+    sizehint!(new_pipes, length(shipmap.pipe_behaviors))
+    for (edge, pipe) in shipmap.pipe_behaviors
+        v1_offset = VertexCoord(
+            TileCoord(edge.v1.tile.q + offset.q, edge.v1.tile.r + offset.r),
+            edge.v1.dir
+        )
+        v2_offset = VertexCoord(
+            TileCoord(edge.v2.tile.q + offset.q, edge.v2.tile.r + offset.r),
+            edge.v2.dir
+        )
+        new_edge = EdgeCoord(v1_offset, v2_offset)
+        new_pipes[new_edge] = pipe
+    end
+    empty!(shipmap.pipe_behaviors)
+    merge!(shipmap.pipe_behaviors, new_pipes)
+
+    # Offset surface tiles
+    new_surface = Set{TileCoord}()
+    sizehint!(new_surface, length(shipmap.ship_tiles))
+    for coord in shipmap.ship_tiles
+        new_coord = TileCoord(coord.q + offset.q, coord.r + offset.r)
+        push!(new_surface, new_coord)
+    end
+    empty!(shipmap.ship_tiles)
+    union!(shipmap.ship_tiles, new_surface)
+
+    return nothing
+end
 
 "Used to update a Dict holding the count of instances of the key in another set. Call this function once for each occurrence of the key"
 function add_or_increment!(dict::Dict{K, V}, key::K) where {K, V <: Integer}
@@ -300,31 +686,39 @@ function add_pipes_abs_element!(abs_vector::Vector{AbsoluteElement}, edge::EdgeC
     return push!(abs_vector, absolute_element)
 end
 
-"Updates behaviors of all components on the map"
-function update_components!(gamemap::GameMap, mna_state::MNA_State)
-    for (coord, data) in get_all_tiles(gamemap)
+"Updates behaviors of all components on a single ShipMap"
+function update_components!(ship::ShipMap, mna_state::MNA_State)
+    for (coord, data) in ship.components
         update_flowbehav!(data; tile = coord, mna_state = mna_state)
     end
     return nothing
 end
 
-"List all electrical elements in the map"
-function list_elements(gamemap::GameMap)
-    tiles = get_all_tiles(gamemap)
-    pipe_behaviors = get_all_pipes(gamemap)
+"Updates behaviors of all components on the GameMap by delegating to each ShipMap"
+function update_components!(gamemap::GameMap, mna_state::MNA_State)
+    for (_, ship) in gamemap.ships
+        update_components!(ship, mna_state)
+    end
+    return nothing
+end
+
+"List all electrical elements for a single ship (returns AbsoluteElement vector)."
+function list_elements(ship::ShipMap)
+    tiles = ship.components
+    pipe_behaviors = ship.pipe_behaviors
 
     size = length(tiles) + length(pipe_behaviors)
     elements_present = Vector{AbsoluteElement}()
-    sizehint!(elements_present, size * 2) # needs tuning
+    sizehint!(elements_present, size * 2)
 
-    for (coord, data) in tiles # collects elements from each tile
+    for (coord, data) in tiles # collects elements from each tile on the ship
         produced = produce_abs_elements(data, coord)
         if length(produced) > 0
             push!(elements_present, produced...)
         end
     end
 
-    for (edge, pipe_behav) in pipe_behaviors # collectes elements from pipes
+    for (edge, pipe_behav) in pipe_behaviors # collects elements from pipes on the ship
         produced = produce_abs_elements(pipe_behav, edge)
         if length(produced) > 0
             push!(elements_present, produced...)
@@ -334,6 +728,20 @@ function list_elements(gamemap::GameMap)
     # remove any inactive elements (produced by stalled components)
     filter!(e -> getfield(e, :active), elements_present)
     return elements_present
+end
+
+"List all electrical elements in the GameMap (aggregates across ships)"
+function list_elements(gamemap::GameMap)
+    all_elements = Vector{AbsoluteElement}()
+    sizehint!(all_elements, 16)
+
+    for (_, ship) in gamemap.ships
+        append!(all_elements, list_elements(ship))
+    end
+
+    # remove any inactive elements (produced by stalled components)
+    filter!(e -> getfield(e, :active), all_elements)
+    return all_elements
 end
 
 "List all nodes connected to an element"
@@ -613,10 +1021,24 @@ function abs_element_get_current(element::AbsoluteElement, derivedmapstate::Deri
     error("Tried to get current for unimplemented element type")
 end
 
-"Get the fluid tags from tiles adjacent to a node"
-function get_node_fluid_tags(node::NodeCoord, gamemap::GameMap)
+"Get the fluid tag contributed by a single tile on a ShipMap for the specified node axis"
+function get_tile_fluid_tag(ship::ShipMap, tile::TileCoord, hex_axis::HexAxis)
+    if haskey(ship.components, tile)
+        tile_comp = ship.components[tile]
+        tile_tags = get_fluidtags(tile_comp)
+        local_dir = rotate(to_hexaxis(hex_axis), HexFrame.rotate_reverse(tile_comp.rotation))
+        return getfield(tile_tags, Symbol(to_nodepos(local_dir)))
+    end
+    return HexFluids.NONE
+end
+
+"Get the fluid tags from tiles adjacent to a node for a single ShipMap"
+function get_node_fluid_tags(node::NodeCoord, ship::ShipMap)
     if node.dir === HexFrame.NODE_INTERNAL
-        tile_comp = get_tile(gamemap, node.tile)
+        tile_comp = get_component(ship, node.tile)
+        if tile_comp === nothing
+            return (HexFluids.NONE,)
+        end
         fluidtags = get_fluidtags(tile_comp)
         tag = getfield(fluidtags, Symbol(HexFrame.NODE_INTERNAL))
         return (tag,)
@@ -626,16 +1048,39 @@ function get_node_fluid_tags(node::NodeCoord, gamemap::GameMap)
     adjacent_tiles_info = get_adjacent_tiles_for_node(proper_node)
 
     tags = map(adjacent_tiles_info) do (tile, hex_axis)
-        if has_tile(gamemap, tile)
-            tile_comp = get_tile(gamemap, tile)
-            tile_tags = get_fluidtags(tile_comp)
-            # hex_axis is in world space, but NodeFluidTags is in local (component) space
-            # To map from world to local, we need to apply the inverse rotation
-            local_dir = rotate(to_hexaxis(hex_axis), HexFrame.rotate_reverse(tile_comp.rotation))
-            return getfield(tile_tags, Symbol(to_nodepos(local_dir)))
-        else
-            return HexFluids.NONE
+        get_tile_fluid_tag(ship, tile, to_hexaxis(hex_axis))
+    end
+
+    return (tags[1], tags[2], tags[3])
+end
+
+"Get the fluid tags from tiles adjacent to a node, checking all ships (aggregates ship lookups)."
+function get_node_fluid_tags(node::NodeCoord, gamemap::GameMap)
+    if node.dir === HexFrame.NODE_INTERNAL
+        for (_, ship) in gamemap.ships
+            tagtuple = get_node_fluid_tags(node, ship)
+            if tagtuple[1] !== HexFluids.NONE
+                return tagtuple
+            end
         end
+        return (HexFluids.NONE,)
+    end
+
+    proper_node = to_proper(node)
+    adjacent_tiles_info = get_adjacent_tiles_for_node(proper_node)
+
+    tags = Vector{HexFluids.FluidTags}(undef, 3)
+    for (i, (tile, hex_axis)) in enumerate(adjacent_tiles_info)
+        # For each adjacent tile, check all ships until a non-NONE tag is found
+        found = HexFluids.NONE
+        for (_, ship) in gamemap.ships
+            candidate = get_tile_fluid_tag(ship, tile, to_hexaxis(hex_axis))
+            if candidate !== HexFluids.NONE
+                found = candidate
+                break
+            end
+        end
+        tags[i] = found
     end
 
     return (tags[1], tags[2], tags[3])

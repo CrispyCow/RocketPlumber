@@ -44,7 +44,7 @@ The goal is to balance readability with conciseness. Comments should convey inte
   ```julia
   # Check if any adjacent tile is on the ship surface
   for (tile, _) in adjacent_tiles
-      if is_on_ship_surface(tile, gamemap)
+      if is_on_surface_tile(tile, gamemap)
           return (true, "")
       end
   end

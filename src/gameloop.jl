@@ -182,29 +182,59 @@ function cleanup!(flowcalc_ipc::FlowCalculatorIPC, globjmap::GLObjectMap, window
 end
 
 function loadmap(mappath::Union{Nothing, String})::GameMap
-    TileDict = Dict{TileCoord, ComponentOnTile}()
-    PipeBehaviorDict = Dict{EdgeCoord, PipeBehavior}()
-    ShipSurface = Set{TileCoord}()
-
+    # gaurd clause for empty path
     if isnothing(mappath)
-        # leave map empty
         @info "No map loaded..."
-    else
+        return GameMap()        
+    end
+
+    # load attempts
+    stored_gamemap::Union{GameMap, ShipMap, Nothing} = nothing
+    if isnothing(stored_gamemap)
         try
-            @load mappath TileDict PipeBehaviorDict ShipSurface
-            @info "Map $mappath loaded successfully"
+            @load mappath stored_gamemap
         catch e
-            # Handle old maps without ShipSurface gracefully
-            try
-                @load mappath TileDict PipeBehaviorDict
-                @info "Map $mappath loaded (legacy format, no ship surface)"
-            catch e2
-                @error "An error occurred while loading map: $e2"
-            end
+            @info "Standard map load failed:\n$e"
         end
     end
 
-    return GameMap(tiles = TileDict, pipe_behaviors = PipeBehaviorDict, ship_surface = ShipSurface)
+    # If a ShipMap was saved directly (legacy single-ship save), wrap it
+    if stored_gamemap isa ShipMap
+        @info "Loaded ShipMap directly from file; wrapping as GameMap"
+        stored_gamemap = GameMap(stored_gamemap)
+    end
+
+    if isnothing(stored_gamemap)
+        @info "Attempting legacy map load 1..."
+        try
+            @load mappath TileDict PipeBehaviorDict ShipSurface
+            ship = ShipMap(components = TileDict, pipe_behaviors = PipeBehaviorDict, ship_tiles = ShipSurface)
+            stored_gamemap = GameMap(ship)
+        catch e
+            @info "Legacy map load 1 failed:\n$e"
+        end
+    end
+
+    if isnothing(stored_gamemap)
+        @info "Attempting legacy map load 2..."
+        try
+            @load mappath TileDict PipeBehaviorDict
+            ship = ShipMap(components = TileDict, pipe_behaviors = PipeBehaviorDict)
+            stored_gamemap = GameMap(ship)
+        catch e
+            @info "Legacy map load 2 failed:\n$e"
+        end
+    end
+    
+    #NOTE: for future versions of this where we change the structure of GameMap, JLD2 has some tools to handle this.
+    # See this link: https://juliaio.github.io/JLD2.jl/stable/advanced/#Upgrading-old-structures-on-load
+
+    # final check
+    if isnothing(stored_gamemap)
+        @warn "All map loading attempts failed. Returning empty map."
+        stored_gamemap = GameMap()
+    end
+    return stored_gamemap
 end
 
 """
@@ -213,16 +243,19 @@ Load a GameMap from various sources:
 - `String`: Load from JLD2 file path
 - `GameMap`: Return the GameMap directly (pass-through)
 """
-function loadmap_from_source(map_source::Union{Nothing, String, GameMap})::GameMap
+function loadmap_from_source(map_source::Union{Nothing, String, GameMap, ShipMap})::GameMap
     if map_source isa GameMap
         @info "Using pre-generated GameMap"
         return map_source
+    elseif map_source isa ShipMap
+        @info "Wrapping pre-generated ShipMap as primary ship"
+        return GameMap(map_source)
     else
         return loadmap(map_source)
     end
 end
 
-"Opens the save map dialogue in the terminal"
+"Saves the gamemap to the specified path."
 function savemap(gamemap::GameMap, mappath::Union{Nothing, String})
     if isnothing(mappath)
         @info "Map not saved..."
@@ -230,10 +263,8 @@ function savemap(gamemap::GameMap, mappath::Union{Nothing, String})
     end
 
     try
-        TileDict = gamemap.tiles
-        PipeBehaviorDict = gamemap.pipe_behaviors
-        ShipSurface = gamemap.ship_surface
-        @save mappath TileDict PipeBehaviorDict ShipSurface
+        stored_gamemap = gamemap
+        @save mappath stored_gamemap
         @info "Map saved as  $mappath"
     catch e
         @error "An error occurred while saving map: $e"
@@ -467,9 +498,11 @@ function inspect_ui!(tile::TileCoord, gamemap::GameMap, derivedmapstate::Derived
         CImGui.Text("Internal Node Voltage: $(format_value(mna_state.node_voltages[internalnode])) V")
     end
 
-    if has_tile(gamemap, tile)
-        tilecomp = get_tile(gamemap, tile)
+    found_comp, comp_ship = has_component_any_ship(gamemap, tile)
+    if found_comp
+        tilecomp, _ = get_component_any_ship(gamemap, tile)
         CImGui.Text("Type: $(String(nameof(typeof(tilecomp.component))))")
+        CImGui.Text("Ship: $(comp_ship)")
 
         # Component Values section
         CImGui.Text("\nValues:")
@@ -535,9 +568,11 @@ function inspect_ui!(edge::EdgeCoord, gamemap::GameMap, derivedmapstate::Derived
     CImGui.Text("$(coord_description(edge.v1)) and $(coord_description(edge.v2))")
 
     # Check for pipe behaviors
-    if has_pipe(gamemap, edge)
-        pipe_behav = get_pipe(gamemap, edge)
+    found_pipe, pipe_ship = has_pipe_any_ship(gamemap, edge)
+    if found_pipe
+        pipe_behav, _ = get_pipe_any_ship(gamemap, edge)
         CImGui.Text("Type: $(nameof(typeof(pipe_behav)))")
+        CImGui.Text("Ship: $(pipe_ship)")
 
         # Component Values section
         CImGui.Text("\nComponent Values:")
@@ -792,7 +827,7 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             if CImGui.Button("Create Surface", (button_width, button_height))
                 @info "Creating Surface..."
                 new_map = GameMap()
-                stacked_random_tile_walk!(new_map.ship_surface, TileCoord(0, 0), steps, stacks, seed)
+                stacked_random_tile_walk!(new_map.ship_tiles, TileCoord(0, 0), steps, stacks, seed)
 
                 enqueue_map_override!(flowcalc_ipc, new_map)
             end
@@ -858,15 +893,33 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             CImGui.TreePop()
         end
 
-        if (CImGui.TreeNode("Generate Ship"))
-            shipconfig_names::Vector{String} = getfield.(ship_gen_configs, :name)
 
+        if (CImGui.TreeNode("Generate Ship"))
+
+            shipconfig_names = getfield.(ship_gen_configs, :name)
             shipconfig_index = gui_listbox_int!(inputstate, :shipconfig_index, "shipconfig", shipconfig_names, Int32(0))
 
             if CImGui.Button("Create New Ship", (button_width, button_height))
-                shipmap = generate_ship(ship_gen_configs[shipconfig_index + 1], seed)
+                ship = generate_ship(ship_gen_configs[shipconfig_index + 1], seed)
 
-                enqueue_map_override!(flowcalc_ipc, shipmap)
+                enqueue_map_override!(flowcalc_ipc, GameMap(ship))
+            end
+            CImGui.TreePop()
+        end
+
+        if (CImGui.TreeNode("Encounter Ship"))
+
+            shipconfig_names = getfield.(ship_gen_configs, :name)
+            shipconfig_index = gui_listbox_int!(inputstate, :shipconfig_index, "shipconfig", shipconfig_names, Int32(0))
+
+            hexaxis_names = collect(string.(instances(HexAxis)))
+            hexaxis_index = gui_listbox_int!(inputstate, :hexaxis_index, "hexaxis", hexaxis_names, Int32(0))
+
+            if CImGui.Button("Encounter New Ship", (button_width, button_height))
+                encounter_map = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
+                encounter_ship!(encounter_map, ship_gen_configs[shipconfig_index + 1], seed, instances(HexAxis)[hexaxis_index + 1])
+
+                enqueue_map_override!(flowcalc_ipc, encounter_map)
             end
             CImGui.TreePop()
         end

@@ -39,3 +39,16 @@ using .HexFlowProcGen
         @test abs(empirical - expected) <= tol
     end
 end
+
+@testset "encounter_ship! smoke test" begin
+    using FlowEngine, HexFrame
+    gm = GameMap()
+    opts = HexFlowProcGen.ShipGenOptions(name="test", surface_gen_steps=2, surface_gen_stacks=2, component_sets=HexFlowProcGen.ShipComponentSet[], pipe_sets=HexFlowProcGen.PipeSpawnOptions[])
+    @test try
+        encounter_ship!(gm, opts, 0x12345678, HexFrame.Q_POS)
+        true
+    catch e
+        @warn "encounter_ship! raised" exception = e
+        false
+    end
+end

@@ -439,13 +439,14 @@ end
 
 #= Queued Render Functions =#
 
-"Renders all tile components in the gamemap by delegating to `render_map_elem!` on each component."
+"Renders all tile components in the gamemap by delegating to `render_map_elem!` on each component. This implementation iterates each ShipMap and calls the per-ship components, keeping ship-local helper functions intact."
 function tile_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, gamestate::GameState)
-    tiles = FlowEngine.get_all_tiles(gamemap)
-    isempty(tiles) && return nothing
+    isempty(gamemap.ships) && return nothing
 
-    for (coord, tilecomp) in tiles
-        render_map_elem!(queue, tilecomp; glmap = map, mna_state = mna_state, derivedmapstate = derivedmapstate, gameticks = gamestate.ticks, position = coord)
+    for (_, ship) in gamemap.ships
+        for (coord, tilecomp) in get_all_components(ship)
+            render_map_elem!(queue, tilecomp; glmap = map, mna_state = mna_state, derivedmapstate = derivedmapstate, gameticks = gamestate.ticks, position = coord)
+        end
     end
     return nothing
 end
@@ -492,22 +493,23 @@ function node_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, der
     return nothing
 end
 
-"Renders all pipe behaviors in the gamemap by delegating to `render_pipe_map!` on each pipe."
+"Renders all pipe behaviors in the gamemap by delegating to `render_pipe_map!` on each pipe. Iterates each ShipMap and uses its pipes." 
 function pipe_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, gamemap::GameMap, derivedmapstate::DerivedMapState, gamestate::GameState)
-    pipes = FlowEngine.get_all_pipes(gamemap)
-    isempty(pipes) && return nothing
+    isempty(gamemap.ships) && return nothing
 
-    for (edge, pipe_behav) in pipes
-        rotation = HexFrame.Q_POS  # Default rotation, edge orientation handled by render_pipe_map!
-        render_pipe_map!(
-            queue, pipe_behav;
-            glmap = map,
-            rotation = rotation,
-            position = edge,
-            transparency = 1.0,
-            derivedmapstate = derivedmapstate,
-            gameticks = gamestate.ticks
-        )
+    for (_, ship) in gamemap.ships
+        for (edge, pipe_behav) in get_all_pipes(ship)
+            rotation = HexFrame.Q_POS  # Default rotation, edge orientation handled by render_pipe_map!
+            render_pipe_map!(
+                queue, pipe_behav;
+                glmap = map,
+                rotation = rotation,
+                position = edge,
+                transparency = 1.0,
+                derivedmapstate = derivedmapstate,
+                gameticks = gamestate.ticks
+            )
+        end
     end
     return nothing
 end
@@ -518,7 +520,7 @@ function ship_surface_queued_render!(
         map::GLObjectMap,
         gamemap::GameMap
     )
-    coords = get_all_ship_surface_coords(gamemap)
+    coords = get_all_surfaces_combined(gamemap)
     isempty(coords) && return nothing
 
     for coord in coords
@@ -817,7 +819,7 @@ function cull_particles_to_buffer!(
         if gamemap !== nothing
             @timeit render_loop_timer "filter_surface" begin
                 # Type-assert to help compiler see this as stable
-                surface_set::Set{TileCoord} = get_all_ship_surface_coords(gamemap)
+                surface_set::Set{TileCoord} = get_all_surfaces_combined(gamemap)
 
                 filter!(manager.cull_buffer) do pos
                     # NOTE: the fact we have to convert to Float64 is an area for possible optimisation
@@ -987,16 +989,19 @@ function tile_particle_spawn!(
         mna_state::MNA_State,
         gamestate::GameState
     )
-    for (coord, tilecomp) in FlowEngine.get_all_tiles(gamemap)
-        collect_effect_particles!(
-            manager, tilecomp;
-            glmap = glmap,
-            mna_state = mna_state,
-            derivedmapstate = derivedmapstate,
-            gameticks = gamestate.ticks,
-            position = coord,
-            tile = coord
-        )
+    # Iterate components per ship so collect_effect_particles! is invoked for every ship's components
+    for (_, ship) in gamemap.ships
+        for (coord, tilecomp) in FlowEngine.get_all_components(ship)
+            collect_effect_particles!(
+                manager, tilecomp;
+                glmap = glmap,
+                mna_state = mna_state,
+                derivedmapstate = derivedmapstate,
+                gameticks = gamestate.ticks,
+                position = coord,
+                tile = coord
+            )
+        end
     end
     return nothing
 end

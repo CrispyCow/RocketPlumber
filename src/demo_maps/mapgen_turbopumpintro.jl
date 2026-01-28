@@ -12,7 +12,9 @@ The turbopump uses the pressure from the decomposition chamber to power
 the pump impeller, creating a self-sustaining propulsion cycle.
 """
 function mapgen_turbopumpintro()
-    map = GameMap()
+    ship = ShipMap()
+    components = Dict{TileCoord, ComponentOnTile}()
+    pipes = Dict{EdgeCoord, PipeBehavior}()
 
     # Create three separate liquid tank instances (must be separate to avoid shared state)
     liquid_tank_1 = ThevininTankCompBehav(
@@ -59,30 +61,30 @@ function mapgen_turbopumpintro()
         sprite = Symbol("AllNozzles_MediumNozzle")
     )
 
-    # Place components on tiles
-    map.tiles[TileCoord(-1, 0)] = ComponentOnTile(liquid_tank_1, HexFrame.Q_NEG)
-    map.tiles[TileCoord(0, -1)] = ComponentOnTile(liquid_tank_2, HexFrame.Q_NEG)
-    map.tiles[TileCoord(0, 0)] = ComponentOnTile(liquid_tank_3, HexFrame.Q_NEG)
-    map.tiles[TileCoord(-3, 1)] = ComponentOnTile(turbopump, HexFrame.Q_POS)
-    map.tiles[TileCoord(-5, 2)] = ComponentOnTile(decomp_chamber, HexFrame.Q_POS)
-    map.tiles[TileCoord(-7, 3)] = ComponentOnTile(nozzle, HexFrame.Q_POS)
+    # Place components on components
+    components[TileCoord(-1, 0)] = ComponentOnTile(liquid_tank_1, HexFrame.Q_NEG)
+    components[TileCoord(0, -1)] = ComponentOnTile(liquid_tank_2, HexFrame.Q_NEG)
+    components[TileCoord(0, 0)] = ComponentOnTile(liquid_tank_3, HexFrame.Q_NEG)
+    components[TileCoord(-3, 1)] = ComponentOnTile(turbopump, HexFrame.Q_POS)
+    components[TileCoord(-5, 2)] = ComponentOnTile(decomp_chamber, HexFrame.Q_POS)
+    components[TileCoord(-7, 3)] = ComponentOnTile(nozzle, HexFrame.Q_POS)
 
     # Add BigPipe connections (high flow capacity)
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(-3, 1), HexFrame.Q_POS),
             VertexCoord(TileCoord(-1, 0), HexFrame.Q_NEG)
         ),
     ] = BigPipeBehav(10.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(-5, 2), HexFrame.Q_POS),
             VertexCoord(TileCoord(-3, 1), HexFrame.Q_NEG)
         ),
     ] = BigPipeBehav(10.0)
 
-    map.pipe_behaviors[
+    pipes[
         EdgeCoord(
             VertexCoord(TileCoord(-7, 3), HexFrame.Q_POS),
             VertexCoord(TileCoord(-5, 2), HexFrame.Q_NEG)
@@ -90,7 +92,7 @@ function mapgen_turbopumpintro()
     ] = BigPipeBehav(10.0)
 
     # Define ship surface (valid placement area)
-    map.ship_surface = Set(
+    surface = Set(
         [
             TileCoord(-1, 0),
             TileCoord(-5, 1),
@@ -110,5 +112,9 @@ function mapgen_turbopumpintro()
         ]
     )
 
-    return map
+    set_component!(ship, components)
+    set_pipe!(ship, pipes)
+    set_surface_tile!(ship, surface)
+
+    return GameMap(ship)
 end

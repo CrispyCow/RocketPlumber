@@ -11,6 +11,8 @@ HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 SmallCollections = "2b935e18-93d6-40ac-ae34-fe54c09f00e1"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+StructEquality = "6ec83bb0-ed9f-11e9-3b4c-2b04cb4e219c"
 
 [compat]
 SmallCollections = "0.4.1"
+StructEquality = "2.1.0"

@@ -110,36 +110,39 @@ const TriGasTank = ThevininTankCompBehav(GasTankBehavFrag, 3;
      ```julia
      # This causes both nozzles to share the same state object!
      switched_nozzle = SwitchedNozzleCompBehav(...)
-     map.tiles[TileCoord(1, 1)] = ComponentOnTile(switched_nozzle, HexFrame.S_POS)
-     map.tiles[TileCoord(1, -2)] = ComponentOnTile(switched_nozzle, HexFrame.R_POS)
-     # Opening one nozzle will open BOTH - they point to the same object!
-     ```
-     
-     **✅ CORRECT - Separate Instances (Preferred for 2 components):**
-     ```julia
-     # Create separate instances with descriptive names
-     switched_nozzle_1 = SwitchedNozzleCompBehav(...)
-     switched_nozzle_2 = SwitchedNozzleCompBehav(...)
-     map.tiles[TileCoord(1, 1)] = ComponentOnTile(switched_nozzle_1, HexFrame.S_POS)
-     map.tiles[TileCoord(1, -2)] = ComponentOnTile(switched_nozzle_2, HexFrame.R_POS)
-     ```
-     
-     **✅ CORRECT - Inline Creation (Best for simple components with few constuctor arguments):**
-     ```julia
-     # Create directly in ComponentOnTile - no variables needed
-     map.tiles[TileCoord(1, 1)] = ComponentOnTile(
-         SwitchedNozzleCompBehav(...), HexFrame.S_POS)
-     map.tiles[TileCoord(1, -2)] = ComponentOnTile(
-         SwitchedNozzleCompBehav(...), HexFrame.R_POS)
-     ```
-     
-     **✅ CORRECT - Using deepcopy (For 3+ identical components):**
-     ```julia
-     # Define template and copy for each use
-     nozzle_template = SwitchedNozzleCompBehav(...)
-     map.tiles[TileCoord(1, 1)] = ComponentOnTile(deepcopy(nozzle_template), HexFrame.S_POS)
-     map.tiles[TileCoord(1, -2)] = ComponentOnTile(deepcopy(nozzle_template), HexFrame.R_POS)
-     map.tiles[TileCoord(2, 0)] = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_POS)
+map.components[TileCoord(1, 1)] = ComponentOnTile(switched_nozzle, HexFrame.S_POS)
+map.components[TileCoord(1, -2)] = ComponentOnTile(switched_nozzle, HexFrame.R_POS)
+# Opening one nozzle will open BOTH - they point to the same object!
+```
+
+**✅ CORRECT - Separate Instances (Preferred for 2 components):**
+```julia
+# Create separate instances with descriptive names
+switched_nozzle_1 = SwitchedNozzleCompBehav(...)
+switched_nozzle_2 = SwitchedNozzleCompBehav(...)
+map.components[TileCoord(1, 1)] = ComponentOnTile(switched_nozzle_1, HexFrame.S_POS)
+map.components[TileCoord(1, -2)] = ComponentOnTile(switched_nozzle_2, HexFrame.R_POS)
+```
+
+**✅ CORRECT - Inline Creation (Best for simple components with few constuctor arguments):**
+```julia
+# Create directly in ComponentOnTile - no variables needed
+map.components[TileCoord(1, 1)] = ComponentOnTile(
+    SwitchedNozzleCompBehav(...), HexFrame.S_POS)
+map.components[TileCoord(1, -2)] = ComponentOnTile(
+    SwitchedNozzleCompBehav(...), HexFrame.R_POS)
+```
+
+**✅ CORRECT - Using deepcopy (For 3+ identical components):**
+```julia
+# Define template and copy for each use
+nozzle_template = SwitchedNozzleCompBehav(...)
+map.components[TileCoord(1, 1)] = ComponentOnTile(deepcopy(nozzle_template), HexFrame.S_POS)
+map.components[TileCoord(1, -2)] = ComponentOnTile(deepcopy(nozzle_template), HexFrame.R_POS)
+map.components[TileCoord(2, 0)] = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_POS)
+```
+map.components[TileCoord(1, -2)] = ComponentOnTile(deepcopy(nozzle_template), HexFrame.R_POS)
+map.components[TileCoord(2, 0)] = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_POS)
      ```
      
      **Which approach to use:**
@@ -153,23 +156,25 @@ const TriGasTank = ThevininTankCompBehav(GasTankBehavFrag, 3;
      
      **The comparison tool will detect this error** and report "SHARED COMPONENT REFERENCES DETECTED" with details of which tiles share objects.
 
-#### Map Structure:
+#### Map Structure (Multi-Ship example):
    ```julia
    function mapgen_<mapname>()
+       # Create ShipMap for the first ship
+       ship_primary = ShipMap()
+       ship_primary.components[TileCoord(0, 0)] = ComponentOnTile(SomeCompBehav(...), HexFrame.S_POS)
+       ship_primary.pipe_behaviors[EdgeCoord(TileCoord(0,0), TileCoord(1,0))] = ScrapPipeBehav()
+       ship_primary.ship_tiles = Set([TileCoord(0,0), TileCoord(1,0)])
+
+       # Create another ShipMap for the second ship
+       ship_secondary = ShipMap()
+       ship_secondary.components[TileCoord(2, 0)] = ComponentOnTile(AnotherCompBehav(...), HexFrame.Q_POS)
+       ship_secondary.ship_tiles = Set([TileCoord(2,0), TileCoord(2,1)])
+
+       # Combine into a GameMap
        map = GameMap()
-       
-       # Create components (either as constants or inline)
-       component1 = SomeCompBehav(param1=value1, param2=value2)
-       
-       # Place components on map
-       map.tiles[TileCoord(x, y)] = ComponentOnTile(component1, rotation)
-       
-       # Add pipe behaviors (edge-based pipes)
-       map.pipe_behaviors[EdgeCoord(...)] = ScrapPipeBehav()  # or BigPipeBehav(), etc.
-       
-       # Add ship surface tiles
-       map.ship_surface = Set([TileCoord(x1, y1), TileCoord(x2, y2), ...])
-       
+       map.ships[:primary] = ship_primary
+       map.ships[:secondary] = ship_secondary
+
        return map
    end
    ```
@@ -191,7 +196,7 @@ const TriGasTank = ThevininTankCompBehav(GasTankBehavFrag, 3;
    - Tile-based pipe components also exist (e.g., `ScrapTilePipeCompBehav`)
 
 6. **Ship Surface**:
-   - The `ship_surface` field defines where components can be placed
+   - The `ship_tiles` field defines where components can be placed
    - It's a `Set{TileCoord}` containing all valid placement locations
    - Components can only be placed on coordinates in the ship surface
    - Pipe endpoints must connect to nodes adjacent to ship surface tiles
@@ -212,6 +217,10 @@ julia --project=. tools/map_encoder/compare_maps.jl <mapname> <path_to_generated
 julia --project=. tools/map_encoder/compare_maps.jl <path/to/map.jld2> <path_to_generated_file.jl>
 ```
 
+Naming convention and sanitization:
+- The encoder will produce a function named `mapgen_<basename>` where the basename is sanitized by removing underscores and non-alphanumeric characters and correcting common typos (e.g., `mulit` → `multi`).
+- For example, input `mulitship_example.jld2` will generate `mapgen_multishipexample()` and the file `tutorials/mapgen_multishipexample.jl`.
+
 Examples:
 ```bash
 # Map name (backwards compatible)
@@ -219,6 +228,12 @@ julia --project=. tools/map_encoder/compare_maps.jl autotest1 tutorials/mapgen_a
 
 # Relative path
 julia --project=. tools/map_encoder/compare_maps.jl src/demo_maps/basicplumbing.jld2 tutorials/mapgen_basicplumbing.jl
+
+# Multi-ship example (encoder will generate a `mapgen_<basename>` function - ensure basename is suitable)
+julia --project=. tools/map_encoder/encode_map.jl mulitship_example src/demo_maps/mapgen_mulitship_example.jl
+julia --project=. tools/map_encoder/compare_maps.jl mulitship_example src/demo_maps/mapgen_mulitship_example.jl
+
+Note: The tool no longer attempts aggressive sanitization. Provide a suitable basename for the generated function (e.g., `mulitship_example` → `mapgen_mulitship_example`).
 ```
 
 The comparison tool performs multiple validation checks:

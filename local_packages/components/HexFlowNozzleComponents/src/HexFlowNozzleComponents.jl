@@ -132,15 +132,15 @@ end
 
 render_map_elem!(queue::Vector{RenderCommand}, nozzle::NozzleBehavFrag; kwargs...) = render_map_elem!(queue, nozzle.stallstate; kwargs...)
 
-function placement_valid(nozzle::NozzleBehavFrag; coord::TileCoord, gamemap::GameMap, rotation::HexAxis, kwargs...)
+function placement_valid(nozzle::NozzleBehavFrag, coord::TileCoord, gamemap::GameMap; rotation::HexAxis, ship_name::Symbol = :primary, kwargs...)
     # Nozzles must hang off ship edges - their input node must be on surface, but the nozzle tile itself must not be
-    if is_on_ship_surface(coord, gamemap)
+    if is_on_surface_tile(coord, gamemap; ship_name = ship_name)
         return (false, "Nozzle must be placed off the ship surface (hanging off an edge)")
     end
 
     # Check that the input node IS connected to the ship surface
     input_node_abs = map_element(nozzle.connected_node, coord, rotation)
-    node_valid, node_reason = is_node_on_ship_surface(input_node_abs, gamemap)
+    node_valid, node_reason = is_node_on_ship_surface(input_node_abs, gamemap; ship_name = ship_name)
     if !node_valid
         return (false, "Nozzle input node is not connected to ship surface")
     end
@@ -274,7 +274,7 @@ on_click!(comp::BasicNozzleCompBehav; kwargs...) = on_click!(comp.nozzle; kwargs
 update_flowbehav!(comp::BasicNozzleCompBehav; kwargs...) = update_flowbehav!(comp.nozzle; kwargs...)
 render_base_elem!(queue::Vector{RenderCommand}, behav::BasicNozzleCompBehav; kwargs...) = render_base_elem!(queue, behav.sprite; kwargs...)
 collect_effect_particles!(manager, comp::BasicNozzleCompBehav; kwargs...) = collect_effect_particles!(manager, comp.nozzle; kwargs...)
-placement_valid(comp::BasicNozzleCompBehav; kwargs...) = placement_valid(comp.nozzle; kwargs...)
+placement_valid(comp::BasicNozzleCompBehav, coord::TileCoord, gamemap::GameMap; kwargs...) = placement_valid(comp.nozzle, coord, gamemap; kwargs...)
 
 
 function render_map_elem!(queue::Vector{RenderCommand}, behav::BasicNozzleCompBehav; kwargs...)
@@ -368,17 +368,17 @@ function update_flowbehav!(comp::SwitchedNozzleCompBehav; kwargs...)
     return nothing
 end
 
-function placement_valid(comp::SwitchedNozzleCompBehav; coord::TileCoord, gamemap::GameMap, rotation::HexAxis, kwargs...)
+function placement_valid(comp::SwitchedNozzleCompBehav, coord::TileCoord, gamemap::GameMap; rotation::HexAxis, ship_name::Symbol = :primary, kwargs...)
     # For switched nozzles, check the switch's external connection node (v1).
     # The switch connects external node (v1) to internal node (v2), and nozzle connects internal to ground.
-    if is_on_ship_surface(coord, gamemap)
+    if is_on_surface_tile(coord, gamemap; ship_name = ship_name)
         return (false, "Nozzle must be placed off the ship surface (hanging off an edge)")
     end
 
     # Check that the input node IS connected to the ship surface
     input_node_pos = comp.switch.switch.connection.v1  # External node from switch
     input_node_abs = map_element(input_node_pos, coord, rotation)
-    node_valid, node_reason = is_node_on_ship_surface(input_node_abs, gamemap)
+    node_valid, node_reason = is_node_on_ship_surface(input_node_abs, gamemap; ship_name = ship_name)
     if !node_valid
         return (false, "Nozzle input node is not connected to ship surface")
     end

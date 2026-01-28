@@ -11,7 +11,8 @@ This map teaches:
 - The `connected_node` parameter determines which external node connects to the system
 """
 function mapgen_coldgasthrusters()
-    map = GameMap()
+    ship = ShipMap()
+    components = Dict{TileCoord, ComponentOnTile}()
 
     # Create a gas tank for the thruster system
     gas_tank = ThevininTankCompBehav(
@@ -22,7 +23,7 @@ function mapgen_coldgasthrusters()
         initial_charge = 150,
         series_conductance = 5.0
     )
-    map.tiles[TileCoord(0, 0)] = ComponentOnTile(gas_tank, HexFrame.Q_NEG)
+    components[TileCoord(0, 0)] = ComponentOnTile(gas_tank, HexFrame.Q_NEG)
 
     # Create three separate switched nozzles for RCS control
     # Each nozzle must be a separate instance to maintain independent state
@@ -36,7 +37,7 @@ function mapgen_coldgasthrusters()
         min_conductance = 0.0,
         change_rate = Float64(0.1f0)
     )
-    map.tiles[TileCoord(4, -5)] = ComponentOnTile(switched_nozzle_1, HexFrame.R_NEG)
+    components[TileCoord(4, -5)] = ComponentOnTile(switched_nozzle_1, HexFrame.R_NEG)
 
     # Nozzle 2: Positioned at (4, -7) with S_NEG rotation
     switched_nozzle_2 = SwitchedNozzleCompBehav(
@@ -46,7 +47,7 @@ function mapgen_coldgasthrusters()
         min_conductance = 0.0,
         change_rate = Float64(0.1f0)
     )
-    map.tiles[TileCoord(4, -7)] = ComponentOnTile(switched_nozzle_2, HexFrame.S_NEG)
+    components[TileCoord(4, -7)] = ComponentOnTile(switched_nozzle_2, HexFrame.S_NEG)
 
     # Nozzle 3: Positioned at (6, -7) with Q_NEG rotation
     switched_nozzle_3 = SwitchedNozzleCompBehav(
@@ -56,10 +57,10 @@ function mapgen_coldgasthrusters()
         min_conductance = 0.0,
         change_rate = Float64(0.1f0)
     )
-    map.tiles[TileCoord(6, -7)] = ComponentOnTile(switched_nozzle_3, HexFrame.Q_NEG)
+    components[TileCoord(6, -7)] = ComponentOnTile(switched_nozzle_3, HexFrame.Q_NEG)
 
     # Define ship surface
-    map.ship_surface = Set(
+    surface = Set(
         [
             TileCoord(1, -1),
             TileCoord(5, -6),
@@ -74,5 +75,8 @@ function mapgen_coldgasthrusters()
         ]
     )
 
-    return map
+    set_component!(ship, components)
+    set_surface_tile!(ship, surface)
+
+    return GameMap(ship)
 end

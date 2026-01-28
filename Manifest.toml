@@ -304,7 +304,7 @@ uuid = "53c48c17-4a7d-5ca2-90c5-79b7896eea93"
 version = "0.8.5"
 
 [[deps.FlowEngine]]
-deps = ["HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "LinearAlgebra", "SmallCollections", "SparseArrays"]
+deps = ["HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "LinearAlgebra", "SmallCollections", "SparseArrays", "StructEquality"]
 path = "local_packages/FlowEngine"
 uuid = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
 version = "0.1.0"
