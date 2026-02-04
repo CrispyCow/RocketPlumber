@@ -2,6 +2,8 @@
 # Keyboard Input Polling
 # ===============================================================
 
+using FlowMap
+
 "Poll raw key state and mutate only ViewState (movement + zoom)"
 function poll_keys!(viewstate::ViewState, window::GLFW.Window)
     # Skip on first frame (last_update_time not yet initialized)
@@ -24,17 +26,178 @@ function poll_keys!(viewstate::ViewState, window::GLFW.Window)
     zoom_factor_in = exp(zoom_rate_per_sec * delta_time)
     zoom_factor_out = exp(-zoom_rate_per_sec * delta_time)
 
-    # Movement (pan)
+    # Movement (pan) - apply before clamping
     get_instate(GLFW.KEY_A, window) && (viewstate.view_x += pan_amount)
     get_instate(GLFW.KEY_D, window) && (viewstate.view_x -= pan_amount)
     get_instate(GLFW.KEY_S, window) && (viewstate.view_y += pan_amount)
     get_instate(GLFW.KEY_W, window) && (viewstate.view_y -= pan_amount)
 
-    # Zoom (exponential scaling)
+    # Zoom (exponential scaling) - apply before clamping
     get_instate(GLFW.KEY_Q, window) && (viewstate.view_zoom *= zoom_factor_out)
     get_instate(GLFW.KEY_E, window) && (viewstate.view_zoom *= zoom_factor_in)
 
+    # === NEW: Apply zoom and pan limits ===
+    apply_view_limits!(viewstate)
+
     return nothing
+end
+
+"""
+Update the ship bounds in ViewState based on the current GameMap.
+Expands bounds if necessary to ensure a minimum span of 10 units (symmetric around centre).
+"""
+function update_ship_bounds!(viewstate::ViewState, gamemap::GameMap)
+    # Get raw bounds from map
+    raw_bounds = get_cartesian_bounds(gamemap)
+
+    # Calculate centre and span
+    centre_x = (raw_bounds.X_POS + raw_bounds.X_NEG) / 2.0
+    centre_y = (raw_bounds.Y_POS + raw_bounds.Y_NEG) / 2.0
+    span_x = raw_bounds.X_POS - raw_bounds.X_NEG
+    span_y = raw_bounds.Y_POS - raw_bounds.Y_NEG
+
+    # Enforce minimum span of 10 units (5 in each direction from centre)
+    MIN_SPAN = 10.0
+    half_span_x = max(span_x / 2.0, MIN_SPAN / 2.0)
+    half_span_y = max(span_y / 2.0, MIN_SPAN / 2.0)
+
+    # Calculate expanded bounds centred on the actual centre
+    viewstate.ship_bounds = (
+        X_POS = centre_x + half_span_x,
+        X_NEG = centre_x - half_span_x,
+        Y_POS = centre_y + half_span_y,
+        Y_NEG = centre_y - half_span_y
+    )
+
+    return nothing
+end
+
+"""
+Apply zoom and pan limits based on ship bounds.
+- Zoom: Limit so the longer ship axis takes up ~1/3 of screen
+- Pan: Ensure at least 5% of ship bounds remains visible on screen
+"""
+function apply_view_limits!(viewstate::ViewState)
+    bounds = viewstate.ship_bounds
+
+    # Calculate ship span in cartesian units
+    ship_span_x = bounds.X_POS - bounds.X_NEG
+    ship_span_y = bounds.Y_POS - bounds.Y_NEG
+    ship_span_max = max(ship_span_x, ship_span_y)
+
+    # Calculate visible area in world units (inverse of zoom)
+    # The hex_size_pixels constant is 256 (from get_viewtransform)
+    hex_size_pixels = 256.0f0
+    visible_width = viewstate.fb_width / (viewstate.view_zoom * hex_size_pixels) 
+    visible_height = viewstate.fb_height / (viewstate.view_zoom * hex_size_pixels)
+
+    # === Zoom Limit ===
+    # Ship should take up at least 1/3 of the smaller screen dimension
+    # So visible area should be at most 5x the ship span
+    max_visible_span = ship_span_max * 5.0f0
+
+    # Calculate minimum zoom based on screen dimensions
+    min_zoom_x = viewstate.fb_width / (max_visible_span * hex_size_pixels)
+    min_zoom_y = viewstate.fb_height / (max_visible_span * hex_size_pixels)
+    min_zoom = max(min_zoom_x, min_zoom_y)
+
+    # Enforce a reasonable hard minimum zoom to prevent unusable views
+    MIN_VIEW_ZOOM = 0.01f0
+    min_zoom = max(min_zoom, MIN_VIEW_ZOOM)
+    
+    # Clamp zoom (allow zooming in indefinitely, but limit zoom out)
+    viewstate.view_zoom = max(viewstate.view_zoom, min_zoom)
+    
+    # Recalculate visible area after zoom clamp
+    visible_width = viewstate.fb_width / (viewstate.view_zoom * hex_size_pixels)
+    visible_height = viewstate.fb_height / (viewstate.view_zoom * hex_size_pixels)
+
+    # === Pan Limit ===
+    # Ensure some of ship remains visible
+    margin_fraction = 0.1f0  # 10% of ship must stay visible
+    margin_x = ship_span_x * margin_fraction
+    margin_y = ship_span_y * margin_fraction
+
+    # Calculate bounds centre
+    bounds_centre_x = (bounds.X_POS + bounds.X_NEG) / 2.0f0
+    bounds_centre_y = (bounds.Y_POS + bounds.Y_NEG) / 2.0f0
+
+    # Calculate pan limits
+    # When view_x is 0, camera is at origin. view_x positive = camera moves left (sees right side)
+    # We want: camera_centre_x - visible_width/2 < bounds.X_POS - margin (can't pan too far right)
+    # And: camera_centre_x + visible_width/2 > bounds.X_NEG + margin (can't pan too far left)
+    # camera_centre = -view (since view is offset applied to world)
+    
+    max_pan_x = -(bounds.X_NEG + margin_x - visible_width / 2.0f0)
+    min_pan_x = -(bounds.X_POS - margin_x + visible_width / 2.0f0)
+    max_pan_y = -(bounds.Y_NEG + margin_y - visible_height / 2.0f0)
+    min_pan_y = -(bounds.Y_POS - margin_y + visible_height / 2.0f0)
+
+    # Handle case where visible area is larger than ship (can't scroll at all)
+    if min_pan_x > max_pan_x
+        viewstate.view_x = -bounds_centre_x
+    else
+        viewstate.view_x = clamp(viewstate.view_x, min_pan_x, max_pan_x)
+    end
+    
+    if min_pan_y > max_pan_y
+        viewstate.view_y = -bounds_centre_y
+    else
+        viewstate.view_y = clamp(viewstate.view_y, min_pan_y, max_pan_y)
+    end
+    
+    return nothing
+end
+
+"""
+Calculate the maximum reachable viewport bounds given the current ship bounds and zoom limits.
+Returns a HexFrame.CartesianBounds representing the union of all possible viewports the user can pan/zoom to.
+"""
+function get_max_reachable_bounds(viewstate::ViewState)
+    bounds = viewstate.ship_bounds
+    
+    # Calculate limits based on ship span
+    ship_span_x = bounds.X_POS - bounds.X_NEG
+    ship_span_y = bounds.Y_POS - bounds.Y_NEG
+    ship_span_max = max(ship_span_x, ship_span_y)
+    
+    # Max visible span allowed by zoom limit
+    # Matches constant in apply_view_limits!
+    max_visible_span = ship_span_max * 5.0f0
+    
+    # Using the same constant as apply_view_limits!
+    hex_size_pixels = 256.0f0
+    
+    # Calculate minimum zoom based on screen dimensions
+    min_zoom_x = viewstate.fb_width / (max_visible_span * hex_size_pixels)
+    min_zoom_y = viewstate.fb_height / (max_visible_span * hex_size_pixels)
+    min_zoom = max(min_zoom_x, min_zoom_y)
+    
+    # Enforce hard minimum
+    MIN_VIEW_ZOOM = 0.01f0
+    min_zoom = max(min_zoom, MIN_VIEW_ZOOM)
+    
+    # Calculate world dimensions at this minimum zoom (max potential view size)
+    max_view_width = viewstate.fb_width / (min_zoom * hex_size_pixels)
+    max_view_height = viewstate.fb_height / (min_zoom * hex_size_pixels)
+    
+    # Pan limits (margin logic) based on current apply_view_limits! implementation
+    margin_fraction = 0.1f0
+    margin_x = ship_span_x * margin_fraction
+    margin_y = ship_span_y * margin_fraction
+    
+    # Calculate maximal extents
+    # Max right view edge: Ship Right Edge - Margin + Full View Width
+    max_right = bounds.X_POS - margin_x + max_view_width
+    # Min left view edge: Ship Left Edge + Margin - Full View Width
+    min_left = bounds.X_NEG + margin_x - max_view_width
+    
+    # Max top view edge: Ship Top Edge - Margin + Full View Height
+    max_top = bounds.Y_POS - margin_y + max_view_height
+    # Min bottom view edge: Ship Bottom Edge + Margin - Full View Height
+    min_bottom = bounds.Y_NEG + margin_y - max_view_height
+    
+    return (X_POS=Float64(max_right), X_NEG=Float64(min_left), Y_POS=Float64(max_top), Y_NEG=Float64(min_bottom))
 end
 
 "Poll key rising edges and mutate only InputState (tool rotation, placement mode, pause, exit)"
@@ -432,12 +595,100 @@ function render_cursor_ghosts!(queue::Vector{RenderCommand}, glmap::GLObjectMap,
 end
 
 # ===============================================================
+# Docking Beam Rendering
+# ===============================================================
+
+"Render tractor beams between the primary ship and other docked ships."
+function render_docking_beams!(queue::Vector{RenderCommand}, glmap::GLObjectMap, gamemap::GameMap, gameticks::Int64)
+    primary_centroid = get_surface_centroid(gamemap, :primary)
+    primary_centroid === nothing && return nothing
+    primary_offset = get_render_offset(get_ship(gamemap, :primary))
+    primary_pos = primary_centroid + primary_offset
+
+    for (ship_name, ship) in gamemap.ships
+        ship_name == :primary && continue
+
+        ship_centroid = get_surface_centroid(ship)
+        ship_centroid === nothing && continue
+        ship_pos = ship_centroid + get_render_offset(ship)
+
+        status = get_docking_status(ship)
+
+        beam_colour = if status isa ApproachingDockStat
+            SVector{4, Float32}(0.2, 0.2, 0.6, 1.0)
+        elseif status isa ConnectedDockStat
+            SVector{4, Float32}(0.2, 0.6, 0.2, 1.0)
+        elseif status isa DepartingDockStat
+            SVector{4, Float32}(0.6, 0.2, 0.2, 1.0)
+        else
+            nothing
+        end
+
+        beam_colour === nothing && continue
+
+        # Beam parameter tuning: default num_elements now 50; connected ships have reduced scale and noise
+        local_num_elements = 50
+        local_noise = 0.1
+        local_scale = 1.0f0
+        if status isa ConnectedDockStat
+            local_scale *= 0.5f0
+            local_noise *= 0.25
+        end
+
+        render_beam!(
+            queue,
+            glmap,
+            gameticks,
+            primary_pos,
+            ship_pos;
+            num_elements = local_num_elements,
+            noise_magnitude = local_noise,
+            scale = local_scale,
+            colour = beam_colour,
+            draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_TRACTOR_BEAM)
+        )
+    end
+
+    return nothing
+end
+
+# ===============================================================
 # FlowCalculator Command System Input Handlers
 # ===============================================================
 # These functions enqueue commands to the FlowCalculator thread
 # instead of directly mutating the game map, decoupling UI from
 # simulation logic.
 # ===============================================================
+
+"Check if clicked coordinate is on a ship with non-zero render position offset (blocks interactions during visual effects)"
+function is_on_offset_ship(coord, gamemap::GameMap)::Bool
+    if coord isa TileCoord
+        # Check if tile is on a ship with offset
+        ship_name = find_ship_for_surface(gamemap, coord)
+        if isnothing(ship_name)
+            # Check if there's a component at this coord
+            ship_name = find_ship_with_component(gamemap, coord)
+        end
+        if !isnothing(ship_name)
+            offset = get_ship_render_offset(gamemap, ship_name)
+            return offset != AxialCoord(0.0, 0.0)
+        end
+    elseif coord isa EdgeCoord
+        # Check if pipe is on a ship with offset
+        ship_name = find_ship_with_pipe(gamemap, coord)
+        if !isnothing(ship_name)
+            offset = get_ship_render_offset(gamemap, ship_name)
+            return offset != AxialCoord(0.0, 0.0)
+        end
+    elseif coord isa VertexCoord
+        # Check node's ship
+        node = to_nodecoord(coord)
+        ship_name = find_ship_for_node(node, gamemap)
+        offset = get_ship_render_offset(gamemap, ship_name)
+        return offset != AxialCoord(0.0, 0.0)
+    end
+    return false
+end
 
 "Checks if two commands are trying to do the same thing, by checking for equivalence excluding IDs"
 function is_same_command(cmd1::Union{MapEditCommand, Nothing}, cmd2::Union{MapEditCommand, Nothing})::Bool
@@ -476,6 +727,7 @@ end
 function flowcalc_tileplacer!(
         command_queue::CommandQueue,
         inputstate::InputState,
+        gamemap::GameMap,
         threadsafe_console_push::Function
     )
     if inputstate.placementmode != TILE
@@ -486,6 +738,12 @@ function flowcalc_tileplacer!(
     end
 
     coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
+    
+    # Block interactions on ships with non-zero render offset
+    if is_on_offset_ship(coord, gamemap)
+        return
+    end
+    
     command = create_set_tile_command(command_queue, coord, inputstate.pendingcomponent, inputstate.toolrotation)
     try_enqueue_command!(command_queue, command, threadsafe_console_push)
     return nothing
@@ -495,6 +753,7 @@ end
 function flowcalc_pipeplacer!(
         command_queue::CommandQueue,
         inputstate::InputState,
+        gamemap::GameMap,
         threadsafe_console_push::Function
     )
     if inputstate.placementmode != PIPE
@@ -508,6 +767,11 @@ function flowcalc_pipeplacer!(
     element = get_clicked(inputstate)
     if element isa VertexCoord
         element = round_to_edge(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
+    end
+    
+    # Block interactions on ships with non-zero render offset
+    if is_on_offset_ship(element, gamemap)
+        return
     end
 
     if element isa EdgeCoord
@@ -542,6 +806,11 @@ function flowcalc_moveplacer!(
 
     element = get_clicked(inputstate)
     if element === nothing
+        return
+    end
+    
+    # Block interactions on ships with non-zero render offset
+    if is_on_offset_ship(element, gamemap)
         return
     end
 
@@ -605,6 +874,7 @@ end
 function flowcalc_deleteplacer!(
         command_queue::CommandQueue,
         inputstate::InputState,
+        gamemap::GameMap,
         threadsafe_console_push::Function
     )
     if inputstate.placementmode != DELETE
@@ -615,6 +885,12 @@ function flowcalc_deleteplacer!(
     end
 
     element = get_clicked(inputstate)
+    
+    # Block interactions on ships with non-zero render offset
+    if is_on_offset_ship(element, gamemap)
+        return
+    end
+    
     command = create_delete_command(command_queue, element)
     try_enqueue_command!(command_queue, command, threadsafe_console_push)
 
@@ -625,6 +901,7 @@ end
 function flowcalc_interactor!(
         command_queue::CommandQueue,
         inputstate::InputState,
+        gamemap::GameMap,
         threadsafe_console_push::Function
     )
     if inputstate.placementmode != INSPECT
@@ -633,10 +910,16 @@ function flowcalc_interactor!(
     if !CImGui.IsMouseClicked(CImGui.lib.ImGuiMouseButton_Left)
         return
     end
-
+    
     # Get clicked tile and calculate click site relative to tile center
     cursor_cart = CartesianCoord(inputstate.cursor_x, inputstate.cursor_y)
     tile = round_to_tile(cursor_cart)
+    
+    # Block interactions on ships with non-zero render offset
+    if is_on_offset_ship(tile, gamemap)
+        return
+    end
+    
     tile_center_cart = to_cartesian(tile)
     unrotated_clicksite = cursor_cart - tile_center_cart
 
@@ -660,6 +943,11 @@ function flowcalc_surfaceeditor!(
     end
 
     coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
+    
+    # Block interactions on ships with non-zero render offset
+    if is_on_offset_ship(coord, gamemap)
+        return
+    end
 
     # Toggle: if surface exists on any ship, remove it; otherwise add it
     foundsurf, _ = is_on_surface_tile_any_ship(coord, gamemap)

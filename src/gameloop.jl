@@ -2,7 +2,7 @@
 # Helper Functions for the Game Main Loop
 # ===============================================================
 
-using HexFlowTelemetry
+using HexFlowTelemetry, FlowMap, FlowEngine
 
 "Uses RenderEngine to initialise OpenGL objects needed for the game loop"
 function init_opengl_objects()
@@ -40,7 +40,7 @@ function custom_rendering!(
         @timeit render_loop_timer "Particle Systems" begin
             @timeit render_loop_timer "Background Particles" begin
                 if !shared_state.is_paused # skip if paused
-                    thrust_dust_particle_effect!(viewstate.background_particles, snapshot.gamestate, snapshot.derived)
+                    thrust_dust_particle_effect!(viewstate.background_particles, snapshot.gamestate, snapshot.gamemap)
                     update_particle_physics!(viewstate.background_particles, snapshot.gamestate, count_surface_tiles(snapshot.gamemap))
                 end
                 # Enable ship surface culling for background particles by passing gamemap
@@ -53,10 +53,11 @@ function custom_rendering!(
     @timeit render_loop_timer "Sprite Rendering" begin
         @timeit render_loop_timer "Populate Render Queue" begin
             @timeit render_loop_timer "Ship Surface" ship_surface_queued_render!(renderqueue, glmap, snapshot.gamemap)
+            @timeit render_loop_timer "Docking Beams" render_docking_beams!(renderqueue, glmap, snapshot.gamemap, snapshot.gamestate.ticks)
             @timeit render_loop_timer "Tiles" tile_queued_render!(renderqueue, glmap, snapshot.gamemap, snapshot.derived, snapshot.mna, snapshot.gamestate)
             @timeit render_loop_timer "Ghosts" render_cursor_ghosts!(renderqueue, glmap, inputstate, snapshot.gamemap, snapshot.gamestate)
             @timeit render_loop_timer "Pipes" pipe_queued_render!(renderqueue, glmap, snapshot.gamemap, snapshot.derived, snapshot.gamestate)
-            @timeit render_loop_timer "Nodes" node_queued_render!(renderqueue, glmap, snapshot.derived, snapshot.mna)
+            @timeit render_loop_timer "Nodes" node_queued_render!(renderqueue, glmap, snapshot.gamemap, snapshot.derived, snapshot.mna)
         end
 
         @timeit render_loop_timer "Execute Render Queue" glrender(glmap, renderqueue)
@@ -123,17 +124,20 @@ function user_handler!(
         snapshot::FlowCalculatorSnapshot,
         window::GLFW.Window
     )
+    # Update ship bounds before input handling so limits are current
+    update_ship_bounds!(viewstate, snapshot.gamemap)
+
     GLFW.PollEvents()
     cimgui_io = CImGui.GetIO()
     handle_inputs!(inputstate, viewstate, window, cimgui_io) # input handling (window sizes, cursor, keys, scroll)
     handle_flowcalc_sharedstate!(inputstate, flowcalc_ipc.shared_state, window, flowcalc_ipc.console_push)
 
     if !unsafe_load(cimgui_io.WantCaptureMouse) # don't handle mouse if clicking GUI
-        flowcalc_tileplacer!(flowcalc_ipc.command_queue, inputstate, flowcalc_ipc.console_push)
-        flowcalc_pipeplacer!(flowcalc_ipc.command_queue, inputstate, flowcalc_ipc.console_push)
+        flowcalc_tileplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
+        flowcalc_pipeplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
         flowcalc_moveplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
-        flowcalc_deleteplacer!(flowcalc_ipc.command_queue, inputstate, flowcalc_ipc.console_push)
-        flowcalc_interactor!(flowcalc_ipc.command_queue, inputstate, flowcalc_ipc.console_push)
+        flowcalc_deleteplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
+        flowcalc_interactor!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
         flowcalc_surfaceeditor!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
     end
 
@@ -150,6 +154,10 @@ function ui_rendering!(
         tutorial_hint::Union{Nothing, HintData} = nothing
     )
     pendingcomponent_typeupdate!(inputstate)
+    
+    # Calculate bounds for interactions
+    max_view_bounds = get_max_reachable_bounds(viewstate)
+    
     return ui_renderwrap() do
         ui_timer_render(
             snapshot.gamestate.ticks,
@@ -161,7 +169,7 @@ function ui_rendering!(
         ui_toolbar_render!(inputstate, GLFW.GetWindowSize(window), flowcalc_ipc.console_see)
         ui_propertybox_render!(inputstate, snapshot.gamemap, snapshot.derived, snapshot.mna, GLFW.GetWindowSize(window))
         ui_pause_menu_render!(inputstate, snapshot, window)
-        ui_dev_utils_menu_render!(inputstate, flowcalc_ipc, GLFW.GetWindowSize(window))
+        ui_dev_utils_menu_render!(inputstate, flowcalc_ipc, GLFW.GetWindowSize(window), max_view_bounds)
 
         # Render hint box if hint data exists and is visible
         if !isnothing(tutorial_hint) && tutorial_hint.is_visible
@@ -181,6 +189,16 @@ function cleanup!(flowcalc_ipc::FlowCalculatorIPC, globjmap::GLObjectMap, window
     # CImGui teardown handled by start menu now
 end
 
+# See this link: https://juliaio.github.io/JLD2.jl/stable/advanced/#Upgrading-old-structures-on-load
+import JLD2: rconvert
+"Conversion for old `ShipMap` saved representations"
+JLD2.rconvert(::Type{FlowMap.ShipMap}, nt::NamedTuple) = FlowMap.ShipMap(
+    components = get(nt, :components, Dict{TileCoord, ComponentOnTile}()),
+    pipe_behaviors = get(nt, :pipe_behaviors, Dict{EdgeCoord, PipeBehavior}()),
+    ship_tiles = get(nt, :ship_tiles, Set{TileCoord}([TileCoord(0, 0)])),
+    docking_status = get(nt, :docking_status, FlowMap.ConnectedDockStat())
+)
+
 function loadmap(mappath::Union{Nothing, String})::GameMap
     # gaurd clause for empty path
     if isnothing(mappath)
@@ -192,7 +210,21 @@ function loadmap(mappath::Union{Nothing, String})::GameMap
     stored_gamemap::Union{GameMap, ShipMap, Nothing} = nothing
     if isnothing(stored_gamemap)
         try
-            @load mappath stored_gamemap
+            # The top-level `JLD2.rconvert` registration (above) handles
+            # upgrading old `ShipMap` structs that lack `render_position_offset`.
+            # Provide typemap so JLD2 will attempt an upgrade to current ShipMap
+            typemap = Dict(
+                "FlowEngine.ShipMap" => JLD2.Upgrade(FlowMap.ShipMap),
+                "FlowEngine.GameMap" => JLD2.Upgrade(FlowMap.GameMap),
+                "FlowEngine.DockingStatus" => JLD2.Upgrade(FlowMap.DockingStatus),
+                "FlowEngine.ConnectedDockStat" => JLD2.Upgrade(FlowMap.ConnectedDockStat),
+                "FlowEngine.ApproachingDockStat" => JLD2.Upgrade(FlowMap.ApproachingDockStat),
+                "FlowEngine.DepartingDockStat" => JLD2.Upgrade(FlowMap.DepartingDockStat),
+                "FlowEngine.RenderPosOffsetState" => JLD2.Upgrade(FlowMap.RenderPosOffsetState)
+            )
+
+            # Use the functional API instead of macro so we can pass keyword args (typemap) safely
+            stored_gamemap = JLD2.load(mappath, "stored_gamemap"; typemap=typemap)
         catch e
             @info "Standard map load failed:\n$e"
         end
@@ -226,9 +258,6 @@ function loadmap(mappath::Union{Nothing, String})::GameMap
         end
     end
     
-    #NOTE: for future versions of this where we change the structure of GameMap, JLD2 has some tools to handle this.
-    # See this link: https://juliaio.github.io/JLD2.jl/stable/advanced/#Upgrading-old-structures-on-load
-
     # final check
     if isnothing(stored_gamemap)
         @warn "All map loading attempts failed. Returning empty map."
@@ -443,6 +472,23 @@ function format_value(val::Float64)::String
     end
 end
 
+"Return a display-safe string for ship names.
+Generates a human-visible label from a `Symbol`. This strips leading gensym
+prefixes like `##` (which ImGui treats as an ID separator and hides the visible
+text) and replaces internal `#` with `-` for readability." 
+function safe_ship_display_name(name::Symbol)::String
+    s = String(name)
+    if startswith(s, "##")
+        # Remove leading '#' characters (turn "##ship#278" -> "ship#278")
+        s2 = lstrip(s, '#')
+        # Replace remaining '#' separators with '-' for a nicer display
+        s2 = replace(s2, '#' => '-')
+        return s2
+    else
+        return s
+    end
+end
+
 "Displays component tunables in read-only format matching edit_tunables! style"
 function display_component_values!(tunables_tuple::NTuple{N, TunableProps}) where {N}
     if N == 0
@@ -548,7 +594,7 @@ function inspect_ui!(vert::VertexCoord, gamemap::GameMap, derivedmapstate::Deriv
         CImGui.Separator()
         CImGui.Indent()
 
-        contributing_tags = FlowEngine.get_node_fluid_tags(node, gamemap)
+        contributing_tags = get_node_fluid_tags(node, gamemap)
         adjacent_tiles_info = HexFrame.get_adjacent_tiles_for_node(node)
 
         for (idx, ((tile, _), tag)) in enumerate(zip(adjacent_tiles_info, contributing_tags))
@@ -790,7 +836,7 @@ function ui_pause_menu_render!(inputstate::InputState, snapshot::FlowCalculatorS
     return nothing
 end
 
-function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}})
+function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}}, max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing)
     # Guard clause to check if dev utils menu is active
     if !inputstate.dev_utils_menu_active
         return nothing
@@ -810,6 +856,72 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             cmd = create_map_override_command(flowcalc_ipc.command_queue, deepcopy(new_map))
             try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
         end
+
+        # Delete Ship utility
+        if CImGui.TreeNode("Delete Ship")
+            # Get current gamemap to list ships
+            current_gamemap = (flowcalc_ipc.get_snapshot()).gamemap
+            all_ship_names = get_all_ship_names(current_gamemap)
+            
+            # Filter out :primary
+            deletable_ships = filter(n -> n != :primary, all_ship_names)
+            deletable_ship_strings = safe_ship_display_name.(deletable_ships)
+            
+            if isempty(deletable_ships)
+                CImGui.Text("No deletable ships (only primary exists)")
+            else
+                # Ship selection dropdown
+                delete_ship_index = gui_listbox_int!(inputstate, :delete_ship_index, "Ship", deletable_ship_strings, Int32(0))
+                delete_ship_index = clamp(delete_ship_index, Int32(0), Int32(max(0, length(deletable_ships) - 1)))
+                inputstate.gui_inputs[:delete_ship_index] = delete_ship_index
+                
+                selected_delete_ship = deletable_ships[delete_ship_index + 1]
+                
+                if CImGui.Button("Delete Ship", (button_width, button_height))
+                    modified_map = deepcopy(current_gamemap)
+                    remove_ship!(modified_map, selected_delete_ship)
+                    enqueue_map_override!(flowcalc_ipc, modified_map)
+                    @info "Deleted ship $(selected_delete_ship)"
+                end
+            end
+            CImGui.TreePop()
+        end
+
+        # Depart Ship utility
+        if CImGui.TreeNode("Depart Ship")
+            # Get current gamemap to list ships
+            current_gamemap = (flowcalc_ipc.get_snapshot()).gamemap
+            all_ship_names = get_all_ship_names(current_gamemap)
+            
+            # Filter out :primary
+            departable_ships = filter(n -> n != :primary, all_ship_names)
+            departable_ship_strings = safe_ship_display_name.(departable_ships)
+            
+            if isempty(departable_ships)
+                CImGui.Text("No departable ships (only primary exists)")
+            else
+                # Ship selection dropdown
+                depart_ship_index = gui_listbox_int!(inputstate, :depart_ship_index, "Ship", departable_ship_strings, Int32(0))
+                depart_ship_index = clamp(depart_ship_index, Int32(0), Int32(max(0, length(departable_ships) - 1)))
+                inputstate.gui_inputs[:depart_ship_index] = depart_ship_index
+                
+                selected_depart_ship = departable_ships[depart_ship_index + 1]
+                
+                if CImGui.Button("Depart Ship", (button_width, button_height))
+                    modified_map = deepcopy(current_gamemap)
+
+                    success, reason = depart_ship!(modified_map, selected_depart_ship; max_view_bounds=max_view_bounds)
+                    if success
+                        enqueue_map_override!(flowcalc_ipc, modified_map)
+                        flowcalc_ipc.console_push(reason)
+                        @info reason
+                    else
+                        flowcalc_ipc.console_push(reason)
+                    end
+                end
+            end
+            CImGui.TreePop()
+        end
     end
 
     if (CImGui.CollapsingHeader("Proc Gen"))
@@ -827,7 +939,10 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             if CImGui.Button("Create Surface", (button_width, button_height))
                 @info "Creating Surface..."
                 new_map = GameMap()
-                stacked_random_tile_walk!(new_map.ship_tiles, TileCoord(0, 0), steps, stacks, seed)
+                # Generate tiles into a temporary set and assign to the primary ship
+                tiles = Set{TileCoord}()
+                stacked_random_tile_walk!(tiles, TileCoord(0, 0), steps, stacks, seed)
+                set_surface_tile!(new_map, tiles)
 
                 enqueue_map_override!(flowcalc_ipc, new_map)
             end
@@ -917,13 +1032,41 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
 
             if CImGui.Button("Encounter New Ship", (button_width, button_height))
                 encounter_map = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
-                encounter_ship!(encounter_map, ship_gen_configs[shipconfig_index + 1], seed, instances(HexAxis)[hexaxis_index + 1])
+                encounter_ship!(encounter_map, ship_gen_configs[shipconfig_index + 1], seed, instances(HexAxis)[hexaxis_index + 1]; max_view_bounds=max_view_bounds)
 
                 enqueue_map_override!(flowcalc_ipc, encounter_map)
             end
             CImGui.TreePop()
         end
 
+    end
+
+    #= ---------- Rendering Section ----------- =#
+    if CImGui.CollapsingHeader("Rendering")
+        button_width = 200.0
+        button_height = 30.0
+
+        if CImGui.TreeNode("Docking Status")
+            current_gamemap = (flowcalc_ipc.get_snapshot()).gamemap
+
+            for (ship_name, ship) in current_gamemap.ships
+                status = get_docking_status(ship)
+                offset = get_render_offset(ship)
+                status_str = string(typeof(status).name.name)
+                axis = get_approach_axis(status)
+                axis_str = isnothing(axis) ? "none" : string(axis)
+                CImGui.Text("$(safe_ship_display_name(ship_name)): $(status_str) @ ($(round(offset.q, digits=2)), $(round(offset.r, digits=2))) axis=$(axis_str)")
+            end
+
+            if CImGui.Button("Clear All to Connected", (button_width, button_height))
+                modified_map = deepcopy(current_gamemap)
+                clear_all_docking_statuses!(modified_map)
+                enqueue_map_override!(flowcalc_ipc, modified_map)
+                @info "Cleared all docking statuses to Connected"
+            end
+
+            CImGui.TreePop()
+        end
     end
 
     CImGui.End()

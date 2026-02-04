@@ -28,7 +28,7 @@ Note: This script must be run from the project root directory with --project=. t
 
 # Import required packages from the main project
 using JLD2
-using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowEngine
+using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowMap
 # Import HexFlowProcGen because `src/components.jl` references it at top level
 # (e.g., `roll_pipe`, `NOZZLE_EDGE_PLACE`, `shipset_*`). This ensures the
 # `include("src/components.jl")` call succeeds when run from this script.

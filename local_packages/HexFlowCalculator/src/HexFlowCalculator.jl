@@ -5,7 +5,7 @@ using Base.Threads, Dates, Printf, LinearAlgebra, StructEquality
 using TimerOutputs, SparseArrays, StaticArrays 
 # Custom Packages
 using HexFrame, HexElements, HexFluids, HexFlowTelemetry
-using FlowEngine, HexComponentsAPI, HexFlowControl
+using FlowEngine, FlowMap, HexComponentsAPI, HexFlowControl
 
 # Type exports - Data Structures
 export FlowCalculatorSnapshot, FlowCalculatorSharedState, FlowCalculatorIPC, TimingState
@@ -991,93 +991,111 @@ function flowcalculator_loop!(
 
     # Main loop
     while true
-        # Update timing state
-        target_ups = @atomic shared_state.target_ups
-        target_update_time = 1.0 / target_ups
-        accumulate_time!(timing, target_update_time)
+        try
+            # Update timing state
+            target_ups = @atomic shared_state.target_ups
+            target_update_time = 1.0 / target_ups
+            accumulate_time!(timing, target_update_time)
 
-        # Exit loop if requested
-        if (@atomic shared_state.should_exit)
-            @info "FlowCalculator loop exiting as requested"
-            threadsafe_console_push("FlowCalculator loop exiting")
+            # Exit loop if requested
+            if (@atomic shared_state.should_exit)
+                @info "FlowCalculator loop exiting as requested"
+                threadsafe_console_push("FlowCalculator loop exiting")
+                break
+            end
+
+            # Check if paused
+            is_paused = @atomic shared_state.is_paused
+
+            # Main update logic
+            if !timing.should_update
+                # Not enough time accumulated, sleep briefly
+                sleep(0.001)  # 1ms
+            else
+                # Process commands (only when updating)
+                commands_processed = false
+                @timeit flowcalc_loop_timer "Command Processing" begin
+                    while isready(command_queue.command_channel)
+                        command = take!(command_queue.command_channel)
+                        process_command!(command, gamemap, threadsafe_console_push, throw_errors = false)
+                        commands_processed = true
+                    end
+                end
+
+                # Consume accumulated time and track update
+                timing.accumulator -= target_update_time
+                update_count += 1
+
+                if !is_paused
+                    # Full update: advance game state
+                    gamestate.ticks += 1
+
+                    # Update state
+                    update_docking!(gamemap)
+                    @timeit flowcalc_loop_timer "Component Updates" update_components!(gamemap, mna_state)
+                    update_map!(gamemap, derivedmapstate, mna_state, gamestate.ticks)
+                    update_mna!(derivedmapstate, mna_state, gamestate.ticks)
+                    @timeit flowcalc_loop_timer "Thruster Handling" handle_thrusters!(gamestate, gamemap, mna_state)
+
+                    # Publish snapshot
+                    @timeit flowcalc_loop_timer "Snapshot Publishing" begin
+                        snapshot = FlowCalculatorSnapshot(
+                            gamemap = deepcopy(gamemap),
+                            derived = deepcopy(derivedmapstate),
+                            mna = deepcopy(mna_state),
+                            gamestate = deepcopy(gamestate),
+                            timestamp = timing.current_time
+                        )
+                        set_snapshot(snapshot)
+                    end
+
+                elseif commands_processed
+                    # Paused with commands: update derived state only
+                    update_map!(gamemap, derivedmapstate, mna_state, gamestate.ticks)
+                    update_mna!(derivedmapstate, mna_state, gamestate.ticks)
+
+                    # Publish snapshot without advancing game time
+                    @timeit flowcalc_loop_timer "Snapshot Publishing" begin
+                        snapshot = FlowCalculatorSnapshot(
+                            gamemap = deepcopy(gamemap),
+                            derived = deepcopy(derivedmapstate),
+                            mna = deepcopy(mna_state),
+                            gamestate = deepcopy(gamestate),
+                            timestamp = timing.current_time
+                        )
+                        set_snapshot(snapshot)
+                    end
+                end
+            end
+
+            # Update UPS metrics, warnings, and diagnostics
+            @timeit flowcalc_loop_timer "UPS Metrics" begin
+                update_count = update_ups_metrics!(
+                    shared_state, timing, update_count,
+                    target_ups, threadsafe_console_push,
+                    diagnostic_interval = diagnostic_interval
+                )
+            end
+
+            # Handle FlowCalculator diagnostics (called from background thread)
+            # Uses gamestate.ticks as counter for tick-based diagnostic printing
+            handle_diagnostics(flowcalc_loop_diagnostic_config, gamestate.ticks)
+        catch e
+            bt = catch_backtrace()
+            @error "FlowCalculator loop exception" exception=(e, bt)
+            # Notify in-game console with a short message and send full details to terminal logs
+            threadsafe_console_push("FlowCalculator loop crashed; see terminal log for details")
+
+            # Print full backtrace to stderr so it's visible in the terminal output/logs
+            ios = IOBuffer()
+            showerror(ios, e, bt)
+            trace_str = String(take!(ios))
+            println(stderr, trace_str)
+
+            # Request orderly shutdown so the error is visible and the main thread can react
+            @atomic shared_state.should_exit = true
             break
         end
-
-        # Check if paused
-        is_paused = @atomic shared_state.is_paused
-
-        # Main update logic
-        if !timing.should_update
-            # Not enough time accumulated, sleep briefly
-            sleep(0.001)  # 1ms
-        else
-            # Process commands (only when updating)
-            commands_processed = false
-            @timeit flowcalc_loop_timer "Command Processing" begin
-                while isready(command_queue.command_channel)
-                    command = take!(command_queue.command_channel)
-                    process_command!(command, gamemap, threadsafe_console_push, throw_errors = false)
-                    commands_processed = true
-                end
-            end
-
-            # Consume accumulated time and track update
-            timing.accumulator -= target_update_time
-            update_count += 1
-
-            if !is_paused
-                # Full update: advance game state
-                gamestate.ticks += 1
-
-                # Update state
-                @timeit flowcalc_loop_timer "Component Updates" update_components!(gamemap, mna_state)
-                update_map!(gamemap, derivedmapstate, mna_state, gamestate.ticks)
-                update_mna!(derivedmapstate, mna_state, gamestate.ticks)
-                @timeit flowcalc_loop_timer "Thruster Handling" handle_thrusters!(gamestate, gamemap, mna_state)
-
-                # Publish snapshot
-                @timeit flowcalc_loop_timer "Snapshot Publishing" begin
-                    snapshot = FlowCalculatorSnapshot(
-                        gamemap = deepcopy(gamemap),
-                        derived = deepcopy(derivedmapstate),
-                        mna = deepcopy(mna_state),
-                        gamestate = deepcopy(gamestate),
-                        timestamp = timing.current_time
-                    )
-                    set_snapshot(snapshot)
-                end
-
-            elseif commands_processed
-                # Paused with commands: update derived state only
-                update_map!(gamemap, derivedmapstate, mna_state, gamestate.ticks)
-                update_mna!(derivedmapstate, mna_state, gamestate.ticks)
-
-                # Publish snapshot without advancing game time
-                @timeit flowcalc_loop_timer "Snapshot Publishing" begin
-                    snapshot = FlowCalculatorSnapshot(
-                        gamemap = deepcopy(gamemap),
-                        derived = deepcopy(derivedmapstate),
-                        mna = deepcopy(mna_state),
-                        gamestate = deepcopy(gamestate),
-                        timestamp = timing.current_time
-                    )
-                    set_snapshot(snapshot)
-                end
-            end
-        end
-
-        # Update UPS metrics, warnings, and diagnostics
-        @timeit flowcalc_loop_timer "UPS Metrics" begin
-            update_count = update_ups_metrics!(
-                shared_state, timing, update_count,
-                target_ups, threadsafe_console_push,
-                diagnostic_interval = diagnostic_interval
-            )
-        end
-
-        # Handle FlowCalculator diagnostics (called from background thread)
-        # Uses gamestate.ticks as counter for tick-based diagnostic printing
-        handle_diagnostics(flowcalc_loop_diagnostic_config, gamestate.ticks)
     end
     return nothing
 end

@@ -14,7 +14,7 @@ All components follow the ComponentBehavior interface defined in HexComponentsAP
 module HexFlowBasicComponents
 
 using Accessors
-using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowEngine, RenderEngine, HexFlowRendering
+using HexFrame, HexElements, HexFluids, HexComponentsAPI, RenderEngine, HexFlowRendering
 
 # ComponentBehavior Mandatories
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
@@ -56,9 +56,9 @@ struct PlainSpriteBehavFrag
 end
 
 "Renders the pre-selected atlas sprite at the component position"
-function render_base_elem!(queue::Vector{RenderCommand}, behav::PlainSpriteBehavFrag; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{RenderCommand}, behav::PlainSpriteBehavFrag; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
     base_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, behav.sprite, rotation, position, scale = scale, transparency = transparency, draw_height = base_height))
+    push!(queue, render_basic_tile(glmap, behav.sprite, rotation, position; scale = scale, transparency = transparency, draw_height = base_height, pos_offset = pos_offset))
     return nothing
 end
 
@@ -155,10 +155,10 @@ unstall!(frag::StallBehavFrag) = setfalse!(frag.stall_state)
 is_stalled(frag::StallBehavFrag)::Bool = getstate(frag.stall_state)
 
 "Renders a stall overlay icon when the component is stalled"
-function render_map_elem!(queue::Vector{RenderCommand}, behav::StallBehavFrag; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, render_height_offset::Integer = 0, kwargs...)
+function render_map_elem!(queue::Vector{RenderCommand}, behav::StallBehavFrag; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     if is_stalled(behav)
         overlay_height = Int32(HexFlowRendering.RENDER_HEIGHT_OVERLAY_BASE) + Int32(render_height_offset)
-        push!(queue, render_basic_tile(glmap, :test_stalled, HexFrame.Q_POS, position, draw_height = overlay_height)) # Always render at 0 rotation
+        push!(queue, render_basic_tile(glmap, :test_stalled, HexFrame.Q_POS, position; draw_height = overlay_height, pos_offset = pos_offset))
     end
     return nothing
 end

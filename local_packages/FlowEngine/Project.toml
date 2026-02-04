@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["Christos Lillis <christos.lillis@gmail.com>"]
 
 [deps]
+FlowMap = "86ae9052-88d6-4179-aacc-02095df7ba41"
 HexComponentsAPI = "a2289db6-e3a5-4e05-9c21-8734dce2bbd4"
 HexElements = "2f6a9512-4d00-40fa-a3ea-0a7372983a4b"
 HexFluids = "98a914a9-3572-461b-8ee2-d8d3de40252c"
@@ -12,7 +13,9 @@ LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 SmallCollections = "2b935e18-93d6-40ac-ae34-fe54c09f00e1"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 StructEquality = "6ec83bb0-ed9f-11e9-3b4c-2b04cb4e219c"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [compat]
 SmallCollections = "0.4.1"
 StructEquality = "2.1.0"
+Test = "1.11.0"

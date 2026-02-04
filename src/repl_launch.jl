@@ -52,7 +52,7 @@ using FilePathsBase, NativeFileDialog
 import CImGui, CImGui.lib
 # Custom Packages (working title: HexFlow; project: Rocket Plumber)
 using HexFrame, HexElements, HexFluids, HexFlowTelemetry
-using HexComponentsAPI, FlowEngine, RenderEngine, HexFlowProcGen
+using HexComponentsAPI, FlowEngine, FlowMap, RenderEngine, HexFlowProcGen
 using HexFlowControl, HexFlowCalculator, HexFlowRendering
 using SquirrelNoise
 

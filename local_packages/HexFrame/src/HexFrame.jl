@@ -7,6 +7,7 @@ import Base: +, -
 export AbstractBasicCoordSystem, AbstractCartesianCoordSystem, AbstractAxialCoordSystem, AbstractDerivedCoordSystem
 export CartesianCoord, AxialCoord, TileCoord, VertexCoord, EdgeCoord, NodeCoord
 export HexAxis, NodePos
+export CartesianBounds, AxialBounds
 
 # Functions
 export glvec, to_cartesian, to_axial, round_to_tile, next_enum_val, rotmat_2D
@@ -126,6 +127,11 @@ struct VertexCoord <: AbstractDerivedCoordSystem
 end
 @struct_hash_equal VertexCoord
 
+"Type alias for cartesian bounds tuple"
+const CartesianBounds = NamedTuple{(:X_POS, :X_NEG, :Y_POS, :Y_NEG), NTuple{4, Float64}}
+
+"Type alias for axial bounds tuple (tile coordinates for each hex axis direction)"
+const AxialBounds = NamedTuple{(:Q_POS, :R_NEG, :S_POS, :Q_NEG, :R_POS, :S_NEG), NTuple{6, TileCoord}}
 """
 A composite datatype representing the coordinates of the edge of a hexagonal grid.
 Identified by the VertexCoord of the two vertices it connects.

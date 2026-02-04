@@ -1,7 +1,7 @@
 module HexFlowPipeComponents
 
 using Accessors
-using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowEngine, RenderEngine, HexFlowRendering
+using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowEngine, FlowMap, RenderEngine, HexFlowRendering
 using HexFlowBasicComponents
 
 # ComponentBehavior Mandatories
@@ -48,9 +48,9 @@ produce_rel_elements(behav::ScrapTilePipeCompBehav) = produce_rel_elements(behav
 get_tunables(behav::ScrapTilePipeCompBehav) = get_tunables(behav.elems)
 set_tunables(behav::ScrapTilePipeCompBehav, tunables::NTuple{1, Real}) = ScrapTilePipeCompBehav(Float64(tunables[1]))
 
-function render_base_elem!(queue::Vector{RenderCommand}, behav::ScrapTilePipeCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{RenderCommand}, behav::ScrapTilePipeCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
     base_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :ScrapPipes_Tile, rotation, position, scale = scale, transparency = transparency, draw_height = base_height))
+    push!(queue, render_basic_tile(glmap, :ScrapPipes_Tile, rotation, position; scale = scale, transparency = transparency, draw_height = base_height, pos_offset = pos_offset))
     return nothing
 end
 
@@ -74,20 +74,20 @@ produce_rel_elements(behav::BigTilePipeCompBehav) = produce_rel_elements(behav.e
 get_tunables(behav::BigTilePipeCompBehav) = get_tunables(behav.elems)
 set_tunables(behav::BigTilePipeCompBehav, tunables::NTuple{1, Real}) = BigTilePipeCompBehav(Float64(tunables[1]))
 
-function render_base_elem!(queue::Vector{RenderCommand}, behav::BigTilePipeCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{RenderCommand}, behav::BigTilePipeCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
     base_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :BigPipes_Tile, rotation, position, scale = scale, transparency = transparency, draw_height = base_height))
+    push!(queue, render_basic_tile(glmap, :BigPipes_Tile, rotation, position; scale = scale, transparency = transparency, draw_height = base_height, pos_offset = pos_offset))
 
     fluidmask_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset) # Under base sprite
     black_colour = DEFAULT_EMPTY_FLUID_COLOUR
-    push!(queue, render_basic_tile(glmap, :BigPipes_Tile_fluidmask, rotation, position, colour = black_colour, scale = scale, transparency = transparency, draw_height = fluidmask_height))
+    push!(queue, render_basic_tile(glmap, :BigPipes_Tile_fluidmask, rotation, position; colour = black_colour, scale = scale, transparency = transparency, draw_height = fluidmask_height, pos_offset = pos_offset))
 
     return nothing
 end
 
-function render_map_elem!(queue::Vector{RenderCommand}, behav::BigTilePipeCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, rotation::HexAxis, position::TileCoord, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, gameticks::Int64 = 0, kwargs...)
+function render_map_elem!(queue::Vector{RenderCommand}, behav::BigTilePipeCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, gameticks::Int64 = 0, kwargs...)
     base_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :BigPipes_Tile, rotation, position, scale = scale, transparency = transparency, draw_height = base_height))
+    push!(queue, render_basic_tile(glmap, :BigPipes_Tile, rotation, position; scale = scale, transparency = transparency, draw_height = base_height, pos_offset = pos_offset))
 
     # Get fluid from both connected nodes
     node_q_pos = map_element(HexFrame.NODE_Q_POS, position, rotation)
@@ -103,11 +103,11 @@ function render_map_elem!(queue::Vector{RenderCommand}, behav::BigTilePipeCompBe
 
     # Render fluidmask with appropriate renderer based on fluid type
     if HexFluids.is_liquid(combined_fluid)
-        push!(queue, render_liquid_tile(glmap, :BigPipes_Tile_fluidmask, rotation, position, gameticks, colour = colour, scale = scale, transparency = transparency, draw_height = fluidmask_height))
+        push!(queue, render_liquid_tile(glmap, :BigPipes_Tile_fluidmask, rotation, position, gameticks; colour = colour, scale = scale, transparency = transparency, draw_height = fluidmask_height, pos_offset = pos_offset))
     elseif HexFluids.is_gas(combined_fluid)
-        push!(queue, render_gas_tile(glmap, :BigPipes_Tile_fluidmask, rotation, position, gameticks, colour = colour, scale = scale, transparency = transparency, draw_height = fluidmask_height))
+        push!(queue, render_gas_tile(glmap, :BigPipes_Tile_fluidmask, rotation, position, gameticks; colour = colour, scale = scale, transparency = transparency, draw_height = fluidmask_height, pos_offset = pos_offset))
     else # No fluid or unknown - use basic sprite in black
-        push!(queue, render_basic_tile(glmap, :BigPipes_Tile_fluidmask, rotation, position, colour = colour, scale = scale, transparency = transparency, draw_height = fluidmask_height))
+        push!(queue, render_basic_tile(glmap, :BigPipes_Tile_fluidmask, rotation, position; colour = colour, scale = scale, transparency = transparency, draw_height = fluidmask_height, pos_offset = pos_offset))
     end
 
     return nothing

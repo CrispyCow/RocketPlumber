@@ -2,7 +2,7 @@
 
 julia_version = "1.12.1"
 manifest_format = "2.0"
-project_hash = "f5c144bb18f56ffb2d458d2b603d3549e8f7f345"
+project_hash = "7b6bb2bca58df7cfb8a9f00afd981ae8ae85e88d"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "MacroTools"]
@@ -238,9 +238,15 @@ uuid = "53c48c17-4a7d-5ca2-90c5-79b7896eea93"
 version = "0.8.5"
 
 [[deps.FlowEngine]]
-deps = ["HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "LinearAlgebra", "SmallCollections", "SparseArrays"]
+deps = ["HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "LinearAlgebra", "SmallCollections", "SparseArrays", "StructEquality", "Test"]
 path = "../FlowEngine"
 uuid = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
+version = "0.1.0"
+
+[[deps.FlowMap]]
+deps = ["HexComponentsAPI", "HexFrame", "StructEquality"]
+path = "../FlowMap"
+uuid = "86ae9052-88d6-4179-aacc-02095df7ba41"
 version = "0.1.0"
 
 [[deps.Fontconfig_jll]]
@@ -328,7 +334,7 @@ uuid = "c4f7b3e2-9a5d-4c8e-b1f2-3e8d9a5c7f1b"
 version = "0.1.0"
 
 [[deps.HexFlowRendering]]
-deps = ["Accessors", "Artifacts", "CSyntax", "ColorSchemes", "ColorTypes", "FileIO", "FlowEngine", "HexComponentsAPI", "HexElements", "HexFlowControl", "HexFlowTelemetry", "HexFluids", "HexFrame", "ImageIO", "ModernGL", "RenderEngine", "StaticArrays", "StructArrays", "TimerOutputs"]
+deps = ["Accessors", "Artifacts", "CSyntax", "ColorSchemes", "ColorTypes", "FileIO", "FlowEngine", "HexComponentsAPI", "HexElements", "HexFlowControl", "HexFlowTelemetry", "HexFluids", "HexFrame", "ImageIO", "ImageMagick", "ModernGL", "RenderEngine", "StaticArrays", "StructArrays", "TimerOutputs"]
 path = "."
 uuid = "4ae3e4b3-9148-4249-9c49-b5ebbd5f9e90"
 version = "0.1.0"

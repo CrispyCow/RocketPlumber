@@ -1,5 +1,6 @@
 using Test
 using HexFrame
+using FlowMap
 using FlowEngine
 using HexFlowRendering
 using RenderEngine
@@ -50,3 +51,36 @@ total = sum(length(g.particles) for g in values(pm.groups))
 @test total == 2
 
 println("HexFlowRendering Phase4 tests passed")
+
+# -----------------------------
+# Test: fractional render offset culling
+# -----------------------------
+# Primary ship with a fractional render offset
+gm2 = GameMap()
+set_surface_tile!(gm2, TileCoord(0,0))
+# Set docking status so the ship has a fractional render offset for rendering tests
+FlowMap.set_docking_status!(get_ship(gm2, :primary), FlowMap.ApproachingDockStat(HexFrame.AxialCoord(0.3, 0.0), HexFrame.AxialCoord(0.3, 0.0), 1.0, HexFrame.Q_POS))
+
+pm = ParticleManager()
+colour = SVector{4, Float32}(1.0f0, 1.0f0, 1.0f0, 1.0f0)
+
+# Spawn a particle at the world-space position corresponding to the tile + fractional offset.
+pos = glvec(TileCoord(0,0)) .+ glvec(get_ship_render_offset(gm2, :primary))
+spawn_particles!(pm, [pos], [SVector{2, Float64}(0.0,0.0)], 0, 10; colour = colour)
+group = pm.groups[colour]
+
+bottom_left = SVector(-1000.0f0, -1000.0f0)
+top_right = SVector(1000.0f0, 1000.0f0)
+
+visible = HexFlowRendering.cull_particles_to_buffer!(pm, group, bottom_left, top_right, time(), 60.0, gm2)
+@test visible == 0  # Particle should be culled as it's behind the visually-offset ship
+
+# Spawn a particle at a distant tile; it should NOT be culled
+pm2 = ParticleManager()
+pos2 = glvec(TileCoord(10,10))
+spawn_particles!(pm2, [pos2], [SVector{2, Float64}(0.0,0.0)], 0, 10; colour = colour)
+group2 = pm2.groups[colour]
+visible2 = HexFlowRendering.cull_particles_to_buffer!(pm2, group2, bottom_left, top_right, time(), 60.0, gm2)
+@test visible2 == 1
+
+println("HexFlowRendering fractional offset culling tests passed")

@@ -10,7 +10,7 @@ All components follow the ComponentBehavior interface defined in HexComponentsAP
 module HexFlowSwitchComponents
 
 using Accessors
-using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowEngine, RenderEngine, HexFlowRendering
+using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowEngine, FlowMap, RenderEngine, HexFlowRendering
 using StaticArrays
 using HexFlowBasicComponents
 
@@ -495,13 +495,13 @@ set_tunables(comp::BoolSwitchCompBehav, tunables::NTuple{3, Real}) = @set comp.s
 update_flowbehav!(comp::BoolSwitchCompBehav; kwargs...) = update_flowbehav!(comp.switch; kwargs...)
 on_click!(comp::BoolSwitchCompBehav; kwargs...) = on_click!(comp.switch; kwargs...)
 
-function render_base_elem!(queue::Vector{RenderCommand}, comp::BoolSwitchCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{RenderCommand}, comp::BoolSwitchCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
     max_conductance = comp.switch.switch.max_conductance
     min_conductance = comp.switch.switch.min_conductance
     current_conductance = comp.switch.switch.state.current_conductance
     midpoint = (min_conductance + max_conductance) / 2
     sprite = current_conductance < midpoint ? comp.off_sprite : comp.on_sprite
-    push!(queue, render_basic_tile(glmap, sprite, rotation, position, scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)))
+    push!(queue, render_basic_tile(glmap, sprite, rotation, position; scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset), pos_offset = pos_offset))
     return nothing
 end
 
@@ -563,17 +563,17 @@ function on_click!(comp::BigAdjustableValveCompBehav; relative_clicksite = nothi
     end
 end
 
-function render_base_elem!(queue::Vector{RenderCommand}, comp::BigAdjustableValveCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{RenderCommand}, comp::BigAdjustableValveCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
     valve_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :BigAdjustableValve_valvebody, rotation, position, scale = scale, transparency = transparency, draw_height = valve_height))
+    push!(queue, render_basic_tile(glmap, :BigAdjustableValve_valvebody, rotation, position; scale = scale, transparency = transparency, draw_height = valve_height, pos_offset = pos_offset))
 
     static_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :BigAdjustableValve_static, rotation, position, scale = scale, transparency = transparency, draw_height = static_height))
+    push!(queue, render_basic_tile(glmap, :BigAdjustableValve_static, rotation, position; scale = scale, transparency = transparency, draw_height = static_height, pos_offset = pos_offset))
 
     return nothing
 end
 
-function render_map_elem!(queue::Vector{RenderCommand}, comp::BigAdjustableValveCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, gameticks::Int64, rotation::HexAxis, position::TileCoord, render_height_offset::Integer = 0, kwargs...)
+function render_map_elem!(queue::Vector{RenderCommand}, comp::BigAdjustableValveCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     node_q_pos = map_element(HexFrame.NODE_Q_POS, position, rotation)
     fluid = get(derivedmapstate.nodeactualfluids, node_q_pos, HexFluids.NONE)
     colour = get_fluid_colour(fluid)
@@ -581,27 +581,27 @@ function render_map_elem!(queue::Vector{RenderCommand}, comp::BigAdjustableValve
     fluidmask_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset)
 
     if HexFluids.is_liquid(fluid)
-        push!(queue, render_liquid_tile(glmap, :BigAdjustableValve_fluidmask, rotation, position, gameticks, colour = colour, draw_height = fluidmask_height))
+        push!(queue, render_liquid_tile(glmap, :BigAdjustableValve_fluidmask, rotation, position, gameticks; colour = colour, draw_height = fluidmask_height, pos_offset = pos_offset))
     elseif HexFluids.is_gas(fluid)
-        push!(queue, render_gas_tile(glmap, :BigAdjustableValve_fluidmask, rotation, position, gameticks, colour = colour, draw_height = fluidmask_height))
+        push!(queue, render_gas_tile(glmap, :BigAdjustableValve_fluidmask, rotation, position, gameticks; colour = colour, draw_height = fluidmask_height, pos_offset = pos_offset))
     else
-        push!(queue, render_basic_tile(glmap, :BigAdjustableValve_fluidmask, rotation, position, colour = colour, draw_height = fluidmask_height))
+        push!(queue, render_basic_tile(glmap, :BigAdjustableValve_fluidmask, rotation, position; colour = colour, draw_height = fluidmask_height, pos_offset = pos_offset))
     end
 
     switch_percentage = get_switch_percentage(comp.switch)
     valve_y_offset = 100.0 * switch_percentage
     valve_offset = SVector{2, Float32}(0.0, valve_y_offset)
     valve_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :BigAdjustableValve_valvebody, rotation, position, sprite_offset_tweak_px = valve_offset, draw_height = valve_height))
+    push!(queue, render_basic_tile(glmap, :BigAdjustableValve_valvebody, rotation, position; sprite_offset_tweak_px = valve_offset, draw_height = valve_height, pos_offset = pos_offset))
 
     static_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :BigAdjustableValve_static, rotation, position, draw_height = static_height))
+    push!(queue, render_basic_tile(glmap, :BigAdjustableValve_static, rotation, position; draw_height = static_height, pos_offset = pos_offset))
 
     target_percentage = get_target_percentage(comp.switch)
     arrow_y_offset = 100.0 * target_percentage
     arrow_offset = SVector{2, Float32}(0.0, arrow_y_offset)
     arrow_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + 100) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :BigAdjustableValve_setpointarrows, rotation, position, sprite_offset_tweak_px = arrow_offset, draw_height = arrow_height))
+    push!(queue, render_basic_tile(glmap, :BigAdjustableValve_setpointarrows, rotation, position; sprite_offset_tweak_px = arrow_offset, draw_height = arrow_height, pos_offset = pos_offset))
 
     return nothing
 end

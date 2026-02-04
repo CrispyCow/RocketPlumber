@@ -1,14 +1,14 @@
 module HexFlowProcGen
 
 using Random
-using HexFrame, FlowEngine, SquirrelNoise, HexComponentsAPI
+using HexFrame, FlowMap, SquirrelNoise, HexComponentsAPI, FlowEngine
 
 export random_tile_walk!, random_tile_walk, stacked_random_tile_walk!
 export weighted_roll_noise, pick_from_range, pick_from_options
 export CompPlacementStrategy, ShipComponentSet, CompSpawnOptions, roll_component
 export PipePlacementStrategy, PipeSpawnOptions, roll_pipe
 export place_shipset!, place_random_pipes!, place_connected_pipes!, place_pipeset!
-export ShipGenOptions, generate_ship, encounter_ship!
+export ShipGenOptions, generate_ship, encounter_ship!, depart_ship!
 
 
 # =============================================================== #
@@ -453,7 +453,12 @@ function _is_surface_overlap(gamemap::GameMap, shipmap::ShipMap)::Bool
     return false
 end
 
-function encounter_ship!(gamemap::GameMap, shipoptions::ShipGenOptions, seed::UInt32, dir::HexFrame.HexAxis)
+function _rects_overlap(a::HexFrame.CartesianBounds, b::HexFrame.CartesianBounds)::Bool
+    return a.X_NEG < b.X_POS && a.X_POS > b.X_NEG &&
+           a.Y_NEG < b.Y_POS && a.Y_POS > b.Y_NEG
+end
+
+function encounter_ship!(gamemap::GameMap, shipoptions::ShipGenOptions, seed::UInt32, dir::HexFrame.HexAxis; max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing)
     newship = generate_ship(shipoptions, seed)
     newship_name = gensym(shipoptions.name)
 
@@ -469,9 +474,157 @@ function encounter_ship!(gamemap::GameMap, shipoptions::ShipGenOptions, seed::UI
     hnt = HexFrame.hex_neighbour_tiles[dir]
     final_offset = TileCoord(hnt.q * MIN_SPACING, hnt.r * MIN_SPACING)
     offset_ship!(offset_newship, final_offset)
+    
+    # Calculate approach animation parameters
+    # Start 20 tiles away in the approach direction and animate to zero offset
+    APPROACH_DISTANCE_TILES = 20.0
+    
+    # Direction vector
+    direction_vec = HexFrame.hex_vert_vecs[dir]
+
+    # If bounds provided, ensure start point is off-screen
+    if !isnothing(max_view_bounds)
+        ship_bounds = get_cartesian_bounds(offset_newship)
+        
+        # Increase distance until out of view
+        is_overlapping = true
+        while is_overlapping
+             start_offset_test = HexFrame.AxialCoord(
+                direction_vec.q * APPROACH_DISTANCE_TILES,
+                direction_vec.r * APPROACH_DISTANCE_TILES
+            )
+            
+            # Shift the ship bounds by this offset
+            shift_cart = HexFrame.to_cartesian(start_offset_test)
+            shifted_bounds = (
+                X_POS = ship_bounds.X_POS + shift_cart.x,
+                X_NEG = ship_bounds.X_NEG + shift_cart.x,
+                Y_POS = ship_bounds.Y_POS + shift_cart.y,
+                Y_NEG = ship_bounds.Y_NEG + shift_cart.y
+            )
+            
+            if _rects_overlap(shifted_bounds, max_view_bounds)
+                APPROACH_DISTANCE_TILES += 10.0
+                if APPROACH_DISTANCE_TILES > 2000.0 # Safety break
+                    @warn "Could not find safe spawn distance, capping at 2000"
+                    break
+                end
+            else
+                is_overlapping = false
+            end
+        end
+    end
+
+    TARGET_APPROACH_DURATION_SECS = 5.0
+    TARGET_UPS = 60.0  # updates per second
+    
+    # Convert tile distance to axial offset (using hex_vert_vecs for direction)
+    start_offset = HexFrame.AxialCoord(
+        direction_vec.q * APPROACH_DISTANCE_TILES,
+        direction_vec.r * APPROACH_DISTANCE_TILES
+    )
+    target_offset = HexFrame.AxialCoord(0.0, 0.0)
+    
+    # Calculate step size: total_distance / (duration * ups)
+    total_distance = sqrt(start_offset.q^2 + start_offset.r^2)
+    total_updates = TARGET_APPROACH_DURATION_SECS * TARGET_UPS
+    offset_step = total_distance / total_updates
+    
+    # Set docking status to approaching on the new ship
+    set_docking_status!(offset_newship, ApproachingDockStat(start_offset, target_offset, offset_step, dir))
 
     # add to gamemap
     add_ship!(gamemap, newship_name, offset_newship)
+
+    return nothing
+end
+
+
+"Attempt to depart a ship using its saved approach axis. Returns (success, reason)."
+function depart_ship!(gamemap::GameMap, ship_name::Symbol; max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing)::Tuple{Bool, String}
+    status = get_docking_status(gamemap, ship_name)
+    if isnothing(status)
+        return false, "Can't depart: ship $(ship_name) not found."
+    end
+
+    if status isa FlowMap.ApproachingDockStat
+        return false, "Can't depart: ship $(ship_name) not connected yet."
+    end
+
+    if status isa FlowMap.DepartingDockStat
+        return false, "Can't depart: ship $(ship_name) already departing."
+    end
+
+    if !(status isa FlowMap.ConnectedDockStat)
+        return false, "Can't depart: ship $(ship_name) has unknown docking state."
+    end
+
+    approach_axis = get_approach_axis(status)
+    if isnothing(approach_axis)
+        return false, "Can't depart: no saved departure axis."
+    end
+
+    # Depart by backtracking along the original approach axis (return to where the ship came from)
+    depart_axis = approach_axis
+
+    # Calculate departure animation parameters
+    DEPART_DISTANCE_TILES = 20.0
+    
+    # Direction vector
+    direction_vec = HexFrame.hex_vert_vecs[depart_axis]
+
+    # If bounds provided, ensure target point is off-screen
+    if !isnothing(max_view_bounds)
+        ship_bounds = get_cartesian_bounds(gamemap.ships[ship_name])
+        
+        # Increase distance until out of view
+        is_overlapping = true
+        while is_overlapping
+             target_offset_test = HexFrame.AxialCoord(
+                direction_vec.q * DEPART_DISTANCE_TILES,
+                direction_vec.r * DEPART_DISTANCE_TILES
+            )
+            
+            # Shift the ship bounds by this offset
+            shift_cart = HexFrame.to_cartesian(target_offset_test)
+            shifted_bounds = (
+                X_POS = ship_bounds.X_POS + shift_cart.x,
+                X_NEG = ship_bounds.X_NEG + shift_cart.x,
+                Y_POS = ship_bounds.Y_POS + shift_cart.y,
+                Y_NEG = ship_bounds.Y_NEG + shift_cart.y
+            )
+            
+            if _rects_overlap(shifted_bounds, max_view_bounds)
+                DEPART_DISTANCE_TILES += 10.0
+                if DEPART_DISTANCE_TILES > 2000.0 # Safety break
+                    @warn "Could not find safe depart distance, capping at 2000"
+                    break
+                end
+            else
+                is_overlapping = false
+            end
+        end
+    end
+
+    TARGET_DEPART_DURATION_SECS = 5.0
+    TARGET_UPS = 60.0
+
+    # Convert tile distance to axial offset
+    direction_vec = HexFrame.hex_vert_vecs[depart_axis]
+    target_offset = HexFrame.AxialCoord(
+        direction_vec.q * DEPART_DISTANCE_TILES,
+        direction_vec.r * DEPART_DISTANCE_TILES
+    )
+    start_offset = HexFrame.AxialCoord(0.0, 0.0)
+
+    # Calculate step size
+    total_distance = sqrt(target_offset.q^2 + target_offset.r^2)
+    total_updates = TARGET_DEPART_DURATION_SECS * TARGET_UPS
+    offset_step = total_distance / total_updates
+
+    set_docking_status!(gamemap, ship_name, DepartingDockStat(start_offset, target_offset, offset_step, approach_axis))
+    reason = "Ship $(ship_name) departing (axis=$(depart_axis))"
+    return true, reason
 end
 
 end # module HexFlowProcGen

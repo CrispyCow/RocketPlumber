@@ -5,6 +5,7 @@ authors = ["Christos Lillis <christos.lillis@gmail.com>"]
 
 [deps]
 FlowEngine = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
+FlowMap = "86ae9052-88d6-4179-aacc-02095df7ba41"
 HexComponentsAPI = "a2289db6-e3a5-4e05-9c21-8734dce2bbd4"
 HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"

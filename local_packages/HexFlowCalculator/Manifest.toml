@@ -2,7 +2,7 @@
 
 julia_version = "1.12.1"
 manifest_format = "2.0"
-project_hash = "776f13d340e09a74afa98bd34cae47a8592d6e31"
+project_hash = "4f5345869aa3ee4945f14768463b948f48507047"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "MacroTools"]
@@ -128,9 +128,15 @@ uuid = "e2ba6199-217a-4e67-a87a-7c52f15ade04"
 version = "0.1.10"
 
 [[deps.FlowEngine]]
-deps = ["HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "LinearAlgebra", "SmallCollections", "SparseArrays"]
+deps = ["HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "LinearAlgebra", "SmallCollections", "SparseArrays", "StructEquality", "Test"]
 path = "../FlowEngine"
 uuid = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
+version = "0.1.0"
+
+[[deps.FlowMap]]
+deps = ["HexComponentsAPI", "HexFrame", "StructEquality"]
+path = "../FlowMap"
+uuid = "86ae9052-88d6-4179-aacc-02095df7ba41"
 version = "0.1.0"
 
 [[deps.Fontconfig_jll]]
@@ -200,7 +206,7 @@ uuid = "2f6a9512-4d00-40fa-a3ea-0a7372983a4b"
 version = "0.1.0"
 
 [[deps.HexFlowCalculator]]
-deps = ["Accessors", "Dates", "FlowEngine", "HexComponentsAPI", "HexElements", "HexFlowControl", "HexFlowTelemetry", "HexFluids", "HexFrame", "LinearAlgebra", "Printf", "SparseArrays", "StaticArrays", "TimerOutputs"]
+deps = ["Dates", "FlowEngine", "HexComponentsAPI", "HexElements", "HexFlowControl", "HexFlowTelemetry", "HexFluids", "HexFrame", "LinearAlgebra", "Printf", "SparseArrays", "StaticArrays", "StructEquality", "TimerOutputs"]
 path = "."
 uuid = "d8e9f3a2-7b4c-4e1d-9f3a-2c5b8e7d9f1a"
 version = "0.1.0"

@@ -12,7 +12,7 @@ module HexFlowPumpComponents
 using Accessors
 using ColorSchemes
 using StaticArrays
-using HexFrame, HexElements, HexFluids, FlowEngine, HexComponentsAPI, RenderEngine, HexFlowRendering
+using HexFrame, HexElements, HexFluids, FlowEngine, FlowMap, HexComponentsAPI, RenderEngine, HexFlowRendering
 using HexFlowBasicComponents, HexFlowSwitchComponents
 
 # ComponentBehavior Mandatories
@@ -172,18 +172,18 @@ function update_flowbehav!(comp::TurboPumpCompBehav; mna_state::MNA_State, tile:
 end
 
 "Renders static turbopump elements: fluid mask, rotor, and static parts."
-function render_base_elem!(queue::Vector{RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
     colour = DEFAULT_EMPTY_FLUID_COLOUR
-    push!(queue, render_basic_tile(glmap, :TurboPump1_fluidmask, rotation, position, scale = scale, colour = colour, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset)))
-    push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position, scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 10 + render_height_offset)))
-    push!(queue, render_basic_tile(glmap, :TurboPump1_static, rotation, position, scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset)))
-    push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position, scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + 10 + render_height_offset)))
+    push!(queue, render_basic_tile(glmap, :TurboPump1_fluidmask, rotation, position; scale = scale, colour = colour, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 10 + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :TurboPump1_static, rotation, position; scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + 10 + render_height_offset), pos_offset = pos_offset))
 
     return nothing
 end
 
 "Renders turbopump with animations when active: spinning rotor, vibration, and smoke effects."
-function render_map_elem!(queue::Vector{RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, gameticks::Int64, rotation::HexAxis, position::TileCoord, render_height_offset::Integer = 0, kwargs...)
+function render_map_elem!(queue::Vector{RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     # Determine if turbine is on
     turbine_current = get(mna_state.vsource_currents, ElementID(position, pump_element_index), 0.0)
     non_trivial_current = abs(turbine_current) > 0.02
@@ -197,24 +197,24 @@ function render_map_elem!(queue::Vector{RenderCommand}, comp::TurboPumpCompBehav
     smoke_sprites = (:TurboPump1_smoke_1, :TurboPump1_smoke_2, :TurboPump1_smoke_3)
     if turbine_is_on
         # Render fluid mask with turbine fluid colour
-        push!(queue, render_basic_tile(glmap, :TurboPump1_fluidmask, rotation, position, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset)))
+        push!(queue, render_basic_tile(glmap, :TurboPump1_fluidmask, rotation, position; colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
         # Render spinning rotor
         rotation_mat = animation_rotate(gameticks, 720.0)
-        push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position, sprite_rotation_tweak_mat = rotation_mat, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100 + render_height_offset)))
+        push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; sprite_rotation_tweak_mat = rotation_mat, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100 + render_height_offset), pos_offset = pos_offset))
         # Render static background
-        push!(queue, render_basic_tile(glmap, :TurboPump1_static, rotation, position, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset)))
+        push!(queue, render_basic_tile(glmap, :TurboPump1_static, rotation, position; draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset), pos_offset = pos_offset))
 
         # Render vibrating part with offset
         vibe_offset = animation_vibe_offset(gameticks)
         vibe_offset_vec = SVector{2, Float32}(Float32(vibe_offset[1]), Float32(vibe_offset[2]))
-        push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position, sprite_offset_tweak_px = vibe_offset_vec, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + render_height_offset)))
+        push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; sprite_offset_tweak_px = vibe_offset_vec, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + render_height_offset), pos_offset = pos_offset))
 
         # Render animated smoke effect with fluid colour
         smoke_sprite = animation_sprite_picker(smoke_sprites, gameticks, 4)
-        push!(queue, render_basic_tile(glmap, smoke_sprite, rotation, position, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM) + Int32(10) + Int32(render_height_offset)))
+        push!(queue, render_basic_tile(glmap, smoke_sprite, rotation, position; colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM) + Int32(10) + Int32(render_height_offset), pos_offset = pos_offset))
     else
         # Render static base when turbine is off
-        render_base_elem!(queue, comp; glmap = glmap, rotation = rotation, position = position, render_height_offset = render_height_offset)
+        render_base_elem!(queue, comp; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, render_height_offset = render_height_offset)
     end
 
     # Render stall overlay
@@ -360,47 +360,48 @@ function render_static!(
         charge_bar_colour::ColourType = let c = get(ColorSchemes.summer, 0.0)
             ColourType(c.r, c.g, c.b, 1.0)
         end,
+        pos_offset = nothing,
         scale::Float64 = 1.0, transparency::Float64 = 1.0,
         render_height_offset::Integer = 0
     )
     # Render charge bar
     energy_frac = get_current_energy(comp.energy) / get_max_energy(comp.energy)
-    push!(queue, render_basic_tile(glmap, chargemask_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = charge_bar_colour, x_unclipped = energy_frac, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset)))
+    push!(queue, render_basic_tile(glmap, chargemask_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = charge_bar_colour, x_unclipped = energy_frac, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
 
     # Render fluid mask if it exists
     if !isnothing(fluidmask_sprite(comp))
         fluidmask_colour = get_fluid_colour(fluid)
         if fluid == HexFluids.NONE
-            push!(queue, render_basic_tile(glmap, fluidmask_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = fluidmask_colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset)))
+            push!(queue, render_basic_tile(glmap, fluidmask_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = fluidmask_colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
         elseif is_liquid(fluid)
-            push!(queue, render_liquid_tile(glmap, fluidmask_sprite(comp), rotation, position, gameticks; colour = fluidmask_colour, scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset)))
+            push!(queue, render_liquid_tile(glmap, fluidmask_sprite(comp), rotation, position, gameticks; colour = fluidmask_colour, scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
         end
     end
 
     # Render static background
-    push!(queue, render_basic_tile(glmap, static_sprite(comp), rotation, position; scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset)))
+    push!(queue, render_basic_tile(glmap, static_sprite(comp), rotation, position; scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset), pos_offset = pos_offset))
 
     return nothing
 end
 
 "Renders static electric pump elements without animation."
-function render_base_elem!(queue::Vector{RenderCommand}, comp::ElectricPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{RenderCommand}, comp::ElectricPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
     # Render non-animated elements
-    render_static!(queue, comp; glmap = glmap, rotation = rotation, position = position, scale = scale, transparency = transparency, render_height_offset = render_height_offset)
+    render_static!(queue, comp; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, scale = scale, transparency = transparency, render_height_offset = render_height_offset)
 
     # Render vibrating part above static
     if !isnothing(vibrating_sprite(comp))
-        push!(queue, render_basic_tile(glmap, vibrating_sprite(comp), rotation, position, scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + render_height_offset)))
+        push!(queue, render_basic_tile(glmap, vibrating_sprite(comp), rotation, position; scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + render_height_offset), pos_offset = pos_offset))
     end
 
     # Render rotor above static and vibepart
-    push!(queue, render_basic_tile(glmap, rotor_sprite(comp), rotation, position, scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + 10 + render_height_offset)))
+    push!(queue, render_basic_tile(glmap, rotor_sprite(comp), rotation, position; scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + 10 + render_height_offset), pos_offset = pos_offset))
 
     return nothing
 end
 
 "Renders electric pump with animations when running: vibration and rotating rotor."
-function render_map_elem!(queue::Vector{RenderCommand}, comp::ElectricPumpCompBehav; glmap::GLObjectMap, mna_state::MNA_State, derivedmapstate::DerivedMapState, gameticks::Int64, rotation::HexAxis, position::TileCoord, render_height_offset::Integer = 0, kwargs...)
+function render_map_elem!(queue::Vector{RenderCommand}, comp::ElectricPumpCompBehav; glmap::GLObjectMap, mna_state::MNA_State, derivedmapstate::DerivedMapState, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     # Get fluid at pump input node
     pump_input_node = map_element(HexFrame.NODE_Q_NEG, position, rotation)
     fluid = get(derivedmapstate.nodeactualfluids, pump_input_node, HexFluids.NONE)
@@ -416,7 +417,7 @@ function render_map_elem!(queue::Vector{RenderCommand}, comp::ElectricPumpCompBe
     charge_bar_colour = ColourType(switch_color.r, switch_color.g, switch_color.b, 1.0)
 
     # Always render non-animated elements
-    render_static!(queue, comp; glmap = glmap, rotation = rotation, position = position, fluid = fluid, gameticks = gameticks, charge_bar_colour = charge_bar_colour, render_height_offset = render_height_offset)
+    render_static!(queue, comp; glmap = glmap, rotation = rotation, position = position, fluid = fluid, gameticks = gameticks, charge_bar_colour = charge_bar_colour, pos_offset = pos_offset, render_height_offset = render_height_offset)
 
     # Set animation tweak values if pump is on
     if pump_is_on
@@ -433,9 +434,9 @@ function render_map_elem!(queue::Vector{RenderCommand}, comp::ElectricPumpCompBe
     vibe_draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + render_height_offset)
     rotor_draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + 10 + render_height_offset)
     if !isnothing(vibrating_sprite(comp))
-        push!(queue, render_basic_tile(glmap, vibrating_sprite(comp), rotation, position, draw_height = vibe_draw_height; vibe_anim_args...))
+        push!(queue, render_basic_tile(glmap, vibrating_sprite(comp), rotation, position; draw_height = vibe_draw_height, pos_offset = pos_offset, vibe_anim_args...))
     end
-    push!(queue, render_basic_tile(glmap, rotor_sprite(comp), rotation, position, draw_height = rotor_draw_height; rotor_anim_args...))
+    push!(queue, render_basic_tile(glmap, rotor_sprite(comp), rotation, position; draw_height = rotor_draw_height, pos_offset = pos_offset, rotor_anim_args...))
 
     return nothing
 end

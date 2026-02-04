@@ -11,7 +11,7 @@ All components follow the ComponentBehavior interface defined in HexComponentsAP
 module HexFlowTankComponents
 
 using Accessors
-using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowEngine, RenderEngine, HexFlowRendering
+using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowEngine, FlowMap, RenderEngine, HexFlowRendering
 using HexFlowBasicComponents
 
 # ComponentBehavior Mandatories
@@ -132,8 +132,8 @@ function update_flowbehav!(tank::TankBehavFrag; tile::TileCoord, mna_state::MNA_
     return tank.state.charge = prospective_charge
 end
 
-function render_map_elem!(queue::Vector{RenderCommand}, tank::TankBehavFrag; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, render_height_offset::Integer = 0, kwargs...)
-    render_map_elem!(queue, tank.stallstate; glmap = glmap, rotation = rotation, position = position, render_height_offset = render_height_offset) # Render stall overlay if present (delegates to StallBehavFrag renderer)
+function render_map_elem!(queue::Vector{RenderCommand}, tank::TankBehavFrag; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
+    render_map_elem!(queue, tank.stallstate; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, render_height_offset = render_height_offset) # Render stall overlay if present (delegates to StallBehavFrag renderer)
     return nothing
 end
 
@@ -206,16 +206,16 @@ Render gas tank fluid visualization.
 Renders a black background fluidmask followed by the fluid-colored mask with transparency
 proportional to fill fraction (more transparent when emptier).
 """
-function render_fluid!(queue::Vector{RenderCommand}, behav::GasTankBehavFrag, fluidmask::Symbol, fluid::FluidTags, gameticks::Int; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0)
+function render_fluid!(queue::Vector{RenderCommand}, behav::GasTankBehavFrag, fluidmask::Symbol, fluid::FluidTags, gameticks::Int; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0)
     # Render fluidmask in black as background
     black = DEFAULT_EMPTY_FLUID_COLOUR
-    push!(queue, render_basic_tile(glmap, fluidmask, rotation, position, scale = scale, transparency = transparency, colour = black, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset)))
+    push!(queue, render_basic_tile(glmap, fluidmask, rotation, position; scale = scale, transparency = transparency, colour = black, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset), pos_offset = pos_offset))
 
     # Render fluid mask with fluid colour, and set transparency based on fill fraction
     colour = get_fluid_colour(fluid)
     fill_frac = behav.tank.state.charge / behav.tank.max_charge
     final_transparency = transparency * fill_frac # More transparent when emptier
-    push!(queue, render_gas_tile(glmap, fluidmask, rotation, position, gameticks, scale = scale, transparency = final_transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 100) + Int32(render_height_offset)))
+    push!(queue, render_gas_tile(glmap, fluidmask, rotation, position, gameticks; scale = scale, transparency = final_transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 100) + Int32(render_height_offset), pos_offset = pos_offset))
     return nothing
 end
 
@@ -251,11 +251,11 @@ Render liquid tank fluid visualization.
 Renders the fluid-colored mask with horizontal clipping based on fill fraction,
 always oriented horizontally (Q_POS) regardless of component rotation.
 """
-function render_fluid!(queue::Vector{RenderCommand}, behav::LiquidTankBehavFrag, fluidmask::Symbol, fluid::FluidTags, gameticks::Int; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0)
+function render_fluid!(queue::Vector{RenderCommand}, behav::LiquidTankBehavFrag, fluidmask::Symbol, fluid::FluidTags, gameticks::Int; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0)
     colour = get_fluid_colour(fluid)
     fill_frac = behav.tank.state.charge / behav.tank.max_charge
     fixed_rotation = HexFrame.Q_POS # Force horizontal for fluid rendering
-    return push!(queue, render_liquid_tile(glmap, fluidmask, fixed_rotation, position, gameticks, scale = scale, transparency = transparency, colour = colour, x_unclipped = fill_frac, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset)))
+    return push!(queue, render_liquid_tile(glmap, fluidmask, fixed_rotation, position, gameticks; scale = scale, transparency = transparency, colour = colour, x_unclipped = fill_frac, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset), pos_offset = pos_offset))
 end
 
 map_rotation(behav::LiquidTankBehavFrag, rotation::HexAxis) = map_rotation(behav.rotation_behav, rotation)
@@ -354,18 +354,18 @@ fluidmask(::ThevininTankCompBehav{GasTankBehavFrag, 3}) = :GasTank1_fluidmask
 tanksprite(::ThevininTankCompBehav{LiquidTankBehavFrag, 3}) = :LiquidTank1_base
 fluidmask(::ThevininTankCompBehav{LiquidTankBehavFrag, 3}) = :LiquidTank1_fluidmask
 
-function render_base_elem!(queue::Vector{RenderCommand}, comp::ThevininTankCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, gameticks::Int64 = 0, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{RenderCommand}, comp::ThevininTankCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, gameticks::Int64 = 0, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
     # Render fluid
-    render_fluid!(queue, comp.tank, fluidmask(comp), comp.fluid, gameticks; glmap = glmap, rotation = rotation, position = position, scale = scale, transparency = transparency, render_height_offset = render_height_offset)
+    render_fluid!(queue, comp.tank, fluidmask(comp), comp.fluid, gameticks; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, scale = scale, transparency = transparency, render_height_offset = render_height_offset)
 
     # Render tank base sprite (static)
-    push!(queue, render_basic_tile(glmap, tanksprite(comp), rotation, position, scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)))
+    push!(queue, render_basic_tile(glmap, tanksprite(comp), rotation, position; scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset), pos_offset = pos_offset))
     return nothing
 end
 
-function render_map_elem!(queue::Vector{RenderCommand}, comp::ThevininTankCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, gameticks::Int64 = 0, render_height_offset::Integer = 0, kwargs...)
-    render_base_elem!(queue, comp; glmap = glmap, rotation = rotation, position = position, gameticks = gameticks, render_height_offset = render_height_offset) # Render tank base
-    render_map_elem!(queue, comp.tank; glmap = glmap, rotation = rotation, position = position, render_height_offset = render_height_offset) # Render tank stall overlay by delegating to the tank fragment's renderer (overlay)
+function render_map_elem!(queue::Vector{RenderCommand}, comp::ThevininTankCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, gameticks::Int64 = 0, render_height_offset::Integer = 0, kwargs...)
+    render_base_elem!(queue, comp; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, gameticks = gameticks, render_height_offset = render_height_offset) # Render tank base
+    render_map_elem!(queue, comp.tank; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, render_height_offset = render_height_offset) # Render tank stall overlay by delegating to the tank fragment's renderer (overlay)
     return nothing
 end
 

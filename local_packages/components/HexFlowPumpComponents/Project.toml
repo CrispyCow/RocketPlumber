@@ -7,6 +7,7 @@ authors = ["Christos Lillis <christos.lillis@gmail.com>"]
 Accessors = "7d9f7c33-5ae7-4f3b-8dc6-eff91059b697"
 ColorSchemes = "35d6a980-a343-548e-a6ea-1d62b119f2f4"
 FlowEngine = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
+FlowMap = "86ae9052-88d6-4179-aacc-02095df7ba41"
 HexComponentsAPI = "a2289db6-e3a5-4e05-9c21-8734dce2bbd4"
 HexElements = "2f6a9512-4d00-40fa-a3ea-0a7372983a4b"
 HexFlowBasicComponents = "32458d45-9755-4715-857d-57f99caca23f"

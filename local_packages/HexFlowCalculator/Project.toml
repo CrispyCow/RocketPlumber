@@ -6,6 +6,7 @@ authors = ["Christos Lillis <christos.lillis@gmail.com>"]
 [deps]
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 FlowEngine = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
+FlowMap = "86ae9052-88d6-4179-aacc-02095df7ba41"
 HexComponentsAPI = "a2289db6-e3a5-4e05-9c21-8734dce2bbd4"
 HexElements = "2f6a9512-4d00-40fa-a3ea-0a7372983a4b"
 HexFlowControl = "c4f7b3e2-9a5d-4c8e-b1f2-3e8d9a5c7f1b"

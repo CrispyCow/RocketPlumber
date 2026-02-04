@@ -7,8 +7,8 @@ using StaticArrays, StructArrays, CSyntax.CRef, Accessors
 using ColorSchemes, ColorTypes
 using FileIO, ImageIO, ImageMagick
 # Custom Packages
-using RenderEngine, HexFlowTelemetry
-using HexFrame, HexFluids, HexComponentsAPI, FlowEngine, HexFlowControl
+using RenderEngine, HexFlowTelemetry 
+using HexFrame, HexFluids, HexComponentsAPI, FlowEngine, FlowMap, HexFlowControl
 import RenderEngine.uniforms_type
 
 #= Exports =#
@@ -28,6 +28,7 @@ export basesprite_glprog_init, liquidsprite_glprog_init, gassprite_glprog_init
 export particle_glprog_init
 export setup_basesprite_uniforms
 export render_basic_sprite, render_basic_tile, render_basic_pipe
+export render_beam!
 export render_liquid_sprite, render_gas_sprite, render_liquid_tile, render_gas_tile
 export render_pipe
 export tile_queued_render!, node_queued_render!, pipe_queued_render!, ship_surface_queued_render!
@@ -64,6 +65,7 @@ const RENDER_HEIGHT_COMPONENT_BEHIND::Int32 = 1000    # for parts sitting behind
 const RENDER_HEIGHT_COMPONENT_STATIC::Int32 = 2000    # static elements of component sprite
 const RENDER_HEIGHT_COMPONENT_ANIM::Int32 = 3000      # animated effects drawn over static elements
 const RENDER_HEIGHT_OVERLAY_BASE::Int32 = 101000      # overlays, e.g., stall overlay
+const RENDER_HEIGHT_TRACTOR_BEAM::Int32 = RENDER_HEIGHT_BACKGROUND - 100  # tractor beam visuals, deep background
 
 const fluid_colour_lookup = Dict{FluidTags, ColourType}(
     HexFluids.MONOPROP_LIQUID => ColourType(0.608, 0.169, 0.69, 1.0), # purple
@@ -234,6 +236,30 @@ end
 
 #= Rendering Helper Functions =#
 
+"Generate a subtle colour tint for a ship surface based on its name (deterministic hash)"
+function get_ship_surface_colour(ship_name::Symbol)::SVector{4, Float32}
+    # Primary ship gets pure white (no tint)
+    if ship_name == :primary
+        return SVector{4, Float32}(1.0f0, 1.0f0, 1.0f0, 1.0f0)
+    end
+    
+    # Hash the ship name to get deterministic pseudo-random values
+    h = hash(ship_name)
+    
+    # Extract components from hash for subtle grey/brown variation
+    # Range: 0.75 to 0.95 for muted appearance
+    r_base = 0.75f0 + 0.20f0 * Float32((h & 0xFF) / 255)
+    g_base = 0.75f0 + 0.20f0 * Float32(((h >> 8) & 0xFF) / 255)
+    b_base = 0.75f0 + 0.20f0 * Float32(((h >> 16) & 0xFF) / 255)
+    
+    # Bias towards grey/brown by reducing blue slightly and keeping r >= g
+    r = clamp(r_base, 0.78f0, 0.95f0)
+    g = clamp(g_base * 0.98f0, 0.75f0, 0.92f0)
+    b = clamp(b_base * 0.90f0, 0.70f0, 0.88f0)
+    
+    return SVector{4, Float32}(r, g, b, 1.0f0)
+end
+
 """
 Compute BaseSpriteUniforms for any sprite. This function contains the common logic
 used by all sprite renderers. It returns a BaseSpriteUniforms value (not a RenderCommand)
@@ -284,10 +310,16 @@ end
 "Returns a RenderCommand for a basic sprite at the given position and rotation matrix."
 function render_basic_sprite(
         glmap::GLObjectMap, sprite::Symbol, rotation_matrix::SMatrix{2, 2, GLfloat}, position;
+        pos_offset = nothing,
         draw_height::Int32 = RENDER_HEIGHT_OVERLAY_BASE,
         kwargs...
     )::RenderCommand
     posvec = position isa SVector{2, Float32} ? position : glvec(position)
+    # Apply position offset if provided
+    if !isnothing(pos_offset)
+        offset_vec = glvec(pos_offset)
+        posvec = posvec .+ offset_vec
+    end
     base_uniforms = setup_basesprite_uniforms(glmap, sprite, rotation_matrix, posvec; kwargs...)
 
     return RenderCommand(base_uniforms, :UnitQuad_VAO, draw_height)
@@ -296,31 +328,46 @@ end
 "Returns a RenderCommand for a basic tile sprite at the given position and rotation."
 function render_basic_tile(
         glmap::GLObjectMap, sprite::Symbol, rotation::HexAxis, position::TileCoord;
+        pos_offset = nothing,
         kwargs...
     )::RenderCommand
-    return render_basic_sprite(glmap, sprite, hex_rotmats[rotation], position; kwargs...)
+    return render_basic_sprite(glmap, sprite, hex_rotmats[rotation], position; pos_offset = pos_offset, kwargs...)
 end
 
 "Returns a RenderCommand for a basic pipe sprite at the given edge position and rotation."
 function render_basic_pipe(
         glmap::GLObjectMap, sprite::Symbol, rotation::HexAxis, position::EdgeCoord;
+        pos_offset = nothing,
         kwargs...
     )::RenderCommand
     # Transpose rotation matrix to convert from column-vector to row-vector convention
     rotation_matrix = get_rotmat(position)'
     position_vec = glvec(position)
+    # Apply position offset if provided
+    if !isnothing(pos_offset)
+        offset_vec = glvec(pos_offset)
+        position_vec = position_vec .+ offset_vec
+    end
 
     return render_basic_sprite(glmap, sprite, rotation_matrix, position_vec; kwargs...)
 end
 
+
+
 "Returns a RenderCommand for a sprite with animated liquid effect."
 function render_liquid_sprite(
         glmap::GLObjectMap, sprite::Symbol, rotation_matrix::SMatrix{2, 2, GLfloat}, position;
+        pos_offset = nothing,
         gameticks::Integer = 0,
         draw_height::Int32 = RENDER_HEIGHT_COMPONENT_BEHIND,
         kwargs...
     )::RenderCommand
     posvec = position isa SVector{2, Float32} ? position : glvec(position)
+    # Apply position offset if provided
+    if !isnothing(pos_offset)
+        offset_vec = glvec(pos_offset)
+        posvec = posvec .+ offset_vec
+    end
     base = setup_basesprite_uniforms(glmap, sprite, rotation_matrix, posvec; kwargs...)
 
     u = LiquidSpriteUniforms(
@@ -342,11 +389,17 @@ end
 "Returns a RenderCommand for a sprite with animated gas effect."
 function render_gas_sprite(
         glmap::GLObjectMap, sprite::Symbol, rotation_matrix::SMatrix{2, 2, GLfloat}, position;
+        pos_offset = nothing,
         gameticks::Integer = 0,
         draw_height::Int32 = RENDER_HEIGHT_COMPONENT_BEHIND,
         kwargs...
     )::RenderCommand
     posvec = position isa SVector{2, Float32} ? position : glvec(position)
+    # Apply position offset if provided
+    if !isnothing(pos_offset)
+        offset_vec = glvec(pos_offset)
+        posvec = posvec .+ offset_vec
+    end
     base = setup_basesprite_uniforms(glmap, sprite, rotation_matrix, posvec; kwargs...)
 
     u = GasSpriteUniforms(
@@ -368,17 +421,19 @@ end
 "Returns a RenderCommand for a basic tile sprite with animated liquid effect."
 function render_liquid_tile(
         glmap::GLObjectMap, sprite::Symbol, rotation::HexAxis, position::AbstractBasicCoordSystem, gameticks::Integer;
+        pos_offset = nothing,
         kwargs...
     )::RenderCommand
-    return render_liquid_sprite(glmap, sprite, hex_rotmats[rotation], position; gameticks = gameticks, kwargs...)
+    return render_liquid_sprite(glmap, sprite, hex_rotmats[rotation], position; pos_offset = pos_offset, gameticks = gameticks, kwargs...)
 end
 
 "Returns a RenderCommand for a basic tile sprite with animated gas effect."
 function render_gas_tile(
         glmap::GLObjectMap, sprite::Symbol, rotation::HexAxis, position::AbstractBasicCoordSystem, gameticks::Integer;
+        pos_offset = nothing,
         kwargs...
     )::RenderCommand
-    return render_gas_sprite(glmap, sprite, hex_rotmats[rotation], position; gameticks = gameticks, kwargs...)
+    return render_gas_sprite(glmap, sprite, hex_rotmats[rotation], position; pos_offset = pos_offset, gameticks = gameticks, kwargs...)
 end
 
 "Returns RenderCommands for a pipe using sprite-based rendering with base pipe and fluid effects."
@@ -437,22 +492,72 @@ function render_pipe(glmap::GLObjectMap, pipe::EdgeCoord, derivedmapstate::Deriv
     return [base_cmd, fluid_cmd]
 end
 
+"Render a dotted beam between two coordinates using repeated sprites with animated noise."
+function render_beam!(
+        queue::Vector{RenderCommand},
+        glmap::GLObjectMap,
+        gameticks::Int64,
+        start_coord,
+        end_coord;
+        num_elements::Int = 50,
+        noise_magnitude::Float64 = 0.1,
+        scale::Float32 = 1.0f0,
+        colour::ColourType = ColourType(1.0f0, 1.0f0, 1.0f0, 1.0f0),
+        draw_height::Int32 = Int32(RENDER_HEIGHT_TRACTOR_BEAM)
+    )
+    num_elements <= 0 && return nothing
+
+    start_cart = convert(CartesianCoord, start_coord)
+    end_cart = convert(CartesianCoord, end_coord)
+
+    dx = end_cart.x - start_cart.x
+    dy = end_cart.y - start_cart.y
+
+    steps = max(num_elements - 1, 1)
+
+    for i in 0:(num_elements - 1)
+        t = i / steps
+        # Per-element vibing - use a hash of the index to produce a unique deterministic seed per element
+        # Constrain the hash to a small positive integer to avoid platform-dependent signed/unsigned issues
+        idx_hash = Int64(UInt(hash(i)) % UInt(1_000_000))
+        noise_x, noise_y = animation_vibe_offset(gameticks + idx_hash; magnitude = noise_magnitude)
+        x = start_cart.x + dx * t + noise_x
+        y = start_cart.y + dy * t + noise_y
+        pos = CartesianCoord(x, y)
+        push!(
+            queue,
+            render_basic_sprite(
+                glmap,
+                :MoveArrow_arrow_start,
+                rotmat_2D(0.0),
+                pos;
+                colour = colour,
+                scale = scale,
+                draw_height = draw_height
+            )
+        )
+    end
+
+    return nothing
+end
+
 #= Queued Render Functions =#
 
 "Renders all tile components in the gamemap by delegating to `render_map_elem!` on each component. This implementation iterates each ShipMap and calls the per-ship components, keeping ship-local helper functions intact."
 function tile_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, gamestate::GameState)
     isempty(gamemap.ships) && return nothing
 
-    for (_, ship) in gamemap.ships
+    for (ship_name, ship) in gamemap.ships
+        ship_offset = get_render_offset(ship)
         for (coord, tilecomp) in get_all_components(ship)
-            render_map_elem!(queue, tilecomp; glmap = map, mna_state = mna_state, derivedmapstate = derivedmapstate, gameticks = gamestate.ticks, position = coord)
+            render_map_elem!(queue, tilecomp; glmap = map, mna_state = mna_state, derivedmapstate = derivedmapstate, gameticks = gamestate.ticks, position = coord, pos_offset = ship_offset)
         end
     end
     return nothing
 end
 
 "Renders all node vertices with colours based on MNA voltage/pressure values."
-function node_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_State)
+function node_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State)
     nodes = list_nodes(derivedmapstate.allelements)
     isempty(nodes) && return nothing
 
@@ -475,7 +580,16 @@ function node_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, der
             end
         end
 
+        # Get ship offset for this node
+        ship_name = find_ship_for_node(node, gamemap)
+        ship_offset = get_ship_render_offset(gamemap, ship_name)
+        
         position = glvec(node)
+        # Apply position offset
+        if ship_offset != AxialCoord(0.0, 0.0)
+            offset_vec = glvec(ship_offset)
+            position = position .+ offset_vec
+        end
         rotation_matrix = hex_rotmats[HexFrame.Q_POS]
 
         # Render pressure mask with voltage colour
@@ -497,7 +611,8 @@ end
 function pipe_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, gamemap::GameMap, derivedmapstate::DerivedMapState, gamestate::GameState)
     isempty(gamemap.ships) && return nothing
 
-    for (_, ship) in gamemap.ships
+    for (ship_name, ship) in gamemap.ships
+        ship_offset = get_render_offset(ship)
         for (edge, pipe_behav) in get_all_pipes(ship)
             rotation = HexFrame.Q_POS  # Default rotation, edge orientation handled by render_pipe_map!
             render_pipe_map!(
@@ -507,34 +622,40 @@ function pipe_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, gam
                 position = edge,
                 transparency = 1.0,
                 derivedmapstate = derivedmapstate,
-                gameticks = gamestate.ticks
+                gameticks = gamestate.ticks,
+                pos_offset = ship_offset
             )
         end
     end
     return nothing
 end
 
-"Render ship surface background tiles"
+"Render ship surface background tiles with per-ship colour tint and position offset"
 function ship_surface_queued_render!(
         queue::Vector{RenderCommand},
         map::GLObjectMap,
         gamemap::GameMap
     )
-    coords = get_all_surfaces_combined(gamemap)
-    isempty(coords) && return nothing
+    isempty(gamemap.ships) && return nothing
 
-    for coord in coords
-        push!(
-            queue, render_basic_tile(
-                map,
-                :ShipSurface_basic,
-                HexFrame.Q_POS,
-                coord;
-                colour = SVector{4, Float32}(1.0, 1.0, 1.0, 1.0),
-                transparency = 1.0,
-                draw_height = Int32(RENDER_HEIGHT_BACKGROUND)
+    for (ship_name, ship) in gamemap.ships
+        ship_offset = get_render_offset(ship)
+        ship_colour = get_ship_surface_colour(ship_name)
+        
+        for coord in get_all_surface_tiles(ship)
+            push!(
+                queue, render_basic_tile(
+                    map,
+                    :ShipSurface_basic,
+                    HexFrame.Q_POS,
+                    coord;
+                    colour = ship_colour,
+                    transparency = 1.0,
+                    draw_height = Int32(RENDER_HEIGHT_BACKGROUND),
+                    pos_offset = ship_offset
+                )
             )
-        )
+        end
     end
     return nothing
 end
@@ -815,18 +936,27 @@ function cull_particles_to_buffer!(
         end
 
         # Filter ship surface (only for background particles when gamemap provided)
-        # NOTE: this step as a whole is somwhat expensive, could be ommited if we get cpu bound
+        # NOTE: this step as a whole is somewhat expensive, could be ommited if we get cpu bound
         if gamemap !== nothing
             @timeit render_loop_timer "filter_surface" begin
-                # Type-assert to help compiler see this as stable
-                surface_set::Set{TileCoord} = get_all_surfaces_combined(gamemap)
+                # Iterate per-ship and test particles in each ship's local coordinate frame.
+                # This allows fractional render offsets (non-integer) without rounding ship tiles.
+                for (ship_name, ship) in gamemap.ships
+                    ship_offset_vec = glvec(get_render_offset(ship))
+                    surface_tiles = ship.ship_tiles
 
-                filter!(manager.cull_buffer) do pos
-                    # NOTE: the fact we have to convert to Float64 is an area for possible optimisation
-                    # Convert Float32 position to CartesianCoord (Float64) for round_to_tile
-                    cart_pos = HexFrame.CartesianCoord(Float64(pos[1]), Float64(pos[2]))
-                    tile = HexFrame.round_to_tile(cart_pos)
-                    return !(tile in surface_set)  # Keep particle if NOT behind surface
+                    filter!(manager.cull_buffer) do pos
+                        # Reverse-offset particle to ship-local coordinates
+                        unoffset_pos = pos .- ship_offset_vec
+
+                        # NOTE: the fact we have to convert to Float64 is an area for possible optimisation
+                        # Convert Float32 position to CartesianCoord (Float64) for round_to_tile
+                        cart_pos = HexFrame.CartesianCoord(Float64(unoffset_pos[1]), Float64(unoffset_pos[2]))
+                        tile = HexFrame.round_to_tile(cart_pos)
+
+                        # Keep particle if NOT behind this ship's surface
+                        return !(tile in surface_tiles)
+                    end
                 end
             end
         end
@@ -851,11 +981,12 @@ end
 """
 Thrust dust particle effect - spawns particles from ship surface edge tiles with random velocities.
 Gated to spawn only once per game tick. Uses batch spawning for efficiency.
+Respects per-ship render position offsets.
 """
 function thrust_dust_particle_effect!(
         manager::ParticleManager,
         gamestate::GameState,
-        derivedmapstate::DerivedMapState;
+        gamemap::GameMap;
         num_particles_per_tile::Int = 2,
         colour::SVector{4, Float32} = SVector{4, Float32}(0.5f0, 0.5f0, 0.5f0, 1.0f0)
     )
@@ -871,24 +1002,33 @@ function thrust_dust_particle_effect!(
         manager.last_spawn_tick = current_tick
 
         @timeit render_loop_timer "generate_particles" begin
-            surface_coords = get_all_ship_edge_coords(derivedmapstate)
-            total_particles = length(surface_coords) * num_particles_per_tile
+            # Iterate per-ship to apply correct render offsets
+            for (ship_name, ship) in gamemap.ships
+                ship_offset = get_render_offset(ship)
+                offset_vec = glvec(ship_offset)
+                
+                # Get edge tiles for this ship
+                edge_tiles = Set{TileCoord}()
+                find_ship_surface_edgetiles!(edge_tiles, ship)
+                
+                total_particles = length(edge_tiles) * num_particles_per_tile
+                total_particles == 0 && continue
+                positions = Vector{SVector{2, Float32}}(undef, total_particles)
+                velocities = Vector{SVector{2, Float64}}(undef, total_particles)
 
-            positions = Vector{SVector{2, Float32}}(undef, total_particles)
-            velocities = Vector{SVector{2, Float64}}(undef, total_particles)
+                idx = 1
+                for tile_coord in edge_tiles
+                    tile_pos = glvec(tile_coord) .+ offset_vec
 
-            idx = 1
-            for tile_coord in surface_coords
-                tile_pos = glvec(tile_coord)
-
-                for _ in 1:num_particles_per_tile
-                    positions[idx] = tile_pos
-                    velocities[idx] = SVector{2, Float64}((rand() - 0.5) * PARTICLE_VELOCITY_RANGE, (rand() - 0.5) * PARTICLE_VELOCITY_RANGE)
-                    idx += 1
+                    for _ in 1:num_particles_per_tile
+                        positions[idx] = tile_pos
+                        velocities[idx] = SVector{2, Float64}((rand() - 0.5) * PARTICLE_VELOCITY_RANGE, (rand() - 0.5) * PARTICLE_VELOCITY_RANGE)
+                        idx += 1
+                    end
                 end
-            end
 
-            spawn_particles!(manager, positions, velocities, gamestate.ticks, gamestate.ticks + PARTICLE_LIFETIME_TICKS; colour = colour)
+                spawn_particles!(manager, positions, velocities, gamestate.ticks, gamestate.ticks + PARTICLE_LIFETIME_TICKS; colour = colour)
+            end
         end
     end
 
@@ -980,6 +1120,7 @@ end
 """
 This function iterates through all tiles in the gamemap and delegates particle
 spawning to each component's collect_effect_particles! implementation.
+Passes per-ship render position offset to particle spawning.
 """
 function tile_particle_spawn!(
         manager::ParticleManager,
@@ -990,8 +1131,9 @@ function tile_particle_spawn!(
         gamestate::GameState
     )
     # Iterate components per ship so collect_effect_particles! is invoked for every ship's components
-    for (_, ship) in gamemap.ships
-        for (coord, tilecomp) in FlowEngine.get_all_components(ship)
+    for (ship_name, ship) in gamemap.ships
+        ship_offset = get_render_offset(ship)
+        for (coord, tilecomp) in get_all_components(ship)
             collect_effect_particles!(
                 manager, tilecomp;
                 glmap = glmap,
@@ -999,7 +1141,8 @@ function tile_particle_spawn!(
                 derivedmapstate = derivedmapstate,
                 gameticks = gamestate.ticks,
                 position = coord,
-                tile = coord
+                tile = coord,
+                pos_offset = ship_offset
             )
         end
     end

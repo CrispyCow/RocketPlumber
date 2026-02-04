@@ -66,6 +66,7 @@ end
     view_x::Float32 = 0.0
     view_y::Float32 = 0.0
     view_zoom::Float32 = 0.5
+    ship_bounds::HexFrame.CartesianBounds = (X_POS=5.0, X_NEG=-5.0, Y_POS=5.0, Y_NEG=-5.0)
     frame_count::Int64 = 0
     last_update_time::Float64 = 0.0
     background_particles::Any = nothing  # ParticleManager - can't type without circular dep

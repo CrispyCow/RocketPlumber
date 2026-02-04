@@ -11,7 +11,7 @@ All components follow the ComponentBehavior interface defined in HexComponentsAP
 module HexFlowNozzleComponents
 
 using Accessors
-using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowEngine, RenderEngine, HexFlowRendering
+using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowEngine, FlowMap, RenderEngine, HexFlowRendering
 using StaticArrays
 using HexFlowBasicComponents
 using HexFlowSwitchComponents
@@ -156,6 +156,7 @@ function collect_effect_particles!(
         derivedmapstate::DerivedMapState,
         mna_state::MNA_State,
         gameticks::Int64,
+        pos_offset = nothing,
         kwargs...
     )
     # Particle spawning parameters controlling the visual behavior of particle exhaust
@@ -208,6 +209,11 @@ function collect_effect_particles!(
     velocities = Vector{SVector{2, Float64}}(undef, num_particles)
 
     tile_pos = glvec(tile)
+    # Apply position offset if provided
+    if !isnothing(pos_offset)
+        offset_vec = glvec(pos_offset)
+        tile_pos = tile_pos .+ offset_vec
+    end
 
     # Convert spawn radii to hex units
     spawn_radius_vertical_hex = spawn_radius_vertical_px / HexFlowRendering.hex_size_pixels
@@ -387,16 +393,16 @@ function placement_valid(comp::SwitchedNozzleCompBehav, coord::TileCoord, gamema
 end
 
 # Render valve sprite just under the main background sprite
-function render_base_elem!(queue::Vector{RenderCommand}, comp::SwitchedNozzleCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{RenderCommand}, comp::SwitchedNozzleCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
     bkg_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_bkg, rotation, position, scale = scale, transparency = transparency, draw_height = bkg_height))
+    push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_bkg, rotation, position; scale = scale, transparency = transparency, draw_height = bkg_height, pos_offset = pos_offset))
 
     valve_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_valve, rotation, position, scale = scale, transparency = transparency, draw_height = valve_height))
+    push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_valve, rotation, position; scale = scale, transparency = transparency, draw_height = valve_height, pos_offset = pos_offset))
     return nothing
 end
 
-function render_map_elem!(queue::Vector{RenderCommand}, comp::SwitchedNozzleCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, gameticks::Int64, rotation::HexAxis, position::TileCoord, render_height_offset::Integer = 0, kwargs...)
+function render_map_elem!(queue::Vector{RenderCommand}, comp::SwitchedNozzleCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     # Get the connected external node for fluid lookup
     connected_node_pos = comp.switch.switch.connection.v1 # External node from switch connection
     connected_node = map_element(connected_node_pos, position, rotation)
@@ -405,20 +411,20 @@ function render_map_elem!(queue::Vector{RenderCommand}, comp::SwitchedNozzleComp
     # Render fluidmask with fluid color (defaulting to black)
     fluidmask_colour = get_fluid_colour(fluid)
     fluidmask_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_fluidmask, rotation, position, colour = fluidmask_colour, draw_height = fluidmask_height))
+    push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_fluidmask, rotation, position; colour = fluidmask_colour, draw_height = fluidmask_height, pos_offset = pos_offset))
 
     # Render valve with position offset based on switch state (0% = no offset, 100% = 30px Y offset)
     switch_percentage = get_switch_percentage(comp.switch)
     valve_offset = SVector{2, Float32}(0.0, 30.0 * switch_percentage)
     valve_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_valve, rotation, position, sprite_offset_tweak_px = valve_offset, draw_height = valve_height))
+    push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_valve, rotation, position; sprite_offset_tweak_px = valve_offset, draw_height = valve_height, pos_offset = pos_offset))
 
     # Render background sprite on top
     bkg_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_bkg, rotation, position, draw_height = bkg_height))
+    push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_bkg, rotation, position; draw_height = bkg_height, pos_offset = pos_offset))
 
     # Delegate to nozzle fragment for stall overlay (particles handled separately via collect_effect_particles!)
-    render_map_elem!(queue, comp.nozzle; glmap = glmap, rotation = rotation, position = position, render_height_offset = render_height_offset)
+    render_map_elem!(queue, comp.nozzle; glmap = glmap, rotation = rotation, position = position, render_height_offset = render_height_offset, pos_offset = pos_offset)
 
     return nothing
 end
@@ -463,19 +469,19 @@ function set_tunables(comp::DecompChamberCompBehav, tunables::NTuple{1, Real})::
     return DecompChamberCompBehav(expansion_factor = Float64(tunables[1]))
 end
 
-function render_base_elem!(queue::Vector{RenderCommand}, comp::DecompChamberCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{RenderCommand}, comp::DecompChamberCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
     # Render gas fluidmask in black as background
     gas_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :DecompChamber1_gas_fluidmask, rotation, position, colour = DEFAULT_EMPTY_FLUID_COLOUR, scale = scale, transparency = transparency, draw_height = gas_height))
+    push!(queue, render_basic_tile(glmap, :DecompChamber1_gas_fluidmask, rotation, position; colour = DEFAULT_EMPTY_FLUID_COLOUR, scale = scale, transparency = transparency, draw_height = gas_height, pos_offset = pos_offset))
 
     # Render frame on top
     frame_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :DecompChamber1_frame, rotation, position, scale = scale, transparency = transparency, draw_height = frame_height))
+    push!(queue, render_basic_tile(glmap, :DecompChamber1_frame, rotation, position; scale = scale, transparency = transparency, draw_height = frame_height, pos_offset = pos_offset))
 
     return nothing
 end
 
-function render_map_elem!(queue::Vector{RenderCommand}, comp::DecompChamberCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, gameticks::Int64, rotation::HexAxis, position::TileCoord, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
+function render_map_elem!(queue::Vector{RenderCommand}, comp::DecompChamberCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
     # Detect current flow through the voltage source element
     voltage_element_current = get(mna_state.vsource_currents, ElementID(position, decomp_voltage_element_index), 0.0)
     non_trivial_current = abs(voltage_element_current) > 0.02
@@ -492,7 +498,7 @@ function render_map_elem!(queue::Vector{RenderCommand}, comp::DecompChamberCompB
 
     # Always render gas fluidmask with basic shader (static background)
     low_gas_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset)
-    push!(queue, render_gas_tile(glmap, :DecompChamber1_gas_fluidmask, rotation, position, gameticks, colour = gas_colour, scale = scale, transparency = transparency, draw_height = low_gas_height))
+    push!(queue, render_gas_tile(glmap, :DecompChamber1_gas_fluidmask, rotation, position, gameticks; colour = gas_colour, scale = scale, transparency = transparency, draw_height = low_gas_height, pos_offset = pos_offset))
 
     # Conditionally render animated liquid fluidmask if current is flowing, and add a transparent gas effect on top
     if non_trivial_current
@@ -500,15 +506,15 @@ function render_map_elem!(queue::Vector{RenderCommand}, comp::DecompChamberCompB
         liquid_sprite = animation_sprite_picker(liquid_sprites, gameticks, 4)
 
         liquid_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 100) + Int32(render_height_offset)
-        push!(queue, render_liquid_tile(glmap, liquid_sprite, rotation, position, gameticks, colour = liquid_colour, scale = scale, transparency = transparency, draw_height = liquid_height))
+        push!(queue, render_liquid_tile(glmap, liquid_sprite, rotation, position, gameticks; colour = liquid_colour, scale = scale, transparency = transparency, draw_height = liquid_height, pos_offset = pos_offset))
 
         high_gas_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 200) + Int32(render_height_offset)
-        push!(queue, render_gas_tile(glmap, :DecompChamber1_gas_fluidmask, rotation, position, gameticks, colour = gas_colour, scale = scale, transparency = transparency*0.2, draw_height = high_gas_height))
+        push!(queue, render_gas_tile(glmap, :DecompChamber1_gas_fluidmask, rotation, position, gameticks; colour = gas_colour, scale = scale, transparency = transparency*0.2, draw_height = high_gas_height, pos_offset = pos_offset))
     end
 
     # Always render frame on top
     frame_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :DecompChamber1_frame, rotation, position, scale = scale, transparency = transparency, draw_height = frame_height))
+    push!(queue, render_basic_tile(glmap, :DecompChamber1_frame, rotation, position; scale = scale, transparency = transparency, draw_height = frame_height, pos_offset = pos_offset))
 
     return nothing
 end

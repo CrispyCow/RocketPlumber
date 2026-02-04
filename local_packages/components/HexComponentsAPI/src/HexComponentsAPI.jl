@@ -85,19 +85,18 @@ function set_tunables(behav::T, tunables::NTuple{N, Real}) where {N, T <: Compon
     error("Required method set_tunables not implemented for $(nameof(T))")
 end
 
-"Error for concrete ComponentBehavior without required method render_base_elem!"
-function render_base_elem!(queue::AbstractVector, behav::T; kwargs...) where {T <: ComponentBehavior}
+"Error for concrete ComponentBehavior without required method render_base_elem! The kwarg `pos_offset` may be any coordinate acceptable to `glvec()` or `nothing` to indicate no offset."
+function render_base_elem!(queue::AbstractVector, behav::T; glmap, rotation, position, pos_offset = nothing, scale=1.0, transparency=1.0, render_height_offset::Integer=0, kwargs...) where {T <: ComponentBehavior}
     error("Required method render_base_elem! not implemented for $(nameof(T))")
 end
 
 
 # Optional Method Defaults
 
-"Default optional method: render_map_elem! forwards to render_base_elem!"
-function render_map_elem!(queue::AbstractVector, behav::T; glmap, rotation, position, kwargs...) where {T}
-    # Default map-level forwards to base render. Do not pass through extra kwargs;
-    # base defaults (scale, transparency) will be used when base is called.
-    return render_base_elem!(queue, behav; glmap = glmap, rotation = rotation, position = position)
+"Default optional method: render_map_elem! forwards to render_base_elem! The kwarg `pos_offset` may be any coordinate acceptable to `glvec()` or `nothing` to indicate no offset."
+function render_map_elem!(queue::AbstractVector, behav::T; glmap, rotation, position, pos_offset = nothing, kwargs...) where {T}
+    # Default map-level forwards only the visual offset to base render (avoid leaking unrelated kwargs)
+    return render_base_elem!(queue, behav; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset)
 end
 
 "Default empty fluidtag for components not otherwise specified"
@@ -123,10 +122,10 @@ can_be_moved(behav::T; kwargs...) where {T <: ComponentBehavior} = (true, "")
 
 """
 Default implementation of placement_valid just errors.
-Default behavior should be provided by FlowEngine with a concrete surface type GameMap.
+Default behaviour should be provided by FlowMap with a concrete surface type GameMap.
 """
 function placement_valid(behav::T, coord::TileCoord, surface; kwargs...) where {T <: ComponentBehavior}
-    error("placement_valid should be called with GameMap as the surface argument; the method for that is implemented in FlowEngine")
+    error("placement_valid should be called with GameMap as the surface argument; the method for that is implemented in FlowMap")
 end
 
 # ===============================================================
@@ -237,11 +236,10 @@ end
 
 # Optional Method Defaults
 
-"Default optional method: render_pipe_map! forwards to render_pipe_base!"
-function render_pipe_map!(queue::AbstractVector, behav::T; glmap, rotation, position, kwargs...) where {T <: PipeBehavior}
-    # Default map-level forwards to base render. Do not pass through extra kwargs;
-    # base defaults (scale, transparency) will be used when base is called.
-    return render_pipe_base!(queue, behav; glmap = glmap, rotation = rotation, position = position)
+"Default optional method: render_pipe_map! forwards to render_pipe_base! The kwarg `pos_offset` may be any coordinate acceptable to `glvec()` or `nothing` to indicate no offset."
+function render_pipe_map!(queue::AbstractVector, behav::T; glmap, rotation, position, pos_offset = nothing, kwargs...) where {T <: PipeBehavior}
+    # Default map-level forwards only the visual offset to base render (avoid leaking unrelated kwargs)
+    return render_pipe_base!(queue, behav; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset)
 end
 
 "Default empty fluidtag for pipes not otherwise specified"

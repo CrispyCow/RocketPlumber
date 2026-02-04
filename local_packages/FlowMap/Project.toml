@@ -1,0 +1,12 @@
+name = "FlowMap"
+uuid = "86ae9052-88d6-4179-aacc-02095df7ba41"
+version = "0.1.0"
+authors = ["Christos Lillis <christos.lillis@gmail.com>"]
+
+[deps]
+HexComponentsAPI = "a2289db6-e3a5-4e05-9c21-8734dce2bbd4"
+HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"
+StructEquality = "6ec83bb0-ed9f-11e9-3b4c-2b04cb4e219c"
+
+[compat]
+StructEquality = "2.1.0"

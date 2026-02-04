@@ -13,6 +13,7 @@ This document describes the numeric render-height scheme used across the rendere
 These are the canonical constants defined in `HexFlowRendering.jl` and their intended semantics:
 
 - `RENDER_HEIGHT_BACKGROUND = -1000` : Deep background, world-floor, very-behind geometry.
+- Tractor beams (docking connection visuals) render at `RENDER_HEIGHT_TRACTOR_BEAM` so they sit deep in the background, behind both ship tiles and components. ⚠️ Note: this constant is defined in `local_packages/HexFlowRendering/src/HexFlowRendering.jl`.
 - `RENDER_HEIGHT_PIPE_BASE = -10`   : Base pipe sprite (beneath fluid mask).
 - `RENDER_HEIGHT_PIPE = 0`          : Pipe fluid mask / main pipe layer. Pipes sit above background but beneath nodes/components.
 - `RENDER_HEIGHT_NODE = 100000`     : Node vertices. Drawn above pipes and most component art, but below overlay UI.
