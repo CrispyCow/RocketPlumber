@@ -207,7 +207,9 @@ function poll_keys!(inputstate::InputState, window::GLFW.Window)
 
     # ESC key to exit placement mode or toggle pause menu
     if get_inrising!(inputstate, GLFW.KEY_ESCAPE, window)
-        if inputstate.placementmode != INSPECT
+        if inputstate.spacemap_active
+            inputstate.spacemap_active = false
+        elseif inputstate.placementmode != INSPECT
             inputstate.placementmode = INSPECT # Escape always returns to inspect mode
         else
             inputstate.escape_menu_active = !inputstate.escape_menu_active # Toggle pause menu when already in inspect mode
@@ -219,6 +221,13 @@ function poll_keys!(inputstate::InputState, window::GLFW.Window)
     get_inrising!(inputstate, GLFW.KEY_GRAVE_ACCENT, window) && (inputstate.editor_mode = !inputstate.editor_mode)
     # \ key to toggle dev utils menu
     get_inrising!(inputstate, GLFW.KEY_BACKSLASH, window) && (inputstate.dev_utils_menu_active = !inputstate.dev_utils_menu_active)
+    # M key to toggle space map (blocked during time progression)
+    if get_inrising!(inputstate, GLFW.KEY_M, window)
+        time_prog = get(inputstate.gui_inputs, :time_progressing, false)::Bool
+        if !time_prog
+            inputstate.spacemap_active = !inputstate.spacemap_active
+        end
+    end
 
     # Number keys 1-4 for standard placement modes
     get_inrising!(inputstate, GLFW.KEY_1, window) && (inputstate.placementmode = INSPECT)

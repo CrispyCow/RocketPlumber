@@ -6,6 +6,7 @@ using TimerOutputs, SparseArrays, StaticArrays
 # Custom Packages
 using HexFrame, HexElements, HexFluids, HexFlowTelemetry
 using FlowEngine, FlowMap, HexComponentsAPI, HexFlowControl
+using HexFlowProcGen
 
 # Type exports - Data Structures
 export FlowCalculatorSnapshot, FlowCalculatorSharedState, FlowCalculatorIPC, TimingState
@@ -33,6 +34,9 @@ export flowcalculator_loop!
 
 # Function exports - Map updates
 export update_map!, update_mna!, handle_thrusters!, scale_voltage_dict
+
+# Constant exports - Manoeuvre thresholds
+export MANOEUVRE_THRUST_THRESHOLD, MANOEUVRE_COMPLETION_THRESHOLD
 
 # ===============================================================
 # Data Structures
@@ -882,18 +886,247 @@ function update_mna!(derivedmapstate::DerivedMapState, mna_state::MNA_State, cur
 end
 
 "Updates thrust related gamestate based on calls to get_thrust for all components"
-function handle_thrusters!(gamestate::GameState, gamemap::GameMap, mna_state::MNA_State)
-    # compute thrust vector
+function handle_thrusters!(gamestate::GameState, gamemap::GameMap,  mna_state::MNA_State; base_ups::Float64 = 60.0)
+    # Compute total thrust vector from all nozzle components (ship space)
     thrust = SVector{2, Float64}(0.0, 0.0)
     for (_, ship) in gamemap.ships
         for (tile, comp) in get_all_components(ship)
             thrust += get_thrust(comp; tile = tile, mna_state = mna_state)
         end
     end
-
-    # mutate gamestate
     gamestate.thrust = thrust
-    return gamestate.impulse += thrust
+
+    # Ship-space acceleration per tick
+    mass = get_mass(gamemap)
+    accel_tick = mass > 0.0 ? thrust / mass : SVector{2, Float64}(0.0, 0.0)
+
+    # Default: ship space = space map space (no rotation)
+    applied_accel_tick = accel_tick
+
+    #= During a burn phase the ship conceptually rotates so that its +X axis
+       aligns with the burn direction in space-map space.  We rotate the ship-
+       space acceleration into space-map space for velocity integration, and
+       subtract the raw ship-space acceleration from the ship-space remaining ΔV. =#
+    if has_active_manoeuvre(gamemap)
+        manoeuvre = get_active_manoeuvre(gamemap)
+        phase = manoeuvre.phase
+        if phase == PHASE_MAIN_BURN || phase == PHASE_DECEL_BURN
+            # Burn direction comes from the planned space-map ΔV vector
+            burn_dv = phase == PHASE_MAIN_BURN ? manoeuvre.main_burn_dv : manoeuvre.decel_burn_dv
+            burn_dir_mag = norm(burn_dv)
+            burn_dir = burn_dir_mag > 1e-10 ? burn_dv / burn_dir_mag : SVector(1.0, 0.0)
+            burn_angle = atan(burn_dir[2], burn_dir[1])
+            c = cos(burn_angle)
+            s = sin(burn_angle)
+
+            # Rotate ship-space acceleration into space-map space
+            applied_accel_tick = SVector(
+                c * accel_tick[1] - s * accel_tick[2],
+                s * accel_tick[1] + c * accel_tick[2],
+            )
+
+            # Track burn progress in ship space (both vectors are ship-space, clean subtraction)
+            manoeuvre.burn_remaining_dv -= accel_tick
+        end
+    end
+
+    # Store acceleration as per-second for UI display
+    gamestate.acceleration = applied_accel_tick * base_ups
+
+    # Integrate velocity: accumulate acceleration each tick (space-map space)
+    current_velocity = get_velocity(gamemap)
+    new_velocity = current_velocity + applied_accel_tick
+    set_velocity!(gamemap, new_velocity)
+
+    return nothing
+end
+
+const MANOEUVRE_COMPLETION_THRESHOLD = 0.05   # Absolute velocity units
+const MANOEUVRE_THRUST_THRESHOLD    = 0.1    # Thrust magnitude to count as "engines off"
+
+#= ---------- Manoeuvre guard helpers ----------- =#
+
+"""
+Cancel the active manoeuvre if the ship is producing thrust above the detection
+threshold.  Returns `true` if the manoeuvre was cancelled.
+
+Thrust during a non-burn phase (e.g. coasting or waiting) invalidates the planned
+trajectory, so the manoeuvre must be abandoned.
+"""
+function cancel_if_thrust!(gamemap::GameMap, gamestate::GameState; console_push::Function = identity)::Bool
+    norm(gamestate.thrust) <= MANOEUVRE_THRUST_THRESHOLD && return false
+    clear_active_manoeuvre!(gamemap)
+    console_push("Manoeuvre cancelled: thrust applied outside a burn phase.")
+    return true
+end
+
+"""
+Cancel the active manoeuvre if time is currently progressing (i.e. the target time
+is ahead of the current time).  Returns `true` if the manoeuvre was cancelled.
+
+Time-warping during an active burn would skip thrust integration steps and corrupt
+the ΔV budget.
+"""
+function cancel_if_time_progressing!(gamemap::GameMap; console_push::Function = identity)::Bool
+    sm = gamemap.space_map
+    !(sm isa SpaceMapState) && return false
+    sm.target_time_years <= sm.time_years && return false
+    clear_active_manoeuvre!(gamemap)
+    console_push("Manoeuvre cancelled: time stepped during an active burn phase.")
+    return true
+end
+
+"""
+Cancel the active manoeuvre if the current time deviates from `expected_time` by
+more than `tolerance` years.  Returns `true` if the manoeuvre was cancelled.
+
+A large time discrepancy means the ship is not at the planned position for the
+upcoming waypoint, so continuing the manoeuvre would produce incorrect burns.
+"""
+function cancel_if_time_wrong!(gamemap::GameMap, expected_time::Float64;
+                                tolerance::Float64 = 0.01,
+                                console_push::Function = identity)::Bool
+    sm = gamemap.space_map
+    !(sm isa SpaceMapState) && return false
+    abs(sm.time_years - expected_time) <= tolerance && return false
+    clear_active_manoeuvre!(gamemap)
+    console_push("Manoeuvre cancelled: current time is too far from the planned waypoint time.")
+    return true
+end
+
+"""
+Cancel the active manoeuvre if the target time (set by the player for time-warping)
+would skip past `waypoint_time` by more than `tolerance` years.  Returns `true` if
+the manoeuvre was cancelled.
+
+Skipping past a waypoint time while coasting (or waiting for a burn) means the
+ship would arrive at the wrong position and the planned burn could never execute
+correctly.
+"""
+function cancel_if_target_time_past!(gamemap::GameMap, waypoint_time::Float64;
+                                      tolerance::Float64 = 0.01,
+                                      console_push::Function = identity)::Bool
+    sm = gamemap.space_map
+    !(sm isa SpaceMapState) && return false
+    sm.target_time_years <= waypoint_time + tolerance && return false
+    clear_active_manoeuvre!(gamemap)
+    console_push("Manoeuvre cancelled: time warp would skip past the planned burn waypoint.")
+    return true
+end
+
+# ===============================================================
+# Manoeuvre phase state machine
+# ===============================================================
+
+"""
+Advance the manoeuvre state machine one step.
+
+At each burn-phase transition, the planned space-map ΔV is rotated into ship space
+to set `burn_target_dv` and `burn_remaining_dv`.  This rotation maps space-map +X
+onto ship +X (i.e. the ship "turns" to face the burn direction).
+
+All phase transitions are centralised here so the UI is purely a display layer.
+Must be called once per tick, after `handle_thrusters!` and `step_space_map_time!`.
+
+Guard helpers run first in each phase to cancel the manoeuvre early if the player
+has taken an action (thrust outside burns, time-warp during burns, skipping a
+waypoint) that would invalidate the planned trajectory.
+"""
+function update_manoeuvre_phase!(gamestate::GameState, gamemap::GameMap; console_push::Function = identity)
+    !has_active_manoeuvre(gamemap) && return nothing
+    sm = gamemap.space_map
+    !(sm isa SpaceMapState) && return nothing
+
+    man = get_active_manoeuvre(gamemap)
+    rem_mag = norm(man.burn_remaining_dv)
+    thrust_mag = norm(gamestate.thrust)
+
+    if man.phase == PHASE_WAIT_APPROACH
+        # Guards: thrust outside a burn phase, or time warp that skips the main burn
+        cancel_if_thrust!(gamemap, gamestate; console_push) && return nothing
+        cancel_if_target_time_past!(gamemap, man.closest_approach_time; console_push) && return nothing
+
+        # Transition: rotate main burn ΔV into ship space when closest approach time is reached
+        if sm.time_years >= man.closest_approach_time
+            # Verify ship is at the expected time (shouldn't have jumped past it)
+            cancel_if_time_wrong!(gamemap, man.closest_approach_time; console_push) && return nothing
+
+            ship_dv = _spacemap_to_ship(man.main_burn_dv)
+            man.burn_target_dv = ship_dv
+            man.burn_remaining_dv = ship_dv
+            man.phase = PHASE_MAIN_BURN
+
+            expected_velocity = man.main_burn_dv + get_velocity(gamemap)
+            expected_encounter_position = get_encounter_position(get_encounter_points(gamemap)[man.target_encounter_index], man.intercept_time)
+            @info "Main Burn started:" expected_velocity = expected_velocity expected_encounter_position = expected_encounter_position
+        end
+
+    elseif man.phase == PHASE_MAIN_BURN
+        # Guards: time-warp during a burn invalidates ΔV integration
+        cancel_if_time_progressing!(gamemap; console_push) && return nothing
+
+        if rem_mag < MANOEUVRE_COMPLETION_THRESHOLD && thrust_mag < MANOEUVRE_THRUST_THRESHOLD
+            man.burn_target_dv = SVector(0.0, 0.0)
+            man.burn_remaining_dv = SVector(0.0, 0.0)
+            man.phase = PHASE_COAST
+
+            current_velocity = get_velocity(gamemap)
+            @info "Main Burn completed:" current_velocity = current_velocity
+        end
+
+    elseif man.phase == PHASE_COAST
+        # Guards: thrust between burns, or time warp that skips the decel burn
+        cancel_if_thrust!(gamemap, gamestate; console_push) && return nothing
+        cancel_if_target_time_past!(gamemap, man.intercept_time; console_push) && return nothing
+
+        # Transition: rotate decel burn ΔV into ship space when intercept time is reached
+        if sm.time_years >= man.intercept_time
+            cancel_if_time_wrong!(gamemap, man.intercept_time; console_push) && return nothing
+
+            ship_dv = _spacemap_to_ship(man.decel_burn_dv)
+            man.burn_target_dv = ship_dv
+            man.burn_remaining_dv = ship_dv
+            man.phase = PHASE_DECEL_BURN
+
+            current_position = get_position(gamemap)
+            expected_velocity = man.decel_burn_dv + get_velocity(gamemap)
+            @info "Decel Burn started:" current_position = current_position expected_velocity = expected_velocity
+        end
+
+    elseif man.phase == PHASE_DECEL_BURN
+        # Guards: time-warp during a burn invalidates ΔV integration
+        cancel_if_time_progressing!(gamemap; console_push) && return nothing
+
+        if rem_mag < MANOEUVRE_COMPLETION_THRESHOLD && thrust_mag < MANOEUVRE_THRUST_THRESHOLD
+            man.burn_target_dv = SVector(0.0, 0.0)
+            man.burn_remaining_dv = SVector(0.0, 0.0)
+            man.phase = PHASE_ENCOUNTER_READY
+
+            current_velocity = get_velocity(gamemap)
+            @info "Decel Burn completed:" current_velocity = current_velocity
+        end
+
+    elseif man.phase == PHASE_ENCOUNTER_READY
+        # Guard: thrust after burns complete invalidates the final approach
+        cancel_if_thrust!(gamemap, gamestate; console_push) && return nothing
+    end
+    # PHASE_ENCOUNTER_READY transition to encounter_ship! is handled by the render thread
+
+    return nothing
+end
+
+"""
+Rotate a space-map-space ΔV vector into ship space.
+
+The ship's +X axis aligns with the burn direction (i.e. the direction of the ΔV vector).
+This is equivalent to rotating by *negative* burn_angle so that the ΔV ends up along
+ship +X:  result ≈ SVector(‖dv‖, 0).
+"""
+function _spacemap_to_ship(dv::SVector{2, Float64})::SVector{2, Float64}
+    mag = norm(dv)
+    mag < 1e-10 && return SVector(0.0, 0.0)
+    # Inverse rotation: rotate by -atan(dv.y, dv.x)
+    return SVector(mag, 0.0)
 end
 
 # ===============================================================
@@ -1036,6 +1269,12 @@ function flowcalculator_loop!(
                     update_map!(gamemap, derivedmapstate, mna_state, gamestate.ticks)
                     update_mna!(derivedmapstate, mna_state, gamestate.ticks)
                     @timeit flowcalc_loop_timer "Thruster Handling" handle_thrusters!(gamestate, gamemap, mna_state)
+
+                    # Step space map time (encounter point recycling, position updates)
+                    step_space_map_time!(gamemap.space_map)
+
+                    # Advance the manoeuvre state machine
+                    update_manoeuvre_phase!(gamestate, gamemap; console_push = threadsafe_console_push)
 
                     # Publish snapshot
                     @timeit flowcalc_loop_timer "Snapshot Publishing" begin

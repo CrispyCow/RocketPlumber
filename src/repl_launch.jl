@@ -45,11 +45,12 @@
 # Start Revise.jl First
 using Revise
 # Packages
-using LinearAlgebra, StaticArrays
+using LinearAlgebra, StaticArrays, GeometryBasics
 using ModernGL, GLFW, JLD2, CSyntax.CRef
 using TimerOutputs, Accessors, Printf, CSyntax
 using FilePathsBase, NativeFileDialog
 import CImGui, CImGui.lib
+using ImPlot
 # Custom Packages (working title: HexFlow; project: Rocket Plumber)
 using HexFrame, HexElements, HexFluids, HexFlowTelemetry
 using HexComponentsAPI, FlowEngine, FlowMap, RenderEngine, HexFlowProcGen
@@ -70,6 +71,9 @@ ui_loadingscreen_render(window, "Initialising")
 include_with_loadingscreen(window, "interactions.jl")
 include_with_loadingscreen(window, "components.jl")
 include_with_loadingscreen(window, "gameloop.jl")
+include_with_loadingscreen(window, "ui_common.jl")
+include_with_loadingscreen(window, "ui_game.jl")
+include_with_loadingscreen(window, "ui_menus.jl")
 include_with_loadingscreen(window, "demo.jl")
 
 # GAME LAUNCH

@@ -2,7 +2,7 @@
 
 julia_version = "1.12.1"
 manifest_format = "2.0"
-project_hash = "8042768a285dfc435c5ddc23e14fdba08fe69dc7"
+project_hash = "78f0d94409ee2113ba4cdb81c7e7816738fce388"
 
 [[deps.ATK_jll]]
 deps = ["Artifacts", "Glib_jll", "JLLWrappers", "Libdl"]
@@ -247,6 +247,12 @@ deps = ["ArgTools", "FileWatching", "LibCURL", "NetworkOptions"]
 uuid = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
 version = "1.6.0"
 
+[[deps.EarCut_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
+git-tree-sha1 = "e3290f2d49e661fbd94046d7e3726ffcb2d41053"
+uuid = "5ae413db-bbd1-5e63-b57d-d24a61df00f5"
+version = "2.2.4+0"
+
 [[deps.EpollShim_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
 git-tree-sha1 = "8a4be429317c42cfae6a7fc03c31bad1970c310d"
@@ -263,6 +269,11 @@ version = "2.7.3+0"
 git-tree-sha1 = "27415f162e6028e81c72b82ef756bf321213b6ec"
 uuid = "e2ba6199-217a-4e67-a87a-7c52f15ade04"
 version = "0.1.10"
+
+[[deps.Extents]]
+git-tree-sha1 = "b309b36a9e02fe7be71270dd8c0fd873625332b4"
+uuid = "411431e0-e8b7-467b-b5e0-f676ba4f2910"
+version = "0.1.6"
 
 [[deps.FFTW_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -310,7 +321,7 @@ uuid = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
 version = "0.1.0"
 
 [[deps.FlowMap]]
-deps = ["HexComponentsAPI", "HexFrame", "StructEquality"]
+deps = ["DataStructures", "HexComponentsAPI", "HexFrame", "StaticArrays", "StructEquality"]
 path = "local_packages/FlowMap"
 uuid = "86ae9052-88d6-4179-aacc-02095df7ba41"
 version = "0.1.0"
@@ -350,6 +361,18 @@ deps = ["ATK_jll", "Artifacts", "Cairo_jll", "Fontconfig_jll", "FreeType2_jll", 
 git-tree-sha1 = "b080a592525632d287aee4637a62682576b7f5e4"
 uuid = "77ec8976-b24b-556a-a1bf-49a033a670a6"
 version = "3.24.31+0"
+
+[[deps.GeometryBasics]]
+deps = ["EarCut_jll", "Extents", "IterTools", "LinearAlgebra", "PrecompileTools", "Random", "StaticArrays"]
+git-tree-sha1 = "1f5a80f4ed9f5a4aada88fc2db456e637676414b"
+uuid = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
+version = "0.5.10"
+
+    [deps.GeometryBasics.extensions]
+    GeometryBasicsGeoInterfaceExt = "GeoInterface"
+
+    [deps.GeometryBasics.weakdeps]
+    GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
 
 [[deps.GettextRuntime_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "Libdl", "Libiconv_jll"]
@@ -417,7 +440,7 @@ uuid = "a5bfb9cd-4dce-4d41-851e-e34bf63bcb54"
 version = "0.1.0"
 
 [[deps.HexFlowCalculator]]
-deps = ["Dates", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowControl", "HexFlowTelemetry", "HexFluids", "HexFrame", "LinearAlgebra", "Printf", "SparseArrays", "StaticArrays", "StructEquality", "TimerOutputs"]
+deps = ["Dates", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowControl", "HexFlowProcGen", "HexFlowTelemetry", "HexFluids", "HexFrame", "LinearAlgebra", "Printf", "SparseArrays", "StaticArrays", "StructEquality", "TimerOutputs"]
 path = "local_packages/HexFlowCalculator"
 uuid = "d8e9f3a2-7b4c-4e1d-9f3a-2c5b8e7d9f1a"
 version = "0.1.0"
@@ -441,7 +464,7 @@ uuid = "994b1c28-7126-425a-9af0-3768b98dec97"
 version = "0.1.0"
 
 [[deps.HexFlowProcGen]]
-deps = ["FlowEngine", "FlowMap", "HexComponentsAPI", "HexFrame", "Random", "SquirrelNoise", "Test"]
+deps = ["DataStructures", "FlowEngine", "FlowMap", "GeometryBasics", "HexComponentsAPI", "HexFrame", "LinearAlgebra", "Random", "SquirrelNoise", "StaticArrays", "Test"]
 path = "local_packages/HexFlowProcGen"
 uuid = "46cebafd-6e5b-4504-9515-23fc742129ca"
 version = "0.1.0"
@@ -487,6 +510,12 @@ deps = ["LinearAlgebra", "StaticArrays", "StructEquality", "Test"]
 path = "local_packages/HexFrame"
 uuid = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"
 version = "0.1.0"
+
+[[deps.ImPlot]]
+deps = ["CEnum", "CImGui", "CImGuiPack_jll", "DocStringExtensions"]
+git-tree-sha1 = "541823093fa6e0006a721787e8d5d559d91338b9"
+uuid = "e8efc688-5342-4ad4-b4ba-9025a731b363"
+version = "0.7.2"
 
 [[deps.ImageAxes]]
 deps = ["AxisArrays", "ImageBase", "ImageCore", "Reexport", "SimpleTraits"]

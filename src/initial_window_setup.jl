@@ -13,20 +13,29 @@ function configure_threads()
     return nothing
 end
 
-"Runs one-time minimal CImGui setup (loader path)"
+"Global storage for the ImPlot context pointer, managed by ui_setup/ui_teardown."
+const _implot_ctx = Ref{Any}(nothing)
+
+"Runs one-time CImGui + ImPlot setup (context creation, backend init)"
 function ui_setup(window::GLFW.Window)
     CImGui.set_backend(:GlfwOpenGL3)
     ctx = CImGui.CreateContext()
+    _implot_ctx[] = ImPlot.CreateContext()
+    ImPlot.SetImGuiContext(ctx)
     CImGui.StyleColorsDark()
     CImGui.lib.ImGui_ImplGlfw_InitForOpenGL(Ptr{CImGui.lib.GLFWwindow}(window.handle), true)
     CImGui.lib.ImGui_ImplOpenGL3_Init("#version 330")
     return ctx
 end
 
-"Runs CImGui cleanup/teardown in the correct order (renderer → platform → context)"
+"Runs CImGui + ImPlot cleanup/teardown in the correct order (renderer → platform → ImPlot → CImGui)"
 function ui_teardown()
     CImGui.lib.ImGui_ImplOpenGL3_Shutdown()
     CImGui.lib.ImGui_ImplGlfw_Shutdown()
+    if !isnothing(_implot_ctx[])
+        ImPlot.DestroyContext(_implot_ctx[])
+        _implot_ctx[] = nothing
+    end
     CImGui.DestroyContext()
     return nothing
 end

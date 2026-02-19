@@ -2,7 +2,9 @@
 # Helper Functions for the Game Main Loop
 # ===============================================================
 
-using HexFlowTelemetry, FlowMap, FlowEngine
+using HexFlowTelemetry, FlowMap, FlowEngine, HexFlowProcGen
+using StaticArrays
+using LinearAlgebra
 
 "Uses RenderEngine to initialise OpenGL objects needed for the game loop"
 function init_opengl_objects()
@@ -127,6 +129,9 @@ function user_handler!(
     # Update ship bounds before input handling so limits are current
     update_ship_bounds!(viewstate, snapshot.gamemap)
 
+    # Set time progression flag for input blocking (space map M key toggle)
+    inputstate.gui_inputs[:time_progressing] = is_time_progressing(snapshot.gamemap)
+
     GLFW.PollEvents()
     cimgui_io = CImGui.GetIO()
     handle_inputs!(inputstate, viewstate, window, cimgui_io) # input handling (window sizes, cursor, keys, scroll)
@@ -159,17 +164,12 @@ function ui_rendering!(
     max_view_bounds = get_max_reachable_bounds(viewstate)
     
     return ui_renderwrap() do
-        ui_timer_render(
-            snapshot.gamestate.ticks,
-            viewstate.frame_count,
-            (@atomic flowcalc_ipc.shared_state.actual_ups),
-            snapshot.gamestate.thrust,
-            snapshot.gamestate.impulse
-        )
+        ui_velocity_tracker_render(snapshot.gamestate, snapshot.gamemap, inputstate, flowcalc_ipc, max_view_bounds)
         ui_toolbar_render!(inputstate, GLFW.GetWindowSize(window), flowcalc_ipc.console_see)
         ui_propertybox_render!(inputstate, snapshot.gamemap, snapshot.derived, snapshot.mna, GLFW.GetWindowSize(window))
         ui_pause_menu_render!(inputstate, snapshot, window)
-        ui_dev_utils_menu_render!(inputstate, flowcalc_ipc, GLFW.GetWindowSize(window), max_view_bounds)
+        ui_dev_utils_menu_render!(inputstate, flowcalc_ipc, snapshot, viewstate, GLFW.GetWindowSize(window), max_view_bounds)
+        ui_spacemap_render!(inputstate, flowcalc_ipc, snapshot, GLFW.GetWindowSize(window), max_view_bounds)
 
         # Render hint box if hint data exists and is visible
         if !isnothing(tutorial_hint) && tutorial_hint.is_visible
@@ -189,14 +189,106 @@ function cleanup!(flowcalc_ipc::FlowCalculatorIPC, globjmap::GLObjectMap, window
     # CImGui teardown handled by start menu now
 end
 
-# See this link: https://juliaio.github.io/JLD2.jl/stable/advanced/#Upgrading-old-structures-on-load
+# ===============================================================
+# JLD2 Serialisation
+# ===============================================================
+# See: https://juliaio.github.io/JLD2.jl/stable/advanced/#Upgrading-old-structures-on-load
+#
+# We rely on `rconvert` to upgrade old on-disk NamedTuple representations
+# into the current struct types when loading saves.
+# Transient fields (such as event queues inside space-map state) are not
+# expected to be valid on disk and are always rebuilt when constructing
+# fresh runtime state after load. The use of `get()` with defaults below
+# ensures that future field additions do not break loading of older saves.
+
 import JLD2: rconvert
+
+#= ---------- ShipMap (legacy FlowEngine upgrades) ----------- =#
+
 "Conversion for old `ShipMap` saved representations"
 JLD2.rconvert(::Type{FlowMap.ShipMap}, nt::NamedTuple) = FlowMap.ShipMap(
     components = get(nt, :components, Dict{TileCoord, ComponentOnTile}()),
     pipe_behaviors = get(nt, :pipe_behaviors, Dict{EdgeCoord, PipeBehavior}()),
     ship_tiles = get(nt, :ship_tiles, Set{TileCoord}([TileCoord(0, 0)])),
     docking_status = get(nt, :docking_status, FlowMap.ConnectedDockStat())
+)
+
+"Conversion for old `GameMap` saved representations that lack `space_map`"
+JLD2.rconvert(::Type{FlowMap.GameMap}, nt::NamedTuple) = FlowMap.GameMap(
+    ships = get(nt, :ships, Dict(:primary => FlowMap.ShipMap())),
+    space_map = get(nt, :space_map, FlowMap.SpaceMapEmpty())
+)
+
+#= ---------- SpaceMapEmpty ----------- =#
+
+"Rebuild `SpaceMapEmpty` from a NamedTuple (JLD2 Upgrade path)."
+JLD2.rconvert(::Type{SpaceMapEmpty}, nt::NamedTuple) = SpaceMapEmpty(
+    velocity = get(nt, :velocity, SVector{2,Float64}(0.0, 0.0)),
+)
+
+#= ---------- ManoeuvreData ----------- =#
+
+"""Rebuild `ManoeuvreData` from a NamedTuple (JLD2 Upgrade path).
+
+Handles three legacy formats:
+1. **Very old**: has `target_delta_v`/`intercept_delta_v` (no `main_burn_dv`). Uses vectors as-is.
+2. **Legacy**: has `main_burn_dv` (ship-local) + `main_burn_direction` unit vector. Reconstructs
+   space-map ΔV via `direction × magnitude`.
+3. **Current**: has `main_burn_dv`/`decel_burn_dv` as full space-map vectors (no `main_burn_direction`).
+"""
+function JLD2.rconvert(::Type{ManoeuvreData}, nt::NamedTuple)
+    if haskey(nt, :target_delta_v) && !haskey(nt, :main_burn_dv)
+        # Very old format: target_delta_v → main_burn_dv, intercept_delta_v → decel_burn_dv
+        main_dv  = get(nt, :target_delta_v,    SVector(0.0, 0.0))
+        decel_dv = get(nt, :intercept_delta_v, SVector(0.0, 0.0))
+    elseif haskey(nt, :main_burn_direction)
+        # Legacy: reconstruct space-map ΔV from direction × magnitude
+        dir_main  = get(nt, :main_burn_direction,  SVector(1.0, 0.0))
+        dir_decel = get(nt, :decel_burn_direction, SVector(1.0, 0.0))
+        main_dv   = dir_main  * norm(nt.main_burn_dv)
+        decel_dv  = dir_decel * norm(nt.decel_burn_dv)
+    else
+        # Current format
+        main_dv  = nt.main_burn_dv
+        decel_dv = nt.decel_burn_dv
+    end
+
+    ManoeuvreData(
+        phase              = get(nt, :phase, PHASE_WAIT_APPROACH),
+        main_burn_dv       = main_dv,
+        decel_burn_dv      = decel_dv,
+        burn_target_dv     = get(nt, :burn_target_dv, SVector(0.0, 0.0)),
+        burn_remaining_dv  = get(nt, :burn_remaining_dv, SVector(0.0, 0.0)),
+        closest_approach_time = get(nt, :closest_approach_time, 0.0),
+        intercept_time     = get(nt, :intercept_time, 0.0),
+        target_encounter_index = get(nt, :target_encounter_index, 0),
+        trajectory_start_pos  = get(nt, :trajectory_start_pos, SVector(0.0, 0.0)),
+        trajectory_start_time = get(nt, :trajectory_start_time, 0.0),
+        surplus_dv         = get(nt, :surplus_dv, 0.0),
+        main_burn_position  = get(nt, :main_burn_position, SVector(0.0, 0.0)),
+        decel_burn_position = get(nt, :decel_burn_position, SVector(0.0, 0.0)),
+    )
+end
+
+#= ---------- SpaceMapState ----------- =#
+
+"Rebuild `SpaceMapState` from a NamedTuple — event_queue is always fresh (rebuilt after load)."
+JLD2.rconvert(::Type{SpaceMapState}, nt::NamedTuple) = SpaceMapState(
+    seed               = get(nt, :seed, UInt32(0)),
+    velocity           = get(nt, :velocity, SVector{2,Float64}(0.0, 0.0)),
+    position           = get(nt, :position, SVector{2,Float64}(0.0, 0.0)),
+    time_years         = get(nt, :time_years, 0.0),
+    target_time_years  = get(nt, :target_time_years, 0.0),
+    active_manoeuvre    = get(nt, :active_manoeuvre, nothing),
+    encounter_points   = get(nt, :encounter_points, EncounterPoint[]),
+    neg_disappear_line_x = get(nt, :neg_disappear_line_x, -1600.0),
+    neg_spawn_line_x     = get(nt, :neg_spawn_line_x, -1500.0),
+    pos_spawn_line_x     = get(nt, :pos_spawn_line_x, 1500.0),
+    pos_disappear_line_x = get(nt, :pos_disappear_line_x, 1600.0),
+    last_line_step_x   = get(nt, :last_line_step_x, 0.0),
+    line_step_size     = get(nt, :line_step_size, 200.0),
+    viewport_half_width  = get(nt, :viewport_half_width, 1000.0),
+    viewport_half_height = get(nt, :viewport_half_height, 500.0),
 )
 
 function loadmap(mappath::Union{Nothing, String})::GameMap
@@ -220,7 +312,10 @@ function loadmap(mappath::Union{Nothing, String})::GameMap
                 "FlowEngine.ConnectedDockStat" => JLD2.Upgrade(FlowMap.ConnectedDockStat),
                 "FlowEngine.ApproachingDockStat" => JLD2.Upgrade(FlowMap.ApproachingDockStat),
                 "FlowEngine.DepartingDockStat" => JLD2.Upgrade(FlowMap.DepartingDockStat),
-                "FlowEngine.RenderPosOffsetState" => JLD2.Upgrade(FlowMap.RenderPosOffsetState)
+                "FlowEngine.RenderPosOffsetState" => JLD2.Upgrade(FlowMap.RenderPosOffsetState),
+                "FlowMap.SpaceMapEmpty" => JLD2.Upgrade(FlowMap.SpaceMapEmpty),
+                "FlowMap.SpaceMapState" => JLD2.Upgrade(FlowMap.SpaceMapState),
+                "FlowMap.ManoeuvreData" => JLD2.Upgrade(FlowMap.ManoeuvreData),
             )
 
             # Use the functional API instead of macro so we can pass keyword args (typemap) safely
@@ -263,6 +358,14 @@ function loadmap(mappath::Union{Nothing, String})::GameMap
         @warn "All map loading attempts failed. Returning empty map."
         stored_gamemap = GameMap()
     end
+
+    # Rebuild event queue if SpaceMapState loaded (BinaryMinHeap may not round-trip via JLD2)
+    sm = stored_gamemap.space_map
+    if sm isa SpaceMapState && !isempty(sm.encounter_points)
+        rebuild_event_queue!(sm)
+        @info "Rebuilt encounter event queue after map load" n_events=length(sm.event_queue)
+    end
+
     return stored_gamemap
 end
 
@@ -292,868 +395,12 @@ function savemap(gamemap::GameMap, mappath::Union{Nothing, String})
     end
 
     try
-        stored_gamemap = gamemap
-        @save mappath stored_gamemap
+        jldsave(mappath; stored_gamemap = gamemap)
         @info "Map saved as  $mappath"
     catch e
         @error "An error occurred while saving map: $e"
     end
 
-    return nothing
-end
-
-# ===============================================================
-# UI Elements
-# ===============================================================
-
-#= ---------- UI Layout Constants ---------- =#
-
-const toolbarheight = 200.0
-const propertyboxwidth = 350.0
-const hintboxwidth = 350.0
-const hintboxheight = 400.0
-const statistics_box_width = 300.0
-
-#= ---------- Window Configuration ---------- =#
-
-const DEFAULT_WINDOW_FLAGS = CImGui.ImGuiWindowFlags_NoTitleBar |
-    CImGui.ImGuiWindowFlags_NoResize |
-    CImGui.ImGuiWindowFlags_NoMove
-
-#= ---------- Mode Configuration ---------- =#
-
-const STANDARD_MODE_CONFIG = (
-    (INSPECT, "[1] Inspect"),
-    (MOVE, "[2] Move"),
-    (PIPE, "[3] Place Pipes"),
-    (DELETE, "[4] Delete"),
-)
-const EDITOR_MODE_CONFIG = (
-    STANDARD_MODE_CONFIG...,
-    (TILE, "[5] Create Tile"),
-    (SURFACE_EDIT, "[6] Edit Surface"),
-)
-
-#= ---------- Pipe Type Configuration ---------- =#
-
-const PIPE_TYPES = (
-    ("Scrap Pipe", ScrapPipeBehav),
-    ("Big Pipe", BigPipeBehav),
-)
-
-#= ---------- Helper Functions ---------- =#
-
-# Helper Functions
-to_float(nt::NamedTuple) = NamedTuple{keys(nt)}(Float64.(values(nt)))
-
-"Sets up and begins a window with position, size, and flags"
-function ui_window_setup(title::String, pos, size, flags)
-    CImGui.SetNextWindowPos(pos, CImGui.ImGuiCond_Always)
-    CImGui.SetNextWindowSize(size, CImGui.ImGuiCond_Always)
-    return CImGui.Begin(title, C_NULL, flags)
-end
-
-"Convenience wrapper for ui_window_setup with default flags"
-function ui_window(title::String, pos, size; flags = DEFAULT_WINDOW_FLAGS)
-    return ui_window_setup(title, pos, size, flags)
-end
-
-"""
-Generic tunable editor that returns updated tunable values.
-Displays input fields for each tunable property and returns the modified values as a tuple.
-"""
-function edit_tunables!(tunables_tuple)
-    tunables = collect(tunables_tuple)
-    cfloat_array = similar(tunables, Cfloat)
-
-    for (index, props) in enumerate(tunables)
-        CImGui.PushID(index)
-        cfloat_array[index] = Cfloat(props.current_val)
-
-        CImGui.Text("$(props.type_desc) [$index]")
-        CImGui.SetNextItemWidth(100.0)
-        @c CImGui.InputFloat(props.unit_desc, pointer(cfloat_array, index), 0.0, 100.0, "%.3f")
-        CImGui.Separator()
-        CImGui.PopID()
-    end
-
-    return tuple(cfloat_array...)
-end
-
-"""Helper to enqueue a map-override command on the flow calculator command queue."""
-function enqueue_map_override!(flowcalc_ipc::FlowCalculatorIPC, gamemap::GameMap)
-    cmd = create_map_override_command(flowcalc_ipc.command_queue, deepcopy(gamemap))
-    try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
-    return nothing
-end
-
-"""Read and write a `UInt32` scalar from `inputstate.gui_inputs` using ImGui.
-Returns the updated `UInt32` value."""
-function gui_input_u32!(inputstate::InputState, key::Symbol, label::String, default::UInt32)
-    one::UInt32 = UInt32(1)
-    val::UInt32 = haskey(inputstate.gui_inputs, key) ? inputstate.gui_inputs[key] : default
-    @cref CImGui.InputScalar(label, CImGui.ImGuiDataType_U32, &val, &one)
-    inputstate.gui_inputs[key] = val
-    return val
-end
-
-"""Read and write an `Int64` scalar from `inputstate.gui_inputs` using ImGui.
-Returns the updated `Int64` value."""
-function gui_input_s64!(inputstate::InputState, key::Symbol, label::String, default::Int64)
-    one::Int64 = Int64(1)
-    val::Int64 = haskey(inputstate.gui_inputs, key) ? inputstate.gui_inputs[key] : default
-    @cref CImGui.InputScalar(label, CImGui.ImGuiDataType_S64, &val, &one)
-    inputstate.gui_inputs[key] = val
-    return val
-end
-
-"""Read and write a `Float64` double from `inputstate.gui_inputs` using ImGui.
-Optional `fmt` controls the displayed format string.
-Returns the updated `Float64` value."""
-function gui_input_double!(inputstate::InputState, key::Symbol, label::String, default::Float64; step_small::Float64 = 0.01, step_fast::Float64 = 0.1, fmt::String = "%.3f")
-    val::Float64 = haskey(inputstate.gui_inputs, key) ? inputstate.gui_inputs[key] : default
-    @cref CImGui.InputDouble(label, &val, step_small, step_fast, fmt)
-    inputstate.gui_inputs[key] = val
-    return val
-end
-
-"""Read and write an `Int32` listbox selection from `inputstate.gui_inputs`.
-`names` is a Vector{String} shown in the ListBox. Returns updated `Int32` index."""
-function gui_listbox_int!(inputstate::InputState, key::Symbol, label::String, names::Vector{String}, default::Int32)
-    val::Int32 = haskey(inputstate.gui_inputs, key) ? inputstate.gui_inputs[key] : default
-    @cref CImGui.ListBox(label, &val, names)
-    inputstate.gui_inputs[key] = val
-    return val
-end
-
-"Returns mode description text based on current placement mode"
-const MODE_DESCRIPTIONS = Dict(
-    TILE => "Configuring TILE for placement...",
-    PIPE => "Configuring PIPE for placement...",
-    INSPECT => "Inspecting hovered part..."
-)
-mode_description(mode::PlacementModes) = get(MODE_DESCRIPTIONS, mode, "No properties available")
-
-"Returns text description for a tile coordinate"
-coord_description(tile::TileCoord) = "($(tile.q), $(tile.r))"
-
-"Returns text description for a vertex coordinate"
-function coord_description(vert::VertexCoord)
-    direction = if vert.dir == HexFrame.Q_POS
-        "Right"
-    elseif vert.dir == HexFrame.Q_NEG
-        "Left"
-    else
-        "(ERR: improper vertex)"
-    end
-    return "$direction node of $(coord_description(vert.tile))"
-end
-
-"Format a number with 6 significant figures, using scientific notation if needed"
-function format_value(val::Float64)::String
-    abs_val = abs(val)
-
-    if abs_val == 0.0
-        return "0.00000"
-    elseif abs_val >= 1.0e6 || abs_val < 1.0e-3
-        # Use scientific notation for very large or very small numbers
-        return @sprintf("%.5e", val)
-    else
-        # Determine decimal places needed for 6 sig figs
-        # For values >= 1, we need 6 - floor(log10(abs_val)) - 1 decimal places
-        # For values < 1, we need 5 + ceil(abs(log10(abs_val))) decimal places
-        if abs_val >= 1.0
-            sig_decimals = max(0, 6 - floor(Int, log10(abs_val)) - 1)
-            return @sprintf("%.*f", sig_decimals, val)
-        else
-            sig_decimals = 5 + ceil(Int, abs(log10(abs_val)))
-            return @sprintf("%.*f", sig_decimals, val)
-        end
-    end
-end
-
-"Return a display-safe string for ship names.
-Generates a human-visible label from a `Symbol`. This strips leading gensym
-prefixes like `##` (which ImGui treats as an ID separator and hides the visible
-text) and replaces internal `#` with `-` for readability." 
-function safe_ship_display_name(name::Symbol)::String
-    s = String(name)
-    if startswith(s, "##")
-        # Remove leading '#' characters (turn "##ship#278" -> "ship#278")
-        s2 = lstrip(s, '#')
-        # Replace remaining '#' separators with '-' for a nicer display
-        s2 = replace(s2, '#' => '-')
-        return s2
-    else
-        return s
-    end
-end
-
-"Displays component tunables in read-only format matching edit_tunables! style"
-function display_component_values!(tunables_tuple::NTuple{N, TunableProps}) where {N}
-    if N == 0
-        CImGui.Text("No configurable values")
-        return nothing
-    end
-
-    for (index, props) in enumerate(tunables_tuple)
-        CImGui.PushID(index)
-
-        CImGui.Text("$(props.type_desc) [$index]")
-        CImGui.Text("$(format_value(props.current_val)) $(props.unit_desc)")
-        CImGui.Separator()
-
-        CImGui.PopID()
-    end
-    return nothing
-end
-
-"Displays circuit element details in the property inspector"
-function display_element_details!(elements::Vector{AbsoluteElement}, derivedmapstate::DerivedMapState, mna_state::MNA_State)
-    if isempty(elements)
-        CImGui.Text("No elements")
-        return nothing
-    end
-
-    for (index, element) in enumerate(elements)
-        CImGui.PushID(index)
-
-        props = get_tunables(element)
-
-        CImGui.Text("$(props.type_desc) [$index]")
-        CImGui.Text("Value: $(format_value(props.current_val)) $(props.unit_desc)")
-
-        current = abs_element_get_current(element, derivedmapstate, mna_state)
-        if isnothing(current)
-            CImGui.Text("Current: Not Connected")
-        else
-            CImGui.Text("Current: $(format_value(current)) A")
-        end
-
-        CImGui.Separator()
-        CImGui.PopID()
-    end
-    return nothing
-end
-
-"Inspects a tile coordinate, displaying component values and element details"
-function inspect_ui!(tile::TileCoord, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State)
-    CImGui.Text("Hex Tile at $(coord_description(tile))")
-    internalnode = NodeCoord(tile, HexFrame.NODE_INTERNAL)
-    if haskey(mna_state.node_voltages, internalnode)
-        CImGui.Text("Internal Node Voltage: $(format_value(mna_state.node_voltages[internalnode])) V")
-    end
-
-    found_comp, comp_ship = has_component_any_ship(gamemap, tile)
-    if found_comp
-        tilecomp, _ = get_component_any_ship(gamemap, tile)
-        CImGui.Text("Type: $(String(nameof(typeof(tilecomp.component))))")
-        CImGui.Text("Ship: $(comp_ship)")
-
-        # Component Values section
-        CImGui.Text("\nValues:")
-        CImGui.Separator()
-        CImGui.Indent()
-        tunables = get_tunables(tilecomp)
-        display_component_values!(tunables)
-        CImGui.Unindent()
-
-        # Element Details section
-        CImGui.Text("\nDerived Elements:")
-        CImGui.Separator()
-        CImGui.Indent()
-        elements = produce_abs_elements(tilecomp, tile)
-        display_element_details!(collect(elements), derivedmapstate, mna_state)
-        CImGui.Unindent()
-    else
-        CImGui.Text("No component on this tile.")
-    end
-
-    return nothing
-end
-
-"Inspects a vertex coordinate, displaying node voltage and fluid tag"
-function inspect_ui!(vert::VertexCoord, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State)
-    CImGui.Text(coord_description(vert))
-    node = to_nodecoord(vert)
-
-    # Exit early if node has no voltage defined
-    if !haskey(mna_state.node_voltages, node)
-        return nothing
-    end
-
-    CImGui.Text("Node Voltage: $(format_value(mna_state.node_voltages[node])) V\n")
-
-    fluidtag = get(derivedmapstate.nodeactualfluids, node, nothing)
-    fluidstr = String(Symbol(fluidtag))
-    CImGui.Text("Fluid Tag: $(fluidstr)")
-
-    # Display contributing fluid tags from adjacent tiles (only for axis nodes)
-    if HexFrame.is_axis(node.dir)
-        CImGui.Text("\nContributing Fluid Tags:")
-        CImGui.Separator()
-        CImGui.Indent()
-
-        contributing_tags = get_node_fluid_tags(node, gamemap)
-        adjacent_tiles_info = HexFrame.get_adjacent_tiles_for_node(node)
-
-        for (idx, ((tile, _), tag)) in enumerate(zip(adjacent_tiles_info, contributing_tags))
-            tag_str = String(Symbol(tag))
-            CImGui.Text("Tile $(coord_description(tile)): $tag_str")
-        end
-
-        CImGui.Unindent()
-    end
-
-    return nothing
-end
-
-"Inspects an edge coordinate, displaying pipe information"
-function inspect_ui!(edge::EdgeCoord, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State)
-    CImGui.Text("Pipe Between:")
-    CImGui.Text("$(coord_description(edge.v1)) and $(coord_description(edge.v2))")
-
-    # Check for pipe behaviors
-    found_pipe, pipe_ship = has_pipe_any_ship(gamemap, edge)
-    if found_pipe
-        pipe_behav, _ = get_pipe_any_ship(gamemap, edge)
-        CImGui.Text("Type: $(nameof(typeof(pipe_behav)))")
-        CImGui.Text("Ship: $(pipe_ship)")
-
-        # Component Values section
-        CImGui.Text("\nComponent Values:")
-        CImGui.Separator()
-        CImGui.Indent()
-        tunables = get_pipe_tunables(pipe_behav)
-        display_component_values!(tunables)
-        CImGui.Unindent()
-
-        # Element Details section
-        CImGui.Text("\nElement Details:")
-        CImGui.Separator()
-        CImGui.Indent()
-        elements = produce_abs_elements(pipe_behav, edge)
-        display_element_details!(collect(elements), derivedmapstate, mna_state)
-        CImGui.Unindent()
-    else
-        CImGui.Text("No pipe at this location.")
-    end
-
-    return nothing
-end
-
-"Inspects nothing, displaying placeholder text"
-inspect_ui!(::Nothing, ::GameMap, ::DerivedMapState, ::MNA_State) = CImGui.Text("Nothing.")
-
-"Prints a seconds counter in the top left of the window, and the thrust readout. Must be called within ui_renderwrap"
-function ui_timer_render(ticks::Integer, frames::Integer, UPS::Float64, thrust::SVector{2, Float64}, impulse::SVector{2, Float64})
-    ui_window("Statistics", (0.0, 0.0), (statistics_box_width, 100.0))
-    CImGui.Text("UPS: $(@sprintf("%.3f", UPS))")
-    CImGui.Text("Ticks: $ticks")
-    CImGui.Text("Frames: $frames")
-    CImGui.Text("Thrust: [$(@sprintf("%.2f", thrust[1])), $(@sprintf("%.2f", thrust[2]))] = $(@sprintf("%.2f", norm(thrust))) U")
-    CImGui.Text("Impulse: [$(@sprintf("%.2f", impulse[1] / 1000)), $(@sprintf("%.2f", impulse[2] / 1000))] = $(@sprintf("%.2f", norm(impulse) / 1000)) kU-ticks")
-
-    CImGui.End()
-    return nothing
-end
-
-"""
-Renders the toolbar with mode select and terminal on the bottom of the window.
-Can mutate inputstate.placementmode based on input from the radio buttons.
-Must be called within ui_renderwrap.
-"""
-function ui_toolbar_render!(
-        inputstate::InputState,
-        winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}},
-        threadsafe_console_see::Function
-    )
-    win_float = to_float(winsize)
-
-    ui_window("Toolbar", (0.0, win_float.height - toolbarheight), (win_float.width, toolbarheight))
-    CImGui.Columns(2)
-
-    # Mode Select
-    CImGui.SetColumnWidth(0, 150.0)
-    CImGui.Text("Modes:")
-    modes_config = inputstate.editor_mode ? EDITOR_MODE_CONFIG : STANDARD_MODE_CONFIG
-    for (mode, label) in modes_config
-        if CImGui.RadioButton(label, inputstate.placementmode === mode)
-            inputstate.placementmode = mode
-        end
-    end
-
-    # Terminal
-    CImGui.NextColumn()
-    CImGui.Text("TERMINAL:")
-    CImGui.BeginChild("TerminalLog", (0.0, 0.0), true)
-    for message in threadsafe_console_see()
-        CImGui.TextUnformatted(message)
-    end
-    # Auto-scroll to bottom if already at bottom
-    if CImGui.GetScrollY() >= (CImGui.GetScrollMaxY() - 1.0)
-        CImGui.SetScrollHereY(1.0)
-    end
-    CImGui.EndChild()
-
-    CImGui.End()
-    return nothing
-end
-
-"""
-Renders the property box on the right side of the window.
-Must be called within ui_renderwrap.
-"""
-function ui_propertybox_render!(
-        inputstate::InputState, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State,
-        winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}}
-    )
-    pendcomp = inputstate.pendingcomponent
-    win_float = to_float(winsize)
-
-    ui_window("Properties", (win_float.width - propertyboxwidth, 0.0), (propertyboxwidth, win_float.height - toolbarheight))
-
-    # Display mode description
-    CImGui.Text("PROPERTIES:")
-    CImGui.Text(mode_description(inputstate.placementmode))
-    CImGui.Separator()
-    CImGui.NewLine()
-
-    # TILE mode: edit component tunables
-    if inputstate.placementmode == TILE
-        CImGui.Text("Tile Tunable Values:")
-        CImGui.Separator()
-        CImGui.Indent()
-        new_tunables = edit_tunables!(get_tunables(pendcomp))
-        inputstate.pendingcomponent = set_tunables(pendcomp, new_tunables)
-        CImGui.Unindent()
-    end
-
-    # PIPE mode: select pipe type and edit tunables
-    if inputstate.placementmode == PIPE
-        # Show type selection buttons if in editor mode
-        if inputstate.editor_mode
-            CImGui.Text("Select Pipe Type:")
-            for (label, pipe_type) in PIPE_TYPES
-                if CImGui.Button(label)
-                    inputstate.pendingpipebehavior = pipe_type()
-                    println("Set pending pipe to $(nameof(pipe_type))")
-                end
-                CImGui.SameLine()
-            end
-            CImGui.NewLine()
-            CImGui.NewLine()
-        else
-            # Can only place scrap pipes outside editor mode
-            inputstate.pendingpipebehavior = ScrapPipeBehav()
-        end
-
-        # Show tunables for the selected pipe behavior
-        CImGui.Text("Pipe Properties:")
-        CImGui.Separator()
-
-        CImGui.Indent()
-        new_tunables = edit_tunables!(get_pipe_tunables(inputstate.pendingpipebehavior))
-        inputstate.pendingpipebehavior = set_pipe_tunables(inputstate.pendingpipebehavior, new_tunables)
-        CImGui.Unindent()
-    end
-
-    # INSPECT mode: display info about clicked element
-    if inputstate.placementmode == INSPECT
-        clicked = get_clicked(inputstate)
-        inspect_ui!(clicked, gamemap, derivedmapstate, mna_state)
-    end
-
-    CImGui.End()
-    return nothing
-end
-
-function ui_pause_menu_render!(inputstate::InputState, snapshot::FlowCalculatorSnapshot, window::GLFW.Window)
-    # Guard clause to check if escape menu is active
-    if !inputstate.escape_menu_active
-        return nothing
-    end
-
-    # Menu box dimensions
-    winsize = GLFW.GetWindowSize(window)
-    win_w, win_h = Float64(winsize.width), Float64(winsize.height)
-    box_w, box_h = 300.0, 350.0
-    pos = ((win_w - box_w) / 2, (win_h - box_h) / 2)
-
-    CImGui.SetNextWindowPos(pos, CImGui.ImGuiCond_Always)
-    CImGui.SetNextWindowSize((box_w, box_h), CImGui.ImGuiCond_Always)
-
-    flags = CImGui.ImGuiWindowFlags_NoResize |
-        CImGui.ImGuiWindowFlags_NoMove |
-        CImGui.ImGuiWindowFlags_NoCollapse
-
-    CImGui.Begin("Escape Menu", C_NULL, flags)
-
-    # Title spacing
-    CImGui.Dummy((0.0, 20.0))
-
-    # Calculate button width (fill most of window width with padding)
-    button_width = box_w - 40.0
-    button_height = 50.0
-
-    # Center buttons horizontally
-    CImGui.SetCursorPosX((box_w - button_width) / 2)
-
-    # Close menu button
-    if CImGui.Button("Close Menu", (button_width, button_height))
-        inputstate.escape_menu_active = false
-    end
-    CImGui.Dummy((0.0, 10.0))
-    CImGui.SetCursorPosX((box_w - button_width) / 2)
-
-    # Save map button
-    if CImGui.Button("Save Map", (button_width, button_height))
-        save_path = save_file(absolute(Path(joinpath(dirname(@__FILE__), "..", "maps"))); filterlist = "jld2")
-        if !isnothing(save_path)
-            savemap(snapshot.gamemap, "$save_path")
-        end
-    end
-    CImGui.Dummy((0.0, 10.0))
-    CImGui.SetCursorPosX((box_w - button_width) / 2)
-
-    # Exit to menu button
-    if CImGui.Button("Exit to Menu", (button_width, button_height))
-        inputstate.return_symbol = :exit_to_startmenu
-        inputstate.should_exit_gameloop = true
-    end
-    CImGui.Dummy((0.0, 20.0))
-    CImGui.SetCursorPosX((box_w - button_width) / 2)
-
-    # Quit button
-    if CImGui.Button("Quit", (button_width, button_height))
-        @info "Quitting Game..."
-        inputstate.return_symbol = :exit_program
-        inputstate.should_exit_gameloop = true
-        GLFW.SetWindowShouldClose(window, true)
-    end
-
-    CImGui.End()
-    return nothing
-end
-
-function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}}, max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing)
-    # Guard clause to check if dev utils menu is active
-    if !inputstate.dev_utils_menu_active
-        return nothing
-    end
-
-    win_float = to_float(winsize)
-    ui_window("Developer Utilities", (win_float.width - propertyboxwidth, 0.0), (propertyboxwidth, win_float.height - toolbarheight))
-
-    button_width = propertyboxwidth - 50.0
-    button_height = 20.0
-
-    if (CImGui.CollapsingHeader("Tools"))
-        if CImGui.Button("Clear Map", (button_width, button_height))
-            @info "Clearing map..."
-            new_map = GameMap()
-            # Create MapOverrideCommand and enqueue it
-            cmd = create_map_override_command(flowcalc_ipc.command_queue, deepcopy(new_map))
-            try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
-        end
-
-        # Delete Ship utility
-        if CImGui.TreeNode("Delete Ship")
-            # Get current gamemap to list ships
-            current_gamemap = (flowcalc_ipc.get_snapshot()).gamemap
-            all_ship_names = get_all_ship_names(current_gamemap)
-            
-            # Filter out :primary
-            deletable_ships = filter(n -> n != :primary, all_ship_names)
-            deletable_ship_strings = safe_ship_display_name.(deletable_ships)
-            
-            if isempty(deletable_ships)
-                CImGui.Text("No deletable ships (only primary exists)")
-            else
-                # Ship selection dropdown
-                delete_ship_index = gui_listbox_int!(inputstate, :delete_ship_index, "Ship", deletable_ship_strings, Int32(0))
-                delete_ship_index = clamp(delete_ship_index, Int32(0), Int32(max(0, length(deletable_ships) - 1)))
-                inputstate.gui_inputs[:delete_ship_index] = delete_ship_index
-                
-                selected_delete_ship = deletable_ships[delete_ship_index + 1]
-                
-                if CImGui.Button("Delete Ship", (button_width, button_height))
-                    modified_map = deepcopy(current_gamemap)
-                    remove_ship!(modified_map, selected_delete_ship)
-                    enqueue_map_override!(flowcalc_ipc, modified_map)
-                    @info "Deleted ship $(selected_delete_ship)"
-                end
-            end
-            CImGui.TreePop()
-        end
-
-        # Depart Ship utility
-        if CImGui.TreeNode("Depart Ship")
-            # Get current gamemap to list ships
-            current_gamemap = (flowcalc_ipc.get_snapshot()).gamemap
-            all_ship_names = get_all_ship_names(current_gamemap)
-            
-            # Filter out :primary
-            departable_ships = filter(n -> n != :primary, all_ship_names)
-            departable_ship_strings = safe_ship_display_name.(departable_ships)
-            
-            if isempty(departable_ships)
-                CImGui.Text("No departable ships (only primary exists)")
-            else
-                # Ship selection dropdown
-                depart_ship_index = gui_listbox_int!(inputstate, :depart_ship_index, "Ship", departable_ship_strings, Int32(0))
-                depart_ship_index = clamp(depart_ship_index, Int32(0), Int32(max(0, length(departable_ships) - 1)))
-                inputstate.gui_inputs[:depart_ship_index] = depart_ship_index
-                
-                selected_depart_ship = departable_ships[depart_ship_index + 1]
-                
-                if CImGui.Button("Depart Ship", (button_width, button_height))
-                    modified_map = deepcopy(current_gamemap)
-
-                    success, reason = depart_ship!(modified_map, selected_depart_ship; max_view_bounds=max_view_bounds)
-                    if success
-                        enqueue_map_override!(flowcalc_ipc, modified_map)
-                        flowcalc_ipc.console_push(reason)
-                        @info reason
-                    else
-                        flowcalc_ipc.console_push(reason)
-                    end
-                end
-            end
-            CImGui.TreePop()
-        end
-    end
-
-    if (CImGui.CollapsingHeader("Proc Gen"))
-            # shared config inputs
-            seed = gui_input_u32!(inputstate, :proc_gen_seed, "Random Seed", UInt32(999))
-
-        if (CImGui.TreeNode("Random Walk Surface Gen"))
-
-            # local config inputs
-            steps = gui_input_s64!(inputstate, :surface_walk_steps, "Walk Steps", Int64(3))
-            stacks = gui_input_s64!(inputstate, :surface_walk_stacks, "Walk stacks", Int64(20))
-
-            # surface creation
-            CImGui.Separator()
-            if CImGui.Button("Create Surface", (button_width, button_height))
-                @info "Creating Surface..."
-                new_map = GameMap()
-                # Generate tiles into a temporary set and assign to the primary ship
-                tiles = Set{TileCoord}()
-                stacked_random_tile_walk!(tiles, TileCoord(0, 0), steps, stacks, seed)
-                set_surface_tile!(new_map, tiles)
-
-                enqueue_map_override!(flowcalc_ipc, new_map)
-            end
-            CImGui.TreePop()
-        end
-
-        if (CImGui.TreeNode("Place Components"))
-            tileset_names = getfield.(ship_gen_tilesets, :name)
-            tileset_index = gui_listbox_int!(inputstate, :tileset_index, "Tileset", tileset_names, Int32(0))
-
-            if CImGui.Button("Place Tileset")
-                tileset_index_oneindexed = tileset_index + 1
-                @info "Placing Components from $(tileset_names[tileset_index_oneindexed])..."
-                tilesetmap::GameMap = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
-                place_shipset!(tilesetmap, ship_gen_tilesets[tileset_index_oneindexed], seed)
-
-                enqueue_map_override!(flowcalc_ipc, tilesetmap)
-            end
-            CImGui.TreePop()
-        end
-
-        if (CImGui.TreeNode("Place Big Pipes"))
-            # local config inputs
-            big_pipe_density = gui_input_double!(inputstate, :big_pipe_density, "Pipe Density", 0.05; step_small = 0.01, step_fast = 0.1, fmt = "%.3f")
-
-            if CImGui.Button("Place Big Pipes", (button_width, button_height))
-                @info "Placing Big Pipes..."
-                bigpipemap::GameMap = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
-                place_random_pipes!(bigpipemap, :BigPipe_pipe, seed; pipe_density = big_pipe_density)
-
-                enqueue_map_override!(flowcalc_ipc, bigpipemap)
-            end
-            CImGui.TreePop()
-        end
-
-        if (CImGui.TreeNode("Place Scrap Pipes"))
-            # local config inputs
-            scrap_pipe_density = gui_input_double!(inputstate, :scrap_pipe_density, "Pipe Density", 0.05; step_small = 0.01, step_fast = 0.1, fmt = "%.3f")
-
-            if CImGui.Button("Place Scrap Pipes", (button_width, button_height))
-                @info "Placing Scrap Pipes..."
-                scrappipemap::GameMap = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
-                place_random_pipes!(scrappipemap, :ScrapPipe_pipe, seed; pipe_density = scrap_pipe_density)
-
-                enqueue_map_override!(flowcalc_ipc, scrappipemap)
-            end
-            CImGui.TreePop()
-        end
-
-        if (CImGui.TreeNode("Place Standard Pipe Combo"))
-            if CImGui.Button("Place Pipes", (button_width, button_height))
-                standard_pipes = [
-                    PipeSpawnOptions(:BigPipe_pipe, HexFlowProcGen.ONE_CONNECT_PIPES, 0.05),
-                    PipeSpawnOptions(:ScrapPipe_pipe, HexFlowProcGen.RANDOM_PIPES, 0.05),
-                ]
-
-                @info "Placing Pipe Combo..."
-                combopipemap::GameMap = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
-                place_pipeset!(combopipemap, standard_pipes, seed)
-
-                enqueue_map_override!(flowcalc_ipc, combopipemap)
-            end
-            CImGui.TreePop()
-        end
-
-
-        if (CImGui.TreeNode("Generate Ship"))
-
-            shipconfig_names = getfield.(ship_gen_configs, :name)
-            shipconfig_index = gui_listbox_int!(inputstate, :shipconfig_index, "shipconfig", shipconfig_names, Int32(0))
-
-            if CImGui.Button("Create New Ship", (button_width, button_height))
-                ship = generate_ship(ship_gen_configs[shipconfig_index + 1], seed)
-
-                enqueue_map_override!(flowcalc_ipc, GameMap(ship))
-            end
-            CImGui.TreePop()
-        end
-
-        if (CImGui.TreeNode("Encounter Ship"))
-
-            shipconfig_names = getfield.(ship_gen_configs, :name)
-            shipconfig_index = gui_listbox_int!(inputstate, :shipconfig_index, "shipconfig", shipconfig_names, Int32(0))
-
-            hexaxis_names = collect(string.(instances(HexAxis)))
-            hexaxis_index = gui_listbox_int!(inputstate, :hexaxis_index, "hexaxis", hexaxis_names, Int32(0))
-
-            if CImGui.Button("Encounter New Ship", (button_width, button_height))
-                encounter_map = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
-                encounter_ship!(encounter_map, ship_gen_configs[shipconfig_index + 1], seed, instances(HexAxis)[hexaxis_index + 1]; max_view_bounds=max_view_bounds)
-
-                enqueue_map_override!(flowcalc_ipc, encounter_map)
-            end
-            CImGui.TreePop()
-        end
-
-    end
-
-    #= ---------- Rendering Section ----------- =#
-    if CImGui.CollapsingHeader("Rendering")
-        button_width = 200.0
-        button_height = 30.0
-
-        if CImGui.TreeNode("Docking Status")
-            current_gamemap = (flowcalc_ipc.get_snapshot()).gamemap
-
-            for (ship_name, ship) in current_gamemap.ships
-                status = get_docking_status(ship)
-                offset = get_render_offset(ship)
-                status_str = string(typeof(status).name.name)
-                axis = get_approach_axis(status)
-                axis_str = isnothing(axis) ? "none" : string(axis)
-                CImGui.Text("$(safe_ship_display_name(ship_name)): $(status_str) @ ($(round(offset.q, digits=2)), $(round(offset.r, digits=2))) axis=$(axis_str)")
-            end
-
-            if CImGui.Button("Clear All to Connected", (button_width, button_height))
-                modified_map = deepcopy(current_gamemap)
-                clear_all_docking_statuses!(modified_map)
-                enqueue_map_override!(flowcalc_ipc, modified_map)
-                @info "Cleared all docking statuses to Connected"
-            end
-
-            CImGui.TreePop()
-        end
-    end
-
-    CImGui.End()
-    return nothing
-end
-
-"""
-Renders the hint/tutorial popup window.
-Displays hints with navigation buttons and completion tracking.
-Must be called within ui_renderwrap.
-"""
-function ui_hintbox_render!(
-        hint_data::HintData,
-        inputstate::InputState,
-        winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}}
-    )
-    # Calculate position (top right, immediately left of property box)
-    win_float = to_float(winsize)
-    pos_x = win_float.width - propertyboxwidth - hintboxwidth
-    pos_y = 0.0
-
-    # Window flags: allow resize and move
-    flags = CImGui.ImGuiWindowFlags_None
-
-    # Setup window
-    ui_window_setup("Hint: $(hint_data.title)", (pos_x, pos_y), (hintboxwidth, hintboxheight), flags)
-
-    # Get current hint text
-    current_hint = hint_data.hints[hint_data.current_hint_index]
-
-    # Scrollable text area (takes remaining space minus button area)
-    button_area_height = 80.0  # Space for two rows of buttons plus padding
-    text_area_height = hintboxheight - button_area_height - 60.0  # 60 for title bar and padding
-
-    CImGui.BeginChild("HintTextArea", (0.0, text_area_height), true)
-    CImGui.PushTextWrapPos(0.0)  # Wrap at window edge
-    CImGui.TextUnformatted(current_hint)
-    CImGui.PopTextWrapPos()
-    CImGui.EndChild()
-
-    CImGui.Spacing()
-
-    # Navigation buttons (Previous and Next, side by side)
-    button_width = (hintboxwidth - 30.0) / 2.0  # Account for padding and spacing
-
-    # Previous button
-    at_first_hint = hint_data.current_hint_index == 1
-    if at_first_hint
-        CImGui.BeginDisabled()
-    end
-    if CImGui.Button("< Previous", (button_width, 30.0))
-        hint_data.current_hint_index = max(1, hint_data.current_hint_index - 1)
-    end
-    if at_first_hint
-        CImGui.EndDisabled()
-    end
-
-    CImGui.SameLine()
-
-    # Next button
-    at_last_hint = hint_data.current_hint_index == length(hint_data.hints)
-    if at_last_hint
-        CImGui.BeginDisabled()
-    end
-    if CImGui.Button("Next >", (button_width, 30.0))
-        hint_data.current_hint_index = min(length(hint_data.hints), hint_data.current_hint_index + 1)
-    end
-    if at_last_hint
-        CImGui.EndDisabled()
-    end
-
-    CImGui.Spacing()
-
-    # Mark Complete button (full width, only enabled at last hint)
-    if !at_last_hint
-        CImGui.BeginDisabled()
-    end
-    if CImGui.Button("Mark Complete", (hintboxwidth - 20.0, 30.0))
-        @info "Hint Marked completed"
-        inputstate.return_symbol = :hint_completed
-        inputstate.should_exit_gameloop = true
-    end
-    if !at_last_hint
-        CImGui.EndDisabled()
-    end
-
-    CImGui.End()
     return nothing
 end
 

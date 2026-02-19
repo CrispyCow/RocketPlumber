@@ -340,6 +340,13 @@ ship_gen_configs = [
     small_corvette_1,
 ]
 
+ship_gen_weights::Vector{Tuple{ShipGenOptions, Float64}} = [
+    (coldgas_micro_ship, 0.4),
+    (monoprop_electric_mini_ship, 0.3),
+    (monoprop_turbine_mini_ship, 0.2),
+    (small_corvette_1, 0.1),
+]
+
 
 
 

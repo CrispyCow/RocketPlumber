@@ -118,11 +118,12 @@ verify_required_artifacts()
 # ===============================================================
 
 # Packages
-using LinearAlgebra, StaticArrays
+using LinearAlgebra, StaticArrays, GeometryBasics
 using ModernGL, GLFW, JLD2, CSyntax.CRef
 using TimerOutputs, Accessors, Printf, CSyntax
 using FilePathsBase, NativeFileDialog
 import CImGui, CImGui.lib
+using ImPlot
 # Custom Packages (working title: HexFlow; project: Rocket Plumber)
 using HexFrame, HexElements, HexFluids, HexFlowTelemetry
 using HexComponentsAPI, FlowEngine, FlowMap, RenderEngine, HexFlowProcGen
@@ -136,6 +137,9 @@ using SquirrelNoise
 include(joinpath(dirname(@__FILE__), "initial_window_setup.jl"))
 include(joinpath(dirname(@__FILE__), "interactions.jl"))
 include(joinpath(dirname(@__FILE__), "components.jl"))
+include(joinpath(dirname(@__FILE__), "ui_common.jl"))
+include(joinpath(dirname(@__FILE__), "ui_game.jl"))
+include(joinpath(dirname(@__FILE__), "ui_menus.jl"))
 include(joinpath(dirname(@__FILE__), "gameloop.jl"))
 include(joinpath(dirname(@__FILE__), "demo.jl"))
 include(joinpath(dirname(@__FILE__), "startmenu.jl"))

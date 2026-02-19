@@ -52,6 +52,7 @@ end
     escape_menu_active::Bool = false
     editor_mode::Bool = false
     dev_utils_menu_active::Bool = false
+    spacemap_active::Bool = false
     # loop status
     should_exit_gameloop::Bool = false
     return_symbol::Symbol = :default
@@ -73,10 +74,10 @@ end
     foreground_particles::Any = nothing  # ParticleManager - can't type without circular dep
 end
 
-"Game state tracking thrust, impulse, and simulation ticks"
+"Game state tracking thrust, acceleration, and simulation ticks"
 @kwdef mutable struct GameState
     thrust::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
-    impulse::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
+    acceleration::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
     ticks::Int64 = 0
 end
 

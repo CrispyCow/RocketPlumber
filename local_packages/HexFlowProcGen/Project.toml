@@ -4,16 +4,25 @@ version = "0.1.0"
 authors = ["Christos Lillis <christos.lillis@gmail.com>"]
 
 [deps]
+DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
 FlowEngine = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
 FlowMap = "86ae9052-88d6-4179-aacc-02095df7ba41"
+GeometryBasics = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
 HexComponentsAPI = "a2289db6-e3a5-4e05-9c21-8734dce2bbd4"
+HexElements = "2f6a9512-4d00-40fa-a3ea-0a7372983a4b"
 HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 SquirrelNoise = "2e7baeb9-be7b-428c-bdac-8e70268c90fc"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [compat]
+GeometryBasics = "0.5.10"
+LinearAlgebra = "1.12.0"
 Random = "1.11.0"
+Statistics = "1.11.1"
 Test = "1.11.0"
 
 [extras]
