@@ -14,7 +14,7 @@ export AbstractSpaceMap, SpaceMapEmpty, SpaceMapState, ManoeuvreData
 export ManoeuvrePhase, PHASE_WAIT_APPROACH, PHASE_MAIN_BURN, PHASE_COAST, PHASE_DECEL_BURN, PHASE_ENCOUNTER_READY
 export EncounterPoint, EncounterEvent
 # Function Exports
-export add_ship!, remove_ship!, get_all_ship_names, has_ship, get_ship, offset_ship!
+export add_ship!, remove_ship!, get_all_ship_names, has_ship, get_ship, offset_ship!, swap_primary!
 # GameMap Abstraction Functions
 export get_component, has_component, set_component!, delete_component!, delete_all_components!
 export get_pipe, has_pipe, set_pipe!, delete_pipe!, delete_all_pipes!
@@ -29,6 +29,9 @@ export get_all_surfaces_combined, find_ship_surface_edgetiles!
 export get_axial_bounds, get_cartesian_bounds, get_surface_centroid
 export find_ship_for_surface, find_ships_adjacent_to_coord, would_bridge_ships, find_valid_ship_for_placement, find_ship_with_component, find_ship_with_pipe
 export find_ship_for_node
+# Off-ship pipe exports
+export can_place_pipe_offship, validate_offship_pipe_deletion, reassign_pipe_ownership!
+export is_node_on_any_ship_surface, flood_search_pipes_from_node!
 # Ship render and docking exports
 export get_ship_render_offset, get_render_offset, update_render_offset!, get_approach_axis
 export get_docking_status, set_docking_status!, update_docking!, clear_all_docking_statuses!
@@ -810,20 +813,21 @@ end
 # Placement Validation Functions
 # ===============================================================
 
-"Check if a node is connected to the ship surface by verifying that at least one of the tiles adjacent to the node is on the ship surface."
-function is_node_on_ship_surface(node_abs::NodeCoord, gamemap::GameMap; ship_name::Symbol = :primary)::Tuple{Bool, String}
+"Return `true` if a node is connected to the ship surface.  A node is considered connected
+by checking whether any tile adjacent to the node lies on the given ship's surface."
+function is_node_on_ship_surface(node_abs::NodeCoord, gamemap::GameMap; ship_name::Symbol = :primary)::Bool
     # Get the tiles adjacent to this node
     adjacent_tiles = get_adjacent_tiles_for_node(node_abs)
 
     # Check if any adjacent tile is on the specified ship surface
     for (tile, _) in adjacent_tiles
         if is_on_surface_tile(tile, gamemap; ship_name = ship_name)
-            return (true, "")
+            return true
         end
     end
 
     # No adjacent tiles on surface
-    return (false, "Node is not connected to ship surface")
+    return false
 end
 
 "Check if a component can be placed at a coordinate"
@@ -841,14 +845,12 @@ function can_place_pipe_at(coord::EdgeCoord, gamemap::GameMap; ship_name::Symbol
     v2_node = to_nodecoord(coord.v2)
 
     # Check that the first node is connected to ship surface
-    v1_valid, v1_reason = is_node_on_ship_surface(v1_node, gamemap; ship_name = ship_name)
-    if !v1_valid
+    if !is_node_on_ship_surface(v1_node, gamemap; ship_name = ship_name)
         return (false, "Pipe endpoint node at $(coord.v1.tile) is not connected to ship surface")
     end
 
     # Check that the second node is connected to ship surface
-    v2_valid, v2_reason = is_node_on_ship_surface(v2_node, gamemap; ship_name = ship_name)
-    if !v2_valid
+    if !is_node_on_ship_surface(v2_node, gamemap; ship_name = ship_name)
         return (false, "Pipe endpoint node at $(coord.v2.tile) is not connected to ship surface")
     end
 
@@ -866,6 +868,232 @@ function can_remove_surface_at(coord::TileCoord, gamemap::GameMap; ship_name::Sy
     # when editing surface tiles. For now, users can create invalid states by removing surface under
     # nozzle input nodes, but this won't cause crashes - just invalid placement that can be fixed.
     return (true, "")
+end
+
+# ===============================================================
+# Off-Ship Pipe Functions
+# ===============================================================
+
+#= ---------- Node Queries ----------- =#
+
+"Check if a node is on any ship's surface (searches all ships)"
+function is_node_on_any_ship_surface(node::NodeCoord, gamemap::GameMap)::Bool
+    for (ship_name, _) in gamemap.ships
+        if is_node_on_ship_surface(node, gamemap; ship_name = ship_name)
+            return true
+        end
+    end
+    return false
+end
+
+"""
+Find which ship a node connects to, by surface-tile adjacency or pipe-edge ownership.
+Returns `nothing` if the node is not connected to any ship. Unlike `find_ship_for_node`,
+this has no fallback — it only reports a genuine connection.
+"""
+function _find_connected_ship(node::NodeCoord, gamemap::GameMap)::Union{Symbol, Nothing}
+    # Fast path: check adjacent surface tiles
+    adjacent_tiles = get_adjacent_tiles_for_node(node)
+    for (tile, _) in adjacent_tiles
+        ship_name = find_ship_for_surface(gamemap, tile)
+        if !isnothing(ship_name)
+            return ship_name
+        end
+    end
+
+    # Slower path: check pipe edges radiating from this node's vertex
+    if is_axis(node.dir)
+        vertex = to_vertex(node)
+        for edge in get_edges(vertex)
+            for (ship_name, ship) in gamemap.ships
+                if haskey(ship.pipe_behaviors, edge)
+                    return ship_name
+                end
+            end
+        end
+    end
+
+    return nothing
+end
+
+#= ---------- Placement & Deletion Validation ----------- =#
+
+"""
+    flood_search_pipes_from_node!(reachable, all_pipe_edges, start_node)
+
+Flood-fill through pipe edges starting from `start_node`, collecting all reachable edges into
+`reachable`. Only traverses edges present in `all_pipe_edges`. Uses BFS over the hex vertex
+graph, following edges from vertex to vertex via shared pipe endpoints.
+
+Placed in FlowMap (rather than FlowEngine) because it depends only on HexFrame primitives and
+is needed by FlowMap's own validation logic.
+"""
+function flood_search_pipes_from_node!(reachable::Set{EdgeCoord}, all_pipe_edges, start_node::NodeCoord)
+    visited_nodes = Set{NodeCoord}()
+    queue = NodeCoord[start_node]
+
+    while !isempty(queue)
+        node = popfirst!(queue)
+        node in visited_nodes && continue
+        push!(visited_nodes, node)
+
+        vertex = to_vertex(node)
+        for edge in get_edges(vertex) # 3 edges radiating from this vertex
+            if edge in all_pipe_edges && edge ∉ reachable
+                push!(reachable, edge)
+                other_vertex = edge.v1 == vertex ? edge.v2 : edge.v1
+                other_node = to_nodecoord(other_vertex)
+                if other_node ∉ visited_nodes
+                    push!(queue, other_node)
+                end
+            end
+        end
+    end
+    return nothing
+end
+
+"""
+    can_place_pipe_offship(coord, gamemap) → (valid, target_ship, reason)
+
+Check if a pipe can be placed at `coord` when it doesn't fit entirely on a single ship's
+surface. Requires at least one endpoint to be connected to a ship (via surface adjacency
+or an existing pipe). Returns the target ship to store the pipe on.
+"""
+function can_place_pipe_offship(coord::EdgeCoord, gamemap::GameMap)::Tuple{Bool, Union{Symbol, Nothing}, String}
+    v1_node = to_nodecoord(coord.v1)
+    v2_node = to_nodecoord(coord.v2)
+
+    v1_ship = _find_connected_ship(v1_node, gamemap)
+    v2_ship = _find_connected_ship(v2_node, gamemap)
+
+    if isnothing(v1_ship) && isnothing(v2_ship)
+        return (false, nothing, "Neither endpoint is connected to a ship or existing pipe")
+    end
+
+    target = !isnothing(v1_ship) ? v1_ship : v2_ship
+    return (true, target, "")
+end
+
+"""
+    validate_offship_pipe_deletion(coord, gamemap) → valid
+
+Validate that deleting an off-surface pipe won't orphan any remaining off-surface pipes.
+Collects all off-surface pipe edges from all ships (excluding the pipe being deleted),
+then flood-fills from each endpoint of the deleted pipe to verify every connected component
+still reaches a ship surface.
+"""
+function validate_offship_pipe_deletion(coord::EdgeCoord, gamemap::GameMap)::Bool
+    # Collect all off-surface pipe edges from all ships, excluding the target
+    remaining_offship = Set{EdgeCoord}()
+    for (_, ship) in gamemap.ships
+        for (edge, _) in ship.pipe_behaviors
+            edge == coord && continue
+            v1_on = is_node_on_any_ship_surface(to_nodecoord(edge.v1), gamemap)
+            v2_on = is_node_on_any_ship_surface(to_nodecoord(edge.v2), gamemap)
+            if !(v1_on && v2_on)
+                push!(remaining_offship, edge)
+            end
+        end
+    end
+
+    isempty(remaining_offship) && return true
+
+    v1_node = to_nodecoord(coord.v1)
+    v2_node = to_nodecoord(coord.v2)
+
+    for start_node in (v1_node, v2_node)
+        reachable = Set{EdgeCoord}()
+        flood_search_pipes_from_node!(reachable, remaining_offship, start_node)
+
+        isempty(reachable) && continue # No remaining off-surface pipes connected to this endpoint
+
+        # Check if any vertex in the reachable component is on a ship surface
+        has_ship_connection = false
+        for edge in reachable
+            for vertex in (edge.v1, edge.v2)
+                if is_node_on_any_ship_surface(to_nodecoord(vertex), gamemap)
+                    has_ship_connection = true
+                    break
+                end
+            end
+            has_ship_connection && break
+        end
+
+        if !has_ship_connection
+            return false # This component would be orphaned
+        end
+    end
+
+    return true
+end
+
+"""
+    reassign_pipe_ownership!(deleted_coord, gamemap)
+
+After deleting an off-surface pipe at `deleted_coord`, flood-fill from each endpoint through
+remaining off-surface pipes to determine which ship each connected component physically
+reaches. Moves any pipes that are stored on the wrong ship to the correct one.
+"""
+function reassign_pipe_ownership!(deleted_coord::EdgeCoord, gamemap::GameMap)
+    # Build lookup of off-surface edges → owning ship
+    offship_edges = Set{EdgeCoord}()
+    edge_to_ship = Dict{EdgeCoord, Symbol}()
+    for (ship_name, ship) in gamemap.ships
+        for (edge, _) in ship.pipe_behaviors
+            v1_on = is_node_on_any_ship_surface(to_nodecoord(edge.v1), gamemap)
+            v2_on = is_node_on_any_ship_surface(to_nodecoord(edge.v2), gamemap)
+            if !(v1_on && v2_on)
+                push!(offship_edges, edge)
+                edge_to_ship[edge] = ship_name
+            end
+        end
+    end
+
+    isempty(offship_edges) && return nothing
+
+    v1_node = to_nodecoord(deleted_coord.v1)
+    v2_node = to_nodecoord(deleted_coord.v2)
+
+    visited_all = Set{EdgeCoord}()
+    for start_node in (v1_node, v2_node)
+        reachable = Set{EdgeCoord}()
+        flood_search_pipes_from_node!(reachable, offship_edges, start_node)
+
+        isempty(reachable) && continue
+        any(e -> e ∈ visited_all, reachable) && continue # Already processed this component
+        union!(visited_all, reachable)
+
+        # Find which ship this component physically connects to
+        target_ship = nothing
+        for edge in reachable
+            for vertex in (edge.v1, edge.v2)
+                node = to_nodecoord(vertex)
+                for (sname, _) in gamemap.ships
+                    if is_node_on_ship_surface(node, gamemap; ship_name = sname)
+                        target_ship = sname
+                        break
+                    end
+                end
+                !isnothing(target_ship) && break
+            end
+            !isnothing(target_ship) && break
+        end
+
+        isnothing(target_ship) && continue # Shouldn't happen if deletion was validated
+
+        # Move any pipes that are stored on the wrong ship
+        for edge in reachable
+            current_ship = get(edge_to_ship, edge, nothing)
+            isnothing(current_ship) && continue
+            if current_ship != target_ship
+                pipe_behav = get_pipe(gamemap, edge; ship_name = current_ship)
+                delete_pipe!(gamemap, edge; ship_name = current_ship)
+                set_pipe!(gamemap, edge, pipe_behav; ship_name = target_ship)
+            end
+        end
+    end
+
+    return nothing
 end
 
 # ===============================================================
@@ -1082,8 +1310,50 @@ function clear_all_docking_statuses!(gamemap::GameMap)
     return nothing
 end
 
-"Find which ship a node belongs to based on adjacent surface tiles. Returns :primary as fallback."
+"""
+Swap the primary ship with another ship in the GameMap.
+The current primary is retired under a unique gensym'd name, and the target ship
+becomes the new `:primary`. Returns `(success::Bool, reason::String)`.
+
+Docking axes are updated so the retired primary can depart:
+the new primary's approach axis is reversed and assigned to the retired ship,
+while the new primary gets a cleared departure axis (it is now home).
+"""
+function swap_primary!(gamemap::GameMap, new_primary_name::Symbol)::Tuple{Bool, String}
+    if new_primary_name == :primary
+        return (false, "Ship is already the primary")
+    end
+    if !has_ship(gamemap, new_primary_name)
+        return (false, "Ship '$(new_primary_name)' not found")
+    end
+
+    # Pop both ships from the dict before re-inserting under swapped keys
+    old_primary_ship = pop!(gamemap.ships, :primary)
+    new_primary_ship = pop!(gamemap.ships, new_primary_name)
+
+    # Compute the reversed departure axis for the retired ship from the new primary's approach axis.
+    # If the new ship docked from direction X, the old ship should depart in the opposite direction.
+    new_primary_status = get_docking_status(new_primary_ship)
+    new_primary_approach = get_approach_axis(new_primary_status)
+    retired_axis = isnothing(new_primary_approach) ? nothing : rotate(new_primary_approach, HexFrame.Q_NEG)
+
+    set_docking_status!(old_primary_ship, ConnectedDockStat(retired_axis))
+    set_docking_status!(new_primary_ship, ConnectedDockStat(nothing))
+
+    retired_name = gensym(:old_primary)
+    gamemap.ships[:primary] = new_primary_ship
+    gamemap.ships[retired_name] = old_primary_ship
+
+    return (true, "Swapped primary: '$(new_primary_name)' is now the primary ship (old primary retired as '$(retired_name)')")
+end
+
+"""
+Find which ship a node belongs to. Checks surface-tile adjacency first (fast path),
+then falls back to pipe-edge ownership for nodes that sit away from any ship surface
+(e.g. off-surface pipes extending between ships). Returns `:primary` as final fallback.
+"""
 function find_ship_for_node(node::NodeCoord, gamemap::GameMap)::Symbol
+    # check adjacent surface tiles to handle most nodes on ships
     adjacent_tiles = get_adjacent_tiles_for_node(node)
     for (tile, _) in adjacent_tiles
         ship_name = find_ship_for_surface(gamemap, tile)
@@ -1091,6 +1361,21 @@ function find_ship_for_node(node::NodeCoord, gamemap::GameMap)::Symbol
             return ship_name
         end
     end
+
+    # If off a ship, check connected pipes for ship association (handles off-surface pipes)
+    if is_axis(node.dir)
+        vertex = to_vertex(node)
+        node_edges = get_edges(vertex)
+        for (ship_name, ship) in gamemap.ships
+            pipes = get_all_pipes(ship)
+            for edge in node_edges
+                if haskey(pipes, edge)
+                    return ship_name
+                end
+            end
+        end
+    end
+
     return :primary  # Fallback for ambiguous/unassociated nodes
 end
 

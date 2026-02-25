@@ -579,6 +579,193 @@ end
 end
 
 # ===============================================================
+# Off-Ship Pipes and Departure Tests
+# ===============================================================
+
+@testset "Off-ship pipes and departure" begin
+    #= ---------- Geometry ----------- =#
+    # Four vertex-connected vertices forming a chain from primary to secondary.
+    # V1 is adjacent to primary's tile (0,0); V4 is adjacent to secondary's tile (3,-1).
+    # V2 and V3 are not adjacent to either ship's surface (they float in the gap).
+    ISP_V1 = to_proper(VertexCoord(TileCoord(0, 0), HexFrame.Q_POS))   # tiles: (1,-1), (0,0), (1,0) → primary
+    ISP_V2 = to_proper(VertexCoord(TileCoord(2, -1), HexFrame.Q_NEG))  # tiles: (2,-1), (1,-1), (1,0) → neither
+    ISP_V3 = to_proper(VertexCoord(TileCoord(1, 0), HexFrame.Q_POS))   # tiles: (2,-1), (1,0), (2,0) → neither
+    ISP_V4 = to_proper(VertexCoord(TileCoord(3, -1), HexFrame.Q_NEG))  # tiles: (3,-1), (2,-1), (2,0) → secondary
+
+    ISP_E1 = to_proper(EdgeCoord(ISP_V1, ISP_V2))  # attached to primary via V1
+    ISP_E2 = to_proper(EdgeCoord(ISP_V2, ISP_V3))  # floating (no ship surface)
+    ISP_E3 = to_proper(EdgeCoord(ISP_V3, ISP_V4))  # attached to secondary via V4
+
+    """
+    Create a GameMap with primary at tile (0,0) and secondary at tile (3,-1).
+    Secondary has a ConnectedDockStat so it can depart.
+    """
+    function make_two_ship_gamemap()
+        gm = GameMap()
+
+        # Primary ship: single tile at origin
+        empty!(gm.ships[:primary].ship_tiles)
+        push!(gm.ships[:primary].ship_tiles, TileCoord(0, 0))
+
+        # Secondary ship: single tile at (3,-1), separated from primary
+        sm = ShipMap()
+        empty!(sm.ship_tiles)
+        push!(sm.ship_tiles, TileCoord(3, -1))
+        sm.docking_status = FlowMap.ConnectedDockStat(HexFrame.Q_POS)
+        add_ship!(gm, :secondary, sm)
+
+        return gm
+    end
+
+    @testset "can_place_pipe_offship — connected to ship surface" begin
+        gm = make_two_ship_gamemap()
+        # E1 has V1 on primary's surface → should be valid, placed on :primary
+        valid, target, _ = can_place_pipe_offship(ISP_E1, gm)
+        @test valid == true
+        @test target == :primary
+    end
+
+    @testset "can_place_pipe_offship — connected via existing pipe" begin
+        gm = make_two_ship_gamemap()
+        # Place E1 on primary, then E2 should connect through E1
+        set_pipe!(gm, ISP_E1, MockPipeBehav(); ship_name = :primary)
+        valid, target, _ = can_place_pipe_offship(ISP_E2, gm)
+        @test valid == true
+        @test target == :primary
+    end
+
+    @testset "can_place_pipe_offship — neither endpoint connected" begin
+        gm = make_two_ship_gamemap()
+        # E2 floats in the gap with no connections
+        valid, _, reason = can_place_pipe_offship(ISP_E2, gm)
+        @test valid == false
+        @test occursin("Neither endpoint", reason)
+    end
+
+    @testset "validate_offship_pipe_deletion — middle of chain" begin
+        gm = make_two_ship_gamemap()
+        # Full bridge chain stored on their respective ships
+        set_pipe!(gm, ISP_E1, MockPipeBehav(); ship_name = :primary)
+        set_pipe!(gm, ISP_E2, MockPipeBehav(); ship_name = :primary)
+        set_pipe!(gm, ISP_E3, MockPipeBehav(); ship_name = :secondary)
+
+        # Deleting E2 (middle) splits into E1 (reaches primary via V1) and E3 (reaches secondary
+        # via V4). Both components still connect to a ship → valid deletion.
+        @test validate_offship_pipe_deletion(ISP_E2, gm) == true
+    end
+
+    @testset "validate_offship_pipe_deletion — would orphan" begin
+        gm = make_two_ship_gamemap()
+        # E1 (on primary) → E2 (floating, stored on primary)
+        set_pipe!(gm, ISP_E1, MockPipeBehav(); ship_name = :primary)
+        set_pipe!(gm, ISP_E2, MockPipeBehav(); ship_name = :primary)
+
+        # Deleting E1 would orphan E2 (E2's vertices touch no ship surface)
+        @test validate_offship_pipe_deletion(ISP_E1, gm) == false
+        # Deleting E2 is fine (E1 still reaches primary)
+        @test validate_offship_pipe_deletion(ISP_E2, gm) == true
+    end
+
+    @testset "reassign_pipe_ownership! — chain split" begin
+        gm = make_two_ship_gamemap()
+        # Full chain all stored on primary
+        set_pipe!(gm, ISP_E1, MockPipeBehav(); ship_name = :primary)
+        set_pipe!(gm, ISP_E2, MockPipeBehav(); ship_name = :primary)
+        set_pipe!(gm, ISP_E3, MockPipeBehav(2.0); ship_name = :primary)
+
+        # Delete E2 to split the chain
+        delete_pipe!(gm, ISP_E2; ship_name = :primary)
+        reassign_pipe_ownership!(ISP_E2, gm)
+
+        # E1 should stay on primary (V1 is on primary's surface)
+        @test has_pipe(gm.ships[:primary], ISP_E1)
+        # E3 should have moved to secondary (V4 is on secondary's surface)
+        @test has_pipe(gm.ships[:secondary], ISP_E3)
+        @test !has_pipe(gm.ships[:primary], ISP_E3)
+        @test get_conductance(get_pipe(gm.ships[:secondary], ISP_E3)) ≈ 2.0
+    end
+
+    @testset "check_departure_pipe_connections — no off-surface pipes" begin
+        gm = make_two_ship_gamemap()
+        can_depart, _ = check_departure_pipe_connections(gm, :secondary)
+        @test can_depart == true
+    end
+
+    @testset "check_departure_pipe_connections — pipe bridge blocks departure" begin
+        gm = make_two_ship_gamemap()
+        # Full chain bridging primary ↔ secondary
+        set_pipe!(gm, ISP_E1, MockPipeBehav(); ship_name = :primary)
+        set_pipe!(gm, ISP_E2, MockPipeBehav(); ship_name = :primary)
+        set_pipe!(gm, ISP_E3, MockPipeBehav(); ship_name = :secondary)
+
+        can_depart, reason = check_departure_pipe_connections(gm, :secondary)
+        @test can_depart == false
+        @test occursin("pipes still connect", reason)
+    end
+
+    @testset "check_departure_pipe_connections — pipe only on departing ship" begin
+        gm = make_two_ship_gamemap()
+        # E3 only touches secondary, stored on secondary
+        set_pipe!(gm, ISP_E3, MockPipeBehav(); ship_name = :secondary)
+
+        can_depart, _ = check_departure_pipe_connections(gm, :secondary)
+        @test can_depart == true
+    end
+
+    @testset "depart_ship! blocked by pipe bridge" begin
+        gm = make_two_ship_gamemap()
+        set_pipe!(gm, ISP_E1, MockPipeBehav(); ship_name = :primary)
+        set_pipe!(gm, ISP_E2, MockPipeBehav(); ship_name = :primary)
+        set_pipe!(gm, ISP_E3, MockPipeBehav(); ship_name = :secondary)
+
+        success, reason = depart_ship!(gm, :secondary)
+        @test success == false
+        @test occursin("pipes still connect", reason)
+
+        # All pipes should still be present
+        @test has_pipe(gm.ships[:primary], ISP_E1)
+        @test has_pipe(gm.ships[:primary], ISP_E2)
+        @test has_pipe(gm.ships[:secondary], ISP_E3)
+    end
+
+    @testset "depart_ship! succeeds without pipe bridge" begin
+        gm = make_two_ship_gamemap()
+        # Pipe only on secondary, no bridge
+        set_pipe!(gm, ISP_E3, MockPipeBehav(); ship_name = :secondary)
+
+        success, _ = depart_ship!(gm, :secondary)
+        @test success == true
+        @test FlowMap.get_docking_status(gm, :secondary) isa FlowMap.DepartingDockStat
+        # Pipe stays with secondary
+        @test has_pipe(gm.ships[:secondary], ISP_E3)
+    end
+
+    @testset "depart_ship! with no pipes works as before" begin
+        gm = make_two_ship_gamemap()
+        success, reason = depart_ship!(gm, :secondary)
+        @test success == true
+        @test FlowMap.get_docking_status(gm, :secondary) isa FlowMap.DepartingDockStat
+    end
+
+    @testset "flood_search_pipes_from_node! basic traversal" begin
+        # Full chain E1→E2→E3, all vertex-connected
+        all_edges = Set([ISP_E1, ISP_E2, ISP_E3])
+
+        # Flood from V1 — should reach all 3
+        start_node = to_nodecoord(ISP_V1)
+        reachable = Set{EdgeCoord}()
+        flood_search_pipes_from_node!(reachable, all_edges, start_node)
+        @test length(reachable) == 3
+
+        # Flood from an unconnected node — should reach nothing
+        far_node = to_nodecoord(to_proper(VertexCoord(TileCoord(10, 10), HexFrame.Q_POS)))
+        reachable2 = Set{EdgeCoord}()
+        flood_search_pipes_from_node!(reachable2, all_edges, far_node)
+        @test isempty(reachable2)
+    end
+end
+
+# ===============================================================
 # Encounter point system tests
 # ===============================================================
 

@@ -145,10 +145,10 @@ end
 end
 @struct_hash_equal MoveCommand
 
-"""Delete element at coordinate"""
-@kwdef struct DeleteAtCommand <: MapEditCommand
+"""Delete element at coordinate. Type parameter selects tile vs edge dispatch."""
+@kwdef struct DeleteAtCommand{T <: Union{TileCoord, EdgeCoord}} <: MapEditCommand
     id::UInt64
-    coord::Union{TileCoord, EdgeCoord, VertexCoord}
+    coord::T
     response_channel::Union{Nothing, Channel{CommandStatus}}
 end
 @struct_hash_equal DeleteAtCommand
@@ -321,34 +321,42 @@ function apply_mapedit_command!(
         command::SetPipeBehaviorCommand,
         threadsafe_console_push::Function
     )
+    # Check if edge is already occupied anywhere
+    found_existing, existing_loc = has_pipe_any_ship(gamemap, command.coord)
+    if found_existing
+        threadsafe_console_push("Cannot place pipe: Edge already occupied on $(existing_loc)")
+        return nothing
+    end
+
     # Determine which ship (if any) has both endpoints on its surface
     v1_node = to_nodecoord(command.coord.v1)
     v2_node = to_nodecoord(command.coord.v2)
 
     target_ship = nothing
     for (ship_name, _) in gamemap.ships
-        v1_valid, _ = is_node_on_ship_surface(v1_node, gamemap; ship_name = ship_name)
-        v2_valid, _ = is_node_on_ship_surface(v2_node, gamemap; ship_name = ship_name)
-        if v1_valid && v2_valid
+        if is_node_on_ship_surface(v1_node, gamemap; ship_name = ship_name) &&
+           is_node_on_ship_surface(v2_node, gamemap; ship_name = ship_name)
             target_ship = ship_name
             break
         end
     end
 
-    if isnothing(target_ship)
-        threadsafe_console_push("Cannot place pipe: Endpoints not on any single ship's surface")
+    if !isnothing(target_ship)
+        set_pipe!(gamemap, command.coord, deepcopy(command.pipe_behavior); ship_name = target_ship)
+        threadsafe_console_push("Pipe placed at $(command.coord) on $(target_ship)")
         return nothing
     end
 
-    # Check if edge already has a pipe on that ship
-    existing_pipe = get_pipe(gamemap, command.coord; ship_name = target_ship)
-    if !isnothing(existing_pipe)
-        threadsafe_console_push("Cannot place pipe: Edge already occupied on $(target_ship)")
+    # Not on any single ship — try off-ship pipe placement (extending from a ship into space)
+    can_place, offship_target, reason = can_place_pipe_offship(command.coord, gamemap)
+    if can_place
+        set_pipe!(gamemap, command.coord, deepcopy(command.pipe_behavior); ship_name = offship_target)
+        threadsafe_console_push("Off-ship pipe placed at $(command.coord) on $(offship_target)")
         return nothing
+    else
+        threadsafe_console_push("Cannot place pipe: $(reason)")
     end
 
-    set_pipe!(gamemap, command.coord, deepcopy(command.pipe_behavior); ship_name = target_ship)
-    threadsafe_console_push("Pipe placed at $(command.coord) on $(target_ship)")
     return nothing
 end
 
@@ -421,65 +429,103 @@ function apply_mapedit_command!(
 
     source_pipe = get_pipe(gamemap, command.source_coord; ship_name = source_ship)
 
-    # Determine destination ship by checking pipe endpoints
+    # Check if source pipe is off-surface — validate that removing it won't orphan connected pipes
+    src_v1_on = is_node_on_any_ship_surface(to_nodecoord(command.source_coord.v1), gamemap)
+    src_v2_on = is_node_on_any_ship_surface(to_nodecoord(command.source_coord.v2), gamemap)
+    source_is_offship = !(src_v1_on && src_v2_on)
+
+    if source_is_offship
+        if !validate_offship_pipe_deletion(command.source_coord, gamemap)
+            threadsafe_console_push("Cannot move pipe: would orphan connected off-surface pipes")
+            return nothing
+        end
+    end
+
+    # Determine destination ship — try on-surface first, then off-ship fallback
     v1_node = to_nodecoord(command.dest_coord.v1)
     v2_node = to_nodecoord(command.dest_coord.v2)
 
     dest_ship = nothing
     for (ship_name, _) in gamemap.ships
-        v1_valid, _ = is_node_on_ship_surface(v1_node, gamemap; ship_name = ship_name)
-        v2_valid, _ = is_node_on_ship_surface(v2_node, gamemap; ship_name = ship_name)
-        if v1_valid && v2_valid
+        if is_node_on_ship_surface(v1_node, gamemap; ship_name = ship_name) &&
+           is_node_on_ship_surface(v2_node, gamemap; ship_name = ship_name)
             dest_ship = ship_name
             break
         end
     end
 
     if isnothing(dest_ship)
-        threadsafe_console_push("Cannot move pipe: Destination endpoints not on any ship's surface")
+        # Try off-ship placement
+        can_place, offship_target, reason = can_place_pipe_offship(command.dest_coord, gamemap)
+        if can_place
+            dest_ship = offship_target
+        else
+            threadsafe_console_push("Cannot move pipe: $(reason)")
+            return nothing
+        end
+    end
+
+    # Check destination not already occupied (across all ships)
+    found_existing, _ = has_pipe_any_ship(gamemap, command.dest_coord)
+    if found_existing
+        threadsafe_console_push("Cannot move pipe: Destination edge already occupied")
         return nothing
     end
 
-    # Check destination not already occupied
-    existing_dest = get_pipe(gamemap, command.dest_coord; ship_name = dest_ship)
-    if !isnothing(existing_dest)
-        threadsafe_console_push("Cannot move pipe: Destination edge already occupied on $(dest_ship)")
-        return nothing
-    end
-
-    # Perform move (potentially cross-ship)
-    set_pipe!(gamemap, command.dest_coord, source_pipe; ship_name = dest_ship)
+    # Perform move
     delete_pipe!(gamemap, command.source_coord; ship_name = source_ship)
+    set_pipe!(gamemap, command.dest_coord, source_pipe; ship_name = dest_ship)
+
+    # Reassign ownership if source was off-surface (removing it may have split a chain)
+    if source_is_offship
+        reassign_pipe_ownership!(command.source_coord, gamemap)
+    end
+
     threadsafe_console_push("Pipe moved from $(command.source_coord) to $(command.dest_coord)")
     return nothing
 end
 
 function apply_mapedit_command!(
         gamemap::GameMap,
-        command::DeleteAtCommand,
+        command::DeleteAtCommand{TileCoord},
         threadsafe_console_push::Function
     )
-    if command.coord isa VertexCoord
-        threadsafe_console_push("Cannot delete a node")
-        return nothing
-    elseif command.coord isa EdgeCoord
-        # Search all ships for this pipe
-        ship_with_pipe = find_ship_with_pipe(gamemap, command.coord)
-        if !isnothing(ship_with_pipe)
-            delete_pipe!(gamemap, command.coord; ship_name = ship_with_pipe)
-            threadsafe_console_push("Pipe deleted at $(command.coord) from $(ship_with_pipe)")
-        else
-            threadsafe_console_push("No pipe found at $(command.coord)")
+    ship_with_comp = find_ship_with_component(gamemap, command.coord)
+    if !isnothing(ship_with_comp)
+        delete_component!(gamemap, command.coord; ship_name = ship_with_comp)
+        threadsafe_console_push("Component deleted at $(command.coord) from $(ship_with_comp)")
+    else
+        threadsafe_console_push("No component found at $(command.coord)")
+    end
+    return nothing
+end
+
+function apply_mapedit_command!(
+        gamemap::GameMap,
+        command::DeleteAtCommand{EdgeCoord},
+        threadsafe_console_push::Function
+    )
+    ship_with_pipe = find_ship_with_pipe(gamemap, command.coord)
+    if !isnothing(ship_with_pipe)
+        # Check if pipe is off-surface — validate deletion won't orphan connected pipes
+        v1_on = is_node_on_any_ship_surface(to_nodecoord(command.coord.v1), gamemap)
+        v2_on = is_node_on_any_ship_surface(to_nodecoord(command.coord.v2), gamemap)
+        is_offship = !(v1_on && v2_on)
+
+        if is_offship && !validate_offship_pipe_deletion(command.coord, gamemap)
+            threadsafe_console_push("Cannot delete: would orphan connected off-surface pipes")
+            return nothing
         end
-    elseif command.coord isa TileCoord
-        # Search all ships for this component
-        ship_with_comp = find_ship_with_component(gamemap, command.coord)
-        if !isnothing(ship_with_comp)
-            delete_component!(gamemap, command.coord; ship_name = ship_with_comp)
-            threadsafe_console_push("Component deleted at $(command.coord) from $(ship_with_comp)")
-        else
-            threadsafe_console_push("No component found at $(command.coord)")
+
+        delete_pipe!(gamemap, command.coord; ship_name = ship_with_pipe)
+        threadsafe_console_push("Pipe deleted at $(command.coord) from $(ship_with_pipe)")
+
+        # Reassign ownership if the deleted pipe was off-surface (may have split a chain)
+        if is_offship
+            reassign_pipe_ownership!(command.coord, gamemap)
         end
+    else
+        threadsafe_console_push("No pipe found at $(command.coord)")
     end
     return nothing
 end
@@ -710,13 +756,13 @@ function create_move_command(
     )
 end
 
-"""Create a DeleteAtCommand for deleting an element"""
+"""Create a DeleteAtCommand for deleting a component or pipe"""
 function create_delete_command(
         cq::CommandQueue,
-        coord::Union{TileCoord, EdgeCoord, VertexCoord};
+        coord::T;
         response_channel::Union{Nothing, Channel} = nothing
-    )::DeleteAtCommand
-    return DeleteAtCommand(
+    ) where {T <: Union{TileCoord, EdgeCoord}}
+    return DeleteAtCommand{T}(
         id = cq.next_command_id(),
         coord = coord,
         response_channel = response_channel

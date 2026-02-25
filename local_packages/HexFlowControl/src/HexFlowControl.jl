@@ -5,7 +5,7 @@ using StaticArrays, GLFW, Dates
 
 # Type exports
 export PlacementModes, INSPECT, MOVE, PIPE, DELETE, TILE, SURFACE_EDIT
-export HintData, InputState, ViewState, GameState
+export ConfirmationPopup, HintData, InputState, ViewState, GameState
 
 # Function exports
 export create_consolebuffer, get_viewtransform
@@ -28,6 +28,13 @@ export get_lastinstate!, update_lastinstate!, get_instate, get_inrising!
     hints::Vector{String}
     current_hint_index::Int = 1
     is_visible::Bool = true
+end
+
+"Generalised confirmation popup with a message, world-space anchor, and action closure"
+@kwdef mutable struct ConfirmationPopup
+    message::String
+    world_position::CartesianCoord
+    action::Function
 end
 
 "Input state for placement, selection, and control"
@@ -53,6 +60,7 @@ end
     editor_mode::Bool = false
     dev_utils_menu_active::Bool = false
     spacemap_active::Bool = false
+    active_popup::Union{Nothing, ConfirmationPopup} = nothing
     # loop status
     should_exit_gameloop::Bool = false
     return_symbol::Symbol = :default
@@ -154,48 +162,39 @@ end
 # Input Helper Functions
 # ===============================================================
 
-"""
-Return the state of the given key at the previous tick. Calling on a key that 
-has not yet been tracked will return false and add it to the tracked Dict.
-"""
-function get_lastinstate!(inputstate::InputState, key::GLFW.Key)::Bool
-    # first time this is called for a key, add key to Dict as released
-    if !haskey(inputstate.last_keystates, key)
-        inputstate.last_keystates[key] = false
-    end
+#= ---------- Dict-based core methods ---------- =#
 
-    # otherwise return the last state
-    return inputstate.last_keystates[key]
+"""
+Return the last-tracked state of `key` from a raw state dict.
+Keys not yet tracked are inserted as `false` (released) and `false` is returned.
+"""
+function get_lastinstate!(states::Dict{K, Bool}, key::K)::Bool where {K}
+    if !haskey(states, key)
+        states[key] = false
+    end
+    return states[key]
 end
 
 """
-Return the state of the given mousebutton at the previous tick. Calling on a 
-mousebutton that has not yet been tracked will return false and add it to the tracked Dict.
+Snapshot the current GLFW state of every tracked key into the dict.
+Call once at the end of each frame, after all rising-edge checks.
 """
-function get_lastinstate!(inputstate::InputState, key::GLFW.MouseButton)::Bool
-    # first time this is called for a key, add key to Dict as released
-    if !haskey(inputstate.last_mousestates, key)
-        inputstate.last_mousestates[key] = false
+function update_lastinstate!(states::Dict{GLFW.Key, Bool}, window::GLFW.Window)
+    for (key, _) in states
+        states[key] = GLFW.GetKey(window, key)
     end
-
-    # otherwise return the last state
-    return inputstate.last_mousestates[key]
+    return nothing
 end
 
 """
-Updates the last state of all tracked keys. Call after all key checks 
-have already been made.
+Snapshot the current GLFW state of every tracked mouse button into the dict.
+Call once at the end of each frame, after all rising-edge checks.
 """
-function update_lastinstate!(inputstate::InputState, window::GLFW.Window)
-    # update all tracked keys
-    for (key, _) in inputstate.last_keystates
-        inputstate.last_keystates[key] = GLFW.GetKey(window, key)
+function update_lastinstate!(states::Dict{GLFW.MouseButton, Bool}, window::GLFW.Window)
+    for (btn, _) in states
+        states[btn] = GLFW.GetMouseButton(window, btn)
     end
-    # update all tracked mouse buttons
-    for (key, _) in inputstate.last_mousestates
-        inputstate.last_mousestates[key] = GLFW.GetMouseButton(window, key)
-    end
-    return
+    return nothing
 end
 
 "Returns state of key, true = pressed"
@@ -209,11 +208,41 @@ function get_instate(mousebutton::GLFW.MouseButton, window::GLFW.Window)::Bool
 end
 
 """
-Returns true on rising edge of key or mousebutton state. Calling on a key or mousebutton 
-that has not yet been tracked will return false and add it to the tracked Dict
+Returns true on rising edge (pressed this frame, released last frame).
+Works on any dict of `{K, Bool}` state tracking.
+"""
+function get_inrising!(states::Dict{GLFW.Key, Bool}, key::GLFW.Key, window::GLFW.Window)::Bool
+    return get_instate(key, window) && !get_lastinstate!(states, key)
+end
+
+function get_inrising!(states::Dict{GLFW.MouseButton, Bool}, key::GLFW.MouseButton, window::GLFW.Window)::Bool
+    return get_instate(key, window) && !get_lastinstate!(states, key)
+end
+
+#= ---------- InputState convenience methods (delegate to dict core) ---------- =#
+
+"Return the last-tracked state of a key via InputState."
+function get_lastinstate!(inputstate::InputState, key::GLFW.Key)::Bool
+    return get_lastinstate!(inputstate.last_keystates, key)
+end
+
+"Return the last-tracked state of a mouse button via InputState."
+function get_lastinstate!(inputstate::InputState, key::GLFW.MouseButton)::Bool
+    return get_lastinstate!(inputstate.last_mousestates, key)
+end
+
+"Update all tracked keys and mouse buttons from the GLFW window via InputState."
+function update_lastinstate!(inputstate::InputState, window::GLFW.Window)
+    update_lastinstate!(inputstate.last_keystates, window)
+    update_lastinstate!(inputstate.last_mousestates, window)
+    return nothing
+end
+
+"""
+Returns true on rising edge of key or mousebutton state via InputState.
+Calling on an untracked key adds it to the dict as released.
 """
 function get_inrising!(inputstate::InputState, key::T, window::GLFW.Window)::Bool where {T <: Union{GLFW.Key, GLFW.MouseButton}}
-    # true if currently pressed, but was released last tick
     return get_instate(key, window) && !get_lastinstate!(inputstate, key)
 end
 

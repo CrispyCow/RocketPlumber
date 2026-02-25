@@ -10,6 +10,7 @@ export CompPlacementStrategy, ShipComponentSet, CompSpawnOptions, roll_component
 export PipePlacementStrategy, PipeSpawnOptions, roll_pipe
 export place_shipset!, place_random_pipes!, place_connected_pipes!, place_pipeset!
 export ShipGenOptions, generate_ship, encounter_ship!, depart_ship!
+export check_departure_pipe_connections
 export EncounterSystemConfig, initialise_encounter_system!
 export spawn_encounter_point!, get_encounter_position, predict_crossing_time
 export rebuild_event_queue!, check_line_shift!, process_encounter_events!
@@ -471,8 +472,10 @@ function encounter_ship!(gamemap::GameMap, shipoptions::ShipGenOptions, seed::UI
     newship = generate_ship(shipoptions, seed)
     newship_name = gensym(shipoptions.name)
 
-    # offset ship until no surface overlap
+    # offset ship until no surface overlap, starting from primary centroid to handle the case the ship is not centered around (0,0)
+    ship_centroid = get_surface_centroid(gamemap, :primary)
     offset_newship = deepcopy(newship)
+    offset_ship!(offset_newship, round_to_tile(ship_centroid))
     while _is_surface_overlap(gamemap, offset_newship)
         offset = HexFrame.hex_neighbour_tiles[dir]
         offset_ship!(offset_newship, offset)
@@ -548,6 +551,70 @@ function encounter_ship!(gamemap::GameMap, shipoptions::ShipGenOptions, seed::UI
     return nothing
 end
 
+"""
+    check_departure_pipe_connections(gamemap, ship_name) → (can_depart, reason)
+
+Check whether a ship can depart by verifying no pipe chain still bridges it to another ship.
+Collects all off-surface pipe edges (relative to the departing ship), flood-fills outward
+from the departing ship's surface boundary, and checks whether any component reaches another
+ship's surface.
+
+Returns `(can_depart::Bool, reason::String)`.
+"""
+function check_departure_pipe_connections(gamemap::GameMap, ship_name::Symbol)::Tuple{Bool, String}
+    # Collect off-surface pipe edges relative to the departing ship (from all ships)
+    offship_edges = Set{EdgeCoord}()
+    for (_, ship) in gamemap.ships
+        for (edge, _) in ship.pipe_behaviors
+            v1_on = is_node_on_ship_surface(to_nodecoord(edge.v1), gamemap; ship_name = ship_name)
+            v2_on = is_node_on_ship_surface(to_nodecoord(edge.v2), gamemap; ship_name = ship_name)
+            if !(v1_on && v2_on)
+                push!(offship_edges, edge)
+            end
+        end
+    end
+
+    isempty(offship_edges) && return (true, "")
+
+    # Starting nodes: endpoints of off-surface pipes that sit on the departing ship's surface
+    starting_nodes = Set{NodeCoord}()
+    for edge in offship_edges
+        for vertex in (edge.v1, edge.v2)
+            node = to_nodecoord(vertex)
+            if is_node_on_ship_surface(node, gamemap; ship_name = ship_name)
+                push!(starting_nodes, node)
+            end
+        end
+    end
+
+    isempty(starting_nodes) && return (true, "")
+
+    # Flood from each starting node, checking if any component reaches another ship
+    visited_edges = Set{EdgeCoord}()
+    for start_node in starting_nodes
+        # Skip if this node's component was already explored
+        any(e -> to_nodecoord(e.v1) == start_node || to_nodecoord(e.v2) == start_node, visited_edges) && continue
+
+        reachable = Set{EdgeCoord}()
+        flood_search_pipes_from_node!(reachable, offship_edges, start_node)
+        union!(visited_edges, reachable)
+
+        for edge in reachable
+            for vertex in (edge.v1, edge.v2)
+                node = to_nodecoord(vertex)
+                for (sname, _) in gamemap.ships
+                    sname == ship_name && continue
+                    if is_node_on_ship_surface(node, gamemap; ship_name = sname)
+                        return (false, "Can't depart: pipes still connect $(ship_name) to $(sname)")
+                    end
+                end
+            end
+        end
+    end
+
+    return (true, "")
+end
+
 
 "Attempt to depart a ship using its saved approach axis. Returns (success, reason)."
 function depart_ship!(gamemap::GameMap, ship_name::Symbol; max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing)::Tuple{Bool, String}
@@ -571,6 +638,12 @@ function depart_ship!(gamemap::GameMap, ship_name::Symbol; max_view_bounds::Unio
     approach_axis = get_approach_axis(status)
     if isnothing(approach_axis)
         return false, "Can't depart: no saved departure axis."
+    end
+
+    # Check pipe connections — block departure if pipes still bridge to another ship
+    can_depart, reason = check_departure_pipe_connections(gamemap, ship_name)
+    if !can_depart
+        return false, reason
     end
 
     # Depart by backtracking along the original approach axis (return to where the ship came from)

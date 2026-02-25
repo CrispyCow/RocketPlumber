@@ -94,44 +94,64 @@ function is_timewarp_blocked(gamemap::GameMap, gamestate::GameState)::Tuple{Bool
     return (false, "")
 end
 
-"""Read and write a `UInt32` scalar from `inputstate.gui_inputs` using ImGui.
+#= ---------- Dict-based GUI input helpers ---------- =#
+
+"""Read and write a `UInt32` scalar from a `Dict{Symbol, Any}` using ImGui.
 Returns the updated `UInt32` value."""
-function gui_input_u32!(inputstate::InputState, key::Symbol, label::String, default::UInt32)
+function gui_input_u32!(inputs::Dict{Symbol, Any}, key::Symbol, label::String, default::UInt32)
     one::UInt32 = UInt32(1)
-    val::UInt32 = haskey(inputstate.gui_inputs, key) ? inputstate.gui_inputs[key] : default
+    val::UInt32 = haskey(inputs, key) ? inputs[key] : default
     @cref CImGui.InputScalar(label, CImGui.ImGuiDataType_U32, &val, &one)
-    inputstate.gui_inputs[key] = val
+    inputs[key] = val
     return val
 end
 
-"""Read and write an `Int64` scalar from `inputstate.gui_inputs` using ImGui.
+"""Read and write an `Int64` scalar from a `Dict{Symbol, Any}` using ImGui.
 Returns the updated `Int64` value."""
-function gui_input_s64!(inputstate::InputState, key::Symbol, label::String, default::Int64)
+function gui_input_s64!(inputs::Dict{Symbol, Any}, key::Symbol, label::String, default::Int64)
     one::Int64 = Int64(1)
-    val::Int64 = haskey(inputstate.gui_inputs, key) ? inputstate.gui_inputs[key] : default
+    val::Int64 = haskey(inputs, key) ? inputs[key] : default
     @cref CImGui.InputScalar(label, CImGui.ImGuiDataType_S64, &val, &one)
-    inputstate.gui_inputs[key] = val
+    inputs[key] = val
     return val
 end
 
-"""Read and write a `Float64` double from `inputstate.gui_inputs` using ImGui.
+"""Read and write a `Float64` double from a `Dict{Symbol, Any}` using ImGui.
 Optional `fmt` controls the displayed format string.
 Returns the updated `Float64` value."""
-function gui_input_double!(inputstate::InputState, key::Symbol, label::String, default::Float64; step_small::Float64 = 0.01, step_fast::Float64 = 0.1, fmt::String = "%.3f")
-    val::Float64 = haskey(inputstate.gui_inputs, key) ? inputstate.gui_inputs[key] : default
+function gui_input_double!(inputs::Dict{Symbol, Any}, key::Symbol, label::String, default::Float64; step_small::Float64 = 0.01, step_fast::Float64 = 0.1, fmt::String = "%.3f")
+    val::Float64 = haskey(inputs, key) ? inputs[key] : default
     @cref CImGui.InputDouble(label, &val, step_small, step_fast, fmt)
-    inputstate.gui_inputs[key] = val
+    inputs[key] = val
     return val
 end
 
-"""Read and write an `Int32` listbox selection from `inputstate.gui_inputs`.
+"""Read and write an `Int32` listbox selection from a `Dict{Symbol, Any}`.
 `names` is a Vector{String} shown in the ListBox. Returns updated `Int32` index."""
-function gui_listbox_int!(inputstate::InputState, key::Symbol, label::String, names::Vector{String}, default::Int32)
-    val::Int32 = haskey(inputstate.gui_inputs, key) ? inputstate.gui_inputs[key] : default
+function gui_listbox_int!(inputs::Dict{Symbol, Any}, key::Symbol, label::String, names::Vector{String}, default::Int32)
+    val::Int32 = haskey(inputs, key) ? inputs[key] : default
     @cref CImGui.ListBox(label, &val, names)
-    inputstate.gui_inputs[key] = val
+    inputs[key] = val
     return val
 end
+
+#= ---------- InputState convenience wrappers (delegate to dict core) ---------- =#
+
+"Read and write a `UInt32` scalar via InputState."
+gui_input_u32!(inputstate::InputState, key::Symbol, label::String, default::UInt32) =
+    gui_input_u32!(inputstate.gui_inputs, key, label, default)
+
+"Read and write an `Int64` scalar via InputState."
+gui_input_s64!(inputstate::InputState, key::Symbol, label::String, default::Int64) =
+    gui_input_s64!(inputstate.gui_inputs, key, label, default)
+
+"Read and write a `Float64` double via InputState."
+gui_input_double!(inputstate::InputState, key::Symbol, label::String, default::Float64; step_small::Float64 = 0.01, step_fast::Float64 = 0.1, fmt::String = "%.3f") =
+    gui_input_double!(inputstate.gui_inputs, key, label, default; step_small, step_fast, fmt)
+
+"Read and write an `Int32` listbox selection via InputState."
+gui_listbox_int!(inputstate::InputState, key::Symbol, label::String, names::Vector{String}, default::Int32) =
+    gui_listbox_int!(inputstate.gui_inputs, key, label, names, default)
 
 "Format a number with 6 significant figures, using scientific notation if needed"
 function format_value(val::Float64)::String

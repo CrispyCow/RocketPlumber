@@ -246,16 +246,16 @@ function get_ship_surface_colour(ship_name::Symbol)::SVector{4, Float32}
     # Hash the ship name to get deterministic pseudo-random values
     h = hash(ship_name)
     
-    # Extract components from hash for subtle grey/brown variation
-    # Range: 0.75 to 0.95 for muted appearance
-    r_base = 0.75f0 + 0.20f0 * Float32((h & 0xFF) / 255)
-    g_base = 0.75f0 + 0.20f0 * Float32(((h >> 8) & 0xFF) / 255)
-    b_base = 0.75f0 + 0.20f0 * Float32(((h >> 16) & 0xFF) / 255)
+    # Extract components from hash for noticeable grey/brown variation
+    # Range: 0.50 to 0.75 for clearly distinct non-primary appearance
+    r_base = 0.50f0 + 0.25f0 * Float32((h & 0xFF) / 255)
+    g_base = 0.50f0 + 0.25f0 * Float32(((h >> 8) & 0xFF) / 255)
+    b_base = 0.50f0 + 0.25f0 * Float32(((h >> 16) & 0xFF) / 255)
     
     # Bias towards grey/brown by reducing blue slightly and keeping r >= g
-    r = clamp(r_base, 0.78f0, 0.95f0)
-    g = clamp(g_base * 0.98f0, 0.75f0, 0.92f0)
-    b = clamp(b_base * 0.90f0, 0.70f0, 0.88f0)
+    r = clamp(r_base, 0.53f0, 0.75f0)
+    g = clamp(g_base * 0.98f0, 0.50f0, 0.72f0)
+    b = clamp(b_base * 0.90f0, 0.45f0, 0.68f0)
     
     return SVector{4, Float32}(r, g, b, 1.0f0)
 end
@@ -607,7 +607,7 @@ function node_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, gam
     return nothing
 end
 
-"Renders all pipe behaviors in the gamemap by delegating to `render_pipe_map!` on each pipe. Iterates each ShipMap and uses its pipes." 
+"Renders all pipe behaviors in the gamemap by delegating to `render_pipe_map!` on each pipe. Iterates each ShipMap." 
 function pipe_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, gamemap::GameMap, derivedmapstate::DerivedMapState, gamestate::GameState)
     isempty(gamemap.ships) && return nothing
 
@@ -627,6 +627,7 @@ function pipe_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, gam
             )
         end
     end
+
     return nothing
 end
 

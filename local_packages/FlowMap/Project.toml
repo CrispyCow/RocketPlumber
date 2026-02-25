@@ -9,6 +9,8 @@ HexComponentsAPI = "a2289db6-e3a5-4e05-9c21-8734dce2bbd4"
 HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 StructEquality = "6ec83bb0-ed9f-11e9-3b4c-2b04cb4e219c"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [compat]
 StructEquality = "2.1.0"
+Test = "1.11.0"

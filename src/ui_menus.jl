@@ -278,6 +278,39 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             end
             CImGui.TreePop()
         end
+
+        # Swap Primary utility
+        if CImGui.TreeNode("Swap Primary")
+            current_gamemap = (flowcalc_ipc.get_snapshot()).gamemap
+            all_ship_names = get_all_ship_names(current_gamemap)
+
+            swappable_ships = filter(n -> n != :primary, all_ship_names)
+            swappable_ship_strings = safe_ship_display_name.(swappable_ships)
+
+            if isempty(swappable_ships)
+                CImGui.Text("No other ships to swap with")
+            else
+                swap_ship_index = gui_listbox_int!(inputstate, :swap_primary_index, "Ship", swappable_ship_strings, Int32(0))
+                swap_ship_index = clamp(swap_ship_index, Int32(0), Int32(max(0, length(swappable_ships) - 1)))
+                inputstate.gui_inputs[:swap_primary_index] = swap_ship_index
+
+                selected_swap_ship = swappable_ships[swap_ship_index + 1]
+
+                if CImGui.Button("Swap Primary", (button_width, button_height))
+                    modified_map = deepcopy(current_gamemap)
+
+                    success, reason = swap_primary!(modified_map, selected_swap_ship)
+                    if success
+                        enqueue_map_override!(flowcalc_ipc, modified_map)
+                        flowcalc_ipc.console_push(reason)
+                        @info reason
+                    else
+                        flowcalc_ipc.console_push(reason)
+                    end
+                end
+            end
+            CImGui.TreePop()
+        end
     end
 
     if (CImGui.CollapsingHeader("Proc Gen"))
@@ -425,5 +458,54 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
     end
 
     CImGui.End()
+    return nothing
+end
+
+# ===============================================================
+# Confirmation Popup
+# ===============================================================
+
+"""
+Renders a world-anchored confirmation popup window.
+The window tracks its `world_position` through panning and zooming,
+has a close (X) button, and a confirm button that executes the stored action.
+Must be called within ui_renderwrap.
+"""
+function ui_confirmation_popup_render!(inputstate::InputState, viewstate::ViewState)
+    popup = inputstate.active_popup
+    popup === nothing && return nothing
+
+    # Convert world-space anchor to screen-space window coordinates
+    screen_x, screen_y = world_to_screen(popup.world_position.x, popup.world_position.y, viewstate)
+
+    popup_width = 220.0
+    popup_height = 110.0
+
+    CImGui.SetNextWindowPos((screen_x, screen_y), CImGui.ImGuiCond_Always)
+    CImGui.SetNextWindowSize((popup_width, popup_height), CImGui.ImGuiCond_Always)
+
+    flags = CImGui.ImGuiWindowFlags_NoResize |
+            CImGui.ImGuiWindowFlags_NoCollapse
+
+    p_open = Ref(true)
+    CImGui.Begin("Confirm##popup", p_open, flags)
+
+    CImGui.TextWrapped(popup.message)
+    CImGui.Dummy((0.0, 4.0))
+
+    button_width = popup_width - 16.0 # window padding
+    CImGui.SetCursorPosX((popup_width - button_width) / 2.0)
+    if CImGui.Button("Confirm?", (button_width, 28.0))
+        popup.action()
+        inputstate.active_popup = nothing
+    end
+
+    CImGui.End()
+
+    # Handle close (X) button
+    if !p_open[]
+        inputstate.active_popup = nothing
+    end
+
     return nothing
 end

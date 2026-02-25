@@ -162,7 +162,7 @@ update_manoeuvre_phase!(gamestate, gamemap)       # phase transitions for active
 The render thread **never directly mutates `GameMap`**. All changes flow through typed `MapEditCommand` subtypes:
 - `SetTileCommand`, `SetPipeBehaviorCommand` — placement
 - `MoveCommand{TileCoord}`, `MoveCommand{EdgeCoord}` — move with delta rotation
-- `DeleteAtCommand` — deletion at any coord type
+- `DeleteAtCommand{TileCoord}`, `DeleteAtCommand{EdgeCoord}` — deletion at tile or edge
 - `ClickTileCommand` — component interaction (with unrotated click site)
 - `AddShipSurfaceCommand`, `RemoveShipSurfaceCommand` — surface editing
 - `MapOverrideCommand` — full map replacement (for proc-gen, map loading)

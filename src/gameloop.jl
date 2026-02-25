@@ -144,6 +144,8 @@ function user_handler!(
         flowcalc_deleteplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
         flowcalc_interactor!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
         flowcalc_surfaceeditor!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
+        flowcalc_swap_primary_ship!(flowcalc_ipc, inputstate, snapshot.gamemap, window)
+        flowcalc_beam_depart!(flowcalc_ipc, inputstate, viewstate, snapshot.gamemap, window)
     end
 
     return update_lastinstate!(inputstate, window)
@@ -168,6 +170,7 @@ function ui_rendering!(
         ui_toolbar_render!(inputstate, GLFW.GetWindowSize(window), flowcalc_ipc.console_see)
         ui_propertybox_render!(inputstate, snapshot.gamemap, snapshot.derived, snapshot.mna, GLFW.GetWindowSize(window))
         ui_pause_menu_render!(inputstate, snapshot, window)
+        ui_confirmation_popup_render!(inputstate, viewstate)
         ui_dev_utils_menu_render!(inputstate, flowcalc_ipc, snapshot, viewstate, GLFW.GetWindowSize(window), max_view_bounds)
         ui_spacemap_render!(inputstate, flowcalc_ipc, snapshot, GLFW.GetWindowSize(window), max_view_bounds)
 
@@ -216,7 +219,7 @@ JLD2.rconvert(::Type{FlowMap.ShipMap}, nt::NamedTuple) = FlowMap.ShipMap(
 "Conversion for old `GameMap` saved representations that lack `space_map`"
 JLD2.rconvert(::Type{FlowMap.GameMap}, nt::NamedTuple) = FlowMap.GameMap(
     ships = get(nt, :ships, Dict(:primary => FlowMap.ShipMap())),
-    space_map = get(nt, :space_map, FlowMap.SpaceMapEmpty())
+    space_map = get(nt, :space_map, FlowMap.SpaceMapEmpty()),
 )
 
 #= ---------- SpaceMapEmpty ----------- =#

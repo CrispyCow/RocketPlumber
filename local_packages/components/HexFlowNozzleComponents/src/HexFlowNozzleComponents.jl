@@ -140,8 +140,7 @@ function placement_valid(nozzle::NozzleBehavFrag, coord::TileCoord, gamemap::Gam
 
     # Check that the input node IS connected to the ship surface
     input_node_abs = map_element(nozzle.connected_node, coord, rotation)
-    node_valid, node_reason = is_node_on_ship_surface(input_node_abs, gamemap; ship_name = ship_name)
-    if !node_valid
+    if !is_node_on_ship_surface(input_node_abs, gamemap; ship_name = ship_name)
         return (false, "Nozzle input node is not connected to ship surface")
     end
 
@@ -384,8 +383,7 @@ function placement_valid(comp::SwitchedNozzleCompBehav, coord::TileCoord, gamema
     # Check that the input node IS connected to the ship surface
     input_node_pos = comp.switch.switch.connection.v1  # External node from switch
     input_node_abs = map_element(input_node_pos, coord, rotation)
-    node_valid, node_reason = is_node_on_ship_surface(input_node_abs, gamemap; ship_name = ship_name)
-    if !node_valid
+    if !is_node_on_ship_surface(input_node_abs, gamemap; ship_name = ship_name)
         return (false, "Nozzle input node is not connected to ship surface")
     end
 

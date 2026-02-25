@@ -260,6 +260,14 @@ const NOZZLE_EDGE_PLACE = HexFlowProcGen.NOZZLE_EDGE_PLACE
 const CLUSTERED_PLACE = HexFlowProcGen.CLUSTERED_PLACE
 const RANDOM_PLACE = HexFlowProcGen.RANDOM_PLACE
 
+const shipset_starter = ShipComponentSet(
+    "Starter Cold Gas",
+    [
+        CompSpawnOptions(:TriGasTank_comp, [(2, 100.0), (3, 200.0), (4, 100.0)], CLUSTERED_PLACE),
+        CompSpawnOptions(:SwitchedTinyNozzle_comp, [(3, 20.0), (4, 20.0)], NOZZLE_EDGE_PLACE),
+    ]
+)
+
 const shipset_simple_cold_gas = ShipComponentSet(
     "Simple Cold Gas",
     [
@@ -302,6 +310,14 @@ standard_pipeoptions::Vector{PipeSpawnOptions} = [
 ]
 
 # Ship Configurations
+starter_ship = ShipGenOptions(
+    name = "Starter Ship",
+    surface_gen_steps = 2,
+    surface_gen_stacks = 6,
+    component_sets = [shipset_starter],
+    pipe_sets = standard_pipeoptions
+)
+
 coldgas_micro_ship = ShipGenOptions(
     name = "Cold Gas Micro Ship",
     surface_gen_steps = 2,
@@ -334,6 +350,7 @@ small_corvette_1 = ShipGenOptions(
 )
 
 ship_gen_configs = [
+    starter_ship,
     coldgas_micro_ship,
     monoprop_electric_mini_ship,
     monoprop_turbine_mini_ship,

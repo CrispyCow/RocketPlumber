@@ -153,7 +153,7 @@ function list_elements(ship::ShipMap)
     return elements_present
 end
 
-"List all electrical elements in the GameMap (aggregates across ships)"
+"List all electrical elements in the GameMap (aggregates across all ships)"
 function list_elements(gamemap::GameMap)
     all_elements = Vector{AbsoluteElement}()
     sizehint!(all_elements, 16)
