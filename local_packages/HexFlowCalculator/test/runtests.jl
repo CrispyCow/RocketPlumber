@@ -6,8 +6,12 @@ using HexFrame: Q_POS
 using HexComponentsAPI
 using HexFlowControl
 using FlowEngine
+using HexFlowProcGen
 using StaticArrays
 using LinearAlgebra
+
+"Minimal encounter config for tests that only need a SpaceMapState."
+const _test_enc_config = EncounterSystemConfig()
 
 # ===============================================================
 # Mock Implementations
@@ -639,7 +643,7 @@ end
 
 @testset "cancel_if_thrust! — above threshold cancels" begin
     gm = GameMap()
-    initialise_spacemap!(gm, UInt32(1))
+    initialise_spacemap!(gm, UInt32(1), _test_enc_config)
     man = ManoeuvreData(main_burn_dv = SVector(1.0, 0.0), decel_burn_dv = SVector(-1.0, 0.0))
     set_active_manoeuvre!(gm, man)
 
@@ -652,7 +656,7 @@ end
 
 @testset "cancel_if_thrust! — at threshold" begin
     gm = GameMap()
-    initialise_spacemap!(gm, UInt32(1))
+    initialise_spacemap!(gm, UInt32(1), _test_enc_config)
     man = ManoeuvreData(main_burn_dv = SVector(1.0, 0.0), decel_burn_dv = SVector(-1.0, 0.0))
     set_active_manoeuvre!(gm, man)
 
@@ -672,7 +676,7 @@ end
 
 @testset "cancel_if_time_progressing! — time not progressing" begin
     gm = GameMap()
-    initialise_spacemap!(gm, UInt32(1))
+    initialise_spacemap!(gm, UInt32(1), _test_enc_config)
     set_time_years!(gm, 5.0)
     set_target_time!(gm, 3.0)  # target behind current → not progressing
 
@@ -685,7 +689,7 @@ end
 
 @testset "cancel_if_time_progressing! — time progressing cancels" begin
     gm = GameMap()
-    initialise_spacemap!(gm, UInt32(1))
+    initialise_spacemap!(gm, UInt32(1), _test_enc_config)
     set_time_years!(gm, 5.0)
     set_target_time!(gm, 10.0)  # target ahead → progressing
 
@@ -698,7 +702,7 @@ end
 
 @testset "cancel_if_time_wrong! — time matches" begin
     gm = GameMap()
-    initialise_spacemap!(gm, UInt32(1))
+    initialise_spacemap!(gm, UInt32(1), _test_enc_config)
     set_time_years!(gm, 5.0)
 
     man = ManoeuvreData(main_burn_dv = SVector(1.0, 0.0), decel_burn_dv = SVector(-1.0, 0.0))
@@ -710,7 +714,7 @@ end
 
 @testset "cancel_if_time_wrong! — time mismatch cancels" begin
     gm = GameMap()
-    initialise_spacemap!(gm, UInt32(1))
+    initialise_spacemap!(gm, UInt32(1), _test_enc_config)
     set_time_years!(gm, 5.0)
 
     man = ManoeuvreData(main_burn_dv = SVector(1.0, 0.0), decel_burn_dv = SVector(-1.0, 0.0))
@@ -722,7 +726,7 @@ end
 
 @testset "cancel_if_time_wrong! — within tolerance" begin
     gm = GameMap()
-    initialise_spacemap!(gm, UInt32(1))
+    initialise_spacemap!(gm, UInt32(1), _test_enc_config)
     set_time_years!(gm, 5.0)
 
     man = ManoeuvreData(main_burn_dv = SVector(1.0, 0.0), decel_burn_dv = SVector(-1.0, 0.0))
@@ -735,7 +739,7 @@ end
 
 @testset "cancel_if_target_time_past! — waypoint ahead" begin
     gm = GameMap()
-    initialise_spacemap!(gm, UInt32(1))
+    initialise_spacemap!(gm, UInt32(1), _test_enc_config)
     set_target_time!(gm, 5.0)
 
     man = ManoeuvreData(main_burn_dv = SVector(1.0, 0.0), decel_burn_dv = SVector(-1.0, 0.0))
@@ -748,7 +752,7 @@ end
 
 @testset "cancel_if_target_time_past! — waypoint behind cancels" begin
     gm = GameMap()
-    initialise_spacemap!(gm, UInt32(1))
+    initialise_spacemap!(gm, UInt32(1), _test_enc_config)
     set_target_time!(gm, 5.0)
 
     man = ManoeuvreData(main_burn_dv = SVector(1.0, 0.0), decel_burn_dv = SVector(-1.0, 0.0))
@@ -786,7 +790,7 @@ end
 @testset "update_manoeuvre_phase! — WAIT_APPROACH with thrust cancels" begin
     gs = GameState()
     gm = GameMap()
-    initialise_spacemap!(gm, UInt32(1))
+    initialise_spacemap!(gm, UInt32(1), _test_enc_config)
     set_time_years!(gm, 0.0)
 
     man = ManoeuvreData(
@@ -807,7 +811,7 @@ end
 @testset "update_manoeuvre_phase! — WAIT_APPROACH transitions to MAIN_BURN" begin
     gs = GameState()
     gm = GameMap()
-    initialise_spacemap!(gm, UInt32(1))
+    initialise_spacemap!(gm, UInt32(1), _test_enc_config)
 
     # Add a dummy encounter point so the encounter index lookup succeeds
     ep = EncounterPoint(index = 1, base_velocity = 100.0,
@@ -840,7 +844,7 @@ end
 @testset "update_manoeuvre_phase! — ENCOUNTER_READY with thrust cancels" begin
     gs = GameState()
     gm = GameMap()
-    initialise_spacemap!(gm, UInt32(1))
+    initialise_spacemap!(gm, UInt32(1), _test_enc_config)
 
     man = ManoeuvreData(
         main_burn_dv = SVector(1.0, 0.0),

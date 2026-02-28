@@ -21,6 +21,12 @@
             "approve": true,
             "matchCommandLine": true
         },
-        "Pkg.resolve()": true
+        "Pkg.resolve()": true,
+        "Pkg.test(\\\"HexFlowProcGen\\\")": true,
+        "\\\"HexFlowProcGen\\\"": true,
+        "/^julia --threads=2 --project=\\. tools/EncounterBalance/src/EncounterBalance\\.jl$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
     }
 }

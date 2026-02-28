@@ -3,6 +3,7 @@ using SquirrelNoise
 using GeometryBasics
 using LinearAlgebra
 using Statistics
+using HexFluids
 
 # Include the local module source (keeps tests runnable without Pkg install)
 include(joinpath(@__DIR__, "..", "src", "HexFlowProcGen.jl"))
@@ -371,58 +372,90 @@ end
 end
 
 # ===============================================================
-# Ship generation tests
+# Encounter generation tests
 # ===============================================================
 
-@testset "Ship generation" begin
+# Module-scope test data used by both inline testsets and helper functions
+const mock_pipe_opts = [PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES, 0.5)]
 
-    @testset "generate_ship (empty components/pipes)" begin
-        opts = ShipGenOptions(
-            name = "bare_ship",
-            surface_gen_steps = 3,
-            surface_gen_stacks = 5,
-            component_sets = ShipComponentSet[],
-            pipe_sets = PipeSpawnOptions[]
+@testset "Encounter generation" begin
+
+    mock_shipset = ShipComponentSet("mock_set", [
+        CompSpawnOptions(:MockComp, [(1, 1.0)], HexFlowProcGen.RANDOM_PLACE),
+    ])
+
+    # Mock encounter class config for testing
+    mock_class_config = EncounterClassConfig(
+        NoScaling(1.0),                        # class_weight
+        HullSizeConfig(
+            LinearScaling(3.0, 0.0),           # Always 3 steps
+            LinearScaling(5.0, 0.0),           # Always 5 stacks
+        ),
+        LinearScaling(2.0, 0.0),               # target_components: always 2
+        Dict{FluidTags, FuelTagConfig}(
+            HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0),
+                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
+            HexFluids.MONOPROP_LIQUID => FuelTagConfig(NoScaling(1.0),
+                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
+        ),
+        mock_pipe_opts,
+    )
+
+    @testset "ScalingRule" begin
+        @testset "NoScaling" begin
+            ns = NoScaling(5.0)
+            @test evaluate_scaling(ns, 0.0) == 5.0
+            @test evaluate_scaling(ns, 100.0) == 5.0
+        end
+
+        @testset "LinearScaling" begin
+            ls = LinearScaling(1.0, 2.0)
+            @test evaluate_scaling(ls, 0.0) == 1.0
+            @test evaluate_scaling(ls, 1.0) == 3.0
+            @test evaluate_scaling(ls, 5.0) == 11.0
+        end
+
+        @testset "GatedLinearScaling" begin
+            gls = GatedLinearScaling(0.25, 0.4, 2.0)
+            @test evaluate_scaling(gls, 0.0) == 0.0
+            @test evaluate_scaling(gls, 1.9) == 0.0
+            @test evaluate_scaling(gls, 2.0) == 0.25
+            @test evaluate_scaling(gls, 3.0) ≈ 0.65
+            @test evaluate_scaling(gls, 7.0) ≈ 2.25
+        end
+    end
+
+    @testset "Encounter class selection" begin
+        configs = Dict{EncounterClass, EncounterClassConfig}(
+            ENCOUNTER_SHIP => mock_class_config,
         )
+        @test select_encounter_class(configs, 1.0, 1, UInt32(42)) == ENCOUNTER_SHIP
+    end
 
-        ship = generate_ship(opts, UInt32(0x1111))
+    @testset "Fuel tag selection" begin
+        fuel_configs = Dict{FluidTags, FuelTagConfig}(
+            HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0),
+                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
+        )
+        @test select_fuel_tag(fuel_configs, 1.0, 1, UInt32(42)) == HexFluids.COLD_GAS
+    end
+
+    @testset "Encounter name generation" begin
+        name = generate_encounter_name(UInt32(12345), ENCOUNTER_SHIP)
+        @test !isempty(name)
+        @test contains(name, "-")
+        @test generate_encounter_name(UInt32(12345), ENCOUNTER_SHIP) == name
+        scrap_name = generate_encounter_name(UInt32(12345), ENCOUNTER_SCRAP)
+        @test !isempty(scrap_name)
+    end
+
+    @testset "generate_encounter places surface and components" begin
+        ship = generate_encounter(ENCOUNTER_SHIP, HexFluids.COLD_GAS, 2.0,
+            UInt32(0x2222), mock_class_config)
+
         @test ship isa ShipMap
         @test !isempty(ship.ship_tiles)
-        @test isempty(ship.components)
-        @test isempty(ship.pipe_behaviors)
-    end
-
-    @testset "generate_ship with mock components and pipes" begin
-        shipset = ShipComponentSet("mock_set", [
-            CompSpawnOptions(:MockComp, [(1, 1.0)], HexFlowProcGen.RANDOM_PLACE),
-        ])
-        pipeset = PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES, 0.5)
-
-        opts = ShipGenOptions(
-            name = "equipped_ship",
-            surface_gen_steps = 4,
-            surface_gen_stacks = 10,
-            component_sets = [shipset],
-            pipe_sets = [pipeset]
-        )
-
-        ship = generate_ship(opts, UInt32(0x2222))
-        @test !isempty(ship.ship_tiles)
         @test !isempty(ship.components)
-    end
-
-    @testset "generate_ship is deterministic" begin
-        opts = ShipGenOptions(
-            name = "det_test",
-            surface_gen_steps = 3,
-            surface_gen_stacks = 5,
-            component_sets = ShipComponentSet[],
-            pipe_sets = PipeSpawnOptions[]
-        )
-
-        ship1 = generate_ship(opts, UInt32(0x3333))
-        ship2 = generate_ship(opts, UInt32(0x3333))
-        @test ship1.ship_tiles == ship2.ship_tiles
     end
 
     @testset "_is_surface_overlap" begin
@@ -463,18 +496,19 @@ end
 
 @testset "encounter_ship! and depart_ship!" begin
 
+    function make_bare_shipmap(seed::UInt32)
+        ship = ShipMap()
+        empty!(ship.ship_tiles)
+        stacked_random_tile_walk!(ship.ship_tiles, TileCoord(0, 0), 2, 2, seed)
+        return ship
+    end
+
     @testset "encounter_ship! adds a ship with ApproachingDockStat" begin
         gm = GameMap()
-        opts = ShipGenOptions(
-            name = "encounter_test",
-            surface_gen_steps = 2,
-            surface_gen_stacks = 2,
-            component_sets = ShipComponentSet[],
-            pipe_sets = PipeSpawnOptions[]
-        )
+        newship = make_bare_shipmap(UInt32(0x12345678))
 
         before = Set(keys(gm.ships))
-        encounter_ship!(gm, opts, UInt32(0x12345678), HexFrame.Q_POS)
+        encounter_ship!(gm, newship, "encounter_test", UInt32(0x12345678), HexFrame.Q_POS)
         after = Set(keys(gm.ships))
 
         new_ships = collect(setdiff(after, before))
@@ -488,31 +522,19 @@ end
     @testset "encounter_ship! works with all hex axes" begin
         for axis in instances(HexFrame.HexAxis)
             gm = GameMap()
-            opts = ShipGenOptions(
-                name = "axis_$(axis)",
-                surface_gen_steps = 2,
-                surface_gen_stacks = 2,
-                component_sets = ShipComponentSet[],
-                pipe_sets = PipeSpawnOptions[]
-            )
+            newship = make_bare_shipmap(UInt32(0xAAAA))
 
-            encounter_ship!(gm, opts, UInt32(0xAAAA), axis)
+            encounter_ship!(gm, newship, "axis_$(axis)", UInt32(0xAAAA), axis)
             @test length(gm.ships) == 2  # :primary + new ship
         end
     end
 
     @testset "encounter -> connect -> depart end-to-end" begin
         gm = GameMap()
-        opts = ShipGenOptions(
-            name = "e2e_test",
-            surface_gen_steps = 2,
-            surface_gen_stacks = 2,
-            component_sets = ShipComponentSet[],
-            pipe_sets = PipeSpawnOptions[]
-        )
+        newship = make_bare_shipmap(UInt32(0x12345678))
 
         before = Set(keys(gm.ships))
-        encounter_ship!(gm, opts, UInt32(0x12345678), HexFrame.R_POS)
+        encounter_ship!(gm, newship, "e2e_test", UInt32(0x12345678), HexFrame.R_POS)
         after = Set(keys(gm.ships))
         newship = only(setdiff(after, before))
 
@@ -546,20 +568,14 @@ end
 
     @testset "depart_ship! error cases" begin
         gm = GameMap()
-        opts = ShipGenOptions(
-            name = "depart_errs",
-            surface_gen_steps = 2,
-            surface_gen_stacks = 2,
-            component_sets = ShipComponentSet[],
-            pipe_sets = PipeSpawnOptions[]
-        )
+        newship = make_bare_shipmap(UInt32(0x9999))
 
         # Can't depart a ship that doesn't exist
         success, _ = depart_ship!(gm, :nonexistent)
         @test success == false
 
         # Can't depart a ship that is still approaching
-        encounter_ship!(gm, opts, UInt32(0x9999), HexFrame.Q_POS)
+        encounter_ship!(gm, newship, "depart_errs", UInt32(0x9999), HexFrame.Q_POS)
         newship = only(setdiff(keys(gm.ships), [:primary]))
         success2, _ = depart_ship!(gm, newship)
         @test success2 == false
@@ -769,14 +785,51 @@ end
 # Encounter point system tests
 # ===============================================================
 
+# ===============================================================
+# Encounter system test setup
+# ===============================================================
+
+"Mock class configuration for tests — uses simple ship set with single mock component."
+function make_test_class_config(pipe_opts = mock_pipe_opts)
+    mock_shipset = ShipComponentSet("mock_set", [
+        CompSpawnOptions(:MockComp, [(1, 1.0)], HexFlowProcGen.RANDOM_PLACE),
+    ])
+    return EncounterClassConfig(
+        NoScaling(1.0),
+        HullSizeConfig(LinearScaling(3.0, 0.0), LinearScaling(5.0, 0.0)),
+        LinearScaling(2.0, 0.0),
+        Dict{FluidTags, FuelTagConfig}(
+            HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0),
+                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
+            HexFluids.MONOPROP_LIQUID => FuelTagConfig(NoScaling(1.0),
+                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
+        ),
+        pipe_opts,
+    )
+end
+
+"Mock encounter system config for tests."
+function make_mock_encounter_config(; n_points::Int = 10)
+    test_class_config = make_test_class_config()
+    return EncounterSystemConfig(
+        n_points = n_points,
+        encounter_class_configs = Dict(
+            ENCOUNTER_SHIP => test_class_config,
+            ENCOUNTER_FUEL_CACHE => test_class_config,
+            ENCOUNTER_SCRAP => test_class_config,
+        ),
+    )
+end
+
 "Construct a minimal SpaceMapState with the encounter system fully initialised."
 function make_encounter_sm(; n_points = 10,
                              player_vel = SVector(0.0, 0.0),
                              player_pos = SVector(0.0, 0.0))
-    sm = SpaceMapState(seed = UInt32(0x1234ABCD), velocity = player_vel, position = player_pos)
-    config = EncounterSystemConfig(n_points = n_points)
-    initialise_encounter_system!(sm, config)
-    return sm, config
+    config = make_mock_encounter_config(n_points = n_points)
+    sm = SpaceMapState(seed = UInt32(0x1234ABCD), velocity = player_vel, position = player_pos,
+        encounter_config = config)
+    initialise_encounter_system!(sm)
+    return sm
 end
 
 @testset "Encounter point system" begin
@@ -812,11 +865,12 @@ end
     end
 
     @testset "spawn_encounter_point! at neg_spawn line" begin
-        sm, config = make_encounter_sm()
+        sm = make_encounter_sm()
+        config = get_encounter_config(sm)
         ep = sm.encounter_points[1]
         old_iter = ep.iteration
 
-        spawn_encounter_point!(ep, sm, config, 5.0, sm.neg_spawn_line_x)
+        spawn_encounter_point!(ep, sm, 5.0, sm.neg_spawn_line_x)
 
         @test ep.iteration == old_iter + 1
         @test ep.spawn_time ≈ 5.0
@@ -825,13 +879,17 @@ end
         @test abs(ep.position[2]) <= sm.viewport_half_height + config.spawn_margin
         # Velocity has a rightward component (positive X, since relative speed > 0)
         @test ep.velocity[1] > 0.0
+        @test ep.encounter_class isa EncounterClass
+        @test ep.fuel_tag isa HexFluids.FluidTags
+        @test !isempty(ep.display_name)
+        @test ep.richness >= 1.0
     end
 
     @testset "spawn_encounter_point! at pos_spawn line (backfill)" begin
-        sm, config = make_encounter_sm()
+        sm = make_encounter_sm()
         ep = sm.encounter_points[2]
 
-        spawn_encounter_point!(ep, sm, config, 0.0, sm.pos_spawn_line_x)
+        spawn_encounter_point!(ep, sm, 0.0, sm.pos_spawn_line_x)
 
         @test ep.position[1] ≈ sm.pos_spawn_line_x
         # Still has positive relative X velocity (ship drifts toward pos_disappear)
@@ -839,21 +897,21 @@ end
     end
 
     @testset "spawn_encounter_point! default uses neg_spawn_line_x" begin
-        sm, config = make_encounter_sm()
+        sm = make_encounter_sm()
         ep = sm.encounter_points[3]
 
-        spawn_encounter_point!(ep, sm, config, 0.0)
+        spawn_encounter_point!(ep, sm, 0.0)
 
         @test ep.position[1] ≈ sm.neg_spawn_line_x
     end
 
     @testset "spawn_encounter_point! is deterministic for same iteration" begin
-        sm, config = make_encounter_sm()
+        sm = make_encounter_sm()
         ep1 = sm.encounter_points[1]
         ep2 = deepcopy(ep1)
 
-        spawn_encounter_point!(ep1, sm, config, 0.0)
-        spawn_encounter_point!(ep2, sm, config, 0.0)
+        spawn_encounter_point!(ep1, sm, 0.0)
+        spawn_encounter_point!(ep2, sm, 0.0)
 
         @test ep1.position == ep2.position
         @test ep1.velocity == ep2.velocity
@@ -861,7 +919,8 @@ end
     end
 
     @testset "initialise_encounter_system! sets four boundary lines" begin
-        sm, config = make_encounter_sm()
+        sm = make_encounter_sm()
+        config = get_encounter_config(sm)
 
         expected_neg_spawn    = -config.viewport_half_width - config.spawn_margin
         expected_neg_disappear = expected_neg_spawn - config.recycle_margin
@@ -884,7 +943,7 @@ end
     end
 
     @testset "process_encounter_events! recycles forward-crossing points" begin
-        sm, config = make_encounter_sm(n_points=5)
+        sm = make_encounter_sm(n_points=5)
 
         # Manually place one point just before pos_disappear and set velocity so it crosses quickly
         ep = sm.encounter_points[1]
@@ -895,10 +954,10 @@ end
         # Predict crossing and rebuild queue so this point is in it
         crossing = predict_crossing_time(ep, sm.pos_disappear_line_x)
         @test !isnothing(crossing)
-        rebuild_event_queue!(sm, config)
+        rebuild_event_queue!(sm)
 
         old_iter = ep.iteration
-        process_encounter_events!(sm, config, crossing + 1.0)
+        process_encounter_events!(sm, crossing + 1.0)
 
         # Point should have been respawned at neg_spawn_line_x
         @test ep.iteration == old_iter + 1
@@ -906,7 +965,7 @@ end
     end
 
     @testset "rebuild_event_queue! recycles points behind neg_disappear_line_x" begin
-        sm, config = make_encounter_sm(n_points=5)
+        sm = make_encounter_sm(n_points=5)
 
         # Move one point well behind neg_disappear_line_x
         ep = sm.encounter_points[1]
@@ -915,7 +974,7 @@ end
         ep.spawn_time = sm.time_years
 
         old_iter = ep.iteration
-        rebuild_event_queue!(sm, config)
+        rebuild_event_queue!(sm)
 
         # Point should have been recycled to pos_spawn_line_x
         @test ep.iteration == old_iter + 1
@@ -923,7 +982,7 @@ end
     end
 
     @testset "rebuild_event_queue! recycles points past pos_disappear_line_x" begin
-        sm, config = make_encounter_sm(n_points=5)
+        sm = make_encounter_sm(n_points=5)
 
         # Move one point well past pos_disappear_line_x
         ep = sm.encounter_points[2]
@@ -932,7 +991,7 @@ end
         ep.spawn_time = sm.time_years
 
         old_iter = ep.iteration
-        rebuild_event_queue!(sm, config)
+        rebuild_event_queue!(sm)
 
         # Point should have been recycled to neg_spawn_line_x
         @test ep.iteration == old_iter + 1
@@ -940,7 +999,8 @@ end
     end
 
     @testset "check_line_shift! shifts all four lines by the same amount" begin
-        sm, config = make_encounter_sm()
+        sm = make_encounter_sm()
+        config = get_encounter_config(sm)
 
         neg_d0 = sm.neg_disappear_line_x
         neg_s0 = sm.neg_spawn_line_x
@@ -950,7 +1010,7 @@ end
         # Move player forward by more than one line_step_size
         shift = config.line_step_size * 2
         sm.position = SVector(sm.position[1] + shift, 0.0)
-        check_line_shift!(sm, config)
+        check_line_shift!(sm)
 
         @test sm.neg_disappear_line_x ≈ neg_d0 + shift
         @test sm.neg_spawn_line_x    ≈ neg_s0 + shift
@@ -959,17 +1019,19 @@ end
     end
 
     @testset "check_line_shift! does not shift for small movement" begin
-        sm, config = make_encounter_sm()
+        sm = make_encounter_sm()
+        config = get_encounter_config(sm)
 
         neg_s0 = sm.neg_spawn_line_x
         sm.position = SVector(sm.position[1] + config.line_step_size * 0.1, 0.0)
-        check_line_shift!(sm, config)
+        check_line_shift!(sm)
 
         @test sm.neg_spawn_line_x ≈ neg_s0
     end
 
     @testset "check_line_shift! handles negative player movement (moving backward)" begin
-        sm, config = make_encounter_sm()
+        sm = make_encounter_sm()
+        config = get_encounter_config(sm)
 
         neg_d0 = sm.neg_disappear_line_x
         neg_s0 = sm.neg_spawn_line_x
@@ -978,7 +1040,7 @@ end
 
         shift = -(config.line_step_size * 2)
         sm.position = SVector(sm.position[1] + shift, 0.0)
-        check_line_shift!(sm, config)
+        check_line_shift!(sm)
 
         @test sm.neg_disappear_line_x  ≈ neg_d0 + shift
         @test sm.neg_spawn_line_x     ≈ neg_s0 + shift
@@ -989,11 +1051,11 @@ end
     @testset "density is maintained after player acceleration (backfill scenario)" begin
         # Simulate the player outrunning ships: advance position significantly
         # then confirm no points are left behind neg_disappear_line_x
-        sm, config = make_encounter_sm(n_points = 50)
+        sm = make_encounter_sm(n_points = 50)
 
         # Move player forward enormously
         sm.position = SVector(5000.0, 0.0)
-        check_line_shift!(sm, config)
+        check_line_shift!(sm)
 
         current_time = sm.time_years
         for ep in sm.encounter_points
@@ -1004,18 +1066,18 @@ end
     end
 
     @testset "step_space_map_time! advances time and updates position" begin
-        sm, config = make_encounter_sm()
+        sm = make_encounter_sm()
         sm.velocity = SVector(100.0, 0.0)
         sm.target_time_years = 1.0
 
-        advanced = step_space_map_time!(sm; config=config, max_step=1.0)
+        advanced = step_space_map_time!(sm; max_step=1.0)
         @test advanced == true
         @test sm.time_years ≈ 1.0
         @test sm.position[1] ≈ 100.0
 
         # At target — no further advance
         sm.target_time_years = 1.0
-        advanced2 = step_space_map_time!(sm; config=config, max_step=1.0)
+        advanced2 = step_space_map_time!(sm; max_step=1.0)
         @test advanced2 == false
     end
 end

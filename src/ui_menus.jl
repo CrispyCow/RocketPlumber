@@ -6,6 +6,7 @@
 import CImGui
 using FilePathsBase, Printf, StaticArrays
 using HexFrame, FlowEngine, FlowMap, HexFlowProcGen
+using HexFluids
 using HexFlowCalculator, HexFlowControl
 
 "renders the pause menu when active, with options to close, save map, exit to menu, or quit"
@@ -198,12 +199,12 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
         # Initialise Space Map utility
         if CImGui.TreeNode("Initialise Space Map")
             spacemap_seed = gui_input_u32!(inputstate, :spacemap_init_seed, "Seed", UInt32(42))
-            init_vel_x = gui_input_double!(inputstate, :spacemap_init_vel_x, "Velocity X", 10.0)
+            init_vel_x = gui_input_double!(inputstate, :spacemap_init_vel_x, "Velocity X", 1.0)
             init_vel_y = gui_input_double!(inputstate, :spacemap_init_vel_y, "Velocity Y", 0.0)
 
             if CImGui.Button("Initialise Space Map", (button_width, button_height))
                 modified_map = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
-                initialise_spacemap!(modified_map, spacemap_seed, SVector{2, Float64}(init_vel_x, init_vel_y))
+                initialise_spacemap!(modified_map, spacemap_seed, encounter_system_config, SVector{2, Float64}(init_vel_x, init_vel_y))
                 if modified_map.space_map isa SpaceMapState
                     initialise_encounter_system!(modified_map.space_map)
                 end
@@ -339,16 +340,29 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
         end
 
         if (CImGui.TreeNode("Place Components"))
-            tileset_names = getfield.(ship_gen_tilesets, :name)
-            tileset_index = gui_listbox_int!(inputstate, :tileset_index, "Tileset", tileset_names, Int32(0))
+            all_component_sets = ShipComponentSet[
+                shipset_starter,
+                shipset_simple_cold_gas,
+                shipset_electric_monoprop,
+                shipset_turbine_monoprop,
+                compset_gas_cache,
+                compset_liquid_cache,
+                compset_extra_gas_tanks,
+                compset_extra_liquid_tanks,
+            ]
+            names = [s.name for s in all_component_sets]
+            tileset_selection = get!(inputstate.gui_inputs, :tileset_selection, Cint(0))::Cint
+            _, tileset_selection = CImGui.ListBox("##tilesets", tileset_selection,
+                names, length(names), 4)
+            inputstate.gui_inputs[:tileset_selection] = tileset_selection
 
             if CImGui.Button("Place Tileset")
-                tileset_index_oneindexed = tileset_index + 1
-                @info "Placing Components from $(tileset_names[tileset_index_oneindexed])..."
+                selected_set = all_component_sets[tileset_selection + 1]
                 tilesetmap::GameMap = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
-                place_shipset!(tilesetmap, ship_gen_tilesets[tileset_index_oneindexed], seed)
+                success, msg = place_shipset!(tilesetmap, selected_set, seed)
 
                 enqueue_map_override!(flowcalc_ipc, tilesetmap)
+                @info "Placed tileset" name=selected_set.name success msg
             end
             CImGui.TreePop()
         end
@@ -397,33 +411,62 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             CImGui.TreePop()
         end
 
+        if (CImGui.TreeNode("Generate Encounter"))
+            class_names = ["Jumbled Ship", "Fuel Cache", "Scrap Clump"]
+            class_enums = [ENCOUNTER_SHIP, ENCOUNTER_FUEL_CACHE, ENCOUNTER_SCRAP]
+            class_sel = gui_listbox_int!(inputstate, :enc_class_sel, "Class", class_names, Cint(0))
 
-        if (CImGui.TreeNode("Generate Ship"))
+            fuel_names = ["COLD_GAS", "MONOPROP_LIQUID", "NONE"]
+            fuel_enums = [HexFluids.COLD_GAS, HexFluids.MONOPROP_LIQUID, HexFluids.NONE]
+            fuel_sel = gui_listbox_int!(inputstate, :enc_fuel_sel, "Fuel Tag", fuel_names, Cint(0))
 
-            shipconfig_names = getfield.(ship_gen_configs, :name)
-            shipconfig_index = gui_listbox_int!(inputstate, :shipconfig_index, "shipconfig", shipconfig_names, Int32(0))
+            richness_val = gui_input_double!(inputstate, :enc_richness, "Richness", 1.0;
+                step_small = 0.5, step_fast = 1.0, fmt = "%.2f")
+            richness_val = max(richness_val, 0.0)
+            inputstate.gui_inputs[:enc_richness] = richness_val
 
-            if CImGui.Button("Create New Ship", (button_width, button_height))
-                ship = generate_ship(ship_gen_configs[shipconfig_index + 1], seed)
+            seed_val = gui_input_s64!(inputstate, :enc_seed, "Seed", Int64(42))
+            inputstate.gui_inputs[:enc_seed] = seed_val
 
-                enqueue_map_override!(flowcalc_ipc, GameMap(ship))
+            dir_names = ["Q+", "R-", "S+", "Q-", "R+", "S-"]
+            dir_sel = gui_listbox_int!(inputstate, :enc_dir_sel, "Direction", dir_names, Cint(3))
+
+            enc_class = class_enums[class_sel + 1]
+            enc_fuel = fuel_enums[fuel_sel + 1]
+            enc_richness = Float64(richness_val)
+            enc_seed = UInt32(abs(seed_val))
+            enc_dir = HexFrame.HexAxis(dir_sel)
+
+            class_config = encounter_system_config.encounter_class_configs[enc_class]
+            steps, stacks = compute_hull_size(class_config.hull_size, enc_richness)
+            target = compute_target_components(class_config.target_components, enc_richness)
+            CImGui.Text(@sprintf("Hull: %d steps, %d stacks", steps, stacks))
+            CImGui.Text(@sprintf("Target components: %d", target))
+
+            fuel_valid = haskey(class_config.fuel_configs, enc_fuel)
+            if !fuel_valid
+                valid_tags = join(string.(keys(class_config.fuel_configs)), ", ")
+                CImGui.TextColored(ImVec4(1.0, 0.4, 0.4, 1.0),
+                    "Fuel tag not in class config. Valid: $valid_tags")
             end
-            CImGui.TreePop()
-        end
 
-        if (CImGui.TreeNode("Encounter Ship"))
-
-            shipconfig_names = getfield.(ship_gen_configs, :name)
-            shipconfig_index = gui_listbox_int!(inputstate, :shipconfig_index, "shipconfig", shipconfig_names, Int32(0))
-
-            hexaxis_names = collect(string.(instances(HexAxis)))
-            hexaxis_index = gui_listbox_int!(inputstate, :hexaxis_index, "hexaxis", hexaxis_names, Int32(0))
-
-            if CImGui.Button("Encounter New Ship", (button_width, button_height))
+            if CImGui.Button("Generate & Dock", ImVec2(-1, 30)) && fuel_valid
+                new_shipmap = generate_encounter(enc_class, enc_fuel, enc_richness,
+                    enc_seed, class_config)
+                display_name = generate_encounter_name(enc_seed, enc_class)
                 encounter_map = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
-                encounter_ship!(encounter_map, ship_gen_configs[shipconfig_index + 1], seed, instances(HexAxis)[hexaxis_index + 1]; max_view_bounds=max_view_bounds)
-
+                encounter_ship!(encounter_map, new_shipmap, display_name,
+                                 enc_seed, enc_dir; max_view_bounds=max_view_bounds)
                 enqueue_map_override!(flowcalc_ipc, encounter_map)
+                @info "Dev: generated encounter" name=display_name class=enc_class richness=enc_richness
+            end
+
+            if CImGui.Button("Generate (No Dock)", ImVec2(-1, 30)) && fuel_valid
+                new_shipmap = generate_encounter(enc_class, enc_fuel, enc_richness,
+                    enc_seed, class_config)
+                new_gamemap = GameMap(ships = Dict(:primary => new_shipmap))
+                enqueue_map_override!(flowcalc_ipc, new_gamemap)
+                @info "Dev: generated standalone encounter" class=enc_class richness=enc_richness
             end
             CImGui.TreePop()
         end

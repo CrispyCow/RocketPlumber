@@ -6,6 +6,7 @@
 using CImGui
 using LinearAlgebra, Printf, StaticArrays
 using HexFrame, FlowEngine, FlowMap, HexComponentsAPI
+using HexFlowRendering, HexFluids
 using ImPlot
 using HexFlowProcGen
 using HexFlowCalculator
@@ -337,6 +338,23 @@ end
 const SPACEMAP_LEFT_PANEL_WIDTH = 280.0
 const SPACEMAP_CLICK_RADIUS_SQ = 400.0   # Squared distance in plot units for click detection
 
+"Convert a FluidTags value to an ImVec4 colour for UI display, using the rendering fluid colours."
+function fluid_tag_to_imvec4(tag::HexFluids.FluidTags)::ImVec4
+    if tag == HexFluids.NONE
+        return ImVec4(0.6, 0.6, 0.6, 0.7)
+    end
+    c = HexFlowRendering.get_fluid_colour(tag)
+    return ImVec4(Float64(c[1]), Float64(c[2]), Float64(c[3]), Float64(c[4]))
+end
+
+"Human-readable label for an encounter class."
+function encounter_class_label(cls::EncounterClass)::String
+    cls == ENCOUNTER_SHIP && return "Jumbled Ship"
+    cls == ENCOUNTER_FUEL_CACHE && return "Fuel Cache"
+    cls == ENCOUNTER_SCRAP && return "Scrap Clump"
+    return "Unknown"
+end
+
 #= ---------- Velocity Tracker Constants ---------- =#
 
 const VELOCITY_TRACKER_WIDTH = 300.0
@@ -524,27 +542,31 @@ function ui_velocity_tracker_render(
                 sm = gamemap.space_map
                 if sm isa SpaceMapState
                     ep = sm.encounter_points[manoeuvre.target_encounter_index]
-                    ship_opts = get_encounter_ship_options(ep, ship_gen_weights)
                     enc_seed = get_encounter_ship_seed(ep, sm.seed)
                     approach_angle = atan(ep.velocity[2], ep.velocity[1])
                     approach_dir = angle_to_hexaxis(rad2deg(approach_angle))
 
+                    enc_config = get_encounter_config(sm)
+                    class_config = enc_config.encounter_class_configs[ep.encounter_class]
+                    new_shipmap = generate_encounter(ep.encounter_class, ep.fuel_tag, ep.richness, enc_seed, class_config)
+
                     encounter_map = deepcopy(gamemap)
                     clear_active_manoeuvre!(encounter_map)
-                    encounter_ship!(encounter_map, ship_opts, enc_seed, approach_dir; max_view_bounds)
+                    encounter_ship!(encounter_map, new_shipmap, ep.display_name,
+                                     enc_seed, approach_dir; max_view_bounds)
 
                     # Recycle encountered point immediately so it disappears from the space map.
                     if encounter_map.space_map isa SpaceMapState
                         encounter_sm = encounter_map.space_map::SpaceMapState
                         if manoeuvre.target_encounter_index >= 1 && manoeuvre.target_encounter_index <= length(encounter_sm.encounter_points)
                             encountered_point = encounter_sm.encounter_points[manoeuvre.target_encounter_index]
-                            spawn_encounter_point!(encountered_point, encounter_sm, EncounterSystemConfig(), encounter_sm.time_years)
+                            spawn_encounter_point!(encountered_point, encounter_sm, encounter_sm.time_years)
                             rebuild_event_queue!(encounter_sm)
                         end
                     end
 
                     enqueue_map_override!(flowcalc_ipc, encounter_map)
-                    @info "Encounter triggered automatically" ship=ship_opts.name
+                    @info "Encounter triggered" name=ep.display_name class=ep.encounter_class
                 end
             end
         end
@@ -700,8 +722,12 @@ function render_spacemap_active_manoeuvre_panel!(
 
     if target_idx >= 1 && target_idx <= length(encounter_points)
         ep = encounter_points[target_idx]
-        ship_opts = get_encounter_ship_options(ep, ship_gen_weights)
-        CImGui.Text("Target: $(ship_opts.name)")
+        CImGui.TextColored(fluid_tag_to_imvec4(ep.fuel_tag),
+            "Target: $(ep.display_name) ($(encounter_class_label(ep.encounter_class)))")
+        fuel_label = fluid_tag_label(ep.fuel_tag)
+        if !isnothing(fuel_label)
+            CImGui.TextColored(fluid_tag_to_imvec4(ep.fuel_tag), "Fuel: $fuel_label")
+        end
     end
 
     CImGui.Text("Phase: $(string(phase))")
@@ -771,7 +797,6 @@ function render_spacemap_encounter_planning_panel!(
         CImGui.TextWrapped("Click an encounter point on the map to select it.")
     else
         ep = encounter_points[selected_idx]
-        ship_opts = get_encounter_ship_options(ep, ship_gen_weights)
         ep_pos = get_encounter_position(ep, current_time)
         distance = norm(ep_pos - player_pos)
         ca = compute_closest_approach(player_pos, player_vel, ep, current_time)
@@ -788,7 +813,13 @@ function render_spacemap_encounter_planning_panel!(
         # Clamp stored value to be at least min_dv
         delta_v_slider = max(delta_v_slider, Cfloat(min_dv))
 
-        CImGui.Text("Ship: $(ship_opts.name)")
+        CImGui.TextColored(fluid_tag_to_imvec4(ep.fuel_tag),
+            "$(encounter_class_label(ep.encounter_class)): $(ep.display_name)")
+        fuel_label = fluid_tag_label(ep.fuel_tag)
+        if !isnothing(fuel_label)
+            CImGui.TextColored(fluid_tag_to_imvec4(ep.fuel_tag), "Fuel: $fuel_label")
+        end
+        CImGui.Text(@sprintf("Richness: %.1f", ep.richness))
         CImGui.Text(@sprintf("Distance: %.0f", distance))
         CImGui.Text(@sprintf("Relative Vel: %.1f", norm(ep.velocity - player_vel)))
         CImGui.Separator()
@@ -821,7 +852,7 @@ function render_spacemap_encounter_planning_panel!(
                 modified_map = deepcopy(gamemap)
                 set_active_manoeuvre!(modified_map, preview_manoeuvre)
                 enqueue_map_override!(flowcalc_ipc, modified_map)
-                @info "Manoeuvre planned" target=ship_opts.name dv=total_dv
+                @info "Manoeuvre planned" target=ep.display_name dv=total_dv
             end
         end
     end
@@ -1046,10 +1077,33 @@ function render_spacemap_plot_area!(
                     Float64[enc_ys[i], vel_tip[2]])
             end
 
-            # Render encounter points on top of velocity arrows
-            ImPlot.SetNextMarkerStyle(ImPlot.ImPlotMarker_Circle, 4.0,
-                ImVec4(0.8, 0.6, 0.2, 0.8))
-            ImPlot.PlotScatter("##encounters", enc_xs, enc_ys, n_enc)
+            # Bucket encounters by (class, fuel_tag) for coloured markers.
+            # Shape distinguishes class; colour distinguishes fuel type.
+            marker_buckets = Dict{Tuple{EncounterClass, HexFluids.FluidTags}, Tuple{Vector{Float64}, Vector{Float64}}}()
+            for i in 1:n_enc
+                ep = encounter_points[i]
+                key = (ep.encounter_class, ep.fuel_tag)
+                xs, ys = get!(marker_buckets, key) do
+                    (Float64[], Float64[])
+                end
+                push!(xs, enc_xs[i])
+                push!(ys, enc_ys[i])
+            end
+
+            for ((cls, tag), (xs, ys)) in marker_buckets
+                isempty(xs) && continue
+                marker = if cls == ENCOUNTER_SHIP
+                    ImPlot.ImPlotMarker_Circle
+                elseif cls == ENCOUNTER_FUEL_CACHE
+                    ImPlot.ImPlotMarker_Square
+                else
+                    ImPlot.ImPlotMarker_Cross
+                end
+                size = cls == ENCOUNTER_FUEL_CACHE ? 5.0 : 4.0
+                colour = fluid_tag_to_imvec4(tag)
+                ImPlot.SetNextMarkerStyle(marker, size, colour)
+                ImPlot.PlotScatter("##enc_$(cls)_$(tag)", xs, ys, length(xs))
+            end
 
             # Render selected encounter highlight
             if selected_idx >= 1 && selected_idx <= n_enc

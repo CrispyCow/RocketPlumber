@@ -1,6 +1,6 @@
 module FlowMap
 
-using HexFrame, HexComponentsAPI
+using HexFrame, HexComponentsAPI, HexFluids
 import HexComponentsAPI: placement_valid
 
 using StructEquality
@@ -10,7 +10,8 @@ using DataStructures: BinaryMinHeap
 # Type Exports
 export ShipMap, GameMap, RenderPosOffsetState
 export DockingStatus, ConnectedDockStat, ApproachingDockStat, DepartingDockStat
-export AbstractSpaceMap, SpaceMapEmpty, SpaceMapState, ManoeuvreData
+export AbstractSpaceMap, SpaceMapEmpty, ManoeuvreData
+export EncounterClass, ENCOUNTER_SHIP, ENCOUNTER_FUEL_CACHE, ENCOUNTER_SCRAP
 export ManoeuvrePhase, PHASE_WAIT_APPROACH, PHASE_MAIN_BURN, PHASE_COAST, PHASE_DECEL_BURN, PHASE_ENCOUNTER_READY
 export EncounterPoint, EncounterEvent
 # Function Exports
@@ -147,8 +148,12 @@ get_approach_axis(status::DepartingDockStat)::Union{HexAxis, Nothing} = status.a
 # Space Map Types
 # ===============================================================
 
-"Abstract base for all space map representations."
-abstract type AbstractSpaceMap end
+"Classifies what type of encounter an encounter point represents."
+@enum EncounterClass::UInt8 begin
+    ENCOUNTER_SHIP          # Jumbled ship with propulsion components
+    ENCOUNTER_FUEL_CACHE    # Heavy platform with fuel tanks, no engines
+    ENCOUNTER_SCRAP         # Random assortment of individual components
+end
 
 "A single encounter point — a ship moving through space on a linear trajectory."
 @kwdef mutable struct EncounterPoint
@@ -159,6 +164,10 @@ abstract type AbstractSpaceMap end
     velocity::SVector{2, Float64} = SVector(0.0, 0.0)   # Actual velocity vector (absolute)
     spawn_time::Float64 = 0.0                           # Time (years) when the current trajectory started
     ship_type_seed::UInt32 = UInt32(0)                  # Seed for proc-gen
+    encounter_class::EncounterClass = ENCOUNTER_SCRAP   # What kind of encounter this is
+    fuel_tag::FluidTags = HexFluids.NONE                # Primary fuel type (NONE for scrap)
+    display_name::String = ""                           # Human-readable name (generated at spawn time)
+    richness::Float64 = 0.0                             # Richness at spawn time (cached for UI display)
 end
 
 "Event representing when an encounter point crosses the disappear line."
@@ -210,36 +219,19 @@ Reference frames:
 end
 @struct_hash_equal ManoeuvreData
 
+"Abstract base for all space map representations."
+abstract type AbstractSpaceMap end
+
 "Minimal space map placeholder that only stores ship velocity. Used for tutorials and old saves."
 @kwdef mutable struct SpaceMapEmpty <: AbstractSpaceMap
     velocity::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
 end
 @struct_hash_equal SpaceMapEmpty
 
-"Full space map state with seed, velocity, position, encounter points, and event queue."
-@kwdef mutable struct SpaceMapState <: AbstractSpaceMap
-    seed::UInt32 = UInt32(0)
-    velocity::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
-    position::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
-    time_years::Float64 = 0.0
-    target_time_years::Float64 = 0.0
-    active_manoeuvre::Union{Nothing, ManoeuvreData} = nothing
-    # Encounter system
-    encounter_points::Vector{EncounterPoint} = EncounterPoint[]
-    event_queue::BinaryMinHeap{EncounterEvent} = BinaryMinHeap{EncounterEvent}()
-    neg_disappear_line_x::Float64 = -1600.0
-    neg_spawn_line_x::Float64 = -1500.0
-    pos_spawn_line_x::Float64 = 1500.0
-    pos_disappear_line_x::Float64 = 1600.0
-    last_line_step_x::Float64 = 0.0
-    line_step_size::Float64 = 200.0
-    viewport_half_width::Float64 = 1000.0
-    viewport_half_height::Float64 = 500.0
-end
-
 # ===============================================================
 # AbstractSpaceMap Accessor Functions
 # ===============================================================
+# SpaceMapEmpty implementations provided here; SpaceMapState implementations in HexFlowProcGen
 
 "Get the ship's current velocity vector."
 get_velocity(sm::AbstractSpaceMap)::SVector{2, Float64} = sm.velocity
@@ -249,31 +241,24 @@ set_velocity!(sm::AbstractSpaceMap, v::SVector{2, Float64}) = (sm.velocity = v)
 
 "Get the space map seed. Returns nothing for SpaceMapEmpty."
 get_space_map_seed(::SpaceMapEmpty)::Nothing = nothing
-get_space_map_seed(sm::SpaceMapState)::UInt32 = sm.seed
 
 "Get the current time in years. Returns nothing for SpaceMapEmpty."
 get_time_years(::SpaceMapEmpty)::Nothing = nothing
-get_time_years(sm::SpaceMapState)::Float64 = sm.time_years
 
 "Set the current time in years. No-op for SpaceMapEmpty."
 set_time_years!(::SpaceMapEmpty, ::Float64) = nothing
-set_time_years!(sm::SpaceMapState, t::Float64) = (sm.time_years = t)
 
 "Get the active manoeuvre data, or nothing if none is active."
 get_active_manoeuvre(::SpaceMapEmpty)::Nothing = nothing
-get_active_manoeuvre(sm::SpaceMapState)::Union{Nothing, ManoeuvreData} = sm.active_manoeuvre
 
 "Check whether a manoeuvre is currently active."
 has_active_manoeuvre(::SpaceMapEmpty)::Bool = false
-has_active_manoeuvre(sm::SpaceMapState)::Bool = !isnothing(sm.active_manoeuvre)
 
 "Set an active manoeuvre on the space map. No-op for SpaceMapEmpty."
 set_active_manoeuvre!(::SpaceMapEmpty, ::ManoeuvreData) = nothing
-set_active_manoeuvre!(sm::SpaceMapState, m::ManoeuvreData) = (sm.active_manoeuvre = m)
 
 "Clear any active manoeuvre. No-op for SpaceMapEmpty."
 clear_active_manoeuvre!(::SpaceMapEmpty) = nothing
-clear_active_manoeuvre!(sm::SpaceMapState) = (sm.active_manoeuvre = nothing)
 
 # ===============================================================
 # Position, Target Time, and Encounter Accessors
@@ -281,27 +266,24 @@ clear_active_manoeuvre!(sm::SpaceMapState) = (sm.active_manoeuvre = nothing)
 
 "Get the ship's current position vector."
 get_position(::SpaceMapEmpty)::SVector{2, Float64} = SVector(0.0, 0.0)
-get_position(sm::SpaceMapState)::SVector{2, Float64} = sm.position
 
 "Set the ship's position vector. No-op for SpaceMapEmpty."
 set_position!(::SpaceMapEmpty, ::SVector{2, Float64}) = nothing
-set_position!(sm::SpaceMapState, p::SVector{2, Float64}) = (sm.position = p)
 
 "Get the target time for time progression."
 get_target_time(::SpaceMapEmpty)::Float64 = 0.0
-get_target_time(sm::SpaceMapState)::Float64 = sm.target_time_years
 
 "Set the target time for time progression. No-op for SpaceMapEmpty."
 set_target_time!(::SpaceMapEmpty, ::Float64) = nothing
-set_target_time!(sm::SpaceMapState, t::Float64) = (sm.target_time_years = t)
 
 "Check whether time is currently being progressed (current < target)."
 is_time_progressing(::SpaceMapEmpty)::Bool = false
-is_time_progressing(sm::SpaceMapState)::Bool = sm.time_years < sm.target_time_years
 
 "Get the encounter points vector. Empty for SpaceMapEmpty."
 get_encounter_points(::SpaceMapEmpty) = EncounterPoint[]
-get_encounter_points(sm::SpaceMapState) = sm.encounter_points
+
+"Overwrite the game map's space map. Implementation provided by HexFlowProcGen."
+function initialise_spacemap! end
 
 # ===============================================================
 # Ship Map and Game Map Struct Types
@@ -1430,12 +1412,6 @@ is_time_progressing(gamemap::GameMap)::Bool = is_time_progressing(gamemap.space_
 
 "Get encounter points from the game map."
 get_encounter_points(gamemap::GameMap) = get_encounter_points(gamemap.space_map)
-
-"Overwrite the game map's space map with a new SpaceMapState using the given seed and velocity."
-function initialise_spacemap!(gamemap::GameMap, seed::UInt32, velocity::SVector{2, Float64} = SVector{2, Float64}(100.0, 0.0))
-    gamemap.space_map = SpaceMapState(seed = seed, velocity = velocity, time_years = 0.0)
-    return nothing
-end
 
 "Calculate the total mass of all ships in the game map based on surface tile count."
 function get_mass(gamemap::GameMap; mass_per_tile::Float64 = 1000.0)::Float64

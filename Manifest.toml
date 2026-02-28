@@ -2,7 +2,7 @@
 
 julia_version = "1.12.1"
 manifest_format = "2.0"
-project_hash = "78f0d94409ee2113ba4cdb81c7e7816738fce388"
+project_hash = "910919873fb61240ac2f3661fb59d4467cc271aa"
 
 [[deps.ATK_jll]]
 deps = ["Artifacts", "Glib_jll", "JLLWrappers", "Libdl"]
@@ -321,7 +321,7 @@ uuid = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
 version = "0.1.0"
 
 [[deps.FlowMap]]
-deps = ["DataStructures", "HexComponentsAPI", "HexFrame", "StaticArrays", "StructEquality"]
+deps = ["DataStructures", "HexComponentsAPI", "HexFluids", "HexFrame", "StaticArrays", "StructEquality", "Test"]
 path = "local_packages/FlowMap"
 uuid = "86ae9052-88d6-4179-aacc-02095df7ba41"
 version = "0.1.0"
@@ -440,7 +440,7 @@ uuid = "a5bfb9cd-4dce-4d41-851e-e34bf63bcb54"
 version = "0.1.0"
 
 [[deps.HexFlowCalculator]]
-deps = ["Dates", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowControl", "HexFlowProcGen", "HexFlowTelemetry", "HexFluids", "HexFrame", "LinearAlgebra", "Printf", "SparseArrays", "StaticArrays", "StructEquality", "TimerOutputs"]
+deps = ["Dates", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowControl", "HexFlowProcGen", "HexFlowTelemetry", "HexFluids", "HexFrame", "LinearAlgebra", "Printf", "SparseArrays", "StaticArrays", "StructEquality", "Test", "TimerOutputs"]
 path = "local_packages/HexFlowCalculator"
 uuid = "d8e9f3a2-7b4c-4e1d-9f3a-2c5b8e7d9f1a"
 version = "0.1.0"
@@ -464,7 +464,7 @@ uuid = "994b1c28-7126-425a-9af0-3768b98dec97"
 version = "0.1.0"
 
 [[deps.HexFlowProcGen]]
-deps = ["DataStructures", "FlowEngine", "FlowMap", "GeometryBasics", "HexComponentsAPI", "HexFrame", "LinearAlgebra", "Random", "SquirrelNoise", "StaticArrays", "Test"]
+deps = ["DataStructures", "FlowEngine", "FlowMap", "GeometryBasics", "HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "LinearAlgebra", "Printf", "Random", "SquirrelNoise", "StaticArrays", "Statistics", "StructEquality", "Test"]
 path = "local_packages/HexFlowProcGen"
 uuid = "46cebafd-6e5b-4504-9515-23fc742129ca"
 version = "0.1.0"

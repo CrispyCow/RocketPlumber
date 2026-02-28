@@ -3,6 +3,7 @@ using FlowMap
 using HexFrame
 using HexFrame: Q_POS, Q_NEG, R_POS, R_NEG, S_POS, S_NEG, NODE_INTERNAL, GROUND
 using HexComponentsAPI
+using HexFluids
 using StaticArrays
 
 # ===============================================================
@@ -1080,41 +1081,12 @@ end
     clear_active_manoeuvre!(sm)
 end
 
-@testset "SpaceMapState — accessors" begin
-    sm = SpaceMapState(seed = UInt32(42))
-
-    @test get_space_map_seed(sm) == UInt32(42)
-    @test get_time_years(sm) == 0.0
-    @test get_velocity(sm) ≈ SVector(0.0, 0.0)
-    @test get_position(sm) ≈ SVector(0.0, 0.0)
-    @test !has_active_manoeuvre(sm)
-    @test !is_time_progressing(sm)
-
-    # Setters
-    set_velocity!(sm, SVector(5.0, 3.0))
-    @test get_velocity(sm) ≈ SVector(5.0, 3.0)
-
-    set_time_years!(sm, 2.5)
-    @test get_time_years(sm) == 2.5
-
-    set_position!(sm, SVector(100.0, 200.0))
-    @test get_position(sm) ≈ SVector(100.0, 200.0)
-
-    set_target_time!(sm, 5.0)
-    @test get_target_time(sm) == 5.0
-    @test is_time_progressing(sm)  # current (2.5) < target (5.0)
-
-    # Manoeuvre
-    man = ManoeuvreData(main_burn_dv = SVector(1.0, 0.0), decel_burn_dv = SVector(-1.0, 0.0))
-    set_active_manoeuvre!(sm, man)
-    @test has_active_manoeuvre(sm)
-    @test get_active_manoeuvre(sm) === man
-
-    clear_active_manoeuvre!(sm)
-    @test !has_active_manoeuvre(sm)
+@testset "SpaceMapState — accessors (moved to HexFlowProcGen)" begin
+    # SpaceMapState has been moved to HexFlowProcGen. These tests are now in HexFlowProcGen.
+    @test true
 end
 
-@testset "GameMap — space map delegation" begin
+@testset "GameMap — space map delegation (SpaceMapEmpty only)" begin
     gm = GameMap()
 
     # Default space map is SpaceMapEmpty
@@ -1124,35 +1096,7 @@ end
     set_velocity!(gm, SVector(10.0, 0.0))
     @test get_velocity(gm) ≈ SVector(10.0, 0.0)
 
-    # Initialise with SpaceMapState
-    initialise_spacemap!(gm, UInt32(123))
-    @test get_spacemap(gm) isa SpaceMapState
-    @test get_space_map_seed(gm) == UInt32(123)
-    @test get_velocity(gm) ≈ SVector(100.0, 0.0)  # default velocity
-
-    # Time
-    set_time_years!(gm, 1.0)
-    @test get_time_years(gm) == 1.0
-
-    # Position
-    set_position!(gm, SVector(50.0, 50.0))
-    @test get_position(gm) ≈ SVector(50.0, 50.0)
-
-    # Manoeuvre delegation
-    @test !has_active_manoeuvre(gm)
-    man = ManoeuvreData(main_burn_dv = SVector(1.0, 0.0), decel_burn_dv = SVector(-1.0, 0.0))
-    set_active_manoeuvre!(gm, man)
-    @test has_active_manoeuvre(gm)
-    clear_active_manoeuvre!(gm)
-    @test !has_active_manoeuvre(gm)
-
-    # Target time
-    set_target_time!(gm, 5.0)
-    @test get_target_time(gm) == 5.0
-    @test is_time_progressing(gm)
-
-    # Encounter points
-    @test isempty(get_encounter_points(gm))
+    # SpaceMapState-specific tests moved to HexFlowProcGen
 end
 
 @testset "get_mass" begin
@@ -1216,6 +1160,19 @@ end
     @test ep.position ≈ SVector(0.0, 0.0)
     @test ep.velocity ≈ SVector(0.0, 0.0)
     @test ep.spawn_time == 0.0
+    @test ep.encounter_class == ENCOUNTER_SCRAP
+    @test ep.fuel_tag == HexFluids.NONE
+    @test ep.display_name == ""
+    @test ep.richness == 0.0
+end
+
+@testset "EncounterClass" begin
+    @test ENCOUNTER_SHIP isa EncounterClass
+    @test ENCOUNTER_FUEL_CACHE isa EncounterClass
+    @test ENCOUNTER_SCRAP isa EncounterClass
+    @test Int(ENCOUNTER_SHIP) != Int(ENCOUNTER_FUEL_CACHE)
+    @test Int(ENCOUNTER_FUEL_CACHE) != Int(ENCOUNTER_SCRAP)
+    @test Int(ENCOUNTER_SHIP) != Int(ENCOUNTER_SCRAP)
 end
 
 @testset "EncounterEvent ordering" begin
@@ -1228,19 +1185,10 @@ end
     @test !isless(e2, e1)
 end
 
-@testset "initialise_spacemap!" begin
-    gm = GameMap()
-    @test get_spacemap(gm) isa SpaceMapEmpty
-
-    initialise_spacemap!(gm, UInt32(99))
-    @test get_spacemap(gm) isa SpaceMapState
-    @test get_space_map_seed(gm) == UInt32(99)
-    @test get_velocity(gm) ≈ SVector(100.0, 0.0)
-    @test get_time_years(gm) == 0.0
-
-    # Custom velocity
-    initialise_spacemap!(gm, UInt32(42), SVector(50.0, 25.0))
-    @test get_velocity(gm) ≈ SVector(50.0, 25.0)
+@testset "initialise_spacemap! (moved to HexFlowProcGen)" begin
+    # initialise_spacemap! implementation has moved to HexFlowProcGen.
+    # These tests are now in HexFlowProcGen tests.
+    @test true
 end
 
 end # @testset "FlowMap"

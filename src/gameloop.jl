@@ -2,7 +2,7 @@
 # Helper Functions for the Game Main Loop
 # ===============================================================
 
-using HexFlowTelemetry, FlowMap, FlowEngine, HexFlowProcGen
+using HexFlowTelemetry, FlowMap, FlowEngine, HexFlowProcGen, HexFluids
 using StaticArrays
 using LinearAlgebra
 
@@ -95,7 +95,7 @@ function setup_flowcalc_ipc(initial_snapshot::FlowCalculatorSnapshot)::FlowCalcu
         set_snapshot,
         get_snapshot,
         console_push,
-        console_see
+        console_see,
     )
 end
 
@@ -292,7 +292,24 @@ JLD2.rconvert(::Type{SpaceMapState}, nt::NamedTuple) = SpaceMapState(
     line_step_size     = get(nt, :line_step_size, 200.0),
     viewport_half_width  = get(nt, :viewport_half_width, 1000.0),
     viewport_half_height = get(nt, :viewport_half_height, 500.0),
+    encounter_config   = encounter_system_config,  # Old saves get current encounter rules
 )
+
+function JLD2.rconvert(::Type{EncounterPoint}, nt::NamedTuple)
+    EncounterPoint(
+        index = nt.index,
+        iteration = get(nt, :iteration, 0),
+        base_velocity = nt.base_velocity,
+        position = get(nt, :position, SVector(0.0, 0.0)),
+        velocity = get(nt, :velocity, SVector(0.0, 0.0)),
+        spawn_time = get(nt, :spawn_time, 0.0),
+        ship_type_seed = get(nt, :ship_type_seed, UInt32(0)),
+        encounter_class = get(nt, :encounter_class, ENCOUNTER_SCRAP),
+        fuel_tag = get(nt, :fuel_tag, HexFluids.NONE),
+        display_name = get(nt, :display_name, ""),
+        richness = get(nt, :richness, 0.0),
+    )
+end
 
 function loadmap(mappath::Union{Nothing, String})::GameMap
     # gaurd clause for empty path
@@ -317,8 +334,9 @@ function loadmap(mappath::Union{Nothing, String})::GameMap
                 "FlowEngine.DepartingDockStat" => JLD2.Upgrade(FlowMap.DepartingDockStat),
                 "FlowEngine.RenderPosOffsetState" => JLD2.Upgrade(FlowMap.RenderPosOffsetState),
                 "FlowMap.SpaceMapEmpty" => JLD2.Upgrade(FlowMap.SpaceMapEmpty),
-                "FlowMap.SpaceMapState" => JLD2.Upgrade(FlowMap.SpaceMapState),
+                "FlowMap.SpaceMapState" => JLD2.Upgrade(HexFlowProcGen.SpaceMapState),
                 "FlowMap.ManoeuvreData" => JLD2.Upgrade(FlowMap.ManoeuvreData),
+                "FlowMap.EncounterPoint" => JLD2.Upgrade(FlowMap.EncounterPoint),
             )
 
             # Use the functional API instead of macro so we can pass keyword args (typemap) safely

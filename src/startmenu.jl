@@ -232,9 +232,9 @@ function handle_start_menu_action!(state::StartMenuState, window::GLFW.Window)::
     elseif action == ACTION_START_EXPLORER
         seed = UInt32(get(state.menu_inputs, :explorer_seed, UInt32(42)))
         @info "Generating explorer mode map with seed=$seed"
-        ship = generate_ship(starter_ship, seed)
+        ship = generate_starter_ship(seed)
         gamemap = GameMap(ships = Dict(:primary => ship))
-        initialise_spacemap!(gamemap, seed)
+        initialise_spacemap!(gamemap, seed, encounter_system_config)
         initialise_encounter_system!(gamemap.space_map)
         enter_gameloop(window, map_source = gamemap)
 

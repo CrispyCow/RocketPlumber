@@ -1,15 +1,27 @@
 module HexFlowProcGen
 
-using Random, LinearAlgebra, GeometryBasics, StaticArrays
-using HexFrame, FlowMap, SquirrelNoise, HexComponentsAPI, FlowEngine
+using Random, LinearAlgebra, GeometryBasics, StaticArrays, Printf
+using HexFrame, FlowMap, SquirrelNoise, HexComponentsAPI, FlowEngine, HexFluids
 using DataStructures: BinaryMinHeap
+using StructEquality: @struct_hash_equal
+
+# Import FlowMap functions to extend with SpaceMapState methods
+import FlowMap: AbstractSpaceMap, get_velocity, set_velocity!, get_space_map_seed
+import FlowMap: get_time_years, set_time_years!, get_active_manoeuvre, has_active_manoeuvre
+import FlowMap: set_active_manoeuvre!, clear_active_manoeuvre!, get_position, set_position!
+import FlowMap: get_target_time, set_target_time!, is_time_progressing, get_encounter_points
+import FlowMap: initialise_spacemap!
 
 export random_tile_walk!, random_tile_walk, stacked_random_tile_walk!
 export weighted_roll_noise, pick_from_range, pick_from_options
 export CompPlacementStrategy, ShipComponentSet, CompSpawnOptions, roll_component
 export PipePlacementStrategy, PipeSpawnOptions, roll_pipe
 export place_shipset!, place_random_pipes!, place_connected_pipes!, place_pipeset!
-export ShipGenOptions, generate_ship, encounter_ship!, depart_ship!
+export ScalingRule, NoScaling, LinearScaling, GatedLinearScaling, evaluate_scaling
+export WeightedComponentSet
+export select_encounter_class, select_fuel_tag
+export generate_encounter, generate_encounter_name
+export encounter_ship!, depart_ship!
 export check_departure_pipe_connections
 export EncounterSystemConfig, initialise_encounter_system!
 export spawn_encounter_point!, get_encounter_position, predict_crossing_time
@@ -17,8 +29,13 @@ export rebuild_event_queue!, check_line_shift!, process_encounter_events!
 export step_space_map_time!
 export calculate_minimum_intercept_dv, plan_intercept_manoeuvre
 export compute_closest_approach
-export get_encounter_ship_options, get_encounter_ship_seed
+export get_encounter_ship_seed
 export generate_base_velocities
+
+# Config type and function exports
+export HullSizeConfig, FuelTagConfig, EncounterClassConfig
+export compute_hull_size, compute_target_components, evaluate_component_pool, calculate_richness
+export SpaceMapState, get_encounter_config
 
 
 # =============================================================== #
@@ -54,6 +71,7 @@ end
 
 "Selects a weighted random item from `weights` based on SquirrelNoise with the given `point` and `seed`."
 function weighted_roll_noise(weights::Vector{Tuple{T, Float64}}, point, seed::UInt32) where {T}
+    isempty(weights) && error("weighted_roll_noise called with empty weights vector")
     total_weight = sum(w[2] for w in weights)
     roll = get_noise_zero_to_one(point, seed) * total_weight
 
@@ -416,36 +434,207 @@ function place_pipeset!(map::GameMap, pipe_options::AbstractArray{PipeSpawnOptio
 end
 
 # =============================================================== #
-# Ship Generation
+# Scaling Rule Type Hierarchy
 # =============================================================== #
 
-@kwdef struct ShipGenOptions
-    name::String
-    surface_gen_steps::Int
-    surface_gen_stacks::Int
-    component_sets::Vector{ShipComponentSet}
-    pipe_sets::Vector{PipeSpawnOptions}
+"Abstract supertype for all richness-dependent scaling rules."
+abstract type ScalingRule end
+
+"Evaluate a scaling rule at a given richness value."
+function evaluate_scaling end
+
+"Constant scaling rule: always returns the same value regardless of richness."
+struct NoScaling <: ScalingRule
+    value::Float64
 end
 
-function generate_ship(ship::ShipGenOptions, seed::UInt32)::ShipMap
-    shipmap = ShipMap()
+evaluate_scaling(ns::NoScaling, richness::Float64)::Float64 = ns.value
 
-    # generate ship surface
-    stacked_random_tile_walk!(get_all_surface_tiles(shipmap), TileCoord(0, 0), ship.surface_gen_steps, ship.surface_gen_stacks, seed)
+"Linear scaling: evaluates as `initial + slope * richness`."
+struct LinearScaling <: ScalingRule
+    initial::Float64
+    slope::Float64
+end
 
-    # place components into a temporary GameMap wrapper for reuse of existing placement logic
-    for shipset in ship.component_sets
-        success, message = place_shipset!(GameMap(shipmap), shipset, seed)
-        if !success
-            @warn "Ship generation did not complete component placement:\n$message"
+evaluate_scaling(ls::LinearScaling, richness::Float64)::Float64 = ls.initial + ls.slope * richness
+
+"""
+Gated linear scaling: zero below threshold, then linear from initial value.
+`evaluate(richness) = richness < threshold ? 0.0 : initial + slope * (richness - threshold)`
+"""
+struct GatedLinearScaling <: ScalingRule
+    initial::Float64
+    slope::Float64
+    threshold::Float64
+end
+
+function evaluate_scaling(gls::GatedLinearScaling, richness::Float64)::Float64
+    richness < gls.threshold && return 0.0
+    return gls.initial + gls.slope * (richness - gls.threshold)
+end
+
+"A component set paired with its richness-dependent scaling rule."
+struct WeightedComponentSet
+    component_set::ShipComponentSet
+    weight::ScalingRule
+end
+
+# =============================================================== #
+# Encounter Config Data Structures
+# =============================================================== #
+
+"Hull generation parameters: linear scaling for both walk steps and stacks."
+struct HullSizeConfig
+    steps::LinearScaling
+    stacks::LinearScaling
+end
+
+"Configuration for one fluid type within an encounter class: selection weight and component pool."
+struct FuelTagConfig
+    weight::ScalingRule
+    component_pool::Vector{WeightedComponentSet}
+end
+
+"Complete generation configuration for one encounter class."
+struct EncounterClassConfig
+    class_weight::ScalingRule
+    hull_size::HullSizeConfig
+    target_components::LinearScaling
+    fuel_configs::Dict{FluidTags, FuelTagConfig}
+    pipe_options::Vector{PipeSpawnOptions}
+end
+
+"Configuration for the encounter point system."
+@kwdef struct EncounterSystemConfig
+    n_points::Int = 100
+    min_base_velocity::Float64 = 10.0
+    max_base_velocity::Float64 = 1000.0
+    velocity_variance::Float64 = 0.1          # ±10% of base velocity
+    max_angle_rad::Float64 = π / 8            # 22.5 degrees from horizontal
+    viewport_half_width::Float64 = 400.0
+    viewport_half_height::Float64 = 200.0
+    spawn_margin::Float64 = 100.0             # Distance from viewport edge to spawn lines
+    recycle_margin::Float64 = 50.0            # Extra distance from spawn lines to disappear lines
+    line_step_size::Float64 = 50.0            # Discrete step for shifting lines
+    encounter_class_configs::Dict{EncounterClass, EncounterClassConfig} = Dict()
+end
+
+"Compute hull size (steps, stacks) from config and richness."
+function compute_hull_size(config::HullSizeConfig, richness::Float64)::Tuple{Int, Int}
+    steps = max(1, round(Int, evaluate_scaling(config.steps, richness)))
+    stacks = max(1, round(Int, evaluate_scaling(config.stacks, richness)))
+    return (steps, stacks)
+end
+
+"Compute target component count from scaling rule and richness."
+function compute_target_components(scaling::ScalingRule, richness::Float64)::Int
+    return max(0, round(Int, evaluate_scaling(scaling, richness)))
+end
+
+"Evaluate a component pool, returning (component_set, weight) pairs with nonzero weights."
+function evaluate_component_pool(pool::Vector{WeightedComponentSet},
+        richness::Float64)::Vector{Tuple{ShipComponentSet, Float64}}
+    result = Tuple{ShipComponentSet, Float64}[]
+    for wcs in pool
+        w = evaluate_scaling(wcs.weight, richness)
+        if w > 0.0
+            push!(result, (wcs.component_set, w))
         end
     end
+    return result
+end
 
-    # place pipes (operate via GameMap wrapper)
-    for pipeset in ship.pipe_sets
-        place_pipeset!(GameMap(shipmap), pipeset, seed)
+"Compute richness from player speed and encounter base velocity."
+function calculate_richness(config::EncounterSystemConfig, player_speed::Float64,
+        base_velocity::Float64)::Float64
+    minimum_richness = 1.0
+    richness_log_scale = 0.7
+    richness_velocity_bonus_scale = 2.0
+
+    base = player_speed > 1.0 ? log(player_speed) * richness_log_scale : 0.0
+    percentile = clamp(base_velocity / config.max_base_velocity, 0.0, 1.0)
+    bonus = richness_velocity_bonus_scale * percentile
+    return max(base + bonus, minimum_richness)
+end
+
+"Select an encounter class from dict-based configs with deterministic ordering."
+function select_encounter_class(configs::Dict{EncounterClass, EncounterClassConfig},
+        richness::Float64, point, seed::UInt32)::EncounterClass
+    sorted_classes = sort!(collect(keys(configs)))
+    evaluated = Tuple{EncounterClass, Float64}[
+        (cls, evaluate_scaling(configs[cls].class_weight, richness)) for cls in sorted_classes
+    ]
+    return weighted_roll_noise(evaluated, point, seed)
+end
+
+"Select a fuel tag from dict-based fuel configs with deterministic ordering."
+function select_fuel_tag(fuel_configs::Dict{FluidTags, FuelTagConfig},
+        richness::Float64, point, seed::UInt32)::FluidTags
+    sorted_tags = sort!(collect(keys(fuel_configs)))
+    evaluated = Tuple{FluidTags, Float64}[
+        (tag, evaluate_scaling(fuel_configs[tag].weight, richness)) for tag in sorted_tags
+    ]
+    return weighted_roll_noise(evaluated, point, seed)
+end
+
+"""
+Generate a random encounter name from a seed and encounter class.
+Produces names like 'Vessel KR-447', 'Wreck AX-082'.
+Each class has a distinct set of prefixes.
+"""
+function generate_encounter_name(seed::UInt32, encounter_class::EncounterClass)::String
+    ship_prefixes = ("Vessel", "Ship", "Craft")
+    cache_prefixes = ("Station", "Hull", "Platform")
+    scrap_prefixes = ("Wreck", "Debris", "Hulk")
+
+    prefixes = if encounter_class == ENCOUNTER_SHIP
+        ship_prefixes
+    elseif encounter_class == ENCOUNTER_FUEL_CACHE
+        cache_prefixes
+    elseif encounter_class == ENCOUNTER_SCRAP
+        scrap_prefixes
+    else
+        error("Unknown encounter class: $encounter_class")
     end
 
+    letters = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+
+    prefix = pick_element_from_noise(prefixes, UInt32(1), seed)
+    l1 = pick_element_from_noise(letters, UInt32(2), seed)
+    l2 = pick_element_from_noise(letters, UInt32(3), seed)
+    num = Int(get_noise(UInt32(4), seed) % 1000)
+
+    return @sprintf("%s %c%c-%03d", prefix, l1, l2, num)
+end
+
+"Generate an encounter's ShipMap from config data."
+function generate_encounter(encounter_class::EncounterClass, fuel_tag::FluidTags,
+        richness::Float64, seed::UInt32, class_config::EncounterClassConfig)::ShipMap
+    steps, stacks = compute_hull_size(class_config.hull_size, richness)
+    shipmap = ShipMap()
+    stacked_random_tile_walk!(get_all_surface_tiles(shipmap), TileCoord(0, 0), steps, stacks, seed)
+
+    target_count = compute_target_components(class_config.target_components, richness)
+    gamemap = GameMap(shipmap)
+    draw_seed = seed
+    max_iterations = target_count + 10
+
+    fuel_config = class_config.fuel_configs[fuel_tag]
+    for iteration in 1:max_iterations
+        current_count = count_components(gamemap)
+        current_count >= target_count && break
+
+        pool = evaluate_component_pool(fuel_config.component_pool, richness)
+        isempty(pool) && break
+
+        draw_seed = get_noise(UInt32(iteration), draw_seed)
+        chosen_set = weighted_roll_noise(pool, iteration, draw_seed)
+
+        success, _ = place_shipset!(gamemap, chosen_set, draw_seed)
+        !success && break
+    end
+
+    place_pipeset!(gamemap, class_config.pipe_options, seed)
     return shipmap
 end
 
@@ -465,12 +654,19 @@ end
 
 function _rects_overlap(a::HexFrame.CartesianBounds, b::HexFrame.CartesianBounds)::Bool
     return a.X_NEG < b.X_POS && a.X_POS > b.X_NEG &&
-           a.Y_NEG < b.Y_POS && a.Y_POS > b.Y_NEG
+        a.Y_NEG < b.Y_POS && a.Y_POS > b.Y_NEG
 end
 
-function encounter_ship!(gamemap::GameMap, shipoptions::ShipGenOptions, seed::UInt32, dir::HexFrame.HexAxis; max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing)
-    newship = generate_ship(shipoptions, seed)
-    newship_name = gensym(shipoptions.name)
+"""
+Dock a pre-generated ship into the game map with approach animation.
+The ship is offset from the primary ship and approaches from direction `dir`.
+"""
+function encounter_ship!(
+        gamemap::GameMap, newship::ShipMap, ship_name_base::String, seed::UInt32, dir::HexFrame.HexAxis;
+        max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing
+    )
+
+    newship_name = gensym(ship_name_base)
 
     # offset ship until no surface overlap, starting from primary centroid to handle the case the ship is not centered around (0,0)
     ship_centroid = get_surface_centroid(gamemap, :primary)
@@ -486,35 +682,35 @@ function encounter_ship!(gamemap::GameMap, shipoptions::ShipGenOptions, seed::UI
     hnt = HexFrame.hex_neighbour_tiles[dir]
     final_offset = TileCoord(hnt.q * MIN_SPACING, hnt.r * MIN_SPACING)
     offset_ship!(offset_newship, final_offset)
-    
+
     # Calculate approach animation parameters
     # Start 20 tiles away in the approach direction and animate to zero offset
     APPROACH_DISTANCE_TILES = 20.0
-    
+
     # Direction vector
     direction_vec = HexFrame.hex_vert_vecs[dir]
 
     # If bounds provided, ensure start point is off-screen
     if !isnothing(max_view_bounds)
         ship_bounds = get_cartesian_bounds(offset_newship)
-        
+
         # Increase distance until out of view
         is_overlapping = true
         while is_overlapping
-             start_offset_test = HexFrame.AxialCoord(
+            start_offset_test = HexFrame.AxialCoord(
                 direction_vec.q * APPROACH_DISTANCE_TILES,
                 direction_vec.r * APPROACH_DISTANCE_TILES
             )
-            
+
             # Shift the ship bounds by this offset
             shift_cart = HexFrame.to_cartesian(start_offset_test)
             shifted_bounds = (
                 X_POS = ship_bounds.X_POS + shift_cart.x,
                 X_NEG = ship_bounds.X_NEG + shift_cart.x,
                 Y_POS = ship_bounds.Y_POS + shift_cart.y,
-                Y_NEG = ship_bounds.Y_NEG + shift_cart.y
+                Y_NEG = ship_bounds.Y_NEG + shift_cart.y,
             )
-            
+
             if _rects_overlap(shifted_bounds, max_view_bounds)
                 APPROACH_DISTANCE_TILES += 10.0
                 if APPROACH_DISTANCE_TILES > 2000.0 # Safety break
@@ -529,19 +725,19 @@ function encounter_ship!(gamemap::GameMap, shipoptions::ShipGenOptions, seed::UI
 
     TARGET_APPROACH_DURATION_SECS = 5.0
     TARGET_UPS = 60.0  # updates per second
-    
+
     # Convert tile distance to axial offset (using hex_vert_vecs for direction)
     start_offset = HexFrame.AxialCoord(
         direction_vec.q * APPROACH_DISTANCE_TILES,
         direction_vec.r * APPROACH_DISTANCE_TILES
     )
     target_offset = HexFrame.AxialCoord(0.0, 0.0)
-    
+
     # Calculate step size: total_distance / (duration * ups)
     total_distance = sqrt(start_offset.q^2 + start_offset.r^2)
     total_updates = TARGET_APPROACH_DURATION_SECS * TARGET_UPS
     offset_step = total_distance / total_updates
-    
+
     # Set docking status to approaching on the new ship
     set_docking_status!(offset_newship, ApproachingDockStat(start_offset, target_offset, offset_step, dir))
 
@@ -651,31 +847,31 @@ function depart_ship!(gamemap::GameMap, ship_name::Symbol; max_view_bounds::Unio
 
     # Calculate departure animation parameters
     DEPART_DISTANCE_TILES = 20.0
-    
+
     # Direction vector
     direction_vec = HexFrame.hex_vert_vecs[depart_axis]
 
     # If bounds provided, ensure target point is off-screen
     if !isnothing(max_view_bounds)
         ship_bounds = get_cartesian_bounds(gamemap.ships[ship_name])
-        
+
         # Increase distance until out of view
         is_overlapping = true
         while is_overlapping
-             target_offset_test = HexFrame.AxialCoord(
+            target_offset_test = HexFrame.AxialCoord(
                 direction_vec.q * DEPART_DISTANCE_TILES,
                 direction_vec.r * DEPART_DISTANCE_TILES
             )
-            
+
             # Shift the ship bounds by this offset
             shift_cart = HexFrame.to_cartesian(target_offset_test)
             shifted_bounds = (
                 X_POS = ship_bounds.X_POS + shift_cart.x,
                 X_NEG = ship_bounds.X_NEG + shift_cart.x,
                 Y_POS = ship_bounds.Y_POS + shift_cart.y,
-                Y_NEG = ship_bounds.Y_NEG + shift_cart.y
+                Y_NEG = ship_bounds.Y_NEG + shift_cart.y,
             )
-            
+
             if _rects_overlap(shifted_bounds, max_view_bounds)
                 DEPART_DISTANCE_TILES += 10.0
                 if DEPART_DISTANCE_TILES > 2000.0 # Safety break
@@ -713,23 +909,67 @@ end
 # Encounter Point System
 # =============================================================== #
 
-"Configuration for the encounter point system."
-@kwdef struct EncounterSystemConfig
-    n_points::Int = 100
-    min_base_velocity::Float64 = 10.0
-    max_base_velocity::Float64 = 1000.0
-    velocity_variance::Float64 = 0.1          # ±10% of base velocity
-    max_angle_rad::Float64 = π/8              # 22.5 degrees from horizontal
-    viewport_half_width::Float64 = 400.0
-    viewport_half_height::Float64 = 200.0
-    spawn_margin::Float64 = 100.0             # Distance from viewport edge to spawn lines
-    recycle_margin::Float64 = 50.0          # Extra distance from spawn lines to disappear lines
-    line_step_size::Float64 = 50.0           # Discrete step for shifting lines
+# =============================================================== #
+# SpaceMapState
+# =============================================================== #
+
+"Full space map state with seed, velocity, position, encounter points, and event queue."
+@kwdef mutable struct SpaceMapState <: AbstractSpaceMap
+    seed::UInt32 = UInt32(0)
+    velocity::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
+    position::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
+    time_years::Float64 = 0.0
+    target_time_years::Float64 = 0.0
+    active_manoeuvre::Union{Nothing, ManoeuvreData} = nothing
+    # Encounter system
+    encounter_points::Vector{EncounterPoint} = EncounterPoint[]
+    event_queue::BinaryMinHeap{EncounterEvent} = BinaryMinHeap{EncounterEvent}()
+    neg_disappear_line_x::Float64 = -1600.0
+    neg_spawn_line_x::Float64 = -1500.0
+    pos_spawn_line_x::Float64 = 1500.0
+    pos_disappear_line_x::Float64 = 1600.0
+    last_line_step_x::Float64 = 0.0
+    line_step_size::Float64 = 200.0
+    viewport_half_width::Float64 = 1000.0
+    viewport_half_height::Float64 = 500.0
+    encounter_config::EncounterSystemConfig
+end
+@struct_hash_equal SpaceMapState
+
+# SpaceMapState accessor implementations (extending FlowMap functions)
+get_velocity(sm::SpaceMapState)::SVector{2, Float64} = sm.velocity
+set_velocity!(sm::SpaceMapState, v::SVector{2, Float64}) = (sm.velocity = v)
+get_space_map_seed(sm::SpaceMapState)::UInt32 = sm.seed
+get_time_years(sm::SpaceMapState)::Float64 = sm.time_years
+set_time_years!(sm::SpaceMapState, t::Float64) = (sm.time_years = t)
+get_active_manoeuvre(sm::SpaceMapState)::Union{Nothing, ManoeuvreData} = sm.active_manoeuvre
+has_active_manoeuvre(sm::SpaceMapState)::Bool = !isnothing(sm.active_manoeuvre)
+set_active_manoeuvre!(sm::SpaceMapState, m::ManoeuvreData) = (sm.active_manoeuvre = m)
+clear_active_manoeuvre!(sm::SpaceMapState) = (sm.active_manoeuvre = nothing)
+get_position(sm::SpaceMapState)::SVector{2, Float64} = sm.position
+set_position!(sm::SpaceMapState, p::SVector{2, Float64}) = (sm.position = p)
+get_target_time(sm::SpaceMapState)::Float64 = sm.target_time_years
+set_target_time!(sm::SpaceMapState, t::Float64) = (sm.target_time_years = t)
+is_time_progressing(sm::SpaceMapState)::Bool = sm.time_years < sm.target_time_years
+get_encounter_points(sm::SpaceMapState) = sm.encounter_points
+
+"Get the encounter system config from a space map."
+get_encounter_config(sm::SpaceMapState)::EncounterSystemConfig = sm.encounter_config
+get_encounter_config(::SpaceMapEmpty)::Nothing = nothing
+
+"Overwrite the game map's space map with a new SpaceMapState."
+function initialise_spacemap!(gamemap::GameMap, seed::UInt32, config::EncounterSystemConfig,
+        velocity::SVector{2, Float64} = SVector{2, Float64}(1.0, 0.0))
+    gamemap.space_map = SpaceMapState(seed = seed, velocity = velocity, time_years = 0.0,
+        encounter_config = config)
+    return nothing
 end
 
 "Generate base velocities with a logarithmic distribution (equal density per octave)."
-function generate_base_velocities(n_points::Int, min_velocity::Float64,
-                                   max_velocity::Float64, seed::UInt32)::Vector{Float64}
+function generate_base_velocities(
+        n_points::Int, min_velocity::Float64,
+        max_velocity::Float64, seed::UInt32
+    )::Vector{Float64}
     velocities = Vector{Float64}(undef, n_points)
     ratio = max_velocity / min_velocity
     for i in 1:n_points
@@ -749,7 +989,7 @@ end
 "Predict when an encounter point will cross a vertical line at x_line. Returns nothing if it never will."
 function predict_crossing_time(ep::EncounterPoint, x_line::Float64)::Union{Nothing, Float64}
     vx = ep.velocity[1]
-    if abs(vx) < 1e-12
+    if abs(vx) < 1.0e-12
         return nothing  # Moving purely vertically, never crosses
     end
     dt = (x_line - ep.position[1]) / vx
@@ -772,9 +1012,9 @@ In both cases the point's velocity is `sm.velocity + relative_vel` so the relati
 distribution is preserved regardless of which line is used.
 """
 function spawn_encounter_point!(ep::EncounterPoint, sm::SpaceMapState,
-                                 config::EncounterSystemConfig, current_time::Float64,
-                                 spawn_line_x::Float64 = sm.neg_spawn_line_x; 
-                                 velocity_override::Union{Nothing, SVector{2, Float64}} = nothing)
+        current_time::Float64, spawn_line_x::Float64 = sm.neg_spawn_line_x;
+        velocity_override::Union{Nothing, SVector{2, Float64}} = nothing)
+    config = get_encounter_config(sm)
     ep.iteration += 1
     ep.spawn_time = current_time
 
@@ -790,8 +1030,7 @@ function spawn_encounter_point!(ep::EncounterPoint, sm::SpaceMapState,
 
     # Random speed: base_velocity ± variance
     speed_noise = get_noise_zero_to_one(ep.index * 2000 + ep.iteration, point_seed)
-    speed = ep.base_velocity * (1.0 - config.velocity_variance +
-                                 2.0 * config.velocity_variance * speed_noise)
+    speed = ep.base_velocity * (1.0 - config.velocity_variance + 2.0 * config.velocity_variance * speed_noise)
 
     # Random angle within ±max_angle of horizontal
     angle_noise = get_noise_zero_to_one(ep.index * 3000 + ep.iteration, point_seed)
@@ -801,34 +1040,17 @@ function spawn_encounter_point!(ep::EncounterPoint, sm::SpaceMapState,
     relative_vel = SVector(speed * cos(angle), speed * sin(angle))
     ep.velocity = velocity_override === nothing ? sm.velocity + relative_vel : velocity_override
 
-    return nothing
-end
+    player_speed = norm(sm.velocity)
+    ep.richness = calculate_richness(config, player_speed, ep.base_velocity)
 
-"Spawn an encounter point at a random position across the full visible area (used for initial distribution)."
-function spawn_encounter_point_distributed!(ep::EncounterPoint, sm::SpaceMapState,
-                                             config::EncounterSystemConfig, current_time::Float64)
-    ep.iteration += 1
-    ep.spawn_time = current_time
+    class_seed = get_noise(UInt32(100), ep.ship_type_seed)
+    ep.encounter_class = select_encounter_class(config.encounter_class_configs, ep.richness, ep.index, class_seed)
 
-    point_seed = get_noise(UInt32(ep.index), get_noise(UInt32(ep.iteration), sm.seed))
-    ep.ship_type_seed = get_noise(UInt32(ep.index + 1000), get_noise(UInt32(ep.iteration), sm.seed))
+    class_config = config.encounter_class_configs[ep.encounter_class]
+    fuel_seed = get_noise(UInt32(200), ep.ship_type_seed)
+    ep.fuel_tag = select_fuel_tag(class_config.fuel_configs, ep.richness, ep.index, fuel_seed)
 
-    # Distribute across the full x range between the outermost boundary lines
-    x_pos = pick_from_range(sm.neg_disappear_line_x, sm.pos_disappear_line_x, ep.index * 4000 + ep.iteration, point_seed)
-    y_range = sm.viewport_half_height + config.spawn_margin
-    y_pos = pick_from_range(-y_range, y_range, ep.index * 5000 + ep.iteration, point_seed)
-    ep.position = SVector(x_pos, y_pos)
-
-    # Speed and angle (same logic as normal spawn)
-    speed_noise = get_noise_zero_to_one(ep.index * 2000 + ep.iteration, point_seed)
-    speed = ep.base_velocity * (1.0 - config.velocity_variance +
-                                 2.0 * config.velocity_variance * speed_noise)
-
-    angle_noise = get_noise_zero_to_one(ep.index * 3000 + ep.iteration, point_seed)
-    angle = config.max_angle_rad * (2.0 * angle_noise - 1.0)
-
-    relative_vel = SVector(speed * cos(angle), speed * sin(angle))
-    ep.velocity = sm.velocity + relative_vel
+    ep.display_name = generate_encounter_name(ep.ship_type_seed, ep.encounter_class)
 
     return nothing
 end
@@ -845,7 +1067,7 @@ For each encounter point:
 
 Called after every discrete line shift in `check_line_shift!`.
 """
-function rebuild_event_queue!(sm::SpaceMapState, config::EncounterSystemConfig = EncounterSystemConfig())
+function rebuild_event_queue!(sm::SpaceMapState)
     sm.event_queue = BinaryMinHeap{EncounterEvent}()
     current_time = sm.time_years
     for ep in sm.encounter_points
@@ -853,10 +1075,10 @@ function rebuild_event_queue!(sm::SpaceMapState, config::EncounterSystemConfig =
 
         if current_x > sm.pos_disappear_line_x
             # Point has drifted past the positive disappear line — recycle to left spawn
-            spawn_encounter_point!(ep, sm, config, current_time, sm.neg_spawn_line_x)
+            spawn_encounter_point!(ep, sm, current_time, sm.neg_spawn_line_x)
         elseif current_x < sm.neg_disappear_line_x
             # Player has outrun this point — backfill by spawning at the right spawn line
-            spawn_encounter_point!(ep, sm, config, current_time, sm.pos_spawn_line_x)
+            spawn_encounter_point!(ep, sm, current_time, sm.pos_spawn_line_x)
         end
 
         # Predict crossing time for points still within the boundaries and add to the event queue
@@ -874,7 +1096,7 @@ Shift all four boundary lines if the player has moved far enough, then rebuild t
 Lines shift in discrete steps of `line_step_size` so the spawn/disappear boundaries always
 stay just outside the viewport regardless of accumulated player travel.
 """
-function check_line_shift!(sm::SpaceMapState, config::EncounterSystemConfig)
+function check_line_shift!(sm::SpaceMapState)
     player_x = sm.position[1]
     step = sm.line_step_size
     moved = player_x - sm.last_line_step_x
@@ -887,15 +1109,14 @@ function check_line_shift!(sm::SpaceMapState, config::EncounterSystemConfig)
         sm.neg_spawn_line_x += shift
         sm.pos_spawn_line_x += shift
         sm.pos_disappear_line_x += shift
-        rebuild_event_queue!(sm, config)
+        rebuild_event_queue!(sm)
     end
 
     return nothing
 end
 
 "Process encounter point recycling events up to the given time."
-function process_encounter_events!(sm::SpaceMapState, config::EncounterSystemConfig,
-                                    up_to_time::Float64)
+function process_encounter_events!(sm::SpaceMapState, up_to_time::Float64)
     while !isempty(sm.event_queue)
         next_event = first(sm.event_queue)
         if next_event.time > up_to_time
@@ -905,7 +1126,7 @@ function process_encounter_events!(sm::SpaceMapState, config::EncounterSystemCon
 
         ep = sm.encounter_points[next_event.index]
         # Normal recycle: point has crossed pos_disappear_line_x, respawn at neg_spawn_line_x
-        spawn_encounter_point!(ep, sm, config, up_to_time, sm.neg_spawn_line_x)
+        spawn_encounter_point!(ep, sm, up_to_time, sm.neg_spawn_line_x)
 
         crossing_time = predict_crossing_time(ep, sm.pos_disappear_line_x)
         if !isnothing(crossing_time) && crossing_time > up_to_time
@@ -916,7 +1137,8 @@ function process_encounter_events!(sm::SpaceMapState, config::EncounterSystemCon
 end
 
 "Initialise the encounter point system on a SpaceMapState."
-function initialise_encounter_system!(sm::SpaceMapState, config::EncounterSystemConfig = EncounterSystemConfig())
+function initialise_encounter_system!(sm::SpaceMapState)
+    config = get_encounter_config(sm)
     current_time = sm.time_years
 
     sm.viewport_half_width = config.viewport_half_width
@@ -924,22 +1146,29 @@ function initialise_encounter_system!(sm::SpaceMapState, config::EncounterSystem
     sm.line_step_size = config.line_step_size
 
     player_x = sm.position[1]
-    sm.neg_spawn_line_x    = player_x - config.viewport_half_width - config.spawn_margin
+    sm.neg_spawn_line_x = player_x - config.viewport_half_width - config.spawn_margin
     sm.neg_disappear_line_x = player_x - config.viewport_half_width - config.spawn_margin - config.recycle_margin
-    sm.pos_spawn_line_x    = player_x + config.viewport_half_width + config.spawn_margin
+    sm.pos_spawn_line_x = player_x + config.viewport_half_width + config.spawn_margin
     sm.pos_disappear_line_x = player_x + config.viewport_half_width + config.spawn_margin + config.recycle_margin
     sm.last_line_step_x = player_x
 
-    base_velocities = generate_base_velocities(config.n_points,
-                                                config.min_base_velocity,
-                                                config.max_base_velocity, sm.seed)
+    base_velocities = generate_base_velocities(config.n_points, config.min_base_velocity,
+        config.max_base_velocity, sm.seed)
 
     sm.encounter_points = Vector{EncounterPoint}(undef, config.n_points)
     sm.event_queue = BinaryMinHeap{EncounterEvent}()
 
     for i in 1:config.n_points
-        ep = EncounterPoint(index=i, base_velocity=base_velocities[i])
-        spawn_encounter_point_distributed!(ep, sm, config, current_time)
+        ep = EncounterPoint(index = i, base_velocity = base_velocities[i])
+        spawn_encounter_point!(ep, sm, current_time, sm.neg_spawn_line_x)
+
+        point_seed = get_noise(UInt32(ep.index), get_noise(UInt32(ep.iteration), sm.seed))
+        x_pos = pick_from_range(sm.neg_disappear_line_x, sm.pos_disappear_line_x,
+            ep.index * 4000 + ep.iteration, point_seed)
+        y_range = sm.viewport_half_height + config.spawn_margin
+        y_pos = pick_from_range(-y_range, y_range, ep.index * 5000 + ep.iteration, point_seed)
+        ep.position = SVector(x_pos, y_pos)
+
         sm.encounter_points[i] = ep
 
         crossing_time = predict_crossing_time(ep, sm.pos_disappear_line_x)
@@ -952,16 +1181,12 @@ function initialise_encounter_system!(sm::SpaceMapState, config::EncounterSystem
 end
 
 "Advance the space map time by one tick. No-op for SpaceMapEmpty."
-function step_space_map_time!(::SpaceMapEmpty;
-                               config::EncounterSystemConfig = EncounterSystemConfig(),
-                               max_step::Float64 = 1.0/60.0)
+function step_space_map_time!(::SpaceMapEmpty; max_step::Float64 = 1.0 / 60.0)
     return false
 end
 
 "Advance the space map time by one tick. Returns true if time was advanced."
-function step_space_map_time!(sm::SpaceMapState;
-                               config::EncounterSystemConfig = EncounterSystemConfig(),
-                               max_step::Float64 = 1.0/60.0)::Bool
+function step_space_map_time!(sm::SpaceMapState; max_step::Float64 = 1.0 / 60.0)::Bool
     if sm.time_years >= sm.target_time_years
         return false
     end
@@ -974,13 +1199,13 @@ function step_space_map_time!(sm::SpaceMapState;
     sm.position = sm.position + sm.velocity * dt
 
     # Process encounter recycling events up to the new time
-    process_encounter_events!(sm, config, new_time)
+    process_encounter_events!(sm, new_time)
 
     # Commit the new time
     sm.time_years = new_time
 
     # Check if lines need to shift
-    check_line_shift!(sm, config)
+    check_line_shift!(sm)
 
     return true
 end
@@ -1014,25 +1239,31 @@ function compute_closest_approach(
     B = 2.0 * dot(a, b)
 
     # No relative motion — distance is constant
-    if A < 1e-12
-        return (time = current_time, distance = norm(a),
-                player_position = player_pos, target_position = target_pos)
+    if A < 1.0e-12
+        return (
+            time = current_time, distance = norm(a),
+            player_position = player_pos, target_position = target_pos,
+        )
     end
 
     t_min = -B / (2.0 * A)
 
     # Closest approach in the past or right now — act immediately
     if t_min <= 0.0
-        return (time = current_time, distance = norm(a),
-                player_position = player_pos, target_position = target_pos)
+        return (
+            time = current_time, distance = norm(a),
+            player_position = player_pos, target_position = target_pos,
+        )
     end
 
     closest_time = current_time + t_min
     closest_distance = norm(a + b * t_min)
     player_at_ca = player_pos + player_vel * t_min
     target_at_ca = get_encounter_position(ep, closest_time)
-    return (time = closest_time, distance = closest_distance,
-            player_position = player_at_ca, target_position = target_at_ca)
+    return (
+        time = closest_time, distance = closest_distance,
+        player_position = player_at_ca, target_position = target_at_ca,
+    )
 end
 
 """
@@ -1084,7 +1315,7 @@ function plan_intercept_manoeuvre(
     # Positive = converging, negative = diverging.
     separation = get_encounter_position(ep, current_time) - player_pos
     sep_dist = norm(separation)
-    sep_unit = sep_dist > 1e-6 ? separation / sep_dist : SVector(1.0, 0.0)
+    sep_unit = sep_dist > 1.0e-6 ? separation / sep_dist : SVector(1.0, 0.0)
     convergence_rate = -dot(relative_vel, sep_unit)  # positive when closing
 
     # Burn immediately if diverging or converging slower than our planned close velocity
@@ -1103,7 +1334,7 @@ function plan_intercept_manoeuvre(
     end
 
     # Coast time: distance / close_velocity (close_velocity = surplus/2)
-    coast_time = if burn_distance > 1e-6 && close_velocity > 1e-6
+    coast_time = if burn_distance > 1.0e-6 && close_velocity > 1.0e-6
         burn_distance / close_velocity
     else
         0.0
@@ -1120,9 +1351,9 @@ function plan_intercept_manoeuvre(
     target_pos_at_burn = get_encounter_position(ep, burn_time)
     direction = target_pos_at_burn - burn_player_pos
     dir_norm = norm(direction)
-    dir_unit = if dir_norm > 1e-6
+    dir_unit = if dir_norm > 1.0e-6
         direction / dir_norm
-    elseif velocity_match > 1e-6
+    elseif velocity_match > 1.0e-6
         relative_vel / velocity_match
     else
         SVector(1.0, 0.0)
@@ -1138,24 +1369,18 @@ function plan_intercept_manoeuvre(
     target_pos_at_intercept = get_encounter_position(ep, intercept_time)
 
     return ManoeuvreData(
-        phase                 = PHASE_WAIT_APPROACH,
-        main_burn_dv          = main_burn_dv,
-        decel_burn_dv         = decel_burn_dv,
+        phase = PHASE_WAIT_APPROACH,
+        main_burn_dv = main_burn_dv,
+        decel_burn_dv = decel_burn_dv,
         closest_approach_time = burn_time,
-        intercept_time        = intercept_time,
+        intercept_time = intercept_time,
         target_encounter_index = ep.index,
-        trajectory_start_pos  = player_pos,
+        trajectory_start_pos = player_pos,
         trajectory_start_time = current_time,
-        surplus_dv            = surplus,
-        main_burn_position    = burn_player_pos,
-        decel_burn_position   = target_pos_at_intercept,
+        surplus_dv = surplus,
+        main_burn_position = burn_player_pos,
+        decel_burn_position = target_pos_at_intercept,
     )
-end
-
-"Determine the ShipGenOptions for an encounter point using its composite seed."
-function get_encounter_ship_options(ep::EncounterPoint,
-                                     ship_weights::Vector{Tuple{ShipGenOptions, Float64}})::ShipGenOptions
-    return weighted_roll_noise(ship_weights, ep.index, ep.ship_type_seed)
 end
 
 "Get the seed for procedural ship generation for this encounter point."

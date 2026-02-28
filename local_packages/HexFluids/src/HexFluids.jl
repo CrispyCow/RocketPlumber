@@ -3,7 +3,7 @@ module HexFluids
 # Type Exports
 export NodeFluidTags, FluidTags
 # Function Exports
-export prioritise_fluidtag, is_gas, is_liquid, is_behavior
+export prioritise_fluidtag, is_gas, is_liquid, is_behavior, fluid_tag_label
 
 # ===============================================================
 # Fluid Types
@@ -111,6 +111,22 @@ prioritise_fluidtag(tag::FluidTags)::FluidTags = tag
 function prioritise_fluidtag(a::FluidTags, b::FluidTags, rest::FluidTags...)::FluidTags
     first_result = prioritise_fluidtag(a, b)
     return isempty(rest) ? first_result : prioritise_fluidtag(first_result, rest...)
+end
+
+# ===============================================================
+# Display
+# ===============================================================
+
+"Human-readable display label for a `FluidTags` value."
+function fluid_tag_label(tag::FluidTags)::Union{String, Nothing}
+    tag == NONE            && return nothing
+    tag == COLD_GAS        && return "Cold Gas"
+    tag == MONOPROP_LIQUID && return "Monopropellant"
+    tag == MONOPROP_GAS    && return "Monopropellant Gas"
+    tag == ANY_GAS         && return "Gas (Generic)"
+    tag == ANY_LIQUID      && return "Liquid (Generic)"
+    @warn "fluid_tag_label: no label defined for FluidTags member" tag
+    return "Unknown ($(string(tag)))"
 end
 
 end # module HexFluids

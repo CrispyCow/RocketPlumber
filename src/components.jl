@@ -298,71 +298,178 @@ const shipset_turbine_monoprop = ShipComponentSet(
     ]
 )
 
-ship_gen_tilesets::Vector{ShipComponentSet} = [
-    shipset_simple_cold_gas,
-    shipset_electric_monoprop,
-    shipset_turbine_monoprop,
-]
-
 standard_pipeoptions::Vector{PipeSpawnOptions} = [
     PipeSpawnOptions(:BigPipe_pipe, HexFlowProcGen.ONE_CONNECT_PIPES, 0.05),
     PipeSpawnOptions(:ScrapPipe_pipe, HexFlowProcGen.RANDOM_PIPES, 0.03),
 ]
 
-# Ship Configurations
-starter_ship = ShipGenOptions(
-    name = "Starter Ship",
-    surface_gen_steps = 2,
-    surface_gen_stacks = 6,
-    component_sets = [shipset_starter],
-    pipe_sets = standard_pipeoptions
+# ===============================================================
+# Encounter Generation Configuration
+# ===============================================================
+
+# NOTE: The pools and weight vectors in this section are intentionally not
+# declared `const` to allow rapid iteration via Revise during development.
+# Once tuning is complete, they should be made `const` for performance.
+
+#= ---------- Additional Component Sets ----------- =#
+
+compset_gas_cache = ShipComponentSet(
+    "Gas Tank Array",
+    [
+        CompSpawnOptions(:TriGasTank_comp, [(2, 100.0), (3, 200.0), (4, 100.0)], CLUSTERED_PLACE),
+        CompSpawnOptions(:ElecTransferPump_comp, [(0, 50.0), (1, 100.0)], RANDOM_PLACE),
+    ]
 )
 
-coldgas_micro_ship = ShipGenOptions(
-    name = "Cold Gas Micro Ship",
-    surface_gen_steps = 2,
-    surface_gen_stacks = 10,
-    component_sets = [shipset_simple_cold_gas],
-    pipe_sets = standard_pipeoptions
+compset_liquid_cache = ShipComponentSet(
+    "Liquid Tank Array",
+    [
+        CompSpawnOptions(:TriLiquidTank_comp, [(2, 100.0), (3, 200.0), (4, 100.0)], CLUSTERED_PLACE),
+        CompSpawnOptions(:ElecTransferPump_comp, [(0, 50.0), (1, 100.0)], RANDOM_PLACE),
+    ]
 )
 
-monoprop_electric_mini_ship = ShipGenOptions(
-    name = "Electric Monoprop Mini Ship",
-    surface_gen_steps = 3,
-    surface_gen_stacks = 17,
-    component_sets = [shipset_electric_monoprop],
-    pipe_sets = standard_pipeoptions
-)
-monoprop_turbine_mini_ship = ShipGenOptions(
-    name = "Turbine Monoprop Mini Ship",
-    surface_gen_steps = 3,
-    surface_gen_stacks = 17,
-    component_sets = [shipset_turbine_monoprop],
-    pipe_sets = standard_pipeoptions
+compset_extra_gas_tanks = ShipComponentSet(
+    "Extra Gas Tanks",
+    [
+        CompSpawnOptions(:TriGasTank_comp, [(1, 50.0), (2, 100.0), (3, 150.0), (4, 100.0), (5, 50.0)], CLUSTERED_PLACE),
+    ]
 )
 
-small_corvette_1 = ShipGenOptions(
-    name = "Small Corvette 1",
-    surface_gen_steps = 4,
-    surface_gen_stacks = 20,
-    component_sets = [shipset_turbine_monoprop, shipset_simple_cold_gas],
-    pipe_sets = standard_pipeoptions
+compset_extra_liquid_tanks = ShipComponentSet(
+    "Extra Liquid Tanks",
+    [
+        CompSpawnOptions(:TriLiquidTank_comp, [(1, 50.0), (2, 100.0), (3, 150.0), (4, 100.0), (5, 50.0)], CLUSTERED_PLACE),
+    ]
 )
 
-ship_gen_configs = [
-    starter_ship,
-    coldgas_micro_ship,
-    monoprop_electric_mini_ship,
-    monoprop_turbine_mini_ship,
-    small_corvette_1,
+compset_scrap_tiny_nozzle = ShipComponentSet("Scrap Tiny Nozzle", [
+    CompSpawnOptions(:TinyNozzle_comp, [(1, 1.0)], NOZZLE_EDGE_PLACE),
+])
+compset_scrap_small_nozzle = ShipComponentSet("Scrap Small Nozzle", [
+    CompSpawnOptions(:SmallNozzle_comp, [(1, 1.0)], NOZZLE_EDGE_PLACE),
+])
+compset_scrap_medium_nozzle = ShipComponentSet("Scrap Medium Nozzle", [
+    CompSpawnOptions(:MediumNozzle_comp, [(1, 1.0)], NOZZLE_EDGE_PLACE),
+])
+compset_scrap_switched_nozzle = ShipComponentSet("Scrap Switched Nozzle", [
+    CompSpawnOptions(:SwitchedTinyNozzle_comp, [(1, 1.0)], NOZZLE_EDGE_PLACE),
+])
+compset_scrap_elec_pump = ShipComponentSet("Scrap Electric Pump", [
+    CompSpawnOptions(:ElecTurboPump_comp, [(1, 1.0)], RANDOM_PLACE),
+])
+compset_scrap_transfer_pump = ShipComponentSet("Scrap Transfer Pump", [
+    CompSpawnOptions(:ElecTransferPump_comp, [(1, 1.0)], RANDOM_PLACE),
+])
+compset_scrap_turbo_pump = ShipComponentSet("Scrap Turbo Pump", [
+    CompSpawnOptions(:TurboPump_comp, [(1, 1.0)], RANDOM_PLACE),
+])
+compset_scrap_valve = ShipComponentSet("Scrap Valve", [
+    CompSpawnOptions(:BigAdjustableValve_comp, [(1, 1.0)], RANDOM_PLACE),
+])
+compset_scrap_decomp = ShipComponentSet("Scrap Decomp Chamber", [
+    CompSpawnOptions(:BasicDecompChamber_comp, [(1, 1.0)], RANDOM_PLACE),
+])
+
+#= ---------- Encounter Class Configs ----------- =#
+
+# Component pools by fuel type
+_ship_coldgas_pool = WeightedComponentSet[
+    WeightedComponentSet(shipset_simple_cold_gas, NoScaling(1.0)),
+    WeightedComponentSet(compset_extra_gas_tanks, GatedLinearScaling(0.5, 0.0, 2.0)),
 ]
 
-ship_gen_weights::Vector{Tuple{ShipGenOptions, Float64}} = [
-    (coldgas_micro_ship, 0.4),
-    (monoprop_electric_mini_ship, 0.3),
-    (monoprop_turbine_mini_ship, 0.2),
-    (small_corvette_1, 0.1),
+_ship_monoprop_pool = WeightedComponentSet[
+    WeightedComponentSet(shipset_electric_monoprop, NoScaling(1.0)),
+    WeightedComponentSet(shipset_turbine_monoprop, GatedLinearScaling(0.5, 0.0, 3.0)),
+    WeightedComponentSet(compset_extra_liquid_tanks, GatedLinearScaling(0.3, 0.0, 2.0)),
 ]
+
+_cache_coldgas_pool = WeightedComponentSet[
+    WeightedComponentSet(compset_gas_cache, NoScaling(1.0)),
+]
+
+_cache_monoprop_pool = WeightedComponentSet[
+    WeightedComponentSet(compset_liquid_cache, NoScaling(1.0)),
+]
+
+_scrap_pool = WeightedComponentSet[
+    WeightedComponentSet(compset_scrap_tiny_nozzle, NoScaling(1.0)),
+    WeightedComponentSet(compset_scrap_small_nozzle, GatedLinearScaling(0.8, 0.0, 0.5)),
+    WeightedComponentSet(compset_scrap_medium_nozzle, GatedLinearScaling(0.4, 0.0, 2.0)),
+    WeightedComponentSet(compset_scrap_switched_nozzle, NoScaling(0.8)),
+    WeightedComponentSet(compset_scrap_elec_pump, GatedLinearScaling(0.6, 0.0, 0.5)),
+    WeightedComponentSet(compset_scrap_transfer_pump, GatedLinearScaling(0.6, 0.0, 0.3)),
+    WeightedComponentSet(compset_scrap_turbo_pump, GatedLinearScaling(0.3, 0.0, 2.0)),
+    WeightedComponentSet(compset_scrap_valve, GatedLinearScaling(0.5, 0.0, 0.5)),
+    WeightedComponentSet(compset_scrap_decomp, GatedLinearScaling(0.4, 0.0, 1.0)),
+]
+
+# Pipe options per class
+fuel_cache_pipeoptions = PipeSpawnOptions[
+    PipeSpawnOptions(:ScrapPipe_pipe, HexFlowProcGen.RANDOM_PIPES, 0.02),
+    PipeSpawnOptions(:ScrapPipe_pipe, HexFlowProcGen.ONE_CONNECT_PIPES, 0.02),
+]
+
+# Per-class encounter generation configs
+const ship_class_config = EncounterClassConfig(
+    NoScaling(3.0),
+    HullSizeConfig(LinearScaling(1.0, 0.6), LinearScaling(2.0, 8.0)),
+    LinearScaling(1.0, 2.0),
+    Dict{FluidTags, FuelTagConfig}(
+        HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), _ship_coldgas_pool),
+        HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 2.0), _ship_monoprop_pool),
+    ),
+    standard_pipeoptions,
+)
+
+const fuel_cache_class_config = EncounterClassConfig(
+    NoScaling(2.0),
+    HullSizeConfig(LinearScaling(1.0, 0.3), LinearScaling(8.0, 10.0)),
+    LinearScaling(2.0, 3.0),
+    Dict{FluidTags, FuelTagConfig}(
+        HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), _cache_coldgas_pool),
+        HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 2.0), _cache_monoprop_pool),
+    ),
+    fuel_cache_pipeoptions,
+)
+
+const scrap_class_config = EncounterClassConfig(
+    NoScaling(5.0),
+    HullSizeConfig(LinearScaling(1.0, 0.8), LinearScaling(2.0, 2.0)),
+    LinearScaling(0.0, 1.0),
+    Dict{FluidTags, FuelTagConfig}(
+        HexFluids.NONE => FuelTagConfig(NoScaling(1.0), _scrap_pool),
+    ),
+    standard_pipeoptions,
+)
+
+const encounter_class_configs = Dict{EncounterClass, EncounterClassConfig}(
+    ENCOUNTER_SHIP => ship_class_config,
+    ENCOUNTER_FUEL_CACHE => fuel_cache_class_config,
+    ENCOUNTER_SCRAP => scrap_class_config,
+)
+
+const encounter_system_config = EncounterSystemConfig(
+    encounter_class_configs = encounter_class_configs
+)
+
+#= ---------- Starter Ship ----------- =#
+
+"Generate the player's starting ship for explorer mode."
+function generate_starter_ship(seed::UInt32)::ShipMap
+    shipmap = ShipMap()
+    stacked_random_tile_walk!(get_all_surface_tiles(shipmap), TileCoord(0, 0), 2, 6, seed)
+
+    gamemap = GameMap(shipmap)
+    success, message = place_shipset!(gamemap, shipset_starter, seed)
+    if !success
+        @warn "Starter ship generation incomplete: $message"
+    end
+
+    place_pipeset!(gamemap, standard_pipeoptions, seed)
+    return shipmap
+end
 
 
 
