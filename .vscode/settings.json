@@ -27,6 +27,17 @@
         "/^julia --threads=2 --project=\\. tools/EncounterBalance/src/EncounterBalance\\.jl$/": {
             "approve": true,
             "matchCommandLine": true
-        }
+        },
+        "/^julia --project=\\. -e \"using Pkg; Pkg\\.test\\(\\\\\"HexFlowProcGen\\\\\"\\)\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^julia --project=\\. -e 'using Pkg; Pkg\\.test\\(\"HexFlowProcGen\"\\)'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "Pkg.test(string(:HexFlowProcGen))": true,
+        "string(:HexFlowProcGen)": true,
+        ":HexFlowProcGen": true
     }
 }

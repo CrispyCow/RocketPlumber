@@ -5,38 +5,42 @@ import HexComponentsAPI: placement_valid
 
 using StructEquality
 using StaticArrays
-using DataStructures: BinaryMinHeap
+using DataStructures: BinaryMinHeap, Deque
 
-# Type Exports
+#= ---------- Type Exports ----------- =#
 export ShipMap, GameMap, RenderPosOffsetState
 export DockingStatus, ConnectedDockStat, ApproachingDockStat, DepartingDockStat
 export AbstractSpaceMap, SpaceMapEmpty, ManoeuvreData
 export EncounterClass, ENCOUNTER_SHIP, ENCOUNTER_FUEL_CACHE, ENCOUNTER_SCRAP
 export ManoeuvrePhase, PHASE_WAIT_APPROACH, PHASE_MAIN_BURN, PHASE_COAST, PHASE_DECEL_BURN, PHASE_ENCOUNTER_READY
 export EncounterPoint, EncounterEvent
-# Function Exports
+
+#= ---------- Function Exports ----------- =#
 export add_ship!, remove_ship!, get_all_ship_names, has_ship, get_ship, offset_ship!, swap_primary!
-# GameMap Abstraction Functions
+
+#= ---------- GameMap Abstraction Functions ----------- =#
 export get_component, has_component, set_component!, delete_component!, delete_all_components!
 export get_pipe, has_pipe, set_pipe!, delete_pipe!, delete_all_pipes!
 export get_all_components, get_all_pipes
 export count_components, count_pipes, count_surface_tiles
-export delete_all_components!, delete_all_pipes!, delete_all_surface_tiles!
+export delete_all_surface_tiles!
 export is_on_surface_tile, set_surface_tile!, delete_surface_tile!, get_all_surface_tiles
 export has_component_any_ship, get_component_any_ship, has_pipe_any_ship, get_pipe_any_ship, is_on_surface_tile_any_ship
-# Convenience helpers that search all ships (useful for UI and queries where ship is not known)
 export can_place_component_at, can_place_pipe_at, can_remove_surface_at, is_node_on_ship_surface
 export get_all_surfaces_combined, find_ship_surface_edgetiles!
 export get_axial_bounds, get_cartesian_bounds, get_surface_centroid
 export find_ship_for_surface, find_ships_adjacent_to_coord, would_bridge_ships, find_valid_ship_for_placement, find_ship_with_component, find_ship_with_pipe
 export find_ship_for_node
-# Off-ship pipe exports
+
+#= ---------- Off-Ship Pipe Exports ----------- =#
 export can_place_pipe_offship, validate_offship_pipe_deletion, reassign_pipe_ownership!
 export is_node_on_any_ship_surface, flood_search_pipes_from_node!
-# Ship render and docking exports
+
+#= ---------- Ship Render and Docking Exports ----------- =#
 export get_ship_render_offset, get_render_offset, update_render_offset!, get_approach_axis
 export get_docking_status, set_docking_status!, update_docking!, clear_all_docking_statuses!
-# Space map and velocity exports
+
+#= ---------- Space Map and Velocity Exports ----------- =#
 export get_velocity, set_velocity!, get_space_map_seed, get_time_years, set_time_years!
 export get_active_manoeuvre, set_active_manoeuvre!, clear_active_manoeuvre!, has_active_manoeuvre
 export initialise_spacemap!, get_spacemap, get_mass
@@ -47,10 +51,7 @@ export is_time_progressing, get_encounter_points
 # Game State Struct Types
 # ===============================================================
 
-"""
-Encapsulates state for a linear maneuver in render offset space.
-Used to animate ships moving between positions.
-"""
+"Encapsulates state for a linear manoeuvre in render offset space, animating ships between positions."
 @kwdef mutable struct RenderPosOffsetState
     current_offset::AxialCoord
     target_offset::AxialCoord
@@ -61,24 +62,19 @@ end
 "Returns the current render offset position"
 get_render_offset(state::RenderPosOffsetState)::AxialCoord = state.current_offset
 
-"""
-Moves current_offset one step closer to target_offset along the line between them.
-Clamps to target if the step would overshoot. Returns true if target has been reached.
-"""
+"Step `current_offset` towards `target_offset` with proximity easing. Returns `true` when target is reached."
 function update_render_offset!(state::RenderPosOffsetState)::Bool
     diff = state.target_offset - state.current_offset
     distance_to_target = sqrt(diff.q^2 + diff.r^2)
 
-    # Easing parameters based on current proximity to dock (zero offset)
+    # Step size proportional to distance from dock (zero offset), clamped to max speed
     proximity_factor = 0.015
     min_speed = 0.005    # Ensure we actually finish moving
 
     current_offset_mag = sqrt(state.current_offset.q^2 + state.current_offset.r^2)
-
-    # Calculate step size: Proportional to distance from dock, but clamped to max speed.
     step_size = clamp(current_offset_mag * proximity_factor, min_speed, state.offset_step)
 
-    # If we're already at the target (or the next step would overshoot), snap to it
+    # Snap to target if close enough or at zero distance
     if distance_to_target <= step_size || distance_to_target == 0.0
         state.current_offset = state.target_offset
         return true
@@ -94,31 +90,27 @@ function update_render_offset!(state::RenderPosOffsetState)::Bool
     return false
 end
 
-# Docking status types and interface
+#= ---------- Docking Status Types ----------- =#
 abstract type DockingStatus end
 
-"""
-Ship is connected/docked with no render offset. This is the default/resting state.
-"""
+"Ship is connected/docked with no render offset. Default/resting state."
 struct ConnectedDockStat <: DockingStatus
     approach_axis::Union{HexAxis, Nothing}
 end
 @struct_hash_equal ConnectedDockStat
-"Default constructor for a connected docking state with no saved approach axis."
+
 ConnectedDockStat() = ConnectedDockStat(nothing)
 get_render_offset(::ConnectedDockStat)::Union{AxialCoord, Nothing} = nothing
 update_render_offset!(::ConnectedDockStat)::Bool = false
 get_approach_axis(status::ConnectedDockStat)::Union{HexAxis, Nothing} = status.approach_axis
 
-"""
-Ship is approaching/docking - moving from a distant position towards connected position.
-When motion completes, should transition to ConnectedDockStat.
-"""
+"Ship is approaching dock. Transitions to `ConnectedDockStat` when motion completes."
 struct ApproachingDockStat <: DockingStatus
     motion::RenderPosOffsetState
     approach_axis::Union{HexAxis, Nothing}
 end
 @struct_hash_equal ApproachingDockStat
+
 "Transparent constructor matching RenderPosOffsetState arguments"
 function ApproachingDockStat(current_offset::AxialCoord, target_offset::AxialCoord, offset_step::Float64, approach_axis::Union{HexAxis, Nothing})
     return ApproachingDockStat(RenderPosOffsetState(current_offset, target_offset, offset_step), approach_axis)
@@ -127,16 +119,12 @@ get_render_offset(status::ApproachingDockStat)::AxialCoord = get_render_offset(s
 update_render_offset!(status::ApproachingDockStat)::Bool = update_render_offset!(status.motion)
 get_approach_axis(status::ApproachingDockStat)::Union{HexAxis, Nothing} = status.approach_axis
 
-"""
-Ship is departing - moving from connected position towards a distant position.
-When motion completes, the ship should be removed from the GameMap.
-"""
+"Ship is departing. Removed from `GameMap` when motion completes."
 struct DepartingDockStat <: DockingStatus
     motion::RenderPosOffsetState
     approach_axis::Union{HexAxis, Nothing}
 end
 @struct_hash_equal DepartingDockStat
-"Transparent constructor matching RenderPosOffsetState arguments"
 function DepartingDockStat(current_offset::AxialCoord, target_offset::AxialCoord, offset_step::Float64, approach_axis::Union{HexAxis, Nothing})
     return DepartingDockStat(RenderPosOffsetState(current_offset, target_offset, offset_step), approach_axis)
 end
@@ -175,12 +163,10 @@ struct EncounterEvent
     time::Float64   # Predicted crossing time (years)
     index::Int      # Index into the encounter_points vector
 end
+"Order encounter events by time for priority queue usage."
 Base.isless(a::EncounterEvent, b::EncounterEvent) = a.time < b.time
 
-"""
-Explicit phase for the manoeuvre state machine.
-Transitions: WAIT_APPROACH → MAIN_BURN → COAST → DECEL_BURN → ENCOUNTER_READY
-"""
+"Manoeuvre phase: WAIT_APPROACH → MAIN_BURN → COAST → DECEL_BURN → ENCOUNTER_READY"
 @enum ManoeuvrePhase begin
     PHASE_WAIT_APPROACH     # Waiting for closest approach time
     PHASE_MAIN_BURN         # Velocity match + acceleration burn
@@ -231,7 +217,7 @@ end
 # ===============================================================
 # AbstractSpaceMap Accessor Functions
 # ===============================================================
-# SpaceMapEmpty implementations provided here; SpaceMapState implementations in HexFlowProcGen
+# SpaceMapEmpty implementations here; SpaceMapState implementations in HexFlowProcGen
 
 "Get the ship's current velocity vector."
 get_velocity(sm::AbstractSpaceMap)::SVector{2, Float64} = sm.velocity
@@ -319,20 +305,18 @@ end
 # ShipMap Abstraction Functions
 # ===============================================================
 
-# Tile access for ShipMap
-"Get the component at a tile coordinate on a ShipMap, or nothing if no component exists"
+#= ---------- ShipMap: Component Access ----------- =#
+"Get the component at a tile coordinate, or `nothing` if absent."
 get_component(ship::ShipMap, coord::TileCoord) = get(ship.components, coord, nothing)
 
-"Check if a component exists at a tile coordinate on a ShipMap"
 has_component(ship::ShipMap, coord::TileCoord)::Bool = haskey(ship.components, coord)
 
-"Set the component at a tile coordinate on a ShipMap"
+"Set a component (or multiple) at tile coordinate(s)."
 function set_component!(ship::ShipMap, coord::TileCoord, component::ComponentOnTile)
     ship.components[coord] = component
     return nothing
 end
 
-"Set multiple components at tile coordinates on a ShipMap"
 function set_component!(ship::ShipMap, components::AbstractDict{TileCoord, ComponentOnTile})
     for (coord, component) in components
         ship.components[coord] = component
@@ -340,29 +324,25 @@ function set_component!(ship::ShipMap, components::AbstractDict{TileCoord, Compo
     return nothing
 end
 
-"Delete the component at a tile coordinate on a ShipMap"
 function delete_component!(ship::ShipMap, coord::TileCoord)
     delete!(ship.components, coord)
     return nothing
 end
 
-"Iterate over all components in a ShipMap (returns pairs of TileCoord => ComponentOnTile)"
 get_all_components(ship::ShipMap) = ship.components
 
-# Pipe access for ShipMap
-"Get the pipe behavior at an edge coordinate in a ShipMap, or nothing if no pipe exists"
+#= ---------- ShipMap: Pipe Access ----------- =#
+"Get the pipe behaviour at an edge coordinate, or `nothing` if absent."
 get_pipe(ship::ShipMap, coord::EdgeCoord) = get(ship.pipe_behaviors, coord, nothing)
 
-"Check if a pipe exists at an edge coordinate on a ShipMap"
 has_pipe(ship::ShipMap, coord::EdgeCoord)::Bool = haskey(ship.pipe_behaviors, coord)
 
-"Set the pipe behavior at an edge coordinate on a ShipMap"
+"Set a pipe behaviour (or multiple) at edge coordinate(s)."
 function set_pipe!(ship::ShipMap, coord::EdgeCoord, pipe_behavior::PipeBehavior)
     ship.pipe_behaviors[coord] = pipe_behavior
     return nothing
 end
 
-"Set multiple pipe behaviors at edge coordinates on a ShipMap"
 function set_pipe!(ship::ShipMap, pipes::AbstractDict{EdgeCoord, PipeBehavior})
     for (coord, pipe_behavior) in pipes
         ship.pipe_behaviors[coord] = pipe_behavior
@@ -370,35 +350,27 @@ function set_pipe!(ship::ShipMap, pipes::AbstractDict{EdgeCoord, PipeBehavior})
     return nothing
 end
 
-"Delete the pipe at an edge coordinate in a ShipMap"
 function delete_pipe!(ship::ShipMap, coord::EdgeCoord)
     delete!(ship.pipe_behaviors, coord)
     return nothing
 end
 
-"Iterate over all pipes in a ShipMap (returns pairs of EdgeCoord => PipeBehavior)"
 get_all_pipes(ship::ShipMap) = ship.pipe_behaviors
 
-# Count functions for ShipMap
-"Get the number of components in a ShipMap"
+#= ---------- ShipMap: Counts ----------- =#
 count_components(ship::ShipMap)::Int = length(ship.components)
-
-"Get the number of pipes in a ShipMap"
 count_pipes(ship::ShipMap)::Int = length(ship.pipe_behaviors)
-
-"Get the number of ship surface tiles in a ShipMap"
 count_surface_tiles(ship::ShipMap)::Int = length(ship.ship_tiles)
 
-# Ship surface access for ShipMap
-"Check if a coordinate is on the ship surface of a ShipMap"
+#= ---------- ShipMap: Surface Access ----------- =#
+"Check if a coordinate is on the ship surface."
 is_on_surface_tile(coord::TileCoord, ship::ShipMap)::Bool = coord in ship.ship_tiles
 
-"Add a tile coordinate to the ship surface on a ShipMap"
+"Add tile coordinate(s) to the ship surface."
 function set_surface_tile!(ship::ShipMap, coord::TileCoord)
     return push!(ship.ship_tiles, coord)
 end
 
-"Add multiple tile coordinates to the ship surface on a ShipMap"
 function set_surface_tile!(ship::ShipMap, surface::AbstractSet{TileCoord})
     for coord in surface
         set_surface_tile!(ship, coord)
@@ -406,7 +378,7 @@ function set_surface_tile!(ship::ShipMap, surface::AbstractSet{TileCoord})
     return nothing
 end
 
-"Remove a tile coordinate from the ship surface on a ShipMap. Returns true if removed, false if didn't exist"
+"Remove a tile from the ship surface. Returns `true` if removed, `false` if absent."
 function delete_surface_tile!(ship::ShipMap, coord::TileCoord)::Bool
     if coord in ship.ship_tiles
         delete!(ship.ship_tiles, coord)
@@ -415,11 +387,9 @@ function delete_surface_tile!(ship::ShipMap, coord::TileCoord)::Bool
     return false
 end
 
-"Get all ship surface coordinates in a ShipMap (for rendering or iteration)"
 get_all_surface_tiles(ship::ShipMap)::Set{TileCoord} = ship.ship_tiles
 
-# Batch operations for ShipMap
-"Delete all components from a ShipMap"
+#= ---------- ShipMap: Batch Operations ----------- =#
 function delete_all_components!(ship::ShipMap)
     return empty!(ship.components)
 end
@@ -440,8 +410,8 @@ end
 # These functions provide a clean, ship-routed interface to map internals.
 # By default operations route to the `:primary` ship unless `ship_name` is supplied.
 
-# Ship management
-"Get a ShipMap by name or throw a descriptive error if it does not exist"
+#= ---------- Ship Management ----------- =#
+"Get a `ShipMap` by name or throw if it does not exist."
 function _get_ship(gamemap::GameMap, ship_name::Symbol = :primary)::ShipMap
     if !haskey(gamemap.ships, ship_name)
         error("Ship '$ship_name' not found. Available ships: $(collect(keys(gamemap.ships)))")
@@ -449,7 +419,7 @@ function _get_ship(gamemap::GameMap, ship_name::Symbol = :primary)::ShipMap
     return gamemap.ships[ship_name]
 end
 
-"Add a ShipMap to the GameMap under the provided symbol name; errors if the name already exists"
+"Add a `ShipMap` under the provided name; errors if it already exists."
 function add_ship!(gamemap::GameMap, name::Symbol, shipmap::ShipMap)
     if haskey(gamemap.ships, name)
         error("Ship '$name' already exists")
@@ -458,7 +428,7 @@ function add_ship!(gamemap::GameMap, name::Symbol, shipmap::ShipMap)
     return nothing
 end
 
-"Remove a ship from the GameMap by name (error if attempting to remove :primary)"
+"Remove a ship by name (cannot remove `:primary`)."
 function remove_ship!(gamemap::GameMap, name::Symbol)
     if name == :primary
         error("Cannot remove primary ship")
@@ -467,80 +437,56 @@ function remove_ship!(gamemap::GameMap, name::Symbol)
     return nothing
 end
 
-"Return a vector containing the Symbol names of all ships in the GameMap"
-function get_all_ship_names(gamemap::GameMap)::Vector{Symbol}
-    return collect(keys(gamemap.ships))
-end
+get_all_ship_names(gamemap::GameMap)::Vector{Symbol} = collect(keys(gamemap.ships))
+has_ship(gamemap::GameMap, name::Symbol)::Bool = haskey(gamemap.ships, name)
+get_ship(gamemap::GameMap, name::Symbol)::ShipMap = _get_ship(gamemap, name)
 
-"Return true if a ship with the given name exists in the GameMap, false otherwise"
-function has_ship(gamemap::GameMap, name::Symbol)::Bool
-    return haskey(gamemap.ships, name)
-end
-
-"Get the ShipMap associated with `name` or throw if not found"
-function get_ship(gamemap::GameMap, name::Symbol)::ShipMap
-    return _get_ship(gamemap, name)
-end
-
-# Tile access
-"Get the component at a tile coordinate on a specific ship, or nothing if no component exists"
+#= ---------- GameMap: Component Access ----------- =#
 get_component(gamemap::GameMap, coord::TileCoord; ship_name::Symbol = :primary) = get_component(_get_ship(gamemap, ship_name), coord)
-
-"Check if a component exists at a tile coordinate on a specific ship"
 has_component(gamemap::GameMap, coord::TileCoord; ship_name::Symbol = :primary)::Bool = has_component(_get_ship(gamemap, ship_name), coord)
 
-"Set the component at a tile coordinate on a specific ship"
+"Set a component (or multiple) at tile coordinate(s) on a specific ship."
 function set_component!(gamemap::GameMap, coord::TileCoord, component::ComponentOnTile; ship_name::Symbol = :primary)
     set_component!(_get_ship(gamemap, ship_name), coord, component)
     return nothing
 end
 
-"Set multiple components at tile coordinates on a specific ship"
 function set_component!(gamemap::GameMap, components::AbstractDict{TileCoord, ComponentOnTile}; ship_name::Symbol = :primary)
     set_component!(_get_ship(gamemap, ship_name), components)
     return nothing
 end
 
-"Delete the component at a tile coordinate on a specific ship"
 function delete_component!(gamemap::GameMap, coord::TileCoord; ship_name::Symbol = :primary)
     delete_component!(_get_ship(gamemap, ship_name), coord)
     return nothing
 end
 
-"Iterate over all components for a specific ship (returns pairs of TileCoord => ComponentOnTile)"
 get_all_components(gamemap::GameMap; ship_name::Symbol = :primary) = get_all_components(_get_ship(gamemap, ship_name))
 
-
-# Pipe access
-"Get the pipe behavior at an edge coordinate on a specific ship, or nothing if no pipe exists"
+#= ---------- GameMap: Pipe Access ----------- =#
 get_pipe(gamemap::GameMap, coord::EdgeCoord; ship_name::Symbol = :primary) = get_pipe(_get_ship(gamemap, ship_name), coord)
-
-"Check if a pipe exists at an edge coordinate on a specific ship"
 has_pipe(gamemap::GameMap, coord::EdgeCoord; ship_name::Symbol = :primary)::Bool = has_pipe(_get_ship(gamemap, ship_name), coord)
 
-"Set the pipe behavior at an edge coordinate on a specific ship"
+"Set a pipe behaviour (or multiple) at edge coordinate(s) on a specific ship."
 function set_pipe!(gamemap::GameMap, coord::EdgeCoord, pipe_behavior::PipeBehavior; ship_name::Symbol = :primary)
     set_pipe!(_get_ship(gamemap, ship_name), coord, pipe_behavior)
     return nothing
 end
 
-"Set multiple pipe behaviors at edge coordinates on a specific ship"
 function set_pipe!(gamemap::GameMap, pipes::AbstractDict{EdgeCoord, PipeBehavior}; ship_name::Symbol = :primary)
     set_pipe!(_get_ship(gamemap, ship_name), pipes)
     return nothing
 end
 
-"Delete the pipe at an edge coordinate on a specific ship"
 function delete_pipe!(gamemap::GameMap, coord::EdgeCoord; ship_name::Symbol = :primary)
     delete_pipe!(_get_ship(gamemap, ship_name), coord)
     return nothing
 end
 
-"Iterate over all pipes for a specific ship (returns pairs of EdgeCoord => PipeBehavior)"
 get_all_pipes(gamemap::GameMap; ship_name::Symbol = :primary) = get_all_pipes(_get_ship(gamemap, ship_name))
 
-# Convenience helpers that search across all ships
-"Check if any ship contains a component at the given tile coordinate; returns (found::Bool, ship::Union{Symbol, Nothing})"
+#= ---------- GameMap: Cross-Ship Queries ----------- =#
+"Check if any ship contains a component at the given tile coordinate."
 function has_component_any_ship(gamemap::GameMap, coord::TileCoord)::Tuple{Bool, Union{Symbol, Nothing}}
     for (ship_name, ship) in gamemap.ships
         if has_component(ship, coord)
@@ -550,7 +496,7 @@ function has_component_any_ship(gamemap::GameMap, coord::TileCoord)::Tuple{Bool,
     return (false, nothing)
 end
 
-"Get the first component found on any ship at the given tile coordinate; returns (component::Union{ComponentOnTile, Nothing}, ship::Union{Symbol, Nothing})"
+"Get the first component found on any ship at the given tile coordinate."
 function get_component_any_ship(gamemap::GameMap, coord::TileCoord)
     for (ship_name, ship) in gamemap.ships
         comp = get_component(ship, coord)
@@ -561,7 +507,7 @@ function get_component_any_ship(gamemap::GameMap, coord::TileCoord)
     return (nothing, nothing)
 end
 
-"Check if any ship contains a pipe at the given edge coordinate; returns (found::Bool, ship::Union{Symbol, Nothing})"
+"Check if any ship contains a pipe at the given edge coordinate."
 function has_pipe_any_ship(gamemap::GameMap, coord::EdgeCoord)::Tuple{Bool, Union{Symbol, Nothing}}
     for (ship_name, ship) in gamemap.ships
         if has_pipe(ship, coord)
@@ -571,7 +517,7 @@ function has_pipe_any_ship(gamemap::GameMap, coord::EdgeCoord)::Tuple{Bool, Unio
     return (false, nothing)
 end
 
-"Get the first pipe found on any ship at the given edge coordinate; returns (pipe::Union{PipeBehavior, Nothing}, ship::Union{Symbol, Nothing})"
+"Get the first pipe found on any ship at the given edge coordinate."
 function get_pipe_any_ship(gamemap::GameMap, coord::EdgeCoord)
     for (ship_name, ship) in gamemap.ships
         p = get_pipe(ship, coord)
@@ -582,7 +528,7 @@ function get_pipe_any_ship(gamemap::GameMap, coord::EdgeCoord)
     return (nothing, nothing)
 end
 
-"Check whether the coordinate is part of any ship surface; returns (found::Bool, ship::Union{Symbol, Nothing})"
+"Check whether the coordinate is part of any ship's surface."
 function is_on_surface_tile_any_ship(coord::TileCoord, gamemap::GameMap)::Tuple{Bool, Union{Symbol, Nothing}}
     for (ship_name, ship) in gamemap.ships
         if is_on_surface_tile(coord, ship)
@@ -592,37 +538,21 @@ function is_on_surface_tile_any_ship(coord::TileCoord, gamemap::GameMap)::Tuple{
     return (false, nothing)
 end
 
-# Count functions
-"Get the number of components in the ship"
+#= ---------- GameMap: Counts ----------- =#
 count_components(gamemap::GameMap; ship_name::Symbol = :primary)::Int = count_components(_get_ship(gamemap, ship_name))
-
-"Get the number of pipes in the ship"
 count_pipes(gamemap::GameMap; ship_name::Symbol = :primary)::Int = count_pipes(_get_ship(gamemap, ship_name))
-
-"Get the number of ship surface tiles for the ship"
 count_surface_tiles(gamemap::GameMap; ship_name::Symbol = :primary)::Int = count_surface_tiles(_get_ship(gamemap, ship_name))
 
-# Batch operations
-"Delete all components from a ship"
-function delete_all_components!(gamemap::GameMap; ship_name::Symbol = :primary)
-    return delete_all_components!(_get_ship(gamemap, ship_name))
-end
+#= ---------- GameMap: Batch Operations ----------- =#
+delete_all_components!(gamemap::GameMap; ship_name::Symbol = :primary) = delete_all_components!(_get_ship(gamemap, ship_name))
+delete_all_pipes!(gamemap::GameMap; ship_name::Symbol = :primary) = delete_all_pipes!(_get_ship(gamemap, ship_name))
+delete_all_surface_tiles!(gamemap::GameMap; ship_name::Symbol = :primary) = delete_all_surface_tiles!(_get_ship(gamemap, ship_name))
 
-"Delete all pipes from a ship"
-function delete_all_pipes!(gamemap::GameMap; ship_name::Symbol = :primary)
-    return delete_all_pipes!(_get_ship(gamemap, ship_name))
-end
-
-"Delete all surface tiles (remove all surface tiles) from a ship"
-function delete_all_surface_tiles!(gamemap::GameMap; ship_name::Symbol = :primary)
-    return delete_all_surface_tiles!(_get_ship(gamemap, ship_name))
-end
-
-# Ship surface access
-"Check if a coordinate is on the ship surface"
+#= ---------- GameMap: Surface Access ----------- =#
+"Check if a coordinate is on the ship surface."
 is_on_surface_tile(coord::TileCoord, gamemap::GameMap; ship_name::Symbol = :primary)::Bool = is_on_surface_tile(coord, _get_ship(gamemap, ship_name))
 
-"Default implimentation for placement_valid on a gamemap"
+"Default implementation for `placement_valid` on a `GameMap`."
 function placement_valid(behav::T, coord::TileCoord, gamemap::GameMap; ship_name::Symbol = :primary, kwargs...) where {T <: ComponentBehavior}
     if is_on_surface_tile(coord, gamemap; ship_name = ship_name)
         return (true, "")
@@ -631,26 +561,23 @@ function placement_valid(behav::T, coord::TileCoord, gamemap::GameMap; ship_name
     end
 end
 
-"Add a tile coordinate to the ship surface"
+"Add tile coordinate(s) to the ship surface."
 function set_surface_tile!(gamemap::GameMap, coord::TileCoord; ship_name::Symbol = :primary)
     return set_surface_tile!(_get_ship(gamemap, ship_name), coord)
 end
-
-"Add multiple tile coordinates to the ship surface"
 function set_surface_tile!(gamemap::GameMap, surface::AbstractSet{TileCoord}; ship_name::Symbol = :primary)
     set_surface_tile!(_get_ship(gamemap, ship_name), surface)
     return nothing
 end
 
-"Remove a tile coordinate from the ship surface. Returns true if removed, false if didn't exist"
+"Remove a tile from the ship surface. Returns `true` if removed, `false` if absent."
 function delete_surface_tile!(gamemap::GameMap, coord::TileCoord; ship_name::Symbol = :primary)::Bool
     return delete_surface_tile!(_get_ship(gamemap, ship_name), coord)
 end
 
-"Get all ship surface coordinates (for rendering or iteration)"
 get_all_surface_tiles(gamemap::GameMap; ship_name::Symbol = :primary)::Set{TileCoord} = get_all_surface_tiles(_get_ship(gamemap, ship_name))
 
-"Get the combined ship surface coordinates across all ships in the GameMap"
+"Get the combined ship surface coordinates across all ships."
 function get_all_surfaces_combined(gamemap::GameMap)::Set{TileCoord}
     combined = Set{TileCoord}()
     for (_, ship) in gamemap.ships
@@ -659,46 +586,39 @@ function get_all_surfaces_combined(gamemap::GameMap)::Set{TileCoord}
     return combined
 end
 
-"""
-Calculate the axial coordinate extremes for a set of surface tiles.
-Accepts an `AbstractSet{TileCoord}` and returns a `HexFrame.AxialBounds` tuple containing the tile
-coordinate furthest along each `HexAxis` direction. This operates on the provided tile set and
-is used by `ShipMap` and `GameMap` overloads.
-"""
+"Find the tile with the largest projection along each `HexAxis` direction."
 function get_axial_bounds(tiles::AbstractSet{TileCoord})::HexFrame.AxialBounds
-    # Handle empty set case - return origin for all directions
     if isempty(tiles)
         origin = TileCoord(0, 0)
         return (Q_POS = origin, R_NEG = origin, S_POS = origin, Q_NEG = origin, R_POS = origin, S_NEG = origin)
     end
 
-    # Initialise tracking for each HexAxis direction
-    extremes = Dict{HexFrame.HexAxis, Tuple{Float64, TileCoord}}()
-    for axis in instances(HexFrame.HexAxis)
-        extremes[axis] = (-Inf, TileCoord(0, 0))
-    end
+    # Track (max_projection, best_tile) per axis using local variables to avoid Dict allocation
+    origin = TileCoord(0, 0)
+    best_proj = MVector{6, Float64}(-Inf, -Inf, -Inf, -Inf, -Inf, -Inf)
+    best_tile = MVector{6, TileCoord}(origin, origin, origin, origin, origin, origin)
 
-    # Single iteration through all surface tiles
     for tile in tiles
-        tile_axial = AxialCoord(Float64(tile.q), Float64(tile.r))
-
+        tile_q = Float64(tile.q)
+        tile_r = Float64(tile.r)
         for axis in instances(HexFrame.HexAxis)
             axis_vec = HexFrame.hex_vert_vecs[axis]
-            projection = tile_axial.q * axis_vec.q + tile_axial.r * axis_vec.r
-
-            if projection > extremes[axis][1]
-                extremes[axis] = (projection, tile)
+            projection = tile_q * axis_vec.q + tile_r * axis_vec.r
+            idx = Int(axis) + 1
+            if projection > best_proj[idx]
+                best_proj[idx] = projection
+                best_tile[idx] = tile
             end
         end
     end
 
     return (
-        Q_POS = extremes[HexFrame.Q_POS][2],
-        R_NEG = extremes[HexFrame.R_NEG][2],
-        S_POS = extremes[HexFrame.S_POS][2],
-        Q_NEG = extremes[HexFrame.Q_NEG][2],
-        R_POS = extremes[HexFrame.R_POS][2],
-        S_NEG = extremes[HexFrame.S_NEG][2],
+        Q_POS = best_tile[Int(HexFrame.Q_POS) + 1],
+        R_NEG = best_tile[Int(HexFrame.R_NEG) + 1],
+        S_POS = best_tile[Int(HexFrame.S_POS) + 1],
+        Q_NEG = best_tile[Int(HexFrame.Q_NEG) + 1],
+        R_POS = best_tile[Int(HexFrame.R_POS) + 1],
+        S_NEG = best_tile[Int(HexFrame.S_NEG) + 1],
     )
 end
 
@@ -716,7 +636,6 @@ Note: Y_POS is the maximum y value (top of screen), Y_NEG is minimum (bottom).
 X_POS is maximum x (right), X_NEG is minimum (left).
 """
 function get_cartesian_bounds(tiles::AbstractSet{TileCoord})::HexFrame.CartesianBounds
-    # Handle empty set case - return zeros
     if isempty(tiles)
         return (X_POS = 0.0, X_NEG = 0.0, Y_POS = 0.0, Y_NEG = 0.0)
     end
@@ -762,7 +681,7 @@ get_surface_centroid(ship::ShipMap)::Union{AxialCoord, Nothing} = get_surface_ce
 get_surface_centroid(gamemap::GameMap, ship_name::Symbol)::Union{AxialCoord, Nothing} = get_surface_centroid(_get_ship(gamemap, ship_name))
 
 
-"Count how many of a tile's 6 adjacent neighbors are present in the surface set."
+"Count how many of a tile's 6 adjacent neighbours are present in the surface set."
 @inline function count_surfacetile_adjacencies(surface_set::Set{TileCoord}, tile::TileCoord)::Int
     adjacent_tiles = HexFrame.get_adjacent_tiles_for_tile(tile)
     return count(adj_tile -> adj_tile in surface_set, adjacent_tiles)
@@ -779,7 +698,7 @@ function find_ship_surface_edgetiles!(edgesurface::Set{TileCoord}, ship::ShipMap
     return nothing
 end
 
-"Update a set with tiles that are on the boundary of all ships (combined). Aggregates ship-level results."
+"Update a set with boundary tiles aggregated across all ships."
 function find_ship_surface_edgetiles!(edgesurface::Set{TileCoord}, gamemap::GameMap)
     empty!(edgesurface)
     tmp = Set{TileCoord}()
@@ -795,20 +714,13 @@ end
 # Placement Validation Functions
 # ===============================================================
 
-"Return `true` if a node is connected to the ship surface.  A node is considered connected
-by checking whether any tile adjacent to the node lies on the given ship's surface."
+"Return `true` if any tile adjacent to the node lies on the given ship's surface."
 function is_node_on_ship_surface(node_abs::NodeCoord, gamemap::GameMap; ship_name::Symbol = :primary)::Bool
-    # Get the tiles adjacent to this node
-    adjacent_tiles = get_adjacent_tiles_for_node(node_abs)
-
-    # Check if any adjacent tile is on the specified ship surface
-    for (tile, _) in adjacent_tiles
+    for (tile, _) in get_adjacent_tiles_for_node(node_abs)
         if is_on_surface_tile(tile, gamemap; ship_name = ship_name)
             return true
         end
     end
-
-    # No adjacent tiles on surface
     return false
 end
 
@@ -820,26 +732,20 @@ function can_place_component_at(coord::TileCoord, gamemap::GameMap; ship_name::S
     return (true, "")
 end
 
-"Check if a pipe can be placed at an edge coordinate (both endpoint nodes must be on ship surface)"
+"Check if a pipe can be placed at an edge coordinate (both endpoint nodes must be on ship surface)."
 function can_place_pipe_at(coord::EdgeCoord, gamemap::GameMap; ship_name::Symbol = :primary)::Tuple{Bool, String}
-    # Get the two node coordinates for this edge
     v1_node = to_nodecoord(coord.v1)
     v2_node = to_nodecoord(coord.v2)
-
-    # Check that the first node is connected to ship surface
     if !is_node_on_ship_surface(v1_node, gamemap; ship_name = ship_name)
         return (false, "Pipe endpoint node at $(coord.v1.tile) is not connected to ship surface")
     end
-
-    # Check that the second node is connected to ship surface
     if !is_node_on_ship_surface(v2_node, gamemap; ship_name = ship_name)
         return (false, "Pipe endpoint node at $(coord.v2.tile) is not connected to ship surface")
     end
-
     return (true, "")
 end
 
-"Check if a surface tile can be removed (must not have a component on it)"
+"Check if a surface tile can be removed (must not have a component on it)."
 function can_remove_surface_at(coord::TileCoord, gamemap::GameMap; ship_name::Symbol = :primary)::Tuple{Bool, String}
     if has_component(gamemap, coord; ship_name = ship_name)
         return (false, "Surface cannot be deleted under a component, delete component first")
@@ -858,7 +764,7 @@ end
 
 #= ---------- Node Queries ----------- =#
 
-"Check if a node is on any ship's surface (searches all ships)"
+"Check if a node is on any ship's surface (searches all ships)."
 function is_node_on_any_ship_surface(node::NodeCoord, gamemap::GameMap)::Bool
     for (ship_name, _) in gamemap.ships
         if is_node_on_ship_surface(node, gamemap; ship_name = ship_name)
@@ -870,20 +776,17 @@ end
 
 """
 Find which ship a node connects to, by surface-tile adjacency or pipe-edge ownership.
-Returns `nothing` if the node is not connected to any ship. Unlike `find_ship_for_node`,
-this has no fallback — it only reports a genuine connection.
+Returns `nothing` if unconnected. Unlike `find_ship_for_node`, has no fallback.
 """
 function _find_connected_ship(node::NodeCoord, gamemap::GameMap)::Union{Symbol, Nothing}
-    # Fast path: check adjacent surface tiles
-    adjacent_tiles = get_adjacent_tiles_for_node(node)
-    for (tile, _) in adjacent_tiles
+    for (tile, _) in get_adjacent_tiles_for_node(node)
         ship_name = find_ship_for_surface(gamemap, tile)
         if !isnothing(ship_name)
             return ship_name
         end
     end
 
-    # Slower path: check pipe edges radiating from this node's vertex
+    # Slow path: check pipe edges radiating from this node's vertex
     if is_axis(node.dir)
         vertex = to_vertex(node)
         for edge in get_edges(vertex)
@@ -912,7 +815,8 @@ is needed by FlowMap's own validation logic.
 """
 function flood_search_pipes_from_node!(reachable::Set{EdgeCoord}, all_pipe_edges, start_node::NodeCoord)
     visited_nodes = Set{NodeCoord}()
-    queue = NodeCoord[start_node]
+    queue = Deque{NodeCoord}()
+    push!(queue, start_node)
 
     while !isempty(queue)
         node = popfirst!(queue)
@@ -1079,10 +983,10 @@ function reassign_pipe_ownership!(deleted_coord::EdgeCoord, gamemap::GameMap)
 end
 
 # ===============================================================
-# Helper Functions
+# Ship Search Helpers
 # ===============================================================
 
-"Find which ship (if any) owns the surface tile at a coordinate"
+"Find which ship (if any) owns the surface tile at a coordinate."
 function find_ship_for_surface(gamemap::GameMap, coord::TileCoord)::Union{Symbol, Nothing}
     for (name, ship) in gamemap.ships
         if coord in ship.ship_tiles
@@ -1092,7 +996,7 @@ function find_ship_for_surface(gamemap::GameMap, coord::TileCoord)::Union{Symbol
     return nothing
 end
 
-"Find which ship(s) have surfaces adjacent to a coordinate"
+"Find which ship(s) have surfaces adjacent to a coordinate."
 function find_ships_adjacent_to_coord(gamemap::GameMap, coord::TileCoord)::Vector{Symbol}
     adjacent_tiles = HexFrame.get_adjacent_tiles_for_tile(coord)
     adjacent_ships = Symbol[]
@@ -1105,13 +1009,12 @@ function find_ships_adjacent_to_coord(gamemap::GameMap, coord::TileCoord)::Vecto
     return adjacent_ships
 end
 
-"Check if placing a surface at coord would connect multiple ships (invalid)"
+"Check if placing a surface at coord would connect multiple ships (invalid)."
 function would_bridge_ships(gamemap::GameMap, coord::TileCoord)::Bool
-    adjacent_ships = find_ships_adjacent_to_coord(gamemap, coord)
-    return length(adjacent_ships) > 1
+    return length(find_ships_adjacent_to_coord(gamemap, coord)) > 1
 end
 
-"Find which ship a component/pipe should belong to by testing placement_valid on all ships"
+"Find which ship a component should belong to by testing `placement_valid` on all ships."
 function find_valid_ship_for_placement(
         component::ComponentBehavior,
         coord::TileCoord,
@@ -1127,7 +1030,7 @@ function find_valid_ship_for_placement(
     return nothing
 end
 
-"Find which ship owns a component at a given coordinate (searches all ships)"
+"Find which ship owns a component at a given coordinate (searches all ships)."
 function find_ship_with_component(gamemap::GameMap, coord::TileCoord)::Union{Symbol, Nothing}
     for (ship_name, ship) in gamemap.ships
         if haskey(ship.components, coord)
@@ -1137,7 +1040,7 @@ function find_ship_with_component(gamemap::GameMap, coord::TileCoord)::Union{Sym
     return nothing
 end
 
-"Find which ship owns a pipe at a given edge coordinate (searches all ships)"
+"Find which ship owns a pipe at a given edge coordinate (searches all ships)."
 function find_ship_with_pipe(gamemap::GameMap, coord::EdgeCoord)::Union{Symbol, Nothing}
     for (ship_name, ship) in gamemap.ships
         if haskey(ship.pipe_behaviors, coord)
@@ -1151,14 +1054,13 @@ end
 # Ship Docking & Render Offset Functions
 # ===============================================================
 
-"Offset all coordinates in a ShipMap in-place by a TileCoord offset."
+"Offset all coordinates in a `ShipMap` in-place by a `TileCoord` offset."
 function offset_ship!(shipmap::ShipMap, offset::TileCoord)
     # Offset components
     new_components = Dict{TileCoord, ComponentOnTile}()
     sizehint!(new_components, length(shipmap.components))
     for (coord, comp) in shipmap.components
-        new_coord = TileCoord(coord.q + offset.q, coord.r + offset.r)
-        new_components[new_coord] = comp
+        new_components[TileCoord(coord.q + offset.q, coord.r + offset.r)] = comp
     end
     empty!(shipmap.components)
     merge!(shipmap.components, new_components)
@@ -1167,16 +1069,9 @@ function offset_ship!(shipmap::ShipMap, offset::TileCoord)
     new_pipes = Dict{EdgeCoord, PipeBehavior}()
     sizehint!(new_pipes, length(shipmap.pipe_behaviors))
     for (edge, pipe) in shipmap.pipe_behaviors
-        v1_offset = VertexCoord(
-            TileCoord(edge.v1.tile.q + offset.q, edge.v1.tile.r + offset.r),
-            edge.v1.dir
-        )
-        v2_offset = VertexCoord(
-            TileCoord(edge.v2.tile.q + offset.q, edge.v2.tile.r + offset.r),
-            edge.v2.dir
-        )
-        new_edge = EdgeCoord(v1_offset, v2_offset)
-        new_pipes[new_edge] = pipe
+        v1_offset = VertexCoord(TileCoord(edge.v1.tile.q + offset.q, edge.v1.tile.r + offset.r), edge.v1.dir)
+        v2_offset = VertexCoord(TileCoord(edge.v2.tile.q + offset.q, edge.v2.tile.r + offset.r), edge.v2.dir)
+        new_pipes[EdgeCoord(v1_offset, v2_offset)] = pipe
     end
     empty!(shipmap.pipe_behaviors)
     merge!(shipmap.pipe_behaviors, new_pipes)
@@ -1185,8 +1080,7 @@ function offset_ship!(shipmap::ShipMap, offset::TileCoord)
     new_surface = Set{TileCoord}()
     sizehint!(new_surface, length(shipmap.ship_tiles))
     for coord in shipmap.ship_tiles
-        new_coord = TileCoord(coord.q + offset.q, coord.r + offset.r)
-        push!(new_surface, new_coord)
+        push!(new_surface, TileCoord(coord.q + offset.q, coord.r + offset.r))
     end
     empty!(shipmap.ship_tiles)
     union!(shipmap.ship_tiles, new_surface)
@@ -1194,18 +1088,18 @@ function offset_ship!(shipmap::ShipMap, offset::TileCoord)
     return nothing
 end
 
-"Get the render position offset for a ship (cosmetic offset for visual effects)"
+"Get the render position offset for a ship."
 function get_ship_render_offset(gamemap::GameMap, ship_name::Symbol)::AxialCoord
     return get_render_offset(_get_ship(gamemap, ship_name))
 end
 
-"Get the render offset for a ShipMap; returns AxialCoord(0,0) if no offset (e.g., ConnectedDockStat)"
+"Get the render offset for a `ShipMap`; returns `AxialCoord(0,0)` if no offset."
 function get_render_offset(ship::ShipMap)::AxialCoord
     offset = get_render_offset(ship.docking_status)
     return isnothing(offset) ? AxialCoord(0.0, 0.0) : offset
 end
 
-"Update render offset motion for a ship, returns true if motion is complete"
+"Update render offset motion; returns `true` if motion is complete."
 update_render_offset!(ship::ShipMap)::Bool = update_render_offset!(ship.docking_status)
 
 "Get the docking status of a ship (ShipMap-level)"
@@ -1217,20 +1111,15 @@ function set_docking_status!(ship::ShipMap, status::DockingStatus)
     return nothing
 end
 
-"Get the docking status of a ship by name. Returns nothing if ship not found."
+"Get the docking status of a ship by name. Returns `nothing` if ship not found."
 function get_docking_status(gamemap::GameMap, ship_name::Symbol)::Union{DockingStatus, Nothing}
-    if !haskey(gamemap.ships, ship_name)
-        return nothing
-    end
+    haskey(gamemap.ships, ship_name) || return nothing
     return get_docking_status(gamemap.ships[ship_name])
 end
 
-"Set the docking status of a ship by name. Errors if ship not found."
+"Set the docking status of a ship by name."
 function set_docking_status!(gamemap::GameMap, ship_name::Symbol, status::DockingStatus)
-    if !haskey(gamemap.ships, ship_name)
-        error("Ship '$ship_name' not found. Available ships: $(collect(keys(gamemap.ships)))")
-    end
-    set_docking_status!(gamemap.ships[ship_name], status)
+    set_docking_status!(_get_ship(gamemap, ship_name), status)
     return nothing
 end
 
@@ -1284,7 +1173,7 @@ function update_docking!(gamemap::GameMap; ship_name::Union{Symbol, Nothing} = n
     return nothing
 end
 
-"Clear all ships to ConnectedDockStat (used before saving maps)"
+"Reset all ships to `ConnectedDockStat` (used before saving maps)."
 function clear_all_docking_statuses!(gamemap::GameMap)
     for (_, ship) in gamemap.ships
         set_docking_status!(ship, ConnectedDockStat())
@@ -1294,12 +1183,8 @@ end
 
 """
 Swap the primary ship with another ship in the GameMap.
-The current primary is retired under a unique gensym'd name, and the target ship
-becomes the new `:primary`. Returns `(success::Bool, reason::String)`.
-
-Docking axes are updated so the retired primary can depart:
-the new primary's approach axis is reversed and assigned to the retired ship,
-while the new primary gets a cleared departure axis (it is now home).
+The current primary is retired under a `gensym`'d name, and the target becomes `:primary`.
+Docking axes are updated so the retired primary can depart in the reverse direction.
 """
 function swap_primary!(gamemap::GameMap, new_primary_name::Symbol)::Tuple{Bool, String}
     if new_primary_name == :primary
@@ -1313,8 +1198,7 @@ function swap_primary!(gamemap::GameMap, new_primary_name::Symbol)::Tuple{Bool, 
     old_primary_ship = pop!(gamemap.ships, :primary)
     new_primary_ship = pop!(gamemap.ships, new_primary_name)
 
-    # Compute the reversed departure axis for the retired ship from the new primary's approach axis.
-    # If the new ship docked from direction X, the old ship should depart in the opposite direction.
+    # Reverse the new primary's approach axis for the retired ship's departure direction
     new_primary_status = get_docking_status(new_primary_ship)
     new_primary_approach = get_approach_axis(new_primary_status)
     retired_axis = isnothing(new_primary_approach) ? nothing : rotate(new_primary_approach, HexFrame.Q_NEG)
@@ -1330,28 +1214,24 @@ function swap_primary!(gamemap::GameMap, new_primary_name::Symbol)::Tuple{Bool, 
 end
 
 """
-Find which ship a node belongs to. Checks surface-tile adjacency first (fast path),
-then falls back to pipe-edge ownership for nodes that sit away from any ship surface
-(e.g. off-surface pipes extending between ships). Returns `:primary` as final fallback.
+Find which ship a node belongs to. Checks surface-tile adjacency first,
+then pipe-edge ownership. Falls back to `:primary`.
 """
 function find_ship_for_node(node::NodeCoord, gamemap::GameMap)::Symbol
-    # check adjacent surface tiles to handle most nodes on ships
-    adjacent_tiles = get_adjacent_tiles_for_node(node)
-    for (tile, _) in adjacent_tiles
+    # Fast path: check adjacent surface tiles
+    for (tile, _) in get_adjacent_tiles_for_node(node)
         ship_name = find_ship_for_surface(gamemap, tile)
         if !isnothing(ship_name)
             return ship_name
         end
     end
 
-    # If off a ship, check connected pipes for ship association (handles off-surface pipes)
+    # Slow path: check pipe edges for off-surface nodes
     if is_axis(node.dir)
         vertex = to_vertex(node)
-        node_edges = get_edges(vertex)
-        for (ship_name, ship) in gamemap.ships
-            pipes = get_all_pipes(ship)
-            for edge in node_edges
-                if haskey(pipes, edge)
+        for edge in get_edges(vertex)
+            for (ship_name, ship) in gamemap.ships
+                if haskey(ship.pipe_behaviors, edge)
                     return ship_name
                 end
             end
@@ -1413,13 +1293,9 @@ is_time_progressing(gamemap::GameMap)::Bool = is_time_progressing(gamemap.space_
 "Get encounter points from the game map."
 get_encounter_points(gamemap::GameMap) = get_encounter_points(gamemap.space_map)
 
-"Calculate the total mass of all ships in the game map based on surface tile count."
+"Total mass of all ships based on surface tile count."
 function get_mass(gamemap::GameMap; mass_per_tile::Float64 = 1000.0)::Float64
-    total_tiles = 0
-    for (_, ship) in gamemap.ships
-        total_tiles += count_surface_tiles(ship)
-    end
-    return total_tiles * mass_per_tile
+    return sum(count_surface_tiles(ship) for (_, ship) in gamemap.ships) * mass_per_tile
 end
 
 end # module FlowMap

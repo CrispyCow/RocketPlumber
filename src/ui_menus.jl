@@ -9,14 +9,14 @@ using HexFrame, FlowEngine, FlowMap, HexFlowProcGen
 using HexFluids
 using HexFlowCalculator, HexFlowControl
 
-"renders the pause menu when active, with options to close, save map, exit to menu, or quit"
+"Render the pause menu when active, with options to close, save map, exit to menu, or quit."
 function ui_pause_menu_render!(inputstate::InputState, snapshot::FlowCalculatorSnapshot, window::GLFW.Window)
-    # Guard clause to check if escape menu is active
+    # Menu must be active
     if !inputstate.escape_menu_active
         return nothing
     end
 
-    # Menu box dimensions
+    # Centre the menu box
     winsize = GLFW.GetWindowSize(window)
     win_w, win_h = Float64(winsize.width), Float64(winsize.height)
     box_w, box_h = 300.0, 350.0
@@ -79,7 +79,7 @@ function ui_pause_menu_render!(inputstate::InputState, snapshot::FlowCalculatorS
 end
 
 """
-Renders the hint/tutorial popup window.
+Render the hint/tutorial popup window.
 Displays hints with navigation buttons and completion tracking.
 Must be called within ui_renderwrap.
 """
@@ -91,23 +91,22 @@ function ui_hintbox_render!(
     # Calculate position (top right, immediately left of property box)
     win_float = to_float(winsize)
     pos_x = win_float.width - propertyboxwidth - hintboxwidth
-    pos_y = 0.0
 
     # Window flags: allow resize and move
     flags = CImGui.ImGuiWindowFlags_None
 
     # Setup window
-    ui_window_setup("Hint: $(hint_data.title)", (pos_x, pos_y), (hintboxwidth, hintboxheight), flags)
+    ui_window_setup("Hint: $(hint_data.title)", (pos_x, 0.0), (hintboxwidth, hintboxheight), flags)
 
     # Get current hint text
     current_hint = hint_data.hints[hint_data.current_hint_index]
 
-    # Scrollable text area (takes remaining space minus button area)
-    button_area_height = 80.0  # Space for two rows of buttons plus padding
-    text_area_height = hintboxheight - button_area_height - 60.0  # 60 for title bar and padding
+    # Scrollable text area
+    button_area_height = 80.0
+    text_area_height = hintboxheight - button_area_height - 60.0
 
     CImGui.BeginChild("HintTextArea", (0.0, text_area_height), true)
-    CImGui.PushTextWrapPos(0.0)  # Wrap at window edge
+    CImGui.PushTextWrapPos(0.0)   # Wrap at window edge
     CImGui.TextUnformatted(current_hint)
     CImGui.PopTextWrapPos()
     CImGui.EndChild()
@@ -115,62 +114,71 @@ function ui_hintbox_render!(
     CImGui.Spacing()
 
     # Navigation buttons (Previous and Next, side by side)
-    button_width = (hintboxwidth - 30.0) / 2.0  # Account for padding and spacing
+    button_width = (hintboxwidth - 30.0) / 2.0
 
     # Previous button
     at_first_hint = hint_data.current_hint_index == 1
-    if at_first_hint
-        CImGui.BeginDisabled()
-    end
+    at_first_hint && CImGui.BeginDisabled()
     if CImGui.Button("< Previous", (button_width, 30.0))
         hint_data.current_hint_index = max(1, hint_data.current_hint_index - 1)
     end
-    if at_first_hint
-        CImGui.EndDisabled()
-    end
+    at_first_hint && CImGui.EndDisabled()
 
     CImGui.SameLine()
 
     # Next button
     at_last_hint = hint_data.current_hint_index == length(hint_data.hints)
-    if at_last_hint
-        CImGui.BeginDisabled()
-    end
+    at_last_hint && CImGui.BeginDisabled()
     if CImGui.Button("Next >", (button_width, 30.0))
         hint_data.current_hint_index = min(length(hint_data.hints), hint_data.current_hint_index + 1)
     end
-    if at_last_hint
-        CImGui.EndDisabled()
-    end
+    at_last_hint && CImGui.EndDisabled()
 
     CImGui.Spacing()
 
     # Mark Complete button (full width, only enabled at last hint)
-    if !at_last_hint
-        CImGui.BeginDisabled()
-    end
+    !at_last_hint && CImGui.BeginDisabled()
     if CImGui.Button("Mark Complete", (hintboxwidth - 20.0, 30.0))
         @info "Hint Marked completed"
         inputstate.return_symbol = :hint_completed
         inputstate.should_exit_gameloop = true
     end
-    if !at_last_hint
-        CImGui.EndDisabled()
-    end
+    !at_last_hint && CImGui.EndDisabled()
 
     CImGui.End()
     return nothing
 end
 
-"Helper to enqueue a map-override command on the flow calculator command queue."
+"Enqueue a `MapOverrideCommand` on the flow calculator's command queue."
 function enqueue_map_override!(flowcalc_ipc::FlowCalculatorIPC, gamemap::GameMap)
     cmd = create_map_override_command(flowcalc_ipc.command_queue, deepcopy(gamemap))
     try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
     return nothing
 end
 
+"""
+Show a listbox of non-primary ships and return `(selected_name, gamemap)`, or
+`(nothing, gamemap)` when no ships are available (with a placeholder message).
+"""
+function _ship_selector_ui!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, key::Symbol, label::String, empty_msg::String = "No other ships (only primary exists)")
+    current_gamemap = (flowcalc_ipc.get_snapshot()).gamemap
+    all_ship_names = get_all_ship_names(current_gamemap)
+    selectable_ships = filter(n -> n != :primary, all_ship_names)
+    display_names = safe_ship_display_name.(selectable_ships)
+
+    if isempty(selectable_ships)
+        CImGui.Text(empty_msg)
+        return nothing, current_gamemap
+    end
+
+    idx = gui_listbox_int!(inputstate, key, label, display_names, Int32(0))
+    idx = clamp(idx, Int32(0), Int32(max(0, length(selectable_ships) - 1)))
+    inputstate.gui_inputs[key] = idx
+    return selectable_ships[idx + 1], current_gamemap
+end
+
 function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, snapshot::FlowCalculatorSnapshot, viewstate::ViewState, winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}}, max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing)
-    # Guard clause to check if dev utils menu is active
+    # Menu must be active
     if !inputstate.dev_utils_menu_active
         return nothing
     end
@@ -190,13 +198,10 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
     if (CImGui.CollapsingHeader("Tools"))
         if CImGui.Button("Clear Map", (button_width, button_height))
             @info "Clearing map..."
-            new_map = GameMap()
-            # Create MapOverrideCommand and enqueue it
-            cmd = create_map_override_command(flowcalc_ipc.command_queue, deepcopy(new_map))
-            try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+            enqueue_map_override!(flowcalc_ipc, GameMap())
         end
 
-        # Initialise Space Map utility
+        # Initialise Space Map
         if CImGui.TreeNode("Initialise Space Map")
             spacemap_seed = gui_input_u32!(inputstate, :spacemap_init_seed, "Seed", UInt32(42))
             init_vel_x = gui_input_double!(inputstate, :spacemap_init_vel_x, "Velocity X", 1.0)
@@ -214,100 +219,47 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             CImGui.TreePop()
         end
 
-        # Delete Ship utility
+        # Delete Ship
         if CImGui.TreeNode("Delete Ship")
-            # Get current gamemap to list ships
-            current_gamemap = (flowcalc_ipc.get_snapshot()).gamemap
-            all_ship_names = get_all_ship_names(current_gamemap)
-            
-            # Filter out :primary
-            deletable_ships = filter(n -> n != :primary, all_ship_names)
-            deletable_ship_strings = safe_ship_display_name.(deletable_ships)
-            
-            if isempty(deletable_ships)
-                CImGui.Text("No deletable ships (only primary exists)")
-            else
-                # Ship selection dropdown
-                delete_ship_index = gui_listbox_int!(inputstate, :delete_ship_index, "Ship", deletable_ship_strings, Int32(0))
-                delete_ship_index = clamp(delete_ship_index, Int32(0), Int32(max(0, length(deletable_ships) - 1)))
-                inputstate.gui_inputs[:delete_ship_index] = delete_ship_index
-                
-                selected_delete_ship = deletable_ships[delete_ship_index + 1]
-                
-                if CImGui.Button("Delete Ship", (button_width, button_height))
-                    modified_map = deepcopy(current_gamemap)
-                    remove_ship!(modified_map, selected_delete_ship)
-                    enqueue_map_override!(flowcalc_ipc, modified_map)
-                    @info "Deleted ship $(selected_delete_ship)"
-                end
+            selected, current_gamemap = _ship_selector_ui!(inputstate, flowcalc_ipc, :delete_ship_index, "Ship", "No deletable ships (only primary exists)")
+            if !isnothing(selected) && CImGui.Button("Delete Ship", (button_width, button_height))
+                modified_map = deepcopy(current_gamemap)
+                remove_ship!(modified_map, selected)
+                enqueue_map_override!(flowcalc_ipc, modified_map)
+                @info "Deleted ship $(selected)"
             end
             CImGui.TreePop()
         end
 
-        # Depart Ship utility
+        # Depart Ship
         if CImGui.TreeNode("Depart Ship")
-            # Get current gamemap to list ships
-            current_gamemap = (flowcalc_ipc.get_snapshot()).gamemap
-            all_ship_names = get_all_ship_names(current_gamemap)
-            
-            # Filter out :primary
-            departable_ships = filter(n -> n != :primary, all_ship_names)
-            departable_ship_strings = safe_ship_display_name.(departable_ships)
-            
-            if isempty(departable_ships)
-                CImGui.Text("No departable ships (only primary exists)")
-            else
-                # Ship selection dropdown
-                depart_ship_index = gui_listbox_int!(inputstate, :depart_ship_index, "Ship", departable_ship_strings, Int32(0))
-                depart_ship_index = clamp(depart_ship_index, Int32(0), Int32(max(0, length(departable_ships) - 1)))
-                inputstate.gui_inputs[:depart_ship_index] = depart_ship_index
-                
-                selected_depart_ship = departable_ships[depart_ship_index + 1]
-                
-                if CImGui.Button("Depart Ship", (button_width, button_height))
-                    modified_map = deepcopy(current_gamemap)
-
-                    success, reason = depart_ship!(modified_map, selected_depart_ship; max_view_bounds=max_view_bounds)
-                    if success
-                        enqueue_map_override!(flowcalc_ipc, modified_map)
-                        flowcalc_ipc.console_push(reason)
-                        @info reason
-                    else
-                        flowcalc_ipc.console_push(reason)
-                    end
+            selected, current_gamemap = _ship_selector_ui!(inputstate, flowcalc_ipc, :depart_ship_index, "Ship", "No departable ships (only primary exists)")
+            if !isnothing(selected) && CImGui.Button("Depart Ship", (button_width, button_height))
+                modified_map = deepcopy(current_gamemap)
+                success, reason = depart_ship!(modified_map, selected; max_view_bounds = max_view_bounds)
+                if success
+                    enqueue_map_override!(flowcalc_ipc, modified_map)
+                    flowcalc_ipc.console_push(reason)
+                    @info reason
+                else
+                    flowcalc_ipc.console_push(reason)
                 end
             end
             CImGui.TreePop()
         end
 
-        # Swap Primary utility
+        # Swap Primary
         if CImGui.TreeNode("Swap Primary")
-            current_gamemap = (flowcalc_ipc.get_snapshot()).gamemap
-            all_ship_names = get_all_ship_names(current_gamemap)
-
-            swappable_ships = filter(n -> n != :primary, all_ship_names)
-            swappable_ship_strings = safe_ship_display_name.(swappable_ships)
-
-            if isempty(swappable_ships)
-                CImGui.Text("No other ships to swap with")
-            else
-                swap_ship_index = gui_listbox_int!(inputstate, :swap_primary_index, "Ship", swappable_ship_strings, Int32(0))
-                swap_ship_index = clamp(swap_ship_index, Int32(0), Int32(max(0, length(swappable_ships) - 1)))
-                inputstate.gui_inputs[:swap_primary_index] = swap_ship_index
-
-                selected_swap_ship = swappable_ships[swap_ship_index + 1]
-
-                if CImGui.Button("Swap Primary", (button_width, button_height))
-                    modified_map = deepcopy(current_gamemap)
-
-                    success, reason = swap_primary!(modified_map, selected_swap_ship)
-                    if success
-                        enqueue_map_override!(flowcalc_ipc, modified_map)
-                        flowcalc_ipc.console_push(reason)
-                        @info reason
-                    else
-                        flowcalc_ipc.console_push(reason)
-                    end
+            selected, current_gamemap = _ship_selector_ui!(inputstate, flowcalc_ipc, :swap_primary_index, "Ship", "No other ships to swap with")
+            if !isnothing(selected) && CImGui.Button("Swap Primary", (button_width, button_height))
+                modified_map = deepcopy(current_gamemap)
+                success, reason = swap_primary!(modified_map, selected)
+                if success
+                    enqueue_map_override!(flowcalc_ipc, modified_map)
+                    flowcalc_ipc.console_push(reason)
+                    @info reason
+                else
+                    flowcalc_ipc.console_push(reason)
                 end
             end
             CImGui.TreePop()
@@ -315,25 +267,20 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
     end
 
     if (CImGui.CollapsingHeader("Proc Gen"))
-            # shared config inputs
-            seed = gui_input_u32!(inputstate, :proc_gen_seed, "Random Seed", UInt32(999))
+        seed = gui_input_u32!(inputstate, :proc_gen_seed, "Random Seed", UInt32(999))
 
         if (CImGui.TreeNode("Random Walk Surface Gen"))
 
-            # local config inputs
             steps = gui_input_s64!(inputstate, :surface_walk_steps, "Walk Steps", Int64(3))
             stacks = gui_input_s64!(inputstate, :surface_walk_stacks, "Walk stacks", Int64(20))
 
-            # surface creation
             CImGui.Separator()
             if CImGui.Button("Create Surface", (button_width, button_height))
                 @info "Creating Surface..."
                 new_map = GameMap()
-                # Generate tiles into a temporary set and assign to the primary ship
                 tiles = Set{TileCoord}()
                 stacked_random_tile_walk!(tiles, TileCoord(0, 0), steps, stacks, seed)
                 set_surface_tile!(new_map, tiles)
-
                 enqueue_map_override!(flowcalc_ipc, new_map)
             end
             CImGui.TreePop()
@@ -352,8 +299,7 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             ]
             names = [s.name for s in all_component_sets]
             tileset_selection = get!(inputstate.gui_inputs, :tileset_selection, Cint(0))::Cint
-            _, tileset_selection = CImGui.ListBox("##tilesets", tileset_selection,
-                names, length(names), 4)
+            _, tileset_selection = CImGui.ListBox("##tilesets", tileset_selection, names, length(names), 4)
             inputstate.gui_inputs[:tileset_selection] = tileset_selection
 
             if CImGui.Button("Place Tileset")
@@ -362,13 +308,12 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
                 success, msg = place_shipset!(tilesetmap, selected_set, seed)
 
                 enqueue_map_override!(flowcalc_ipc, tilesetmap)
-                @info "Placed tileset" name=selected_set.name success msg
+                @info "Placed tileset" name = selected_set.name success msg
             end
             CImGui.TreePop()
         end
 
         if (CImGui.TreeNode("Place Big Pipes"))
-            # local config inputs
             big_pipe_density = gui_input_double!(inputstate, :big_pipe_density, "Pipe Density", 0.05; step_small = 0.01, step_fast = 0.1, fmt = "%.3f")
 
             if CImGui.Button("Place Big Pipes", (button_width, button_height))
@@ -382,7 +327,6 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
         end
 
         if (CImGui.TreeNode("Place Scrap Pipes"))
-            # local config inputs
             scrap_pipe_density = gui_input_double!(inputstate, :scrap_pipe_density, "Pipe Density", 0.05; step_small = 0.01, step_fast = 0.1, fmt = "%.3f")
 
             if CImGui.Button("Place Scrap Pipes", (button_width, button_height))
@@ -420,8 +364,10 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             fuel_enums = [HexFluids.COLD_GAS, HexFluids.MONOPROP_LIQUID, HexFluids.NONE]
             fuel_sel = gui_listbox_int!(inputstate, :enc_fuel_sel, "Fuel Tag", fuel_names, Cint(0))
 
-            richness_val = gui_input_double!(inputstate, :enc_richness, "Richness", 1.0;
-                step_small = 0.5, step_fast = 1.0, fmt = "%.2f")
+            richness_val = gui_input_double!(
+                inputstate, :enc_richness, "Richness", 1.0;
+                step_small = 0.5, step_fast = 1.0, fmt = "%.2f"
+            )
             richness_val = max(richness_val, 0.0)
             inputstate.gui_inputs[:enc_richness] = richness_val
 
@@ -446,27 +392,35 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             fuel_valid = haskey(class_config.fuel_configs, enc_fuel)
             if !fuel_valid
                 valid_tags = join(string.(keys(class_config.fuel_configs)), ", ")
-                CImGui.TextColored(ImVec4(1.0, 0.4, 0.4, 1.0),
-                    "Fuel tag not in class config. Valid: $valid_tags")
+                CImGui.TextColored(
+                    ImVec4(1.0, 0.4, 0.4, 1.0),
+                    "Fuel tag not in class config. Valid: $valid_tags"
+                )
             end
 
             if CImGui.Button("Generate & Dock", ImVec2(-1, 30)) && fuel_valid
-                new_shipmap = generate_encounter(enc_class, enc_fuel, enc_richness,
-                    enc_seed, class_config)
+                new_shipmap = generate_encounter(
+                    enc_class, enc_fuel, enc_richness,
+                    enc_seed, class_config
+                )
                 display_name = generate_encounter_name(enc_seed, enc_class)
                 encounter_map = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
-                encounter_ship!(encounter_map, new_shipmap, display_name,
-                                 enc_seed, enc_dir; max_view_bounds=max_view_bounds)
+                encounter_ship!(
+                    encounter_map, new_shipmap, display_name,
+                    enc_seed, enc_dir; max_view_bounds = max_view_bounds
+                )
                 enqueue_map_override!(flowcalc_ipc, encounter_map)
-                @info "Dev: generated encounter" name=display_name class=enc_class richness=enc_richness
+                @info "Dev: generated encounter" name = display_name class = enc_class richness = enc_richness
             end
 
             if CImGui.Button("Generate (No Dock)", ImVec2(-1, 30)) && fuel_valid
-                new_shipmap = generate_encounter(enc_class, enc_fuel, enc_richness,
-                    enc_seed, class_config)
+                new_shipmap = generate_encounter(
+                    enc_class, enc_fuel, enc_richness,
+                    enc_seed, class_config
+                )
                 new_gamemap = GameMap(ships = Dict(:primary => new_shipmap))
                 enqueue_map_override!(flowcalc_ipc, new_gamemap)
-                @info "Dev: generated standalone encounter" class=enc_class richness=enc_richness
+                @info "Dev: generated standalone encounter" class = enc_class richness = enc_richness
             end
             CImGui.TreePop()
         end
@@ -486,7 +440,7 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
                 status_str = string(typeof(status).name.name)
                 axis = get_approach_axis(status)
                 axis_str = isnothing(axis) ? "none" : string(axis)
-                CImGui.Text("$(safe_ship_display_name(ship_name)): $(status_str) @ ($(round(offset.q, digits=2)), $(round(offset.r, digits=2))) axis=$(axis_str)")
+                CImGui.Text("$(safe_ship_display_name(ship_name)): $(status_str) @ ($(round(offset.q, digits = 2)), $(round(offset.r, digits = 2))) axis=$(axis_str)")
             end
 
             if CImGui.Button("Clear All to Connected", (button_width, button_height))
@@ -509,10 +463,9 @@ end
 # ===============================================================
 
 """
-Renders a world-anchored confirmation popup window.
-The window tracks its `world_position` through panning and zooming,
-has a close (X) button, and a confirm button that executes the stored action.
-Must be called within ui_renderwrap.
+Render a world-anchored confirmation popup.
+The window tracks `world_position` through panning/zooming, with a close (X) button
+and a confirm button that executes the stored action.
 """
 function ui_confirmation_popup_render!(inputstate::InputState, viewstate::ViewState)
     popup = inputstate.active_popup
@@ -528,7 +481,7 @@ function ui_confirmation_popup_render!(inputstate::InputState, viewstate::ViewSt
     CImGui.SetNextWindowSize((popup_width, popup_height), CImGui.ImGuiCond_Always)
 
     flags = CImGui.ImGuiWindowFlags_NoResize |
-            CImGui.ImGuiWindowFlags_NoCollapse
+        CImGui.ImGuiWindowFlags_NoCollapse
 
     p_open = Ref(true)
     CImGui.Begin("Confirm##popup", p_open, flags)

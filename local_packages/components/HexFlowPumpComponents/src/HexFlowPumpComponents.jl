@@ -172,12 +172,12 @@ function update_flowbehav!(comp::TurboPumpCompBehav; mna_state::MNA_State, tile:
 end
 
 "Renders static turbopump elements: fluid mask, rotor, and static parts."
-function render_base_elem!(queue::Vector{RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
-    colour = DEFAULT_EMPTY_FLUID_COLOUR
-    push!(queue, render_basic_tile(glmap, :TurboPump1_fluidmask, rotation, position; scale = scale, colour = colour, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
-    push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 10 + render_height_offset), pos_offset = pos_offset))
-    push!(queue, render_basic_tile(glmap, :TurboPump1_static, rotation, position; scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset), pos_offset = pos_offset))
-    push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + 10 + render_height_offset), pos_offset = pos_offset))
+function render_base_elem!(queue::Vector{RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
+    fluidmask_colour = DEFAULT_EMPTY_FLUID_COLOUR
+    push!(queue, render_basic_tile(glmap, :TurboPump1_fluidmask, rotation, position; scale = scale, colour = fluidmask_colour, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 10 + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :TurboPump1_static, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + 10 + render_height_offset), pos_offset = pos_offset))
 
     return nothing
 end
@@ -362,6 +362,7 @@ function render_static!(
         end,
         pos_offset = nothing,
         scale::Float64 = 1.0, transparency::Float64 = 1.0,
+        colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0),
         render_height_offset::Integer = 0
     )
     # Render charge bar
@@ -379,23 +380,23 @@ function render_static!(
     end
 
     # Render static background
-    push!(queue, render_basic_tile(glmap, static_sprite(comp), rotation, position; scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, static_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset), pos_offset = pos_offset))
 
     return nothing
 end
 
 "Renders static electric pump elements without animation."
-function render_base_elem!(queue::Vector{RenderCommand}, comp::ElectricPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{RenderCommand}, comp::ElectricPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     # Render non-animated elements
-    render_static!(queue, comp; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, scale = scale, transparency = transparency, render_height_offset = render_height_offset)
+    render_static!(queue, comp; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, scale = scale, transparency = transparency, colour = colour, render_height_offset = render_height_offset)
 
     # Render vibrating part above static
     if !isnothing(vibrating_sprite(comp))
-        push!(queue, render_basic_tile(glmap, vibrating_sprite(comp), rotation, position; scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + render_height_offset), pos_offset = pos_offset))
+        push!(queue, render_basic_tile(glmap, vibrating_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + render_height_offset), pos_offset = pos_offset))
     end
 
     # Render rotor above static and vibepart
-    push!(queue, render_basic_tile(glmap, rotor_sprite(comp), rotation, position; scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + 10 + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, rotor_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + 10 + render_height_offset), pos_offset = pos_offset))
 
     return nothing
 end

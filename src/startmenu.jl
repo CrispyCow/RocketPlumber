@@ -89,7 +89,7 @@ end
 
 "Render the new game page: Explorer Mode, Blank Ship, Back"
 function render_page_new_game!(state::StartMenuState, box_w::Float64, button_width::Float64, button_height::Float64, escape_rising::Bool)
-    # Back button — small, left-aligned
+    # Small, left-aligned back button
     if CImGui.Button("< Back", (MENU_BACK_BUTTON_W, MENU_BACK_BUTTON_H)) || escape_rising
         state.page = PAGE_INITIAL
         return nothing
@@ -114,14 +114,14 @@ end
 
 "Render the explorer mode settings page: seed input, randomise, start"
 function render_page_explorer_settings!(state::StartMenuState, box_w::Float64, button_width::Float64, button_height::Float64, escape_rising::Bool)
-    # Back button — small, left-aligned
+    # Small, left-aligned back button
     if CImGui.Button("< Back", (MENU_BACK_BUTTON_W, MENU_BACK_BUTTON_H)) || escape_rising
         state.page = PAGE_NEW_GAME
         return nothing
     end
     CImGui.Dummy((0.0, 10.0))
 
-    #= ---------- Seed input ---------- =#
+    # Seed input
     seed_input_width = button_width - 110.0
     CImGui.SetCursorPosX((box_w - button_width) / 2)
     CImGui.SetNextItemWidth(seed_input_width)
@@ -134,7 +134,7 @@ function render_page_explorer_settings!(state::StartMenuState, box_w::Float64, b
     # Spacer for future settings
     CImGui.Dummy((0.0, 80.0))
 
-    #= ---------- Start button ---------- =#
+    # Start button
     CImGui.SetCursorPosX((box_w - button_width) / 2)
     if CImGui.Button("Start Explorer Mode", (button_width, button_height))
         @info "Starting Explorer Mode"
@@ -254,7 +254,7 @@ end
 # ===============================================================
 
 """
-Enters the start menu loop, rendering the state-machine–driven menu in a 
+Enters the start menu loop, rendering the state-machine-driven menu in a 
 vsynced loop until window close is requested.
 """
 function enter_start_menu(window::GLFW.Window)

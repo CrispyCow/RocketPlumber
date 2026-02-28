@@ -1,15 +1,17 @@
 # Code Review Instructions for AI Agents
 
-I am doing a formatting and code cleanup pass through my codebase, one file at a time, in preparation for a release. I have run the formatting tool, and now I would like you to help me review and clean up the code.
+I am doing a formatting and code cleanup pass through my codebase, one file at a time, in preparation for a release. I would like you to help me review and clean up the code.
 
 ## Editorial Guidelines
 
 ### Spelling and Documentation
 - **Typos and spelling mistakes**: Note that I use Australian English spellings
+- **Em Dash**: Avoid the em dash, it makes things look too AI generated
 - **Comments that should be docstrings**: Convert function/type documentation to proper docstrings
   - **Single-line docstrings**: Use single quotes `"x"` to keep file length reasonable
   - **Multi-line docstrings**: Use triple quotes `"""x"""`
 - **Verbose doxygen-esque comments**: I find these too verbose; prefer a simple description of what the function does
+- **Overly verbose docstrings**: Docstrings should convey the function's purpose, not repeat its name/signature or describe step-by-step workings. Only include detailed notes when there is genuine complexity or a non-obvious quirk worth flagging
 - **Duplicate returns added by Runic**: Runic often adds `return` wrapping a block of code that doesn't produce a meaningful return. In this case, add a `return nothing` line to the end of the function instead
 - **Base function extensions**: When extending Base functions (e.g., `Base.convert`, `Base.promote_rule`, `Base.:+`), include docstrings explaining what each does—the implementation alone can be confusing
 
@@ -87,6 +89,39 @@ Minor section dividers should use this style:
 
 Some sections that are currently minor dividers should probably be major, and vice versa.
 
+### Line Length and Argument Layout
+
+Do not excessively break function signatures across multiple lines. I have a wide screen and prefer keeping things compact. Follow these rules:
+
+- **Short signatures** (positional args + a few kwargs that fit comfortably on one line): keep everything on a single line
+  ```julia
+  function render_pipe(glmap::GLObjectMap, pipe::EdgeCoord, colour::ColourType; transparency::AbstractFloat = 1.0f0, gameticks::Integer = 0)
+  ```
+- **Medium signatures**: if a line break is needed, prefer breaking at the `;` between positional and keyword arguments. Positional args go on the first line; kwargs start on the next, each on its own indented line
+  ```julia
+  function render_basic_sprite(
+          glmap::GLObjectMap, sprite::Symbol, rotation_matrix::SMatrix{2, 2, GLfloat}, position;
+          pos_offset = nothing,
+          draw_height::Int32 = RENDER_HEIGHT_OVERLAY_BASE,
+          kwargs...
+      )::RenderCommand
+  ```
+- **Long signatures** (many kwargs): break positional args onto the first continuation line, then one kwarg per line
+  ```julia
+  function setup_basesprite_uniforms(
+          glmap::GLObjectMap, sprite::Symbol, rotation_matrix::SMatrix{2, 2, GLfloat}, position::SVector{2, Float32};
+          colour::SVector{4, Float32} = SVector{4, Float32}(1.0, 1.0, 1.0, 1.0),
+          scale::AbstractFloat = 1.0,
+          transparency::AbstractFloat = 1.0,
+          x_unclipped::AbstractFloat = 1.0,
+          sprite_offset_tweak_px::SVector{2, <:AbstractFloat} = SVector{2, Float32}(0.0, 0.0),
+          sprite_rotation_tweak_mat::SMatrix{2, 2, GLfloat} = SMatrix{2, 2, GLfloat}(1, 0, 0, 1)
+      )
+  ```
+- **General principle**: don't split a line that reads comfortably at ~120–140 columns. Only break when a single line would genuinely be hard to scan
+- The same rules apply to function calls, constructor invocations, and similar long expressions
+- We do make an exception for rendering functions in component definition files, as their args are always the same and its best to just hide them on one line so we don’t have to look at all of it.
+
 ## Code Quality Checks
 
 **General Priority**: Readability and simplicity over performance outside of critical hot loops. In hot loops, limiting allocations is more important than CPU cycles—prefer `filter!`, `copyto!`, and similar built-ins over bespoke implementations when they're simpler.
@@ -116,6 +151,13 @@ Some sections that are currently minor dividers should probably be major, and vi
 
 ## Review Process
 
+### Step 0: Formatting Pass
+Before making any manual edits, run the Runic formatter on the file being reviewed:
+```shell
+julia --project=@runic --startup-file=no -e "using Runic; exit(Runic.main(ARGS))" -- -i <filepath>
+```
+This formats the file in place. Review and commit the formatting changes separately from editorial/code changes.
+
 ### Step 1: Low-Friction Editorial Changes
 Implement any low-friction editorial changes directly in the file (typos, comment cleanup, section divider formatting, etc.)
 
@@ -129,8 +171,17 @@ Present any more controversial editorial changes or recommended code changes to 
 ### Step 3: Execute Approved Changes
 Execute those changes after my feedback and direction.
 
-### Step 4: Testing
-Test the changes once done by running the development script and iteratively solve any errors that result:
+### Step 4: Package Tests
+If the file being reviewed belongs to a package that has tests, run them:
+```shell
+julia --project=. -e "using Pkg; Pkg.test(string(:PackageName))"
+```
+Note: use the `string(:Symbol)` notation, as other quoting styles tend to break with shell escaping.
+
+Packages with tests: `FlowMap`, `FlowEngine`, `HexFlowCalculator`, `HexFlowProcGen`, `HexFlowRendering`, `HexFrame`, `SquirrelNoise`.
+
+### Step 5: Integration Testing
+Test the changes by running the development script and iteratively solve any errors that result:
 - Execute: `julia --project=. --threads=2 src/repl_launch.jl`
 - Note: The game can take a very long time to fully load
 - I will have to interact with it to test the new features

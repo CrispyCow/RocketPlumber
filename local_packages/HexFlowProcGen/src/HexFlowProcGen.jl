@@ -13,7 +13,7 @@ import FlowMap: get_target_time, set_target_time!, is_time_progressing, get_enco
 import FlowMap: initialise_spacemap!
 
 export random_tile_walk!, random_tile_walk, stacked_random_tile_walk!
-export weighted_roll_noise, pick_from_range, pick_from_options
+export weighted_roll_noise, weighted_roll_rng, pick_from_range, pick_from_options
 export CompPlacementStrategy, ShipComponentSet, CompSpawnOptions, roll_component
 export PipePlacementStrategy, PipeSpawnOptions, roll_pipe
 export place_shipset!, place_random_pipes!, place_connected_pipes!, place_pipeset!
@@ -31,29 +31,28 @@ export calculate_minimum_intercept_dv, plan_intercept_manoeuvre
 export compute_closest_approach
 export get_encounter_ship_seed
 export generate_base_velocities
-
-# Config type and function exports
 export HullSizeConfig, FuelTagConfig, EncounterClassConfig
 export compute_hull_size, compute_target_components, evaluate_component_pool, calculate_richness
 export SpaceMapState, get_encounter_config
 
 
-# =============================================================== #
+# ===============================================================
 # Utilities
-# =============================================================== #
+# ===============================================================
 
+"Pick a deterministic random value in `[min, max]` from SquirrelNoise."
 function pick_from_range(min::T, max::T, point, seed::UInt32) where {T <: Real}
     noise = get_noise_zero_to_one(point, seed)
     raw = min + noise * (max - min)
-
-    return T <: Integer ? round(T, raw) : T(raw) # ensures uniform sampling for integer types
+    return T <: Integer ? round(T, raw) : T(raw) # round for uniform integer sampling
 end
 
+"Pick a deterministic random element from `options` using SquirrelNoise."
 function pick_from_options(options::Vector{T}, point, seed::UInt32) where {T}
     return pick_element_from_noise(options, point, seed)
 end
 
-"Selects a weighted random item from `weights` based on and RNG instance"
+"Select a weighted random item from `weights` using an RNG instance."
 function weighted_roll_rng(rng::AbstractRNG, weights::Vector{Tuple{T, Float64}}) where {T}
     total_weight = sum(w[2] for w in weights)
     roll = rand(rng) * total_weight
@@ -69,7 +68,7 @@ function weighted_roll_rng(rng::AbstractRNG, weights::Vector{Tuple{T, Float64}})
     return weights[end][1]  # fallback
 end
 
-"Selects a weighted random item from `weights` based on SquirrelNoise with the given `point` and `seed`."
+"Select a weighted random item from `weights` using SquirrelNoise."
 function weighted_roll_noise(weights::Vector{Tuple{T, Float64}}, point, seed::UInt32) where {T}
     isempty(weights) && error("weighted_roll_noise called with empty weights vector")
     total_weight = sum(w[2] for w in weights)
@@ -86,12 +85,11 @@ function weighted_roll_noise(weights::Vector{Tuple{T, Float64}}, point, seed::UI
     return weights[end][1]  # Fallback in case of rounding errors
 end
 
-# =============================================================== #
+# ===============================================================
 # Surface Generation
-# =============================================================== #
+# ===============================================================
 
-"Adds to the set `tiles` by performing a random walk starting at `start` for `steps` steps.
- The tile chosen at each step is determined by SquirrelNoise with the given `seed`."
+"Grow `tiles` via a deterministic random walk from `start` for `steps` steps."
 function random_tile_walk!(tiles::Set{TileCoord}, start::TileCoord, steps::Int, seed::UInt32)
     current = start
 
@@ -105,17 +103,14 @@ function random_tile_walk!(tiles::Set{TileCoord}, start::TileCoord, steps::Int, 
     return nothing
 end
 
-"Return a set of `tiles` by performing a random walk starting at `start` for `steps` steps.
- The tile chosen at each step is determined by SquirrelNoise with the given `seed`."
+"Return a new tile set from a deterministic random walk starting at `start`."
 function random_tile_walk(start::TileCoord, steps::Int, seed::UInt32)
     new_tiles = Set{TileCoord}()
     random_tile_walk!(new_tiles, start, steps, seed)
     return new_tiles
 end
 
-
-"Adds to the set `tiles` by performing `stacks` of overlaping random walks to bias the surface towards the center.
- Each stack uses a different seed derived from the original `seed`."
+"Grow `tiles` via `stacks` overlapping random walks, biasing the surface towards the centre."
 function stacked_random_tile_walk!(tiles::Set{TileCoord}, start::TileCoord, steps::Int, stacks::Int, seed::UInt32)
     for stack in 1:stacks
         stack_seed = get_noise(stack, seed)
@@ -125,9 +120,9 @@ function stacked_random_tile_walk!(tiles::Set{TileCoord}, start::TileCoord, step
     return nothing
 end
 
-# =============================================================== #
-# component placement
-# =============================================================== #
+# ===============================================================
+# Component Placement
+# ===============================================================
 
 @enum CompPlacementStrategy begin
     RANDOM_PLACE
@@ -146,15 +141,15 @@ struct ShipComponentSet
     components::Vector{CompSpawnOptions}
 end
 
-"Rolls a component of the given kind symbol, using Val disptached functions"
+"Roll a component of the given kind symbol via Val dispatch."
 roll_component(kind::Symbol, point, seed) =
     roll_component(Val(kind), point, seed)
 
-"Default fallback — triggers for unknown kind"
+"Default fallback — error for unknown component kind."
 roll_component(::Val{K}, point, seed) where {K} =
     error("Unknown component kind: $K")
 
-"Clears the given tile coordinate and all adjacent tiles from the provided set of tiles."
+"Remove `coord` and all its neighbours from `tiles`."
 function clear_tiles_around_component!(tiles::Set{TileCoord}, coord::TileCoord)
     delete!(tiles, coord)
     for neighbor in get_adjacent_tiles_for_tile(coord)
@@ -164,8 +159,7 @@ function clear_tiles_around_component!(tiles::Set{TileCoord}, coord::TileCoord)
     return nothing
 end
 
-"Places all components from the given shipset onto the map using the provided seed.
- Returns a tuple indicating success and a message."
+"Place all components from `shipset` onto the map. Returns `(success, message)`."
 function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::Tuple{Bool, String}
     existing_components::Set{TileCoord} = Set(keys(get_all_components(map)))
 
@@ -175,27 +169,27 @@ function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::
     for edge_tile in ship_surface_edge
         union!(all_tiles_adjacent_to_edgetiles, get_adjacent_tiles_for_tile(edge_tile))
     end
-    # tiles adjecent to the edge of the ship but not part of the ship surface are valid for nozzles
+    # Tiles adjacent to the edge but not on the ship surface are valid for nozzles
     available_nozzle_tiles = setdiff(all_tiles_adjacent_to_edgetiles, get_all_surface_tiles(map))
-    # all surface tiles are valid for everything else
+    # All surface tiles are valid for everything else
     available_ship_surface::Set{TileCoord} = Set(get_all_surface_tiles(map))
-    # clear all tiles adjacent to existing components
+    # Clear all tiles adjacent to existing components
     for coord in existing_components
         clear_tiles_around_component!(available_nozzle_tiles, coord)
         clear_tiles_around_component!(available_ship_surface, coord)
     end
 
-    # preallocated buffers
+    # Preallocated buffers
     prng = MersenneTwister(seed)
     component_location_list = Vector{TileCoord}()
-    canidate_tiles = Set{TileCoord}()
+    candidate_tiles = Set{TileCoord}()
     possible_rotations = Vector{HexFrame.HexAxis}(collect(instances(HexFrame.HexAxis)))
 
     for spawn_option in shipset.components
         empty!(component_location_list)
         count = weighted_roll_rng(prng, spawn_option.spawn_count_weights)
 
-        # build list of positions to place components
+        # Build list of positions to place components
         if spawn_option.placement == CLUSTERED_PLACE
             for index in 1:count
                 if isempty(available_ship_surface)
@@ -203,21 +197,21 @@ function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::
                 end
 
                 if isempty(component_location_list)
-                    # first component, pick randomly
+                    # First component, pick randomly
                     selected_coord = pick_element_from_rng(available_ship_surface, prng)
                 else
-                    # pick from canidates if any, otherwise fall back to full available surface
-                    empty!(canidate_tiles)
-                    union!(canidate_tiles, get_adjacent_tiles_for_tile(component_location_list[end]))
-                    intersect!(canidate_tiles, available_ship_surface)
-                    selected_coord = isempty(canidate_tiles) ? pick_element_from_rng(available_ship_surface, prng) : pick_element_from_rng(canidate_tiles, prng)
+                    # Pick from candidates if any, otherwise fall back to full surface
+                    empty!(candidate_tiles)
+                    union!(candidate_tiles, get_adjacent_tiles_for_tile(component_location_list[end]))
+                    intersect!(candidate_tiles, available_ship_surface)
+                    selected_coord = isempty(candidate_tiles) ? pick_element_from_rng(available_ship_surface, prng) : pick_element_from_rng(candidate_tiles, prng)
                 end
 
                 delete!(available_ship_surface, selected_coord) # only delete actual coordinate for now
                 push!(component_location_list, selected_coord)
             end
 
-            # clean up adjacent tiles after placing all components in the cluster
+            # Clean up adjacent tiles after placing all components in the cluster
             for selected_coord in component_location_list
                 clear_tiles_around_component!(available_nozzle_tiles, selected_coord)
                 clear_tiles_around_component!(available_ship_surface, selected_coord)
@@ -253,14 +247,14 @@ function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::
             return (false, "Unknown placement strategy for component $(spawn_option.kind)")
         end
 
-        # skip if no components to place
+        # Skip if no components to place
         if isempty(component_location_list)
             continue
         end
 
-        # place components from list according to strategy
+        # Place components from list according to strategy
         if spawn_option.placement == CLUSTERED_PLACE
-            # clustered place uses identical components, and assumes all rotations can be mapped to a valid one
+            # Clustered: identical components, assumes all rotations can be mapped to a valid one
             comp_behav = roll_component(spawn_option.kind, first(component_location_list), seed)
             comp_rotation = map_rotation(comp_behav, pick_element_from_rng(instances(HexFrame.HexAxis), prng))
             tilecomp = ComponentOnTile(comp_behav, comp_rotation)
@@ -270,7 +264,7 @@ function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::
             end
 
         elseif spawn_option.placement == RANDOM_PLACE
-            # random place rolls each component individually, assuming all rotations can be mapped to a valid one
+            # Random: rolls each component individually, assumes all rotations are valid
             for selected_coord in component_location_list
                 comp_behav = roll_component(spawn_option.kind, selected_coord, seed)
                 comp_rotation = map_rotation(comp_behav, pick_element_from_rng(instances(HexFrame.HexAxis), prng))
@@ -280,17 +274,17 @@ function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::
             end
 
         elseif spawn_option.placement == NOZZLE_EDGE_PLACE
-            # nozzle edge place rolls each component individually, validating each rotation
+            # Nozzle edge: rolls each individually, validating orientation
             for selected_coord in component_location_list
-                # generate component based on coordinate noise
+                # Generate component based on coordinate noise
                 comp_behav = roll_component(spawn_option.kind, selected_coord, seed)
 
-                # find valid orientation then place on the map
+                # Find valid orientation then place on the map
                 shuffle!(prng, possible_rotations)
                 for random_axis in possible_rotations
                     chosen_axis = map_rotation(comp_behav, random_axis)
 
-                    # check if placement is valid
+                    # Check if placement is valid
                     valid_pick, reason = placement_valid(comp_behav, selected_coord, map; rotation = chosen_axis)
                     if valid_pick
                         set_component!(map, selected_coord, ComponentOnTile(comp_behav, chosen_axis))
@@ -308,9 +302,9 @@ function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::
     return (true, "Successfully placed all components")
 end
 
-# =============================================================== #
-# pipe placement
-# =============================================================== #
+# ===============================================================
+# Pipe Placement
+# ===============================================================
 
 @enum PipePlacementStrategy begin
     RANDOM_PIPES
@@ -323,15 +317,15 @@ struct PipeSpawnOptions
     density::Float64
 end
 
-"Rolls a pipe of the given kind symbol, using Val disptached functions"
+"Roll a pipe of the given kind symbol via Val dispatch."
 roll_pipe(kind::Symbol, point, seed) =
     roll_pipe(Val(kind), point, seed)
 
-"Default fallback — triggers for unknown kind"
+"Default fallback — error for unknown pipe kind."
 roll_pipe(::Val{K}, point, seed) where {K} =
     error("Unknown pipe kind: $K")
 
-"allocated set of all edgecoords for the given set of tiles"
+"Return the set of all `EdgeCoord`s belonging to the given tiles."
 function get_all_edgecoords_of_tiles(tiles::Set{TileCoord})
     edgecoords = Set{EdgeCoord}()
 
@@ -342,8 +336,7 @@ function get_all_edgecoords_of_tiles(tiles::Set{TileCoord})
     return edgecoords
 end
 
-"randomly chooses to place a pipe at the given edge based on noise and pipe density"
-
+"Probabilistically place a pipe at `edge` based on noise and `pipe_density`."
 function noise_pipe_place_helper!(map::GameMap, edge::EdgeCoord, pipe_kind::Symbol, seed::UInt32; pipe_density)
     used_pipe_density = clamp(pipe_density, 0.0, 1.0)
     hashed_edge = UInt32(hash(edge, hash(pipe_kind)) & typemax(UInt32)) # mix in pipe kind to vary placement
@@ -356,7 +349,7 @@ function noise_pipe_place_helper!(map::GameMap, edge::EdgeCoord, pipe_kind::Symb
     return nothing
 end
 
-"randomly chooses to place pipes at the given edges based on noise and pipe density"
+"Probabilistically place pipes at multiple edges based on noise and `pipe_density`."
 function noise_pipe_place_helper!(map::GameMap, edges, pipe_kind::Symbol, seed::UInt32; pipe_density)
     for edgecoord in edges
         noise_pipe_place_helper!(map, edgecoord, pipe_kind, seed; pipe_density = pipe_density)
@@ -365,39 +358,34 @@ function noise_pipe_place_helper!(map::GameMap, edges, pipe_kind::Symbol, seed::
     return nothing
 end
 
-"places pipes randomly on canidate edges that connect to 1 and only 1 existing node on the map based on pipe density"
+"Place pipes on candidate edges connecting to exactly one existing node, filtered by `pipe_density`."
 function place_connected_pipes!(map::GameMap, pipe_kind::Symbol, seed::UInt32; pipe_density)
     ship_tiles = deepcopy(get_all_surface_tiles(map))
     available_edgecoords = get_all_edgecoords_of_tiles(ship_tiles)
     all_nodes = Set(keys(list_nodes(list_elements(map))))
 
-    # keep only edgecoords that would connect to one existing node
+    # Keep only edges that would connect to exactly one existing node
     for edgecoord in available_edgecoords
         v1_is_connected = to_nodecoord(edgecoord.v1) in all_nodes
         v2_is_connected = to_nodecoord(edgecoord.v2) in all_nodes
-
-        if v1_is_connected && !v2_is_connected
-            # keep this edgecoord
-        elseif !v1_is_connected && v2_is_connected
-            # keep this edgecoord
-        else
+        if v1_is_connected == v2_is_connected  # both or neither connected — remove
             delete!(available_edgecoords, edgecoord)
         end
     end
 
-    # place pipes based on density
+    # Place pipes based on density
     noise_pipe_place_helper!(map, available_edgecoords, pipe_kind, seed; pipe_density = pipe_density)
 
     return nothing
 end
 
-"places pipes randomly on on canidate edges that do not connect 2 nodes based on pipe density"
+"Place pipes on candidate edges that do not bridge two existing nodes, filtered by `pipe_density`."
 function place_random_pipes!(map::GameMap, pipe_kind::Symbol, seed::UInt32; pipe_density)
     ship_tiles = deepcopy(get_all_surface_tiles(map))
     available_edgecoords = get_all_edgecoords_of_tiles(ship_tiles)
     all_nodes = Set(keys(list_nodes(list_elements(map))))
 
-    # remove any edgecoords that would actually connect 2 existing nodes
+    # Remove any edges that would bridge two existing nodes
     for edgecoord in available_edgecoords
         v1_is_connected = to_nodecoord(edgecoord.v1) in all_nodes
         v2_is_connected = to_nodecoord(edgecoord.v2) in all_nodes
@@ -407,12 +395,13 @@ function place_random_pipes!(map::GameMap, pipe_kind::Symbol, seed::UInt32; pipe
         end
     end
 
-    # place pipes based on density
+    # Place pipes based on density
     noise_pipe_place_helper!(map, available_edgecoords, pipe_kind, seed; pipe_density = pipe_density)
 
     return nothing
 end
 
+"Place pipes according to the given `PipeSpawnOptions`."
 function place_pipeset!(map::GameMap, pipe_options::PipeSpawnOptions, seed::UInt32)
     if pipe_options.placement == RANDOM_PIPES
         place_random_pipes!(map, pipe_options.kind, seed; pipe_density = pipe_options.density)
@@ -425,6 +414,7 @@ function place_pipeset!(map::GameMap, pipe_options::PipeSpawnOptions, seed::UInt
     return nothing
 end
 
+"Place all pipes from an array of `PipeSpawnOptions`."
 function place_pipeset!(map::GameMap, pipe_options::AbstractArray{PipeSpawnOptions}, seed::UInt32)
     for pipe_option in pipe_options
         place_pipeset!(map, pipe_option, seed)
@@ -433,9 +423,9 @@ function place_pipeset!(map::GameMap, pipe_options::AbstractArray{PipeSpawnOptio
     return nothing
 end
 
-# =============================================================== #
+# ===============================================================
 # Scaling Rule Type Hierarchy
-# =============================================================== #
+# ===============================================================
 
 "Abstract supertype for all richness-dependent scaling rules."
 abstract type ScalingRule end
@@ -479,9 +469,9 @@ struct WeightedComponentSet
     weight::ScalingRule
 end
 
-# =============================================================== #
+# ===============================================================
 # Encounter Config Data Structures
-# =============================================================== #
+# ===============================================================
 
 "Hull generation parameters: linear scaling for both walk steps and stacks."
 struct HullSizeConfig
@@ -532,8 +522,10 @@ function compute_target_components(scaling::ScalingRule, richness::Float64)::Int
 end
 
 "Evaluate a component pool, returning (component_set, weight) pairs with nonzero weights."
-function evaluate_component_pool(pool::Vector{WeightedComponentSet},
-        richness::Float64)::Vector{Tuple{ShipComponentSet, Float64}}
+function evaluate_component_pool(
+        pool::Vector{WeightedComponentSet},
+        richness::Float64
+    )::Vector{Tuple{ShipComponentSet, Float64}}
     result = Tuple{ShipComponentSet, Float64}[]
     for wcs in pool
         w = evaluate_scaling(wcs.weight, richness)
@@ -545,8 +537,10 @@ function evaluate_component_pool(pool::Vector{WeightedComponentSet},
 end
 
 "Compute richness from player speed and encounter base velocity."
-function calculate_richness(config::EncounterSystemConfig, player_speed::Float64,
-        base_velocity::Float64)::Float64
+function calculate_richness(
+        config::EncounterSystemConfig, player_speed::Float64,
+        base_velocity::Float64
+    )::Float64
     minimum_richness = 1.0
     richness_log_scale = 0.7
     richness_velocity_bonus_scale = 2.0
@@ -558,8 +552,10 @@ function calculate_richness(config::EncounterSystemConfig, player_speed::Float64
 end
 
 "Select an encounter class from dict-based configs with deterministic ordering."
-function select_encounter_class(configs::Dict{EncounterClass, EncounterClassConfig},
-        richness::Float64, point, seed::UInt32)::EncounterClass
+function select_encounter_class(
+        configs::Dict{EncounterClass, EncounterClassConfig},
+        richness::Float64, point, seed::UInt32
+    )::EncounterClass
     sorted_classes = sort!(collect(keys(configs)))
     evaluated = Tuple{EncounterClass, Float64}[
         (cls, evaluate_scaling(configs[cls].class_weight, richness)) for cls in sorted_classes
@@ -568,8 +564,10 @@ function select_encounter_class(configs::Dict{EncounterClass, EncounterClassConf
 end
 
 "Select a fuel tag from dict-based fuel configs with deterministic ordering."
-function select_fuel_tag(fuel_configs::Dict{FluidTags, FuelTagConfig},
-        richness::Float64, point, seed::UInt32)::FluidTags
+function select_fuel_tag(
+        fuel_configs::Dict{FluidTags, FuelTagConfig},
+        richness::Float64, point, seed::UInt32
+    )::FluidTags
     sorted_tags = sort!(collect(keys(fuel_configs)))
     evaluated = Tuple{FluidTags, Float64}[
         (tag, evaluate_scaling(fuel_configs[tag].weight, richness)) for tag in sorted_tags
@@ -608,8 +606,10 @@ function generate_encounter_name(seed::UInt32, encounter_class::EncounterClass):
 end
 
 "Generate an encounter's ShipMap from config data."
-function generate_encounter(encounter_class::EncounterClass, fuel_tag::FluidTags,
-        richness::Float64, seed::UInt32, class_config::EncounterClassConfig)::ShipMap
+function generate_encounter(
+        encounter_class::EncounterClass, fuel_tag::FluidTags,
+        richness::Float64, seed::UInt32, class_config::EncounterClassConfig
+    )::ShipMap
     steps, stacks = compute_hull_size(class_config.hull_size, richness)
     shipmap = ShipMap()
     stacked_random_tile_walk!(get_all_surface_tiles(shipmap), TileCoord(0, 0), steps, stacks, seed)
@@ -638,23 +638,48 @@ function generate_encounter(encounter_class::EncounterClass, fuel_tag::FluidTags
     return shipmap
 end
 
-"Checks if the surface tiles of the given shipmap overlap with any existing surfaces in the gamemap."
+"Check whether `shipmap`'s surface tiles overlap any existing surfaces in `gamemap`."
 function _is_surface_overlap(gamemap::GameMap, shipmap::ShipMap)::Bool
     all_tiles = get_all_surfaces_combined(gamemap)
-    ship_tiles = get_all_surface_tiles(shipmap)
-
-    # Iterate the (assumed-smaller) ship tiles and test membership in the larger set without allocating
-    for t in ship_tiles
-        if t in all_tiles
-            return true
-        end
-    end
-    return false
+    return any(t -> t in all_tiles, get_all_surface_tiles(shipmap))
 end
 
+"Check whether two axis-aligned bounding rectangles overlap."
 function _rects_overlap(a::HexFrame.CartesianBounds, b::HexFrame.CartesianBounds)::Bool
     return a.X_NEG < b.X_POS && a.X_POS > b.X_NEG &&
         a.Y_NEG < b.Y_POS && a.Y_POS > b.Y_NEG
+end
+
+"Increase `distance` along `direction_vec` until the shifted `ship_bounds` no longer overlap `view_bounds`."
+function _ensure_offscreen_distance(
+        ship_bounds::HexFrame.CartesianBounds, direction_vec, initial_distance::Float64,
+        view_bounds::HexFrame.CartesianBounds
+    )::Float64
+
+    distance = initial_distance
+    while true
+        offset = HexFrame.AxialCoord(direction_vec.q * distance, direction_vec.r * distance)
+        shift_cart = HexFrame.to_cartesian(offset)
+        shifted = (
+            X_POS = ship_bounds.X_POS + shift_cart.x, X_NEG = ship_bounds.X_NEG + shift_cart.x,
+            Y_POS = ship_bounds.Y_POS + shift_cart.y, Y_NEG = ship_bounds.Y_NEG + shift_cart.y,
+        )
+        _rects_overlap(shifted, view_bounds) || return distance
+        distance += 10.0
+        if distance > 2000.0
+            @warn "Could not find safe offscreen distance, capping at 2000"
+            return distance
+        end
+    end
+end
+
+"Compute docking animation offsets: `(far_offset, zero_offset, step_size)` for approach/departure."
+function _compute_docking_offsets(direction_vec, distance::Float64; duration_secs::Float64 = 5.0, ups::Float64 = 60.0)
+    far_offset = HexFrame.AxialCoord(direction_vec.q * distance, direction_vec.r * distance)
+    zero_offset = HexFrame.AxialCoord(0.0, 0.0)
+    total_distance = sqrt(far_offset.q^2 + far_offset.r^2)
+    step = total_distance / (duration_secs * ups)
+    return (far_offset, zero_offset, step)
 end
 
 """
@@ -668,7 +693,7 @@ function encounter_ship!(
 
     newship_name = gensym(ship_name_base)
 
-    # offset ship until no surface overlap, starting from primary centroid to handle the case the ship is not centered around (0,0)
+    # Offset ship until no surface overlap, starting from primary centroid
     ship_centroid = get_surface_centroid(gamemap, :primary)
     offset_newship = deepcopy(newship)
     offset_ship!(offset_newship, round_to_tile(ship_centroid))
@@ -677,71 +702,29 @@ function encounter_ship!(
         offset_ship!(offset_newship, offset)
     end
 
-    # add final gap
+    # Add final gap
     MIN_SPACING = 3
     hnt = HexFrame.hex_neighbour_tiles[dir]
     final_offset = TileCoord(hnt.q * MIN_SPACING, hnt.r * MIN_SPACING)
     offset_ship!(offset_newship, final_offset)
 
     # Calculate approach animation parameters
-    # Start 20 tiles away in the approach direction and animate to zero offset
     APPROACH_DISTANCE_TILES = 20.0
-
-    # Direction vector
     direction_vec = HexFrame.hex_vert_vecs[dir]
 
     # If bounds provided, ensure start point is off-screen
     if !isnothing(max_view_bounds)
-        ship_bounds = get_cartesian_bounds(offset_newship)
-
-        # Increase distance until out of view
-        is_overlapping = true
-        while is_overlapping
-            start_offset_test = HexFrame.AxialCoord(
-                direction_vec.q * APPROACH_DISTANCE_TILES,
-                direction_vec.r * APPROACH_DISTANCE_TILES
-            )
-
-            # Shift the ship bounds by this offset
-            shift_cart = HexFrame.to_cartesian(start_offset_test)
-            shifted_bounds = (
-                X_POS = ship_bounds.X_POS + shift_cart.x,
-                X_NEG = ship_bounds.X_NEG + shift_cart.x,
-                Y_POS = ship_bounds.Y_POS + shift_cart.y,
-                Y_NEG = ship_bounds.Y_NEG + shift_cart.y,
-            )
-
-            if _rects_overlap(shifted_bounds, max_view_bounds)
-                APPROACH_DISTANCE_TILES += 10.0
-                if APPROACH_DISTANCE_TILES > 2000.0 # Safety break
-                    @warn "Could not find safe spawn distance, capping at 2000"
-                    break
-                end
-            else
-                is_overlapping = false
-            end
-        end
+        APPROACH_DISTANCE_TILES = _ensure_offscreen_distance(
+            get_cartesian_bounds(offset_newship), direction_vec, APPROACH_DISTANCE_TILES, max_view_bounds
+        )
     end
 
-    TARGET_APPROACH_DURATION_SECS = 5.0
-    TARGET_UPS = 60.0  # updates per second
-
-    # Convert tile distance to axial offset (using hex_vert_vecs for direction)
-    start_offset = HexFrame.AxialCoord(
-        direction_vec.q * APPROACH_DISTANCE_TILES,
-        direction_vec.r * APPROACH_DISTANCE_TILES
-    )
-    target_offset = HexFrame.AxialCoord(0.0, 0.0)
-
-    # Calculate step size: total_distance / (duration * ups)
-    total_distance = sqrt(start_offset.q^2 + start_offset.r^2)
-    total_updates = TARGET_APPROACH_DURATION_SECS * TARGET_UPS
-    offset_step = total_distance / total_updates
+    start_offset, target_offset, offset_step = _compute_docking_offsets(direction_vec, APPROACH_DISTANCE_TILES)
 
     # Set docking status to approaching on the new ship
     set_docking_status!(offset_newship, ApproachingDockStat(start_offset, target_offset, offset_step, dir))
 
-    # add to gamemap
+    # Add to gamemap
     add_ship!(gamemap, newship_name, offset_newship)
 
     return nothing
@@ -812,7 +795,7 @@ function check_departure_pipe_connections(gamemap::GameMap, ship_name::Symbol)::
 end
 
 
-"Attempt to depart a ship using its saved approach axis. Returns (success, reason)."
+"Attempt to depart a ship using its saved approach axis. Returns `(success, reason)`."
 function depart_ship!(gamemap::GameMap, ship_name::Symbol; max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing)::Tuple{Bool, String}
     status = get_docking_status(gamemap, ship_name)
     if isnothing(status)
@@ -836,82 +819,34 @@ function depart_ship!(gamemap::GameMap, ship_name::Symbol; max_view_bounds::Unio
         return false, "Can't depart: no saved departure axis."
     end
 
-    # Check pipe connections — block departure if pipes still bridge to another ship
+    # block departure if pipes still bridge to another ship
     can_depart, reason = check_departure_pipe_connections(gamemap, ship_name)
     if !can_depart
         return false, reason
     end
 
-    # Depart by backtracking along the original approach axis (return to where the ship came from)
+    # Depart by backtracking along the original approach axis
     depart_axis = approach_axis
-
-    # Calculate departure animation parameters
     DEPART_DISTANCE_TILES = 20.0
-
-    # Direction vector
     direction_vec = HexFrame.hex_vert_vecs[depart_axis]
 
     # If bounds provided, ensure target point is off-screen
     if !isnothing(max_view_bounds)
-        ship_bounds = get_cartesian_bounds(gamemap.ships[ship_name])
-
-        # Increase distance until out of view
-        is_overlapping = true
-        while is_overlapping
-            target_offset_test = HexFrame.AxialCoord(
-                direction_vec.q * DEPART_DISTANCE_TILES,
-                direction_vec.r * DEPART_DISTANCE_TILES
-            )
-
-            # Shift the ship bounds by this offset
-            shift_cart = HexFrame.to_cartesian(target_offset_test)
-            shifted_bounds = (
-                X_POS = ship_bounds.X_POS + shift_cart.x,
-                X_NEG = ship_bounds.X_NEG + shift_cart.x,
-                Y_POS = ship_bounds.Y_POS + shift_cart.y,
-                Y_NEG = ship_bounds.Y_NEG + shift_cart.y,
-            )
-
-            if _rects_overlap(shifted_bounds, max_view_bounds)
-                DEPART_DISTANCE_TILES += 10.0
-                if DEPART_DISTANCE_TILES > 2000.0 # Safety break
-                    @warn "Could not find safe depart distance, capping at 2000"
-                    break
-                end
-            else
-                is_overlapping = false
-            end
-        end
+        DEPART_DISTANCE_TILES = _ensure_offscreen_distance(
+            get_cartesian_bounds(gamemap.ships[ship_name]), direction_vec, DEPART_DISTANCE_TILES, max_view_bounds
+        )
     end
 
-    TARGET_DEPART_DURATION_SECS = 5.0
-    TARGET_UPS = 60.0
+    far_offset, zero_offset, offset_step = _compute_docking_offsets(direction_vec, DEPART_DISTANCE_TILES)
 
-    # Convert tile distance to axial offset
-    direction_vec = HexFrame.hex_vert_vecs[depart_axis]
-    target_offset = HexFrame.AxialCoord(
-        direction_vec.q * DEPART_DISTANCE_TILES,
-        direction_vec.r * DEPART_DISTANCE_TILES
-    )
-    start_offset = HexFrame.AxialCoord(0.0, 0.0)
-
-    # Calculate step size
-    total_distance = sqrt(target_offset.q^2 + target_offset.r^2)
-    total_updates = TARGET_DEPART_DURATION_SECS * TARGET_UPS
-    offset_step = total_distance / total_updates
-
-    set_docking_status!(gamemap, ship_name, DepartingDockStat(start_offset, target_offset, offset_step, approach_axis))
+    set_docking_status!(gamemap, ship_name, DepartingDockStat(zero_offset, far_offset, offset_step, approach_axis))
     reason = "Ship $(ship_name) departing (axis=$(depart_axis))"
     return true, reason
 end
 
-# =============================================================== #
-# Encounter Point System
-# =============================================================== #
-
-# =============================================================== #
-# SpaceMapState
-# =============================================================== #
+# ===============================================================
+# Encounter Point System — SpaceMapState
+# ===============================================================
 
 "Full space map state with seed, velocity, position, encounter points, and event queue."
 @kwdef mutable struct SpaceMapState <: AbstractSpaceMap
@@ -936,7 +871,7 @@ end
 end
 @struct_hash_equal SpaceMapState
 
-# SpaceMapState accessor implementations (extending FlowMap functions)
+#= ---------- SpaceMapState accessor implementations (extending FlowMap) ----------- =#
 get_velocity(sm::SpaceMapState)::SVector{2, Float64} = sm.velocity
 set_velocity!(sm::SpaceMapState, v::SVector{2, Float64}) = (sm.velocity = v)
 get_space_map_seed(sm::SpaceMapState)::UInt32 = sm.seed
@@ -957,11 +892,15 @@ get_encounter_points(sm::SpaceMapState) = sm.encounter_points
 get_encounter_config(sm::SpaceMapState)::EncounterSystemConfig = sm.encounter_config
 get_encounter_config(::SpaceMapEmpty)::Nothing = nothing
 
-"Overwrite the game map's space map with a new SpaceMapState."
-function initialise_spacemap!(gamemap::GameMap, seed::UInt32, config::EncounterSystemConfig,
-        velocity::SVector{2, Float64} = SVector{2, Float64}(1.0, 0.0))
-    gamemap.space_map = SpaceMapState(seed = seed, velocity = velocity, time_years = 0.0,
-        encounter_config = config)
+"Overwrite the game map's space map with a new `SpaceMapState`."
+function initialise_spacemap!(
+        gamemap::GameMap, seed::UInt32, config::EncounterSystemConfig,
+        velocity::SVector{2, Float64} = SVector{2, Float64}(1.0, 0.0)
+    )
+    gamemap.space_map = SpaceMapState(
+        seed = seed, velocity = velocity, time_years = 0.0,
+        encounter_config = config
+    )
     return nothing
 end
 
@@ -986,7 +925,7 @@ function get_encounter_position(ep::EncounterPoint, time::Float64)::SVector{2, F
     return ep.position + ep.velocity * dt
 end
 
-"Predict when an encounter point will cross a vertical line at x_line. Returns nothing if it never will."
+"Predict when an encounter point will cross a vertical line at `x_line`. Returns `nothing` if it never will."
 function predict_crossing_time(ep::EncounterPoint, x_line::Float64)::Union{Nothing, Float64}
     vx = ep.velocity[1]
     if abs(vx) < 1.0e-12
@@ -1011,9 +950,11 @@ The `spawn_line_x` argument selects which boundary the point spawns on:
 In both cases the point's velocity is `sm.velocity + relative_vel` so the relative speed
 distribution is preserved regardless of which line is used.
 """
-function spawn_encounter_point!(ep::EncounterPoint, sm::SpaceMapState,
+function spawn_encounter_point!(
+        ep::EncounterPoint, sm::SpaceMapState,
         current_time::Float64, spawn_line_x::Float64 = sm.neg_spawn_line_x;
-        velocity_override::Union{Nothing, SVector{2, Float64}} = nothing)
+        velocity_override::Union{Nothing, SVector{2, Float64}} = nothing
+    )
     config = get_encounter_config(sm)
     ep.iteration += 1
     ep.spawn_time = current_time
@@ -1136,7 +1077,7 @@ function process_encounter_events!(sm::SpaceMapState, up_to_time::Float64)
     return nothing
 end
 
-"Initialise the encounter point system on a SpaceMapState."
+"Initialise the encounter point system on a `SpaceMapState`."
 function initialise_encounter_system!(sm::SpaceMapState)
     config = get_encounter_config(sm)
     current_time = sm.time_years
@@ -1152,8 +1093,10 @@ function initialise_encounter_system!(sm::SpaceMapState)
     sm.pos_disappear_line_x = player_x + config.viewport_half_width + config.spawn_margin + config.recycle_margin
     sm.last_line_step_x = player_x
 
-    base_velocities = generate_base_velocities(config.n_points, config.min_base_velocity,
-        config.max_base_velocity, sm.seed)
+    base_velocities = generate_base_velocities(
+        config.n_points, config.min_base_velocity,
+        config.max_base_velocity, sm.seed
+    )
 
     sm.encounter_points = Vector{EncounterPoint}(undef, config.n_points)
     sm.event_queue = BinaryMinHeap{EncounterEvent}()
@@ -1163,8 +1106,10 @@ function initialise_encounter_system!(sm::SpaceMapState)
         spawn_encounter_point!(ep, sm, current_time, sm.neg_spawn_line_x)
 
         point_seed = get_noise(UInt32(ep.index), get_noise(UInt32(ep.iteration), sm.seed))
-        x_pos = pick_from_range(sm.neg_disappear_line_x, sm.pos_disappear_line_x,
-            ep.index * 4000 + ep.iteration, point_seed)
+        x_pos = pick_from_range(
+            sm.neg_disappear_line_x, sm.pos_disappear_line_x,
+            ep.index * 4000 + ep.iteration, point_seed
+        )
         y_range = sm.viewport_half_height + config.spawn_margin
         y_pos = pick_from_range(-y_range, y_range, ep.index * 5000 + ep.iteration, point_seed)
         ep.position = SVector(x_pos, y_pos)
@@ -1180,7 +1125,7 @@ function initialise_encounter_system!(sm::SpaceMapState)
     return nothing
 end
 
-"Advance the space map time by one tick. No-op for SpaceMapEmpty."
+"Advance the space map time by one tick. No-op for `SpaceMapEmpty`."
 function step_space_map_time!(::SpaceMapEmpty; max_step::Float64 = 1.0 / 60.0)
     return false
 end
@@ -1210,9 +1155,9 @@ function step_space_map_time!(sm::SpaceMapState; max_step::Float64 = 1.0 / 60.0)
     return true
 end
 
-# =============================================================== #
+# ===============================================================
 # Manoeuvre Planning
-# =============================================================== #
+# ===============================================================
 
 """
 Compute the time, distance, and positions of closest approach between the player and an

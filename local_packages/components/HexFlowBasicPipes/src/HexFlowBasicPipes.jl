@@ -45,9 +45,9 @@ set_pipe_tunables(behav::ScrapPipeBehav, tunables::NTuple{1, Real}) = ScrapPipeB
 
 get_tile_pipe_equivalent(behav::ScrapPipeBehav) = ScrapTilePipeCompBehav(get_conductance(behav))
 
-function render_pipe_base!(queue::AbstractVector, behav::ScrapPipeBehav; glmap::GLObjectMap, rotation::HexAxis, position::EdgeCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
+function render_pipe_base!(queue::AbstractVector, behav::ScrapPipeBehav; glmap::GLObjectMap, rotation::HexAxis, position::EdgeCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     base_height = Int32(HexFlowRendering.RENDER_HEIGHT_PIPE) + Int32(render_height_offset)
-    push!(queue, render_basic_pipe(glmap, :ScrapPipes_Edge, rotation, position; scale = scale, transparency = transparency, draw_height = base_height, pos_offset = pos_offset))
+    push!(queue, render_basic_pipe(glmap, :ScrapPipes_Edge, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = base_height, pos_offset = pos_offset))
     return nothing
 end
 
@@ -69,14 +69,14 @@ set_pipe_tunables(behav::BigPipeBehav, tunables::NTuple{1, Real}) = BigPipeBehav
 
 get_tile_pipe_equivalent(behav::BigPipeBehav) = BigTilePipeCompBehav(get_conductance(behav))
 
-function render_pipe_base!(queue::AbstractVector, behav::BigPipeBehav; glmap::GLObjectMap, rotation::HexAxis, position::EdgeCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
+function render_pipe_base!(queue::AbstractVector, behav::BigPipeBehav; glmap::GLObjectMap, rotation::HexAxis, position::EdgeCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     # Render black fluidmask at pipe-base height, then pipe sprite at pipe height
     base_height = Int32(HexFlowRendering.RENDER_HEIGHT_PIPE_BASE) + Int32(render_height_offset)
     black_colour = DEFAULT_EMPTY_FLUID_COLOUR
     push!(queue, render_basic_pipe(glmap, :BigPipes_Edge_fluidmask, rotation, position; colour = black_colour, scale = scale, transparency = transparency, draw_height = base_height, pos_offset = pos_offset))
 
     pipe_height = Int32(HexFlowRendering.RENDER_HEIGHT_PIPE) + Int32(render_height_offset)
-    push!(queue, render_basic_pipe(glmap, :BigPipes_Edge, rotation, position; scale = scale, transparency = transparency, draw_height = pipe_height, pos_offset = pos_offset))
+    push!(queue, render_basic_pipe(glmap, :BigPipes_Edge, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = pipe_height, pos_offset = pos_offset))
 
     return nothing
 end

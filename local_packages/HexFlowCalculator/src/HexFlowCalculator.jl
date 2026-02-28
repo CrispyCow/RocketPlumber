@@ -1,8 +1,8 @@
 module HexFlowCalculator
 
 # Packages
-using Base.Threads, Dates, Printf, LinearAlgebra, StructEquality
-using TimerOutputs, SparseArrays, StaticArrays 
+using Base.Threads, Dates, LinearAlgebra, StructEquality
+using TimerOutputs, StaticArrays
 # Custom Packages
 using HexFrame, HexElements, HexFluids, HexFlowTelemetry
 using FlowEngine, FlowMap, HexComponentsAPI, HexFlowControl
@@ -42,7 +42,7 @@ export MANOEUVRE_THRUST_THRESHOLD, MANOEUVRE_COMPLETION_THRESHOLD
 # Data Structures
 # ===============================================================
 
-"""Snapshot of complete game state for rendering. Deep copied to ensure thread safety."""
+"Snapshot of complete game state for rendering. Deep-copied to ensure thread safety."
 @kwdef struct FlowCalculatorSnapshot
     gamemap::GameMap = GameMap()
     derived::DerivedMapState = DerivedMapState()
@@ -51,7 +51,7 @@ export MANOEUVRE_THRUST_THRESHOLD, MANOEUVRE_COMPLETION_THRESHOLD
     timestamp::Float64
 end
 
-"""Shared control state between render and logic threads. All fields must be accessed atomically."""
+"Shared control state between render and logic threads. All fields must be accessed atomically."
 mutable struct FlowCalculatorSharedState
     @atomic should_exit::Bool
     @atomic is_paused::Bool
@@ -69,7 +69,7 @@ function FlowCalculatorSharedState(;
     return FlowCalculatorSharedState(should_exit, is_paused, target_ups, actual_ups)
 end
 
-"""Mutable timing state for FlowCalculator main loop."""
+"Timing state for the FlowCalculator fixed-timestep accumulator."
 mutable struct TimingState
     current_time::Float64
     last_loop_time::Float64
@@ -79,7 +79,7 @@ mutable struct TimingState
     last_update_time::Float64
 end
 
-"""Initialize TimingState with current time"""
+"Initialise `TimingState` with the current wall-clock time."
 function TimingState()
     t = time()
     return TimingState(t, t, 0.0, 0.0, false, t)
@@ -92,17 +92,17 @@ end
 # Command result status
 @enum CommandStatus APPLIED REJECTED QUEUED_FAILED
 
-"""Abstract base type for all map edit commands"""
+"Abstract base type for all map edit commands."
 abstract type MapEditCommand end
 
-"""Command queue with encapsulated channel and ID generation."""
+"Command queue with encapsulated channel and ID generation."
 mutable struct CommandQueue
     command_channel::Channel{MapEditCommand}
     next_command_id::Function
     last_command::Union{MapEditCommand, Nothing}
 end
 
-"""Combines all IPC elements for FlowCalculator task"""
+"Bundles all inter-thread communication handles for the FlowCalculator."
 @kwdef struct FlowCalculatorIPC
     shared_state::FlowCalculatorSharedState
     command_queue::CommandQueue
@@ -116,7 +116,7 @@ end
 # FlowCalculator Command Types and Processing
 # ===============================================================
 
-"""Place or replace component at a tile coordinate"""
+"Place a component at a tile coordinate."
 @kwdef struct SetTileCommand <: MapEditCommand
     id::UInt64
     coord::TileCoord
@@ -126,7 +126,7 @@ end
 end
 @struct_hash_equal SetTileCommand
 
-"""Create/replace pipe behavior at an edge coordinate"""
+"Place a pipe behaviour at an edge coordinate."
 @kwdef struct SetPipeBehaviorCommand <: MapEditCommand
     id::UInt64
     coord::EdgeCoord
@@ -135,7 +135,7 @@ end
 end
 @struct_hash_equal SetPipeBehaviorCommand
 
-"""Moves a pipe or tile across the map"""
+"Move a component or pipe across the map."
 @kwdef struct MoveCommand{T <: Union{TileCoord, EdgeCoord}} <: MapEditCommand
     id::UInt64
     source_coord::T
@@ -145,7 +145,7 @@ end
 end
 @struct_hash_equal MoveCommand
 
-"""Delete element at coordinate. Type parameter selects tile vs edge dispatch."""
+"Delete element at coordinate. Type parameter selects tile vs edge dispatch."
 @kwdef struct DeleteAtCommand{T <: Union{TileCoord, EdgeCoord}} <: MapEditCommand
     id::UInt64
     coord::T
@@ -153,7 +153,7 @@ end
 end
 @struct_hash_equal DeleteAtCommand
 
-"""Invoke on_click! semantics for a tile"""
+"Invoke `on_click!` semantics for a tile component."
 @kwdef struct ClickTileCommand <: MapEditCommand
     id::UInt64
     coord::TileCoord
@@ -162,7 +162,7 @@ end
 end
 @struct_hash_equal ClickTileCommand
 
-"""Add a ship surface tile at coordinate"""
+"Add a ship surface tile at coordinate."
 @kwdef struct AddShipSurfaceCommand <: MapEditCommand
     id::UInt64
     coord::TileCoord
@@ -170,7 +170,7 @@ end
 end
 @struct_hash_equal AddShipSurfaceCommand
 
-"""Remove a ship surface tile at coordinate"""
+"Remove a ship surface tile at coordinate."
 @kwdef struct RemoveShipSurfaceCommand <: MapEditCommand
     id::UInt64
     coord::TileCoord
@@ -178,7 +178,7 @@ end
 end
 @struct_hash_equal RemoveShipSurfaceCommand
 
-"""Replace the entire GameMap with a provided GameMap"""
+"Replace the entire `GameMap` with a provided map."
 @kwdef struct MapOverrideCommand <: MapEditCommand
     id::UInt64
     new_map::GameMap
@@ -192,21 +192,20 @@ end
 
 """
 Thread-safe snapshot storage using closure pattern.
-Accepts an initial FlowCalculatorSnapshot.
-Returns (set_function, get_function) for snapshot access.
+Returns `(set_function, get_function)` for snapshot access.
 """
 function create_snapshot_storage(initial_snapshot::FlowCalculatorSnapshot)
     local snapshot_ref = Ref{FlowCalculatorSnapshot}(initial_snapshot)
     local snapshot_lock = ReentrantLock()
 
-    """Set the latest snapshot (producer side)"""
+    "Set the latest snapshot (producer side)."
     function set_flowcalc_snapshot(new_snapshot::FlowCalculatorSnapshot)
         return lock(snapshot_lock) do
             snapshot_ref[] = new_snapshot
         end
     end
 
-    """Get the latest snapshot (consumer side)"""
+    "Get the latest snapshot (consumer side)."
     function get_flowcalc_snapshot()::FlowCalculatorSnapshot
         return lock(snapshot_lock) do
             return snapshot_ref[]
@@ -222,30 +221,30 @@ end
 
 """
 Thread-safe console message buffer using closure pattern.
-Returns (push_function, see_function) for console access.
+Returns `(push_function, see_function)` for console access.
 """
-function create_threadsafe_consolebuffer(Length::Int)
-    if Length < 1
-        error("Invalid Length of Console Buffer (must be more than 1)")
+function create_threadsafe_consolebuffer(capacity::Int)
+    if capacity < 1
+        error("Invalid console buffer capacity (must be at least 1)")
     end
 
     local msg_buffer = String[]
     local console_lock = ReentrantLock()
 
-    """Thread-safe function to add a message string to the internal message buffer"""
+    "Thread-safe push: appends a timestamped message, evicting the oldest if over capacity."
     function push_message(msg::String)
         lock(console_lock) do
             timestamp = Dates.format(now(), "HH:MM:SS")
             stamped_msg = "[$timestamp]: $msg"
             push!(msg_buffer, stamped_msg)
-            if length(msg_buffer) > Length
+            if length(msg_buffer) > capacity
                 popfirst!(msg_buffer)
             end
         end
         return nothing
     end
 
-    """Thread-safe function which returns a shallow copy of the internal message buffer"""
+    "Thread-safe read: returns a shallow copy of the message buffer."
     function see_messages()
         return lock(console_lock) do
             return copy(msg_buffer)
@@ -260,11 +259,10 @@ end
 # ===============================================================
 
 """
-Create command queue with bounded capacity.
-Returns a CommandQueue with encapsulated channel and ID counter.
+Create a command queue with bounded capacity.
+Returns a `CommandQueue` with encapsulated channel and atomic ID counter.
 """
 function create_command_queue(capacity::Int = 32)
-    # Create per-queue atomic counter
     local id_counter = Threads.Atomic{UInt64}(0)
 
     # Create closure for thread-safe ID generation
@@ -283,9 +281,22 @@ end
 # Command Processing
 # ===============================================================
 
+"Find which ship (if any) has both edge endpoints on its surface. Returns `nothing` if none."
+function find_ship_for_pipe_endpoints(coord::EdgeCoord, gamemap::GameMap)::Union{Symbol, Nothing}
+    v1_node = to_nodecoord(coord.v1)
+    v2_node = to_nodecoord(coord.v2)
+    for (ship_name, _) in gamemap.ships
+        if is_node_on_ship_surface(v1_node, gamemap; ship_name = ship_name) &&
+                is_node_on_ship_surface(v2_node, gamemap; ship_name = ship_name)
+            return ship_name
+        end
+    end
+    return nothing
+end
+
 """
-Apply a map edit command directly to the gamemap without validation.
-Dispatches on command type and performs the actual mutation.
+Apply a map edit command directly to the `gamemap` without sandbox validation.
+Dispatches on concrete command type.
 """
 function apply_mapedit_command!(
         gamemap::GameMap,
@@ -328,18 +339,8 @@ function apply_mapedit_command!(
         return nothing
     end
 
-    # Determine which ship (if any) has both endpoints on its surface
-    v1_node = to_nodecoord(command.coord.v1)
-    v2_node = to_nodecoord(command.coord.v2)
-
-    target_ship = nothing
-    for (ship_name, _) in gamemap.ships
-        if is_node_on_ship_surface(v1_node, gamemap; ship_name = ship_name) &&
-           is_node_on_ship_surface(v2_node, gamemap; ship_name = ship_name)
-            target_ship = ship_name
-            break
-        end
-    end
+    # Try on-surface placement first, then off-ship fallback
+    target_ship = find_ship_for_pipe_endpoints(command.coord, gamemap)
 
     if !isnothing(target_ship)
         set_pipe!(gamemap, command.coord, deepcopy(command.pipe_behavior); ship_name = target_ship)
@@ -383,6 +384,14 @@ function apply_mapedit_command!(
 
     # Calculate new rotation
     new_rotation = map_rotation(source_comptile.component, rotate(source_comptile.rotation, command.delta_rotation))
+
+    # Same-coord move: rotate component in place
+    if command.source_coord == command.dest_coord
+        rotated_comptile = ComponentOnTile(source_comptile.component, new_rotation)
+        set_component!(gamemap, command.source_coord, rotated_comptile; ship_name = source_ship)
+        threadsafe_console_push("Component rotated in place at $(command.source_coord)")
+        return nothing
+    end
 
     # Determine destination ship via placement_valid
     dest_ship = find_valid_ship_for_placement(
@@ -442,17 +451,7 @@ function apply_mapedit_command!(
     end
 
     # Determine destination ship — try on-surface first, then off-ship fallback
-    v1_node = to_nodecoord(command.dest_coord.v1)
-    v2_node = to_nodecoord(command.dest_coord.v2)
-
-    dest_ship = nothing
-    for (ship_name, _) in gamemap.ships
-        if is_node_on_ship_surface(v1_node, gamemap; ship_name = ship_name) &&
-           is_node_on_ship_surface(v2_node, gamemap; ship_name = ship_name)
-            dest_ship = ship_name
-            break
-        end
-    end
+    dest_ship = find_ship_for_pipe_endpoints(command.dest_coord, gamemap)
 
     if isnothing(dest_ship)
         # Try off-ship placement
@@ -600,7 +599,7 @@ function apply_mapedit_command!(
         return nothing
     end
 
-    # NEW: Check if this is the last surface tile on this ship
+    # Check if this is the last surface tile on this ship
     ship = get_ship(gamemap, ship_with_surface)
     if count_surface_tiles(ship) <= 1
         threadsafe_console_push("Cannot remove surface: Cannot delete last surface tile on $(ship_with_surface)")
@@ -612,8 +611,8 @@ function apply_mapedit_command!(
     return nothing
 end
 
-"Replaces all the content of the destination mutable struct, from the source mutable struct of the same type"
-function replace_by_mutation!(dest::T, src::T) where T
+"Replace all fields of `dest` with values from `src` (same concrete type). Keeps the original object reference."
+function replace_by_mutation!(dest::T, src::T) where {T}
     @assert typeof(dest) === typeof(src)
     for f in fieldnames(T)
         setfield!(dest, f, getfield(src, f))
@@ -635,13 +634,14 @@ function apply_mapedit_command!(
     numcomps = count_components(newmap)
     numpipes = count_pipes(newmap)
     threadsafe_console_push("Map override applied with $numtiles surfaces, $numcomps tiles, and $numpipes pipes")
-    
+
     return nothing
 end
 
 """
-Process a single map edit command using sandbox validation.
-Validates changes on a copy before applying to the real gamemap.
+Validate and apply a map edit command using sandbox-first execution.
+Applies the command to a deep copy first; only mutates the real `gamemap` if the
+sandbox survives a full `update_map!` / `update_mna!` cycle.
 """
 function process_command!(
         command::MapEditCommand,
@@ -707,7 +707,7 @@ end
 # Command Generation Helpers
 # ===============================================================
 
-"""Create a SetTileCommand for placing a component"""
+"Create a `SetTileCommand` for placing a component."
 function create_set_tile_command(
         cq::CommandQueue,
         coord::TileCoord,
@@ -724,7 +724,7 @@ function create_set_tile_command(
     )
 end
 
-"""Create a SetPipeBehaviorCommand for placing a pipe behavior"""
+"Create a `SetPipeBehaviorCommand` for placing a pipe."
 function create_set_pipe_behavior_command(
         cq::CommandQueue,
         coord::EdgeCoord,
@@ -739,7 +739,7 @@ function create_set_pipe_behavior_command(
     )
 end
 
-"""Create a MoveCommand for moving an element"""
+"Create a `MoveCommand` for moving an element."
 function create_move_command(
         cq::CommandQueue,
         source_coord::T,
@@ -756,7 +756,7 @@ function create_move_command(
     )
 end
 
-"""Create a DeleteAtCommand for deleting a component or pipe"""
+"Create a `DeleteAtCommand` for deleting a component or pipe."
 function create_delete_command(
         cq::CommandQueue,
         coord::T;
@@ -769,7 +769,7 @@ function create_delete_command(
     )
 end
 
-"""Create a ClickTileCommand for tile interaction"""
+"Create a `ClickTileCommand` for tile interaction."
 function create_click_tile_command(
         cq::CommandQueue,
         coord::TileCoord,
@@ -784,7 +784,7 @@ function create_click_tile_command(
     )
 end
 
-"""Create an AddShipSurfaceCommand"""
+"Create an `AddShipSurfaceCommand`."
 function create_add_ship_surface_command(
         cq::CommandQueue,
         coord::TileCoord;
@@ -797,7 +797,7 @@ function create_add_ship_surface_command(
     )
 end
 
-"""Create a RemoveShipSurfaceCommand"""
+"Create a `RemoveShipSurfaceCommand`."
 function create_remove_ship_surface_command(
         cq::CommandQueue,
         coord::TileCoord;
@@ -810,7 +810,7 @@ function create_remove_ship_surface_command(
     )
 end
 
-"""Create a MapOverrideCommand to replace the current map with `new_map`."""
+"Create a `MapOverrideCommand` to replace the current map."
 function create_map_override_command(
         cq::CommandQueue,
         new_map::GameMap;
@@ -824,9 +824,8 @@ function create_map_override_command(
 end
 
 """
-Command enqueue function - currently blocking.
-Returns (success::Bool, status::CommandStatus)
-TODO: Implement proper non-blocking behavior with isfull check once available
+Enqueue a command onto the command channel (currently blocking).
+Returns `(success::Bool, status::CommandStatus)`.
 """
 function try_enqueue_command!(
         command_queue::CommandQueue,
@@ -850,21 +849,19 @@ end
 # ===============================================================
 
 """
-Checks for changes to the map, and recomputes derived state and MNA if necessary.
-Will modify derivedmapstate and mna_state.
+Rebuild derived map state and MNA matrix from the current `gamemap`.
+Called every tick (fast enough for now; may need revisiting if it becomes a bottleneck).
 """
 function update_map!(gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, current_tick::Int64)
     # (updating map every tick as it is quite quick. This might need to be revisited if it becomes a bottleneck)
     @timeit flowcalc_loop_timer "Map Updates" begin
-        # derive basic map state
+        # Derive basic map state
         @timeit flowcalc_loop_timer "find ship edge" find_ship_surface_edgetiles!(derivedmapstate, gamemap)
         @timeit flowcalc_loop_timer "list elements" derivedmapstate.allelements = list_elements(gamemap)
-        @timeit flowcalc_loop_timer "list nodes" derivedmapstate.allnodes = list_nodes(derivedmapstate.allelements) # not actually used, just for diagnostics
-        @timeit flowcalc_loop_timer "prune" derivedmapstate.prunedelements = prune(derivedmapstate.allelements)
-        @timeit flowcalc_loop_timer "grounding search" derivedmapstate.prunedelements = ground_search(derivedmapstate.prunedelements)
+        @timeit flowcalc_loop_timer "list nodes" derivedmapstate.allnodes = list_nodes(derivedmapstate.allelements) # diagnostic only
 
-        # repeatedly clean/prune until clear_dangling_dependants no longer changes the elements
-        # this part of the code is not great, ripe for optimization
+        # Iteratively prune until clear_dangling_dependants reaches a fixed point
+        # This is a simple but inefficient approach, should consider optimising if it becomes a bottleneck
         derivedmapstate.prunedelements = derivedmapstate.allelements
         last_hash::UInt64 = 0
         while last_hash != hash(derivedmapstate.prunedelements)
@@ -885,7 +882,7 @@ function update_map!(gamemap::GameMap, derivedmapstate::DerivedMapState, mna_sta
             @timeit flowcalc_loop_timer "MNA split elements" MNA_splitelements!(mna_state, derivedmapstate)
             @timeit flowcalc_loop_timer "MNA get A" mna_state.mat_A = MNA_getA(mna_state)
         else
-            # clear old outputs so they dont continue to be rendered
+            # Clear stale outputs so they don't continue to be rendered
             empty!(mna_state.node_voltages)
             empty!(mna_state.vsource_currents)
             empty!(mna_state.node_voltages_scaled)
@@ -895,12 +892,10 @@ function update_map!(gamemap::GameMap, derivedmapstate::DerivedMapState, mna_sta
     return nothing
 end
 
-# Closure to remember maximum voltage seen so far
+# TODO: This closure hides mutable state (max_voltage_ever) with no way to reset on map reload.
+# Consider replacing with a proper struct + reset! method in a future cleanup pass.
 let max_voltage_ever::Float64 = -Inf
-    """
-    Normalise the node voltage between 0 and 1 for colour rendering.
-    Remembers maximum voltage it has seen.
-    """
+    "Normalise node voltages to [0, 1] for colour rendering. Tracks the historical maximum."
     global function scale_voltage_dict(dict::Dict{NodeCoord, Float64})::Dict{NodeCoord, Float64}
         # Skip if input Dict is empty
         if isempty(dict)
@@ -917,9 +912,7 @@ let max_voltage_ever::Float64 = -Inf
     end
 end
 
-"""
-Updates Z matrix and re-solves MNA. Run once every tick.
-"""
+"Re-solve the MNA system (Z vector rebuild + linear solve). Called once per tick."
 function update_mna!(derivedmapstate::DerivedMapState, mna_state::MNA_State, current_tick::Int64)
     if !isempty(derivedmapstate.prunednodes)
         @timeit flowcalc_loop_timer "MNA Solve" begin
@@ -931,8 +924,8 @@ function update_mna!(derivedmapstate::DerivedMapState, mna_state::MNA_State, cur
     return nothing
 end
 
-"Updates thrust related gamestate based on calls to get_thrust for all components"
-function handle_thrusters!(gamestate::GameState, gamemap::GameMap,  mna_state::MNA_State; base_ups::Float64 = 60.0)
+"Sum thrust from all components, integrate velocity, and track burn progress during manoeuvres."
+function handle_thrusters!(gamestate::GameState, gamemap::GameMap, mna_state::MNA_State; base_ups::Float64 = 60.0)
     # Compute total thrust vector from all nozzle components (ship space)
     thrust = SVector{2, Float64}(0.0, 0.0)
     for (_, ship) in gamemap.ships
@@ -960,7 +953,7 @@ function handle_thrusters!(gamestate::GameState, gamemap::GameMap,  mna_state::M
             # Burn direction comes from the planned space-map ΔV vector
             burn_dv = phase == PHASE_MAIN_BURN ? manoeuvre.main_burn_dv : manoeuvre.decel_burn_dv
             burn_dir_mag = norm(burn_dv)
-            burn_dir = burn_dir_mag > 1e-10 ? burn_dv / burn_dir_mag : SVector(1.0, 0.0)
+            burn_dir = burn_dir_mag > 1.0e-10 ? burn_dv / burn_dir_mag : SVector(1.0, 0.0)
             burn_angle = atan(burn_dir[2], burn_dir[1])
             c = cos(burn_angle)
             s = sin(burn_angle)
@@ -987,14 +980,14 @@ function handle_thrusters!(gamestate::GameState, gamemap::GameMap,  mna_state::M
     return nothing
 end
 
-const MANOEUVRE_COMPLETION_THRESHOLD = 0.05   # Absolute velocity units
-const MANOEUVRE_THRUST_THRESHOLD    = 0.1    # Thrust magnitude to count as "engines off"
+const MANOEUVRE_COMPLETION_THRESHOLD = 0.05  # Absolute velocity units
+const MANOEUVRE_THRUST_THRESHOLD = 0.1       # Thrust magnitude to count as "engines off"
 
 #= ---------- Manoeuvre guard helpers ----------- =#
 
 """
 Cancel the active manoeuvre if the ship is producing thrust above the detection
-threshold.  Returns `true` if the manoeuvre was cancelled.
+threshold. Returns `true` if the manoeuvre was cancelled.
 
 Thrust during a non-burn phase (e.g. coasting or waiting) invalidates the planned
 trajectory, so the manoeuvre must be abandoned.
@@ -1008,7 +1001,7 @@ end
 
 """
 Cancel the active manoeuvre if time is currently progressing (i.e. the target time
-is ahead of the current time).  Returns `true` if the manoeuvre was cancelled.
+is ahead of the current time). Returns `true` if the manoeuvre was cancelled.
 
 Time-warping during an active burn would skip thrust integration steps and corrupt
 the ΔV budget.
@@ -1023,15 +1016,17 @@ function cancel_if_time_progressing!(gamemap::GameMap; console_push::Function = 
 end
 
 """
-Cancel the active manoeuvre if the current time deviates from `expected_time` by
-more than `tolerance` years.  Returns `true` if the manoeuvre was cancelled.
+Cancel if the current time deviates from `expected_time` by more than `tolerance`
+years. Returns `true` if the manoeuvre was cancelled.
 
 A large time discrepancy means the ship is not at the planned position for the
 upcoming waypoint, so continuing the manoeuvre would produce incorrect burns.
 """
-function cancel_if_time_wrong!(gamemap::GameMap, expected_time::Float64;
-                                tolerance::Float64 = 0.01,
-                                console_push::Function = identity)::Bool
+function cancel_if_time_wrong!(
+        gamemap::GameMap, expected_time::Float64;
+        tolerance::Float64 = 0.01,
+        console_push::Function = identity
+    )::Bool
     sm = gamemap.space_map
     !(sm isa SpaceMapState) && return false
     abs(sm.time_years - expected_time) <= tolerance && return false
@@ -1041,17 +1036,18 @@ function cancel_if_time_wrong!(gamemap::GameMap, expected_time::Float64;
 end
 
 """
-Cancel the active manoeuvre if the target time (set by the player for time-warping)
-would skip past `waypoint_time` by more than `tolerance` years.  Returns `true` if
-the manoeuvre was cancelled.
+Cancel if the target time (set by the player for time-warping) would skip past
+`waypoint_time` by more than `tolerance` years. Returns `true` if cancelled.
 
 Skipping past a waypoint time while coasting (or waiting for a burn) means the
 ship would arrive at the wrong position and the planned burn could never execute
 correctly.
 """
-function cancel_if_target_time_past!(gamemap::GameMap, waypoint_time::Float64;
-                                      tolerance::Float64 = 0.01,
-                                      console_push::Function = identity)::Bool
+function cancel_if_target_time_past!(
+        gamemap::GameMap, waypoint_time::Float64;
+        tolerance::Float64 = 0.01,
+        console_push::Function = identity
+    )::Bool
     sm = gamemap.space_map
     !(sm isa SpaceMapState) && return false
     sm.target_time_years <= waypoint_time + tolerance && return false
@@ -1073,10 +1069,6 @@ onto ship +X (i.e. the ship "turns" to face the burn direction).
 
 All phase transitions are centralised here so the UI is purely a display layer.
 Must be called once per tick, after `handle_thrusters!` and `step_space_map_time!`.
-
-Guard helpers run first in each phase to cancel the manoeuvre early if the player
-has taken an action (thrust outside burns, time-warp during burns, skipping a
-waypoint) that would invalidate the planned trajectory.
 """
 function update_manoeuvre_phase!(gamestate::GameState, gamemap::GameMap; console_push::Function = identity)
     !has_active_manoeuvre(gamemap) && return nothing
@@ -1163,15 +1155,12 @@ end
 
 """
 Rotate a space-map-space ΔV vector into ship space.
-
-The ship's +X axis aligns with the burn direction (i.e. the direction of the ΔV vector).
-This is equivalent to rotating by *negative* burn_angle so that the ΔV ends up along
-ship +X:  result ≈ SVector(‖dv‖, 0).
+The ship's +X axis aligns with the burn direction, so the result is `SVector(‖dv‖, 0)`.
 """
 function _spacemap_to_ship(dv::SVector{2, Float64})::SVector{2, Float64}
     mag = norm(dv)
-    mag < 1e-10 && return SVector(0.0, 0.0)
-    # Inverse rotation: rotate by -atan(dv.y, dv.x)
+    mag < 1.0e-10 && return SVector(0.0, 0.0)
+
     return SVector(mag, 0.0)
 end
 
@@ -1179,10 +1168,22 @@ end
 # FlowCalculator Main Loop
 # ===============================================================
 
-"""
-Update timing state for the next loop iteration.
-Calculates delta time, updates accumulator with saturation, and sets should_update flag.
-"""
+"Deep-copy all game state and publish a new snapshot."
+function _publish_snapshot!(set_snapshot::Function, gamemap, derivedmapstate, mna_state, gamestate, timestamp)
+    @timeit flowcalc_loop_timer "Snapshot Publishing" begin
+        snapshot = FlowCalculatorSnapshot(
+            gamemap = deepcopy(gamemap),
+            derived = deepcopy(derivedmapstate),
+            mna = deepcopy(mna_state),
+            gamestate = deepcopy(gamestate),
+            timestamp = timestamp
+        )
+        set_snapshot(snapshot)
+    end
+    return nothing
+end
+
+"Update timing state: compute delta, advance accumulator (with saturation), and set the `should_update` flag."
 function accumulate_time!(
         timing::TimingState,
         target_update_time::Float64
@@ -1204,16 +1205,15 @@ function accumulate_time!(
 end
 
 """
-Update UPS metrics, check saturation, and log diagnostics.
-Returns new update_count (0 if reset, otherwise unchanged).
+Update UPS metrics and warn if the accumulator is saturating.
+Returns the (possibly reset) update count.
 """
 function update_ups_metrics!(
         shared_state::FlowCalculatorSharedState,
         timing::TimingState,
         update_count::Int,
         target_ups::Float64,
-        threadsafe_console_push::Function;
-        diagnostic_interval::Float64 = 10.0
+        threadsafe_console_push::Function
     )::Int
     # Calculate actual UPS based on updates performed
     time_since_last_update = timing.current_time - timing.last_update_time
@@ -1223,16 +1223,15 @@ function update_ups_metrics!(
         if time_since_last_update > 0.0 && update_count > 0
             measured_ups = update_count / time_since_last_update
             prev_ups = @atomic shared_state.actual_ups
-            new_ups = prev_ups * 0.5 + measured_ups * 0.5
+            new_ups = prev_ups * 0.5 + measured_ups * 0.5  # EMA smoothing
             @atomic shared_state.actual_ups = new_ups
 
-            # Reset counters
             timing.last_update_time = timing.current_time
             new_update_count = 0
         end
     end
 
-    # Warn if accumulator is saturated
+    # Warn if accumulator is saturating
     max_accumulator = (1.0 / target_ups) * 10.0
     if timing.accumulator >= max_accumulator * 0.99
         threadsafe_console_push("FlowCalculator saturating time accumulator (running behind)")
@@ -1241,9 +1240,7 @@ function update_ups_metrics!(
     return new_update_count
 end
 
-"""
-Main FlowCalculator loop - runs deterministic game simulation on fixed timestep.
-"""
+"Main FlowCalculator loop: runs deterministic game simulation on a fixed timestep."
 function flowcalculator_loop!(
         ipc::FlowCalculatorIPC,
         initial_snapshot::FlowCalculatorSnapshot
@@ -1291,7 +1288,7 @@ function flowcalculator_loop!(
                 # Not enough time accumulated, sleep briefly
                 sleep(0.001)  # 1ms
             else
-                # Process commands (only when updating)
+                # Drain command queue
                 commands_processed = false
                 @timeit flowcalc_loop_timer "Command Processing" begin
                     while isready(command_queue.command_channel)
@@ -1301,7 +1298,7 @@ function flowcalculator_loop!(
                     end
                 end
 
-                # Consume accumulated time and track update
+                # Consume accumulated time
                 timing.accumulator -= target_update_time
                 update_count += 1
 
@@ -1309,69 +1306,41 @@ function flowcalculator_loop!(
                     # Full update: advance game state
                     gamestate.ticks += 1
 
-                    # Update state
+                    # Simulation pipeline
                     update_docking!(gamemap)
                     @timeit flowcalc_loop_timer "Component Updates" update_components!(gamemap, mna_state)
                     update_map!(gamemap, derivedmapstate, mna_state, gamestate.ticks)
                     update_mna!(derivedmapstate, mna_state, gamestate.ticks)
                     @timeit flowcalc_loop_timer "Thruster Handling" handle_thrusters!(gamestate, gamemap, mna_state)
-
-                    # Step space map time (encounter point recycling, position updates)
                     step_space_map_time!(gamemap.space_map)
-
-                    # Advance the manoeuvre state machine
                     update_manoeuvre_phase!(gamestate, gamemap; console_push = threadsafe_console_push)
 
-                    # Publish snapshot
-                    @timeit flowcalc_loop_timer "Snapshot Publishing" begin
-                        snapshot = FlowCalculatorSnapshot(
-                            gamemap = deepcopy(gamemap),
-                            derived = deepcopy(derivedmapstate),
-                            mna = deepcopy(mna_state),
-                            gamestate = deepcopy(gamestate),
-                            timestamp = timing.current_time
-                        )
-                        set_snapshot(snapshot)
-                    end
+                    _publish_snapshot!(set_snapshot, gamemap, derivedmapstate, mna_state, gamestate, timing.current_time)
 
                 elseif commands_processed
-                    # Paused with commands: update derived state only
+                    # Paused with pending commands: rebuild derived state without advancing time
                     update_map!(gamemap, derivedmapstate, mna_state, gamestate.ticks)
                     update_mna!(derivedmapstate, mna_state, gamestate.ticks)
 
-                    # Publish snapshot without advancing game time
-                    @timeit flowcalc_loop_timer "Snapshot Publishing" begin
-                        snapshot = FlowCalculatorSnapshot(
-                            gamemap = deepcopy(gamemap),
-                            derived = deepcopy(derivedmapstate),
-                            mna = deepcopy(mna_state),
-                            gamestate = deepcopy(gamestate),
-                            timestamp = timing.current_time
-                        )
-                        set_snapshot(snapshot)
-                    end
+                    _publish_snapshot!(set_snapshot, gamemap, derivedmapstate, mna_state, gamestate, timing.current_time)
                 end
             end
 
-            # Update UPS metrics, warnings, and diagnostics
+            # UPS metrics and diagnostics
             @timeit flowcalc_loop_timer "UPS Metrics" begin
                 update_count = update_ups_metrics!(
                     shared_state, timing, update_count,
-                    target_ups, threadsafe_console_push,
-                    diagnostic_interval = diagnostic_interval
+                    target_ups, threadsafe_console_push
                 )
             end
 
-            # Handle FlowCalculator diagnostics (called from background thread)
-            # Uses gamestate.ticks as counter for tick-based diagnostic printing
             handle_diagnostics(flowcalc_loop_diagnostic_config, gamestate.ticks)
         catch e
             bt = catch_backtrace()
-            @error "FlowCalculator loop exception" exception=(e, bt)
-            # Notify in-game console with a short message and send full details to terminal logs
+            @error "FlowCalculator loop exception" exception = (e, bt)
             threadsafe_console_push("FlowCalculator loop crashed; see terminal log for details")
 
-            # Print full backtrace to stderr so it's visible in the terminal output/logs
+            # Print full backtrace to stderr for terminal visibility
             ios = IOBuffer()
             showerror(ios, e, bt)
             trace_str = String(take!(ios))

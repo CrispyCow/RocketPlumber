@@ -212,7 +212,11 @@ function poll_keys!(inputstate::InputState, window::GLFW.Window)
         elseif inputstate.spacemap_active
             inputstate.spacemap_active = false
         elseif inputstate.placementmode != INSPECT
-            inputstate.placementmode = INSPECT # Escape always returns to inspect mode
+            if inputstate.placementmode == MOVE && !isnothing(inputstate.selectedcoord)
+                inputstate.selectedcoord = nothing # First Escape in move mode: clear selection
+            else
+                inputstate.placementmode = INSPECT # Exit to inspect mode
+            end
         else
             inputstate.escape_menu_active = !inputstate.escape_menu_active # Toggle pause menu when already in inspect mode
             inputstate.selectedcoord = nothing
@@ -406,6 +410,10 @@ end
 # Cursor Ghost Rendering
 # ===============================================================
 
+const GHOST_COLOUR_VALID = SVector{4, Float32}(1.0, 1.0, 1.0, 1.0)
+const GHOST_COLOUR_INVALID = SVector{4, Float32}(1.0, 0.4, 0.4, 1.0)
+const GHOST_PIPE_COLOUR_INVALID = ColourType(0.6, 0.15, 0.15, 1.0)
+
 """
 Render cursor ghosts for tile/pipe placement and move operations.
 Shows semi-transparent previews of where components will be placed/moved.
@@ -419,12 +427,9 @@ function render_cursor_ghosts!(queue::Vector{RenderCommand}, glmap::GLObjectMap,
         coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
         component = component_list[inputstate.toolbar]
         rotation = map_rotation(component, inputstate.toolrotation)
-
-        # Check if valid placement on ANY ship (using find_valid_ship_for_placement)
         target_ship = find_valid_ship_for_placement(component, coord, gamemap; rotation = rotation)
-        if !isnothing(target_ship)
-            render_base_elem!(queue, component; glmap = glmap, rotation = rotation, position = coord, transparency = 0.5, render_height_offset = Int32(100000)) # Tile ghost above everything
-        end
+        ghost_colour = isnothing(target_ship) ? GHOST_COLOUR_INVALID : GHOST_COLOUR_VALID
+        render_base_elem!(queue, component; glmap = glmap, rotation = rotation, position = coord, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000))
     end
 
     if inputstate.placementmode == PIPE
@@ -460,6 +465,8 @@ function render_cursor_ghosts!(queue::Vector{RenderCommand}, glmap::GLObjectMap,
 
             if valid_placement
                 render_pipe_base!(queue, pipe_behav; glmap = glmap, rotation = rotation, position = edge, transparency = 0.5)
+            else
+                render_pipe_base!(queue, pipe_behav; glmap = glmap, rotation = rotation, position = edge, transparency = 0.5, colour = GHOST_COLOUR_INVALID)
             end
         elseif element isa TileCoord
             tilecoord::TileCoord = element
@@ -467,9 +474,8 @@ function render_cursor_ghosts!(queue::Vector{RenderCommand}, glmap::GLObjectMap,
             if !isnothing(component)
                 rotation = map_rotation(component, inputstate.toolrotation)
                 target_ship = find_valid_ship_for_placement(component, tilecoord, gamemap; rotation = rotation)
-                if !isnothing(target_ship)
-                    render_base_elem!(queue, component; glmap = glmap, rotation = rotation, position = tilecoord, transparency = 0.5, render_height_offset = Int32(100000))
-                end
+                ghost_colour = isnothing(target_ship) ? GHOST_COLOUR_INVALID : GHOST_COLOUR_VALID
+                render_base_elem!(queue, component; glmap = glmap, rotation = rotation, position = tilecoord, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000))
             end
         end
     end
@@ -483,12 +489,9 @@ function render_cursor_ghosts!(queue::Vector{RenderCommand}, glmap::GLObjectMap,
                 coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
                 tilecomp = get_component(gamemap, inputstate.selectedcoord; ship_name = source_ship)
                 rotation = map_rotation(tilecomp, rotate(tilecomp.rotation, inputstate.toolrotation))
-
-                # Check if destination is valid on any ship
                 target_ship = find_valid_ship_for_placement(tilecomp.component, coord, gamemap; rotation = rotation)
-                if !isnothing(target_ship)
-                    render_base_elem!(queue, tilecomp; glmap = glmap, rotation = rotation, position = coord, transparency = 0.5, render_height_offset = Int32(100000))
-                end
+                ghost_colour = isnothing(target_ship) ? GHOST_COLOUR_INVALID : GHOST_COLOUR_VALID
+                render_base_elem!(queue, tilecomp; glmap = glmap, rotation = rotation, position = coord, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000))
             end
         end
 
@@ -518,6 +521,9 @@ function render_cursor_ghosts!(queue::Vector{RenderCommand}, glmap::GLObjectMap,
 
                 if valid_dest
                     pipe_commands = render_pipe(glmap, ghost_pipe, HexFlowRendering.DEFAULT_PIPE_COLOUR; transparency = 0.5)
+                    append!(queue, pipe_commands)
+                else
+                    pipe_commands = render_pipe(glmap, ghost_pipe, GHOST_PIPE_COLOUR_INVALID; transparency = 0.5)
                     append!(queue, pipe_commands)
                 end
             end
@@ -920,13 +926,15 @@ function flowcalc_moveplacer!(
         end
 
         inputstate.selectedcoord = element
+        inputstate.toolrotation = HexFrame.Q_POS # Reset delta rotation so ghost matches source
         threadsafe_console_push("Selected $(element) for moving")
         return
     end
 
     # Handle deselection or move
     selected = inputstate.selectedcoord
-    if selected == element
+    if selected == element && selected isa EdgeCoord
+        # Pipes have no rotation — same-edge click is a no-op, deselect
         inputstate.selectedcoord = nothing
         threadsafe_console_push("Deselected $(element)")
         return
