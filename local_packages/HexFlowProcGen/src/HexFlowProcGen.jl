@@ -21,7 +21,7 @@ export ScalingRule, NoScaling, LinearScaling, GatedLinearScaling, evaluate_scali
 export WeightedComponentSet
 export select_encounter_class, select_fuel_tag
 export generate_encounter, generate_encounter_name
-export encounter_ship!, depart_ship!
+export encounter_ship!, encounter_ship_optimal_dir!, depart_ship!, redock_ship!
 export check_departure_pipe_connections
 export EncounterSystemConfig, initialise_encounter_system!
 export spawn_encounter_point!, get_encounter_position, predict_crossing_time
@@ -34,7 +34,11 @@ export generate_base_velocities
 export HullSizeConfig, FuelTagConfig, EncounterClassConfig
 export compute_hull_size, compute_target_components, evaluate_component_pool, calculate_richness
 export SpaceMapState, get_encounter_config
+export estimate_min_delta_v
 
+
+"Minimum gap (in tile-steps) added between ships after clearing overlap."
+const MIN_SPACING::Int = 2
 
 # ===============================================================
 # Utilities
@@ -503,6 +507,7 @@ end
     max_angle_rad::Float64 = π / 8            # 22.5 degrees from horizontal
     viewport_half_width::Float64 = 400.0
     viewport_half_height::Float64 = 200.0
+    spawn_half_height::Float64 = 300.0        # Half-height of vertical spawn band (decoupled from viewport)
     spawn_margin::Float64 = 100.0             # Distance from viewport edge to spawn lines
     recycle_margin::Float64 = 50.0            # Extra distance from spawn lines to disappear lines
     line_step_size::Float64 = 50.0            # Discrete step for shifting lines
@@ -674,7 +679,7 @@ function _ensure_offscreen_distance(
 end
 
 "Compute docking animation offsets: `(far_offset, zero_offset, step_size)` for approach/departure."
-function _compute_docking_offsets(direction_vec, distance::Float64; duration_secs::Float64 = 5.0, ups::Float64 = 60.0)
+function _compute_docking_offsets(direction_vec, distance::Float64; duration_secs::Float64 = 5.0, ups::Float64 = BASE_UPS)
     far_offset = HexFrame.AxialCoord(direction_vec.q * distance, direction_vec.r * distance)
     zero_offset = HexFrame.AxialCoord(0.0, 0.0)
     total_distance = sqrt(far_offset.q^2 + far_offset.r^2)
@@ -683,8 +688,35 @@ function _compute_docking_offsets(direction_vec, distance::Float64; duration_sec
 end
 
 """
+Offset `ship` along `dir` until it no longer overlaps any surface in `gamemap`,
+then add `MIN_SPACING` tiles of additional gap. Mutates `ship` in place.
+
+Returns the total number of tile-steps the ship was moved (including spacing).
+"""
+function _offset_ship_until_clear!(gamemap::GameMap, ship::ShipMap, dir::HexFrame.HexAxis)::Int
+    step = HexFrame.hex_neighbour_tiles[dir]
+    steps = 0
+    max_steps = 500  # safety limit
+    while _is_surface_overlap(gamemap, ship) && steps < max_steps
+        offset_ship!(ship, step)
+        steps += 1
+    end
+    if steps >= max_steps
+        @warn "Hit safety limit in _offset_ship_until_clear!" dir steps
+        return steps  # don't add spacing to an already-stuck ship
+    end
+
+    # Add spacing gap
+    spacing_offset = TileCoord(step.q * MIN_SPACING, step.r * MIN_SPACING)
+    offset_ship!(ship, spacing_offset)
+
+    return steps + MIN_SPACING
+end
+
+"""
 Dock a pre-generated ship into the game map with approach animation.
-The ship is offset from the primary ship and approaches from direction `dir`.
+The ship is offset from the primary ship along direction `dir` until clear,
+then approaches from that direction.
 """
 function encounter_ship!(
         gamemap::GameMap, newship::ShipMap, ship_name_base::String, seed::UInt32, dir::HexFrame.HexAxis;
@@ -697,16 +729,7 @@ function encounter_ship!(
     ship_centroid = get_surface_centroid(gamemap, :primary)
     offset_newship = deepcopy(newship)
     offset_ship!(offset_newship, round_to_tile(ship_centroid))
-    while _is_surface_overlap(gamemap, offset_newship)
-        offset = HexFrame.hex_neighbour_tiles[dir]
-        offset_ship!(offset_newship, offset)
-    end
-
-    # Add final gap
-    MIN_SPACING = 3
-    hnt = HexFrame.hex_neighbour_tiles[dir]
-    final_offset = TileCoord(hnt.q * MIN_SPACING, hnt.r * MIN_SPACING)
-    offset_ship!(offset_newship, final_offset)
+    _offset_ship_until_clear!(gamemap, offset_newship, dir)
 
     # Calculate approach animation parameters
     APPROACH_DISTANCE_TILES = 20.0
@@ -731,8 +754,56 @@ function encounter_ship!(
 end
 
 """
-    check_departure_pipe_connections(gamemap, ship_name) → (can_depart, reason)
+Dock a pre-generated ship into the game map, automatically choosing the approach
+direction that requires the fewest tile-steps to avoid overlap with existing ships.
 
+Tries all six hex axis directions, measures the offset distance each would require,
+and picks the direction with the shortest distance. Ties are broken deterministically
+using the encounter seed. Delegates to `encounter_ship!` for the actual placement.
+"""
+function encounter_ship_optimal_dir!(
+        gamemap::GameMap, newship::ShipMap, ship_name_base::String, seed::UInt32;
+        max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing
+    )
+
+    ship_centroid = get_surface_centroid(gamemap, :primary)
+    if isnothing(ship_centroid)
+        # Fallback: pick randomly if primary has no surface
+        dir = pick_element_from_noise(collect(instances(HexFrame.HexAxis)), 42, seed)
+        encounter_ship!(gamemap, newship, ship_name_base, seed, dir; max_view_bounds)
+        return nothing
+    end
+    centroid_tile = round_to_tile(ship_centroid)
+
+    # Measure offset distance required for each direction
+    best_dist = typemax(Int)
+    best_dirs = HexFrame.HexAxis[]
+
+    for dir in instances(HexFrame.HexAxis)
+        trial_ship = deepcopy(newship)
+        offset_ship!(trial_ship, centroid_tile)
+        dist = _offset_ship_until_clear!(gamemap, trial_ship, dir)
+
+        if dist < best_dist
+            best_dist = dist
+            best_dirs = HexFrame.HexAxis[dir]
+        elseif dist == best_dist
+            push!(best_dirs, dir)
+        end
+    end
+
+    # Pick among tied directions — deterministic from seed
+    chosen_dir = if length(best_dirs) == 1
+        best_dirs[1]
+    else
+        pick_from_options(best_dirs, 42, seed)
+    end
+
+    encounter_ship!(gamemap, newship, ship_name_base, seed, chosen_dir; max_view_bounds)
+    return nothing
+end
+
+"""
 Check whether a ship can depart by verifying no pipe chain still bridges it to another ship.
 Collects all off-surface pipe edges (relative to the departing ship), flood-fills outward
 from the departing ship's surface boundary, and checks whether any component reaches another
@@ -844,6 +915,93 @@ function depart_ship!(gamemap::GameMap, ship_name::Symbol; max_view_bounds::Unio
     return true, reason
 end
 
+
+"""
+Attempt to move a docked ship closer to the primary by walking it inward
+along the reverse of its stored approach axis until overlap, then backing
+off by `MIN_SPACING` tiles. Animates the approach using the docking status system.
+"""
+function redock_ship!(gamemap::GameMap, ship_name::Symbol)::Tuple{Bool, String}
+    if ship_name === :primary
+        return (false, "Cannot redock the primary ship.")
+    end
+    if !has_ship(gamemap, ship_name)
+        return (false, "Ship '$(ship_name)' not found.")
+    end
+
+    status = get_docking_status(gamemap, ship_name)
+    if !(status isa FlowMap.ConnectedDockStat)
+        return (false, "Ship '$(ship_name)' is not docked.")
+    end
+
+    approach_axis = get_approach_axis(status)
+    if isnothing(approach_axis)
+        return (false, "No docking axis recorded for $(ship_name).")
+    end
+
+    ship = get_ship(gamemap, ship_name)
+    if isempty(get_all_surface_tiles(ship))
+        return (false, "Ship '$(ship_name)' has no surface tiles.")
+    end
+
+    # Create temporary gamemap without this ship for clean overlap testing
+    temp_gamemap = deepcopy(gamemap)
+    remove_ship!(temp_gamemap, ship_name)
+
+    # Walk inward from current position (towards primary)
+    towards_primary = HexFrame.rotate(approach_axis, HexFrame.Q_NEG)
+    step_offset = HexFrame.hex_neighbour_tiles[towards_primary]
+    trial_ship = deepcopy(ship)
+
+    steps_taken = 0
+    max_steps = 100  # safety limit
+    while steps_taken < max_steps
+        offset_ship!(trial_ship, step_offset)
+        steps_taken += 1
+
+        if _is_surface_overlap(temp_gamemap, trial_ship)
+            # Back out the overlapping step
+            reverse_offset = TileCoord(-step_offset.q, -step_offset.r)
+            offset_ship!(trial_ship, reverse_offset)
+            steps_taken -= 1
+            break
+        end
+    end
+
+    # Back off by MIN_SPACING from closest non-overlapping position
+    reverse = TileCoord(-step_offset.q, -step_offset.r)
+    actual_backoff = min(MIN_SPACING, steps_taken)
+    for _ in 1:actual_backoff
+        offset_ship!(trial_ship, reverse)
+    end
+    net_steps = steps_taken - actual_backoff
+
+    if net_steps <= 0
+        return (true, "Ship $(ship_name) is already as close as possible.")
+    end
+
+    # Compute the total move delta from original to new position
+    move_delta = TileCoord(
+        step_offset.q * net_steps,
+        step_offset.r * net_steps,
+    )
+
+    # Apply the move to the real ship
+    offset_ship!(ship, move_delta)
+
+    # Animate: set render offset so ship appears at old position, then slides to new
+    anim_offset = HexFrame.AxialCoord(Float64(-move_delta.q), Float64(-move_delta.r))
+    target_offset = HexFrame.AxialCoord(0.0, 0.0)
+    dist = sqrt(anim_offset.q^2 + anim_offset.r^2)
+    duration_secs = clamp(dist / 3.0, 0.5, 5.0)  # scale with distance, 0.5–5 seconds
+    step_size = dist > 0.0 ? dist / (duration_secs * BASE_UPS) : 0.01
+
+    set_docking_status!(ship, ApproachingDockStat(anim_offset, target_offset, step_size, approach_axis))
+
+    return (true, "Ship $(ship_name) redocking (moved $(net_steps) tiles closer).")
+end
+
+
 # ===============================================================
 # Encounter Point System — SpaceMapState
 # ===============================================================
@@ -855,6 +1013,8 @@ end
     position::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
     time_years::Float64 = 0.0
     target_time_years::Float64 = 0.0
+    last_stop_time::Float64 = 0.0
+    is_time_progressing::Bool = false
     active_manoeuvre::Union{Nothing, ManoeuvreData} = nothing
     # Encounter system
     encounter_points::Vector{EncounterPoint} = EncounterPoint[]
@@ -884,8 +1044,18 @@ clear_active_manoeuvre!(sm::SpaceMapState) = (sm.active_manoeuvre = nothing)
 get_position(sm::SpaceMapState)::SVector{2, Float64} = sm.position
 set_position!(sm::SpaceMapState, p::SVector{2, Float64}) = (sm.position = p)
 get_target_time(sm::SpaceMapState)::Float64 = sm.target_time_years
-set_target_time!(sm::SpaceMapState, t::Float64) = (sm.target_time_years = t)
-is_time_progressing(sm::SpaceMapState)::Bool = sm.time_years < sm.target_time_years
+
+"Set the target time. If the new target is at or before the current time, records a stop for easing."
+function set_target_time!(sm::SpaceMapState, t::Float64)
+    sm.target_time_years = t
+    if t <= sm.time_years
+        sm.last_stop_time = sm.time_years
+    end
+end
+
+is_time_progressing(sm::SpaceMapState)::Bool = sm.is_time_progressing
+get_last_stop_time(sm::SpaceMapState)::Float64 = sm.last_stop_time
+set_last_stop_time!(sm::SpaceMapState, t::Float64) = (sm.last_stop_time = t)
 get_encounter_points(sm::SpaceMapState) = sm.encounter_points
 
 "Get the encounter system config from a space map."
@@ -964,7 +1134,7 @@ function spawn_encounter_point!(
     ep.ship_type_seed = get_noise(UInt32(ep.index + 1000), get_noise(UInt32(ep.iteration), sm.seed))
 
     # Random Y position along the spawn line
-    spawn_y_range = sm.viewport_half_height + config.spawn_margin
+    spawn_y_range = config.spawn_half_height
     player_y_position = get_position(sm)[2]
     y_pos = pick_from_range(player_y_position - spawn_y_range, player_y_position + spawn_y_range, ep.index * 1000 + ep.iteration, point_seed)
     ep.position = SVector(spawn_line_x, y_pos)
@@ -1110,7 +1280,7 @@ function initialise_encounter_system!(sm::SpaceMapState)
             sm.neg_disappear_line_x, sm.pos_disappear_line_x,
             ep.index * 4000 + ep.iteration, point_seed
         )
-        y_range = sm.viewport_half_height + config.spawn_margin
+        y_range = config.spawn_half_height
         y_pos = pick_from_range(-y_range, y_range, ep.index * 5000 + ep.iteration, point_seed)
         ep.position = SVector(x_pos, y_pos)
 
@@ -1126,18 +1296,45 @@ function initialise_encounter_system!(sm::SpaceMapState)
 end
 
 "Advance the space map time by one tick. No-op for `SpaceMapEmpty`."
-function step_space_map_time!(::SpaceMapEmpty; max_step::Float64 = 1.0 / 60.0)
+function step_space_map_time!(::SpaceMapEmpty, target_time::Float64; max_step::Float64 = 2.5 / BASE_UPS, ease_distance::Float64 = 1.0)
     return false
 end
 
-"Advance the space map time by one tick. Returns true if time was advanced."
-function step_space_map_time!(sm::SpaceMapState; max_step::Float64 = 1.0 / 60.0)::Bool
-    if sm.time_years >= sm.target_time_years
+"""
+Advance the space map time by one tick. Returns `true` if time was advanced.
+
+Time stepping uses linear ease-in/ease-out: within `ease_distance` years of the warp start
+(`last_stop_time`) or the warp end (`target_time_years`), the step size is scaled down linearly.
+A minimum step of `0.2/BASE_UPS` years/tick ensures the warp always makes progress.
+"""
+function step_space_map_time!(sm::SpaceMapState, target_time::Float64; max_step::Float64 = 2.5 / BASE_UPS, ease_distance::Float64 = 1.0)::Bool
+    # Sync target from IPC shared state (only calls set_target_time! when the value has actually changed,
+    # preserving the last_stop_time update logic on cancel)
+    if target_time != sm.target_time_years
+        set_target_time!(sm, target_time)
+    end
+
+    sm.is_time_progressing = sm.time_years < sm.target_time_years
+    if !sm.is_time_progressing
         return false
     end
 
+    min_step = 0.2 / BASE_UPS
+
+    # Ease‑in/ease‑out: use the smaller of start/end distances for a single smooth ramp
+    dist_from_start = sm.time_years - sm.last_stop_time
+    dist_to_end = sm.target_time_years - sm.time_years
+    ease_dist = min(dist_from_start, dist_to_end)
+
+    if ease_dist < ease_distance
+        fraction = ease_dist / ease_distance
+        step = max(min_step, max_step * fraction)
+    else
+        step = max_step
+    end
+
     old_time = sm.time_years
-    new_time = min(old_time + max_step, sm.target_time_years)
+    new_time = min(old_time + step, sm.target_time_years)
     dt = new_time - old_time
 
     # Update player position (velocity is constant between manoeuvres)
@@ -1151,6 +1348,11 @@ function step_space_map_time!(sm::SpaceMapState; max_step::Float64 = 1.0 / 60.0)
 
     # Check if lines need to shift
     check_line_shift!(sm)
+
+    # Record stop for future ease-in when warp completes
+    if sm.time_years >= sm.target_time_years
+        sm.last_stop_time = sm.time_years
+    end
 
     return true
 end
@@ -1212,16 +1414,17 @@ function compute_closest_approach(
 end
 
 """
-Calculate the minimum delta‑V needed to intercept an encounter point.
+Calculate the minimum delta-V needed to intercept an encounter point.
 
-Returns the velocity‑match ΔV plus a minimum surplus for closing the gap.
+Returns the velocity-match ΔV plus a minimum surplus fraction for closing the gap.
 """
 function calculate_minimum_intercept_dv(
         player_vel::SVector{2, Float64},
         target_vel::SVector{2, Float64};
-        min_surplus::Float64 = 5.0
+        min_surplus_fraction::Float64 = 0.05
     )::Float64
-    return norm(target_vel - player_vel) + min_surplus
+    
+    return norm(target_vel - player_vel) * (1.0 + min_surplus_fraction)
 end
 
 """
@@ -1233,7 +1436,7 @@ Manoeuvre model:
    - Wait for closest approach if ships are already converging faster than close velocity.
 2. Main burn: velocity match + surplus/2 toward the intercept position.
 3. Coast the remaining gap at close velocity (surplus/2).
-4. Deceleration burn: surplus/2 to re‑match velocities.
+4. Deceleration burn: surplus/2 to re-match velocities.
 
 Returns `ManoeuvreData` or `nothing` if the total ΔV is insufficient.
 """
@@ -1331,6 +1534,53 @@ end
 "Get the seed for procedural ship generation for this encounter point."
 function get_encounter_ship_seed(ep::EncounterPoint, map_seed::UInt32)::UInt32
     return get_noise(UInt32(ep.index), get_noise(UInt32(ep.iteration), map_seed))
+end
+
+# ===============================================================
+# Delta V Estimation
+# ===============================================================
+
+"""
+Estimate the minimum remaining delta V for a ship using the Tsiolkovsky rocket equation.
+
+Computes a lower bound by staging fuels in decreasing exhaust velocity order (burning
+more efficient fuel first, when the ship is heaviest). Two fuel paths are modelled:
+- Cold gas: direct use (`COLD_GAS` tanks, `COLD_GAS` exhaust velocity)
+- Monopropellant: liquid decomposed to gas (`MONOPROP_LIQUID` tanks, `MONOPROP_GAS` exhaust velocity)
+
+Returns 0.0 if the ship has no fuel or no dry mass.
+"""
+function estimate_min_delta_v(gamemap::GameMap)::Float64
+    dry_mass = get_dry_mass(gamemap)
+    dry_mass <= 0.0 && return 0.0
+
+    # Define fuel paths: (wet mass of fuel, effective exhaust velocity)
+    cold_gas_mass = get_wet_mass(gamemap; fluid = HexFluids.COLD_GAS)
+    cold_gas_ve = something(lookup_fluid_exhaust_velocity(HexFluids.COLD_GAS), 0.0)
+
+    monoprop_mass = get_wet_mass(gamemap; fluid = HexFluids.MONOPROP_LIQUID)
+    monoprop_ve = something(lookup_fluid_exhaust_velocity(HexFluids.MONOPROP_GAS), 0.0)
+
+    # Collect non-empty fuel stages and sort by DECREASING exhaust velocity (minimum delta V order)
+    fuels = Tuple{Float64, Float64}[]
+    cold_gas_mass > 0.0 && cold_gas_ve > 0.0 && push!(fuels, (cold_gas_mass, cold_gas_ve))
+    monoprop_mass > 0.0 && monoprop_ve > 0.0 && push!(fuels, (monoprop_mass, monoprop_ve))
+    sort!(fuels; by = last, rev = true)
+
+    # Sequential Tsiolkovsky rocket equation: for each fuel stage, the remaining
+    # unburnt fuels act as additional dry mass
+    remaining_mass = dry_mass + sum(first, fuels; init = 0.0)
+    total_dv = 0.0
+
+    for (fuel_mass, ve) in fuels
+        m_final = remaining_mass - fuel_mass
+        m_final <= 0.0 && continue
+
+        total_dv += ve * log(remaining_mass / m_final)
+        remaining_mass = m_final
+    end
+
+    return total_dv
 end
 
 

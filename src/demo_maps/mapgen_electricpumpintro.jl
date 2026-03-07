@@ -16,7 +16,7 @@ function mapgen_electricpumpintro()
     # Create components with separate instances to avoid state sharing
 
     # Decomposition chamber at (-5, 0) - converts liquid to gas
-    decomp_chamber = DecompChamberCompBehav(expansion_factor = 5.0)
+    decomp_chamber = DecompChamberCompBehav()
 
     # Liquid tank at (-1, 0) - stores monopropellant
     liquid_tank = ThevininTankCompBehav(
@@ -36,7 +36,7 @@ function mapgen_electricpumpintro()
         initial_energy = 100000.0,
         max_conductance = 1.0,
         min_conductance = 0.0,
-        change_rate = 1.0 / 60
+        change_rate = 1.0 / BASE_UPS
     )
 
     # Tile-based pipe at (-3, 1) - high-flow pipe connector

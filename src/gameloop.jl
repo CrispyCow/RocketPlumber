@@ -1,4 +1,4 @@
-# ===============================================================
+﻿# ===============================================================
 # Helper Functions for the Game Main Loop
 # ===============================================================
 
@@ -43,7 +43,7 @@ function custom_rendering!(
             @timeit render_loop_timer "Background Particles" begin
                 if !shared_state.is_paused # skip if paused
                     thrust_dust_particle_effect!(viewstate.background_particles, snapshot.gamestate, snapshot.gamemap)
-                    update_particle_physics!(viewstate.background_particles, snapshot.gamestate, count_surface_tiles(snapshot.gamemap))
+                    update_particle_physics!(viewstate.background_particles, snapshot.gamestate)
                 end
                 # Enable ship surface culling for background particles by passing gamemap
                 render_particles!(glmap, viewstate.background_particles, viewstate, snapshot.timestamp, shared_state.actual_ups, snapshot.gamemap)
@@ -54,7 +54,7 @@ function custom_rendering!(
     # Render queued elements (tiles, pipes, nodes)
     @timeit render_loop_timer "Sprite Rendering" begin
         @timeit render_loop_timer "Populate Render Queue" begin
-            @timeit render_loop_timer "Ship Surface" ship_surface_queued_render!(renderqueue, glmap, snapshot.gamemap)
+            @timeit render_loop_timer "Ship Surface" ship_surface_queued_render!(renderqueue, glmap, snapshot.gamemap; selected_ship = inputstate.rightclick_selectedship)
             @timeit render_loop_timer "Docking Beams" render_docking_beams!(renderqueue, glmap, snapshot.gamemap, snapshot.gamestate.ticks)
             @timeit render_loop_timer "Tiles" tile_queued_render!(renderqueue, glmap, snapshot.gamemap, snapshot.derived, snapshot.mna, snapshot.gamestate)
             @timeit render_loop_timer "Ghosts" render_cursor_ghosts!(renderqueue, glmap, inputstate, snapshot.gamemap, snapshot.gamestate)
@@ -71,7 +71,7 @@ function custom_rendering!(
             @timeit render_loop_timer "Foreground Particles" begin
                 if !shared_state.is_paused # skip if paused
                     tile_particle_spawn!(viewstate.foreground_particles, glmap, snapshot.gamemap, snapshot.derived, snapshot.mna, snapshot.gamestate)
-                    update_particle_physics!(viewstate.foreground_particles, snapshot.gamestate, count_surface_tiles(snapshot.gamemap))
+                    update_particle_physics!(viewstate.foreground_particles, snapshot.gamestate)
                 end
                 # Disable ship surface culling for foreground particles by passing nothing as gamemap
                 render_particles!(glmap, viewstate.foreground_particles, viewstate, snapshot.timestamp, shared_state.actual_ups, nothing)
@@ -129,23 +129,23 @@ function user_handler!(
     # Update ship bounds before input handling so limits are current
     update_ship_bounds!(viewstate, snapshot.gamemap)
 
-    # Set time progression flag for input blocking (space map M key toggle)
+    # Set time progression flag and current spacemap time for input blocking and key handlers
     inputstate.gui_inputs[:time_progressing] = is_time_progressing(snapshot.gamemap)
+    current_time_years = get_time_years(snapshot.gamemap)
+    inputstate.gui_inputs[:current_spacemap_time] = something(current_time_years, 0.0)
 
     GLFW.PollEvents()
     cimgui_io = CImGui.GetIO()
-    handle_inputs!(inputstate, viewstate, window, cimgui_io) # input handling (window sizes, cursor, keys, scroll)
-    handle_flowcalc_sharedstate!(inputstate, flowcalc_ipc.shared_state, window, flowcalc_ipc.console_push)
+    handle_inputs!(inputstate, viewstate, flowcalc_ipc.shared_state, window, cimgui_io) # input handling (window sizes, cursor, keys, scroll)
 
     if !unsafe_load(cimgui_io.WantCaptureMouse) # don't handle mouse if clicking GUI
+        flowcalc_inspect_click!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
         flowcalc_tileplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
         flowcalc_pipeplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
         flowcalc_moveplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
         flowcalc_deleteplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
-        flowcalc_interactor!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
         flowcalc_surfaceeditor!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
-        flowcalc_swap_primary_ship!(flowcalc_ipc, inputstate, snapshot.gamemap, window)
-        flowcalc_beam_depart!(flowcalc_ipc, inputstate, viewstate, snapshot.gamemap, window)
+        flowcalc_rightclick_action!(inputstate, snapshot.gamemap, window)
     end
 
     return update_lastinstate!(inputstate, window)
@@ -168,9 +168,9 @@ function ui_rendering!(
     return ui_renderwrap() do
         ui_velocity_tracker_render(snapshot.gamestate, snapshot.gamemap, inputstate, flowcalc_ipc, max_view_bounds)
         ui_toolbar_render!(inputstate, GLFW.GetWindowSize(window), flowcalc_ipc.console_see)
-        ui_propertybox_render!(inputstate, snapshot.gamemap, snapshot.derived, snapshot.mna, GLFW.GetWindowSize(window))
+        ui_propertybox_render!(inputstate, snapshot.gamemap, snapshot.derived, snapshot.mna, GLFW.GetWindowSize(window), flowcalc_ipc)
         ui_pause_menu_render!(inputstate, snapshot, window)
-        ui_confirmation_popup_render!(inputstate, viewstate)
+        ui_action_popup_render!(inputstate, viewstate, flowcalc_ipc)
         ui_dev_utils_menu_render!(inputstate, flowcalc_ipc, snapshot, viewstate, GLFW.GetWindowSize(window), max_view_bounds)
         ui_spacemap_render!(inputstate, flowcalc_ipc, snapshot, GLFW.GetWindowSize(window), max_view_bounds)
 
@@ -192,238 +192,7 @@ function cleanup!(flowcalc_ipc::FlowCalculatorIPC, globjmap::GLObjectMap, window
     # CImGui teardown handled by start menu now
 end
 
-# ===============================================================
-# JLD2 Serialisation
-# ===============================================================
-# See: https://juliaio.github.io/JLD2.jl/stable/advanced/#Upgrading-old-structures-on-load
-#
-# We rely on `rconvert` to upgrade old on-disk NamedTuple representations
-# into the current struct types when loading saves.
-# Transient fields (such as event queues inside space-map state) are not
-# expected to be valid on disk and are always rebuilt when constructing
-# fresh runtime state after load. The use of `get()` with defaults below
-# ensures that future field additions do not break loading of older saves.
-
-import JLD2: rconvert
-
-#= ---------- ShipMap (legacy FlowEngine upgrades) ----------- =#
-
-"Conversion for old `ShipMap` saved representations"
-JLD2.rconvert(::Type{FlowMap.ShipMap}, nt::NamedTuple) = FlowMap.ShipMap(
-    components = get(nt, :components, Dict{TileCoord, ComponentOnTile}()),
-    pipe_behaviors = get(nt, :pipe_behaviors, Dict{EdgeCoord, PipeBehavior}()),
-    ship_tiles = get(nt, :ship_tiles, Set{TileCoord}([TileCoord(0, 0)])),
-    docking_status = get(nt, :docking_status, FlowMap.ConnectedDockStat())
-)
-
-"Conversion for old `GameMap` saved representations that lack `space_map`"
-JLD2.rconvert(::Type{FlowMap.GameMap}, nt::NamedTuple) = FlowMap.GameMap(
-    ships = get(nt, :ships, Dict(:primary => FlowMap.ShipMap())),
-    space_map = get(nt, :space_map, FlowMap.SpaceMapEmpty()),
-)
-
-#= ---------- SpaceMapEmpty ----------- =#
-
-"Rebuild `SpaceMapEmpty` from a NamedTuple (JLD2 Upgrade path)."
-JLD2.rconvert(::Type{SpaceMapEmpty}, nt::NamedTuple) = SpaceMapEmpty(
-    velocity = get(nt, :velocity, SVector{2,Float64}(0.0, 0.0)),
-)
-
-#= ---------- ManoeuvreData ----------- =#
-
-"""Rebuild `ManoeuvreData` from a NamedTuple (JLD2 Upgrade path).
-
-Handles three legacy formats:
-1. **Very old**: has `target_delta_v`/`intercept_delta_v` (no `main_burn_dv`). Uses vectors as-is.
-2. **Legacy**: has `main_burn_dv` (ship-local) + `main_burn_direction` unit vector. Reconstructs
-   space-map ΔV via `direction × magnitude`.
-3. **Current**: has `main_burn_dv`/`decel_burn_dv` as full space-map vectors (no `main_burn_direction`).
-"""
-function JLD2.rconvert(::Type{ManoeuvreData}, nt::NamedTuple)
-    if haskey(nt, :target_delta_v) && !haskey(nt, :main_burn_dv)
-        # Very old format: target_delta_v → main_burn_dv, intercept_delta_v → decel_burn_dv
-        main_dv  = get(nt, :target_delta_v,    SVector(0.0, 0.0))
-        decel_dv = get(nt, :intercept_delta_v, SVector(0.0, 0.0))
-    elseif haskey(nt, :main_burn_direction)
-        # Legacy: reconstruct space-map ΔV from direction × magnitude
-        dir_main  = get(nt, :main_burn_direction,  SVector(1.0, 0.0))
-        dir_decel = get(nt, :decel_burn_direction, SVector(1.0, 0.0))
-        main_dv   = dir_main  * norm(nt.main_burn_dv)
-        decel_dv  = dir_decel * norm(nt.decel_burn_dv)
-    else
-        # Current format
-        main_dv  = nt.main_burn_dv
-        decel_dv = nt.decel_burn_dv
-    end
-
-    ManoeuvreData(
-        phase              = get(nt, :phase, PHASE_WAIT_APPROACH),
-        main_burn_dv       = main_dv,
-        decel_burn_dv      = decel_dv,
-        burn_target_dv     = get(nt, :burn_target_dv, SVector(0.0, 0.0)),
-        burn_remaining_dv  = get(nt, :burn_remaining_dv, SVector(0.0, 0.0)),
-        closest_approach_time = get(nt, :closest_approach_time, 0.0),
-        intercept_time     = get(nt, :intercept_time, 0.0),
-        target_encounter_index = get(nt, :target_encounter_index, 0),
-        trajectory_start_pos  = get(nt, :trajectory_start_pos, SVector(0.0, 0.0)),
-        trajectory_start_time = get(nt, :trajectory_start_time, 0.0),
-        surplus_dv         = get(nt, :surplus_dv, 0.0),
-        main_burn_position  = get(nt, :main_burn_position, SVector(0.0, 0.0)),
-        decel_burn_position = get(nt, :decel_burn_position, SVector(0.0, 0.0)),
-    )
-end
-
-#= ---------- SpaceMapState ----------- =#
-
-"Rebuild `SpaceMapState` from a NamedTuple — event_queue is always fresh (rebuilt after load)."
-JLD2.rconvert(::Type{SpaceMapState}, nt::NamedTuple) = SpaceMapState(
-    seed               = get(nt, :seed, UInt32(0)),
-    velocity           = get(nt, :velocity, SVector{2,Float64}(0.0, 0.0)),
-    position           = get(nt, :position, SVector{2,Float64}(0.0, 0.0)),
-    time_years         = get(nt, :time_years, 0.0),
-    target_time_years  = get(nt, :target_time_years, 0.0),
-    active_manoeuvre    = get(nt, :active_manoeuvre, nothing),
-    encounter_points   = get(nt, :encounter_points, EncounterPoint[]),
-    neg_disappear_line_x = get(nt, :neg_disappear_line_x, -1600.0),
-    neg_spawn_line_x     = get(nt, :neg_spawn_line_x, -1500.0),
-    pos_spawn_line_x     = get(nt, :pos_spawn_line_x, 1500.0),
-    pos_disappear_line_x = get(nt, :pos_disappear_line_x, 1600.0),
-    last_line_step_x   = get(nt, :last_line_step_x, 0.0),
-    line_step_size     = get(nt, :line_step_size, 200.0),
-    viewport_half_width  = get(nt, :viewport_half_width, 1000.0),
-    viewport_half_height = get(nt, :viewport_half_height, 500.0),
-    encounter_config   = encounter_system_config,  # Old saves get current encounter rules
-)
-
-function JLD2.rconvert(::Type{EncounterPoint}, nt::NamedTuple)
-    EncounterPoint(
-        index = nt.index,
-        iteration = get(nt, :iteration, 0),
-        base_velocity = nt.base_velocity,
-        position = get(nt, :position, SVector(0.0, 0.0)),
-        velocity = get(nt, :velocity, SVector(0.0, 0.0)),
-        spawn_time = get(nt, :spawn_time, 0.0),
-        ship_type_seed = get(nt, :ship_type_seed, UInt32(0)),
-        encounter_class = get(nt, :encounter_class, ENCOUNTER_SCRAP),
-        fuel_tag = get(nt, :fuel_tag, HexFluids.NONE),
-        display_name = get(nt, :display_name, ""),
-        richness = get(nt, :richness, 0.0),
-    )
-end
-
-function loadmap(mappath::Union{Nothing, String})::GameMap
-    # gaurd clause for empty path
-    if isnothing(mappath)
-        @info "No map loaded..."
-        return GameMap()        
-    end
-
-    # load attempts
-    stored_gamemap::Union{GameMap, ShipMap, Nothing} = nothing
-    if isnothing(stored_gamemap)
-        try
-            # The top-level `JLD2.rconvert` registration (above) handles
-            # upgrading old `ShipMap` structs that lack `render_position_offset`.
-            # Provide typemap so JLD2 will attempt an upgrade to current ShipMap
-            typemap = Dict(
-                "FlowEngine.ShipMap" => JLD2.Upgrade(FlowMap.ShipMap),
-                "FlowEngine.GameMap" => JLD2.Upgrade(FlowMap.GameMap),
-                "FlowEngine.DockingStatus" => JLD2.Upgrade(FlowMap.DockingStatus),
-                "FlowEngine.ConnectedDockStat" => JLD2.Upgrade(FlowMap.ConnectedDockStat),
-                "FlowEngine.ApproachingDockStat" => JLD2.Upgrade(FlowMap.ApproachingDockStat),
-                "FlowEngine.DepartingDockStat" => JLD2.Upgrade(FlowMap.DepartingDockStat),
-                "FlowEngine.RenderPosOffsetState" => JLD2.Upgrade(FlowMap.RenderPosOffsetState),
-                "FlowMap.SpaceMapEmpty" => JLD2.Upgrade(FlowMap.SpaceMapEmpty),
-                "FlowMap.SpaceMapState" => JLD2.Upgrade(HexFlowProcGen.SpaceMapState),
-                "FlowMap.ManoeuvreData" => JLD2.Upgrade(FlowMap.ManoeuvreData),
-                "FlowMap.EncounterPoint" => JLD2.Upgrade(FlowMap.EncounterPoint),
-            )
-
-            # Use the functional API instead of macro so we can pass keyword args (typemap) safely
-            stored_gamemap = JLD2.load(mappath, "stored_gamemap"; typemap=typemap)
-        catch e
-            @info "Standard map load failed:\n$e"
-        end
-    end
-
-    # If a ShipMap was saved directly (legacy single-ship save), wrap it
-    if stored_gamemap isa ShipMap
-        @info "Loaded ShipMap directly from file; wrapping as GameMap"
-        stored_gamemap = GameMap(stored_gamemap)
-    end
-
-    if isnothing(stored_gamemap)
-        @info "Attempting legacy map load 1..."
-        try
-            @load mappath TileDict PipeBehaviorDict ShipSurface
-            ship = ShipMap(components = TileDict, pipe_behaviors = PipeBehaviorDict, ship_tiles = ShipSurface)
-            stored_gamemap = GameMap(ship)
-        catch e
-            @info "Legacy map load 1 failed:\n$e"
-        end
-    end
-
-    if isnothing(stored_gamemap)
-        @info "Attempting legacy map load 2..."
-        try
-            @load mappath TileDict PipeBehaviorDict
-            ship = ShipMap(components = TileDict, pipe_behaviors = PipeBehaviorDict)
-            stored_gamemap = GameMap(ship)
-        catch e
-            @info "Legacy map load 2 failed:\n$e"
-        end
-    end
-    
-    # final check
-    if isnothing(stored_gamemap)
-        @warn "All map loading attempts failed. Returning empty map."
-        stored_gamemap = GameMap()
-    end
-
-    # Rebuild event queue if SpaceMapState loaded (BinaryMinHeap may not round-trip via JLD2)
-    sm = stored_gamemap.space_map
-    if sm isa SpaceMapState && !isempty(sm.encounter_points)
-        rebuild_event_queue!(sm)
-        @info "Rebuilt encounter event queue after map load" n_events=length(sm.event_queue)
-    end
-
-    return stored_gamemap
-end
-
-"""
-Load a GameMap from various sources:
-- `nothing`: Return an empty map
-- `String`: Load from JLD2 file path
-- `GameMap`: Return the GameMap directly (pass-through)
-"""
-function loadmap_from_source(map_source::Union{Nothing, String, GameMap, ShipMap})::GameMap
-    if map_source isa GameMap
-        @info "Using pre-generated GameMap"
-        return map_source
-    elseif map_source isa ShipMap
-        @info "Wrapping pre-generated ShipMap as primary ship"
-        return GameMap(map_source)
-    else
-        return loadmap(map_source)
-    end
-end
-
-"Saves the gamemap to the specified path."
-function savemap(gamemap::GameMap, mappath::Union{Nothing, String})
-    if isnothing(mappath)
-        @info "Map not saved..."
-        return
-    end
-
-    try
-        jldsave(mappath; stored_gamemap = gamemap)
-        @info "Map saved as  $mappath"
-    catch e
-        @error "An error occurred while saving map: $e"
-    end
-
-    return nothing
-end
+# (Map loading/saving and JLD2 serialisation are in map_loading.jl)
 
 # ===============================================================
 # Game Main Loop

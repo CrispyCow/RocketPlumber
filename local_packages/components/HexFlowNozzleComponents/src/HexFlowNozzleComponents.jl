@@ -20,7 +20,7 @@ using HexFlowSwitchComponents
 # ComponentBehavior Mandatories
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional
-import HexComponentsAPI: get_fluidtags, on_click!, get_thrust, update_flowbehav!, render_map_elem!, placement_valid, collect_effect_particles!
+import HexComponentsAPI: get_fluidtags, on_click!, get_thrust, update_flowbehav!, render_map_elem!, placement_valid, collect_effect_particles!, get_actions, do_action!
 # Behavior Fragment Dependencies
 import HexFlowBasicComponents: stall!, unstall!, is_stalled
 import HexFlowSwitchComponents: get_switch_percentage
@@ -81,7 +81,7 @@ function set_tunables(nozzle::NozzleBehavFrag, tunables::NTuple{1, T})::NozzleBe
     return newnozzle
 end
 
-function get_thrust(nozzle::NozzleBehavFrag; tile::TileCoord, rotation::HexAxis, mna_state::MNA_State, kwargs...)
+function get_thrust(nozzle::NozzleBehavFrag; tile::TileCoord, rotation::HexAxis, mna_state::MNA_State, derivedmapstate::DerivedMapState, kwargs...)
     # Get nozzle state
     nozzle_throat_area = nozzle.throat_area
     nozzle_input_node = map_element(nozzle.connected_node, tile, rotation)
@@ -89,9 +89,21 @@ function get_thrust(nozzle::NozzleBehavFrag; tile::TileCoord, rotation::HexAxis,
     nozzle_conductance = first(produce_rel_elements(nozzle)).value
     nozzle_flow = nozzle_input_pressure * nozzle_conductance
 
-    # Hardcoded physical constants (will need to be looked up based on fluid once that's been implemented)
-    density = 1.0
-    exhaust_velocity = 100.0
+    # Look up the fluid at the nozzle's input node
+    fluid = get(derivedmapstate.nodeactualfluids, nozzle_input_node, HexFluids.NONE)
+    density = lookup_fluid_density(fluid)
+    exhaust_velocity = lookup_fluid_exhaust_velocity(fluid)
+
+    # If density or exhaust velocity is unknown, there's either no fluid connected or a new
+    # fluid type was added without defining its physical properties
+    if isnothing(density) || isnothing(exhaust_velocity)
+        # If there's significant flow but no fluid properties, something is wrong
+        if abs(nozzle_flow) > 1e-6
+            error("Nozzle at tile $tile has significant flow ($nozzle_flow) but fluid properties could not be found for fluid tag '$fluid'. Ensure lookup_fluid_density and lookup_fluid_exhaust_velocity are defined for this fluid.")
+        end
+        return SVector{2, Float64}(0.0, 0.0)
+    end
+
     nozzle_area_gain = 1.0
 
     # Thrust components: momentum thrust = mass flow rate × exhaust velocity
@@ -114,9 +126,12 @@ function get_thrust(nozzle::NozzleBehavFrag; tile::TileCoord, rotation::HexAxis,
 end
 
 function on_click!(nozzle::NozzleBehavFrag; kwargs...)
-    unstall!(nozzle)
+    do_action!(nozzle, :unstall)
     return nothing
 end
+
+get_actions(nozzle::NozzleBehavFrag; kwargs...) = get_actions(nozzle.stallstate; kwargs...)
+do_action!(nozzle::NozzleBehavFrag, action_id::Symbol; kwargs...) = do_action!(nozzle.stallstate, action_id; kwargs...)
 
 function update_flowbehav!(nozzle::NozzleBehavFrag; rotation::HexAxis, tile::TileCoord, mna_state::MNA_State, kwargs...)
     # Get the voltage at the nozzle's connected node
@@ -172,7 +187,7 @@ function collect_effect_particles!(
     perpendicular_velocity_randomness = 0.03  # randomness perpendicular to exhaust
 
     # Particle lifetime
-    particle_lifetime = 120  # ticks (2 seconds at 60 UPS)
+    particle_lifetime = Int(2 * BASE_UPS)  # ticks (2 seconds at BASE_UPS)
 
     # Returns a smooth curve for x ≥ 0 that rises toward 1.0 and reaches 90% at x90
     exp_sat(x::Real, x90_sat::Real)::Float64 = 1 - exp(-log(10) * x / x90_sat)
@@ -276,6 +291,8 @@ set_tunables(comp::BasicNozzleCompBehav, tunables::NTuple{1, Real}) = @set comp.
 get_fluidtags(comp::BasicNozzleCompBehav) = get_fluidtags(comp.fluid)
 get_thrust(comp::BasicNozzleCompBehav; kwargs...) = get_thrust(comp.nozzle; kwargs...)
 on_click!(comp::BasicNozzleCompBehav; kwargs...) = on_click!(comp.nozzle; kwargs...)
+get_actions(comp::BasicNozzleCompBehav; kwargs...) = get_actions(comp.nozzle; kwargs...)
+do_action!(comp::BasicNozzleCompBehav, action_id::Symbol; kwargs...) = do_action!(comp.nozzle, action_id; kwargs...)
 update_flowbehav!(comp::BasicNozzleCompBehav; kwargs...) = update_flowbehav!(comp.nozzle; kwargs...)
 render_base_elem!(queue::Vector{RenderCommand}, behav::BasicNozzleCompBehav; kwargs...) = render_base_elem!(queue, behav.sprite; kwargs...)
 collect_effect_particles!(manager, comp::BasicNozzleCompBehav; kwargs...) = collect_effect_particles!(manager, comp.nozzle; kwargs...)
@@ -360,11 +377,26 @@ collect_effect_particles!(manager, comp::SwitchedNozzleCompBehav; kwargs...) = c
 function on_click!(comp::SwitchedNozzleCompBehav; kwargs...)
     # If stalled, unstall the nozzle; otherwise toggle the switch
     if is_stalled(comp.nozzle)
-        on_click!(comp.nozzle)
+        do_action!(comp.nozzle, :unstall)
     else
-        on_click!(comp.switch)
+        on_click!(comp.switch; kwargs...) 
     end
     return nothing
+end
+
+function get_actions(comp::SwitchedNozzleCompBehav; kwargs...)
+    switch_actions = get_actions(comp.switch)
+    nozzle_actions = get_actions(comp.nozzle)
+    return (switch_actions..., nozzle_actions...)
+end
+
+function do_action!(comp::SwitchedNozzleCompBehav, action_id::Symbol; kwargs...)
+    # Try switch actions first
+    if action_id in (:open_valve, :close_valve)
+        return do_action!(comp.switch, action_id)
+    end
+    # Then nozzle actions
+    return do_action!(comp.nozzle, action_id)
 end
 
 function update_flowbehav!(comp::SwitchedNozzleCompBehav; kwargs...)
@@ -431,12 +463,16 @@ end
 
 const decomp_voltage_element_index::Int = 1  # Voltage source element index for current detection
 
-"Decomposition chamber that converts liquid to gas with animated fluid effects"
-Base.@kwdef struct DecompChamberCompBehav <: ComponentBehavior
-    expansion_factor::Float64
-end
+"Decomposition chamber that converts liquid to gas with animated fluid effects. Expansion factor is derived from fluid density ratio."
+struct DecompChamberCompBehav <: ComponentBehavior end
 
 function produce_rel_elements(comp::DecompChamberCompBehav)::NTuple{2, RelativeElement}
+    # Compute expansion factor from density ratio (liquid density / gas density)
+    # to maintain constant mass flow through the decomposition process
+    liquid_density = lookup_fluid_density(HexFluids.MONOPROP_LIQUID)::Float64
+    gas_density = lookup_fluid_density(HexFluids.MONOPROP_GAS)::Float64
+    expansion_factor = liquid_density / gas_density
+
     # Voltage-dependent voltage source from liquid input to ground
     voltage_elem = RelativeElement(
         RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.GROUND),
@@ -446,7 +482,7 @@ function produce_rel_elements(comp::DecompChamberCompBehav)::NTuple{2, RelativeE
     # Current-dependent current source from gas output to ground
     current_elem = RelativeElement(
         RelativeElementConnections(HexFrame.NODE_Q_NEG, HexFrame.GROUND),
-        -comp.expansion_factor, HexElements.C_DEP_CURRENT; dependent_index = 1
+        -expansion_factor, HexElements.C_DEP_CURRENT; dependent_index = 1
     )
 
     return (voltage_elem, current_elem)
@@ -459,13 +495,9 @@ function get_fluidtags(comp::DecompChamberCompBehav)::NodeFluidTags
     )
 end
 
-function get_tunables(comp::DecompChamberCompBehav)::NTuple{1, TunableProps}
-    return (TunableProps(comp.expansion_factor, "Expansion Factor", ""),)
-end
+get_tunables(::DecompChamberCompBehav)::Tuple{} = ()
 
-function set_tunables(comp::DecompChamberCompBehav, tunables::NTuple{1, Real})::DecompChamberCompBehav
-    return DecompChamberCompBehav(expansion_factor = Float64(tunables[1]))
-end
+set_tunables(comp::DecompChamberCompBehav, ::Tuple{})::DecompChamberCompBehav = comp
 
 function render_base_elem!(queue::Vector{RenderCommand}, comp::DecompChamberCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     # Render gas fluidmask in black as background

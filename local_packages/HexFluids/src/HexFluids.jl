@@ -1,9 +1,14 @@
 module HexFluids
 
+using Base.Threads: Atomic, atomic_xchg!
+
 # Type Exports
 export NodeFluidTags, FluidTags
 # Function Exports
 export prioritise_fluidtag, is_gas, is_liquid, is_behavior, fluid_tag_label
+export lookup_fluid_exhaust_velocity, lookup_fluid_density
+export set_fluid_exhaust_velocity!, set_fluid_density!
+export get_fluid_exhaust_velocities, get_fluid_densities
 
 # ===============================================================
 # Fluid Types
@@ -27,6 +32,61 @@ const isbehavior_mask = 1 << 5
     COLD_GAS = 0x03 | isgas_mask
     MONOPROP_LIQUID = 0x04 | isliquid_mask
     MONOPROP_GAS = 0x05 | isgas_mask
+end
+
+# ===============================================================
+# Fluid Physical Properties
+# ===============================================================
+
+"Dictionary of exhaust velocities for concrete gas fluids, with per-value atomic storage for thread-safe runtime tuning."
+const _fluid_exhaust_velocities = Dict{FluidTags, Atomic{Float64}}(
+    COLD_GAS => Atomic{Float64}(500.0),
+    MONOPROP_GAS => Atomic{Float64}(1500.0),
+)
+
+"Dictionary of fluid densities for concrete fluids, with per-value atomic storage for thread-safe runtime tuning."
+const _fluid_densities = Dict{FluidTags, Atomic{Float64}}(
+    COLD_GAS => Atomic{Float64}(1.0),
+    MONOPROP_LIQUID => Atomic{Float64}(5.0),
+    MONOPROP_GAS => Atomic{Float64}(1.0),
+)
+
+"Look up the exhaust velocity for a fluid tag. Returns `nothing` if not defined."
+function lookup_fluid_exhaust_velocity(tag::FluidTags)::Union{Float64, Nothing}
+    velocity_ref = get(_fluid_exhaust_velocities, tag, nothing)
+    return isnothing(velocity_ref) ? nothing : velocity_ref[]
+end
+
+"Look up the density for a fluid tag. Returns `nothing` if not defined."
+function lookup_fluid_density(tag::FluidTags)::Union{Float64, Nothing}
+    density_ref = get(_fluid_densities, tag, nothing)
+    return isnothing(density_ref) ? nothing : density_ref[]
+end
+
+"Set the exhaust velocity for a fluid tag. Use for runtime tuning."
+function set_fluid_exhaust_velocity!(tag::FluidTags, value::Float64)
+    velocity_ref = get(_fluid_exhaust_velocities, tag, nothing)
+    isnothing(velocity_ref) && error("No exhaust velocity configured for fluid tag $(tag)")
+    atomic_xchg!(velocity_ref, value)
+    return nothing
+end
+
+"Set the density for a fluid tag. Use for runtime tuning."
+function set_fluid_density!(tag::FluidTags, value::Float64)
+    density_ref = get(_fluid_densities, tag, nothing)
+    isnothing(density_ref) && error("No density configured for fluid tag $(tag)")
+    atomic_xchg!(density_ref, value)
+    return nothing
+end
+
+"Return a snapshot of exhaust velocities for UI enumeration."
+function get_fluid_exhaust_velocities()::Dict{FluidTags, Float64}
+    return Dict(tag => value_ref[] for (tag, value_ref) in _fluid_exhaust_velocities)
+end
+
+"Return a snapshot of fluid densities for UI enumeration."
+function get_fluid_densities()::Dict{FluidTags, Float64}
+    return Dict(tag => value_ref[] for (tag, value_ref) in _fluid_densities)
 end
 
 "Check if fluid tag is a concrete gas type (determined with bitmask)"

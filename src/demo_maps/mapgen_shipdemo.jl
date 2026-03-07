@@ -161,9 +161,9 @@ function mapgen_shipdemo()
     )
 
     # === Decomposition Chambers ===
-    decomp_1 = DecompChamberCompBehav(expansion_factor = 5.0)
+    decomp_1 = DecompChamberCompBehav()
 
-    decomp_2 = DecompChamberCompBehav(expansion_factor = 5.0)
+    decomp_2 = DecompChamberCompBehav()
 
     # === Turbopump ===
     turbopump = TurboPumpCompBehav(
@@ -180,7 +180,7 @@ function mapgen_shipdemo()
         initial_energy = 100000.0,
         max_conductance = 1.0,
         min_conductance = 0.0,
-        change_rate = 1.0 / 60
+        change_rate = 1.0 / BASE_UPS
     )
 
     # Create separate instances for electric transfer pumps
@@ -191,7 +191,7 @@ function mapgen_shipdemo()
         initial_energy = 1000000.0,
         max_conductance = 0.2,
         min_conductance = 0.0,
-        change_rate = 0.4 / 60
+        change_rate = 0.4 / BASE_UPS
     )
 
     elec_transfer_2 = ElectricPumpCompBehav(
@@ -201,7 +201,7 @@ function mapgen_shipdemo()
         initial_energy = 1000000.0,
         max_conductance = 0.2,
         min_conductance = 0.0,
-        change_rate = 0.4 / 60
+        change_rate = 0.4 / BASE_UPS
     )
 
     elec_transfer_3 = ElectricPumpCompBehav(
@@ -211,7 +211,7 @@ function mapgen_shipdemo()
         initial_energy = 1000000.0,
         max_conductance = 0.2,
         min_conductance = 0.0,
-        change_rate = 0.4 / 60
+        change_rate = 0.4 / BASE_UPS
     )
 
     elec_transfer_4 = ElectricPumpCompBehav(
@@ -221,7 +221,7 @@ function mapgen_shipdemo()
         initial_energy = 1000000.0,
         max_conductance = 0.2,
         min_conductance = 0.0,
-        change_rate = 0.4 / 60
+        change_rate = 0.4 / BASE_UPS
     )
 
     # === Adjustable Valve ===
@@ -229,7 +229,7 @@ function mapgen_shipdemo()
         max_conductance = 2.0,
         min_conductance = 0.0,
         percentage_step_size = 0.05,
-        change_rate = 0.25 / 60
+        change_rate = 0.25 / BASE_UPS
     )
 
     # === Nozzles ===
@@ -322,7 +322,7 @@ function mapgen_shipdemo()
             connected_node = HexFrame.NODE_Q_POS,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 6.0 / 60
+            change_rate = 6.0 / BASE_UPS
         ), HexFrame.R_NEG
     )
     components[TileCoord(0, -4)] = ComponentOnTile(
@@ -331,7 +331,7 @@ function mapgen_shipdemo()
             connected_node = HexFrame.NODE_Q_POS,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 6.0 / 60
+            change_rate = 6.0 / BASE_UPS
         ), HexFrame.S_NEG
     )
     components[TileCoord(0, 3)] = ComponentOnTile(
@@ -340,7 +340,7 @@ function mapgen_shipdemo()
             connected_node = HexFrame.NODE_Q_POS,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 6.0 / 60
+            change_rate = 6.0 / BASE_UPS
         ), HexFrame.R_NEG
     )
     components[TileCoord(-2, -3)] = ComponentOnTile(
@@ -349,7 +349,7 @@ function mapgen_shipdemo()
             connected_node = HexFrame.NODE_Q_POS,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 6.0 / 60
+            change_rate = 6.0 / BASE_UPS
         ), HexFrame.S_NEG
     )
     components[TileCoord(2, 2)] = ComponentOnTile(
@@ -358,7 +358,7 @@ function mapgen_shipdemo()
             connected_node = HexFrame.NODE_Q_POS,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 6.0 / 60
+            change_rate = 6.0 / BASE_UPS
         ), HexFrame.R_NEG
     )
     components[TileCoord(2, -5)] = ComponentOnTile(
@@ -367,7 +367,7 @@ function mapgen_shipdemo()
             connected_node = HexFrame.NODE_Q_POS,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 6.0 / 60
+            change_rate = 6.0 / BASE_UPS
         ), HexFrame.S_NEG
     )
 

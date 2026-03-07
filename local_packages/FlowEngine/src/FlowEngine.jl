@@ -301,40 +301,62 @@ end
 
 
 """
-Performs graph traversal across all elements, starting from grounded elements to exclude elements not connected to ground.
-Uses some random combination of breadth and depth first search, as pushes and pops from sets are not ordered.
-Returns elements that were visited, and thus reachable from a ground node
+Performs graph traversal across all elements, starting from grounded elements to
+exclude elements not connected to ground. Current sources (CONST_CURRENT,
+C_DEP_CURRENT) are excluded from the traversal graph because they do not provide
+voltage references — a node connected to ground solely through current sources has
+undetermined voltage, causing MNA singularity.
+
+Current sources whose non-ground nodes are reachable through other elements are
+still included in the output (they are valid circuit elements when their nodes
+have determined voltages from other paths).
+
+Returns elements that are reachable from ground through voltage-reference-capable
+paths, plus current sources whose nodes are coincidentally reachable.
 """
 function ground_search(elements::Vector{AbsoluteElement})
-    node_elements = Dict{NodeCoord, Vector{UInt16}}()
+    node_elements = Dict{NodeCoord, MutableSmallVector{10, UInt16}}()
     sizehint!(node_elements, length(elements))
 
     for (index, element) in enumerate(elements)
-        # adds the nodes connected to each element
+        # skip zero-conductance resistors (no voltage/current contribution)
+        if element.type == CONST_RESISTOR && element.value == 0.0
+            continue
+        end
+
+        # skip current sources — they don't provide voltage references
+        if element.type == CONST_CURRENT || element.type == C_DEP_CURRENT
+            continue
+        end
+
+        # register non-ground nodes for traversal
         for i in 1:2
             node = getfield(element.connections, i)
             # if the node is not grounded, then it can be used to find other elements
             if !is_grounded(node)
                 if !haskey(node_elements, node)
-                    node_elements[node] = Vector{UInt16}()
+                    node_elements[node] = MutableSmallVector{10, UInt16}()
                 end
-                push!(node_elements[node], index)
+                push!(node_elements[node], UInt16(index))
             end
         end
     end
 
-    # elements are represented by their index in the input vector
-    grounded_elements::Set{UInt16} = Set(UInt16(index) for (index, elem) in enumerate(elements) if is_grounded(elem.connections.v2))
-    to_visit::Set{UInt16} = Set{UInt16}()
-    visited::Set{UInt16} = Set{UInt16}()
+    #= ---------- BFS from grounded non-current elements ---------- =#
+    grounded_elements = Set{UInt16}(
+        UInt16(index) for (index, elem) in enumerate(elements)
+        if is_grounded(elem.connections.v2)
+           && elem.type != CONST_CURRENT
+           && elem.type != C_DEP_CURRENT
+    )
+    to_visit = Set{UInt16}()
+    visited = Set{UInt16}()
     sizehint!(visited, length(elements))
 
     while !isempty(grounded_elements)
         # start at grounded element that hasn't been visited yet
         grounded_element = pop!(grounded_elements)
-        if grounded_element ∈ visited
-            continue
-        end
+        grounded_element ∈ visited && continue
         push!(to_visit, grounded_element)
 
         while !isempty(to_visit)
@@ -344,19 +366,44 @@ function ground_search(elements::Vector{AbsoluteElement})
             for i in 1:2
                 node = getfield(elements[current].connections, i)
                 if !is_grounded(node)
-                    # add connected elements to to_visit if they haven't been visited already
-                    connected_elements = node_elements[node]
+                    connected_elements = get(node_elements, node, nothing)
+                    connected_elements === nothing && continue
                     for element in connected_elements
-                        if element ∉ visited
-                            push!(to_visit, element)
-                        end
+                        element ∉ visited && push!(to_visit, element)
                     end
                 end
             end
         end
     end
 
-    return elements[collect(visited)]
+    #= ---------- Collect visited nodes ---------- =#
+    visited_nodes = Set{NodeCoord}()
+    sizehint!(visited_nodes, length(visited) * 2)
+    for idx in visited
+        for i in 1:2
+            node = getfield(elements[idx].connections, i)
+            is_grounded(node) || push!(visited_nodes, node)
+        end
+    end
+
+    #= ---------- Include current sources whose nodes are all reachable ---------- =#
+    for (index, element) in enumerate(elements)
+        uidx = UInt16(index)
+        uidx ∈ visited && continue # already included
+        (element.type == CONST_CURRENT || element.type == C_DEP_CURRENT) || continue
+
+        all_visited = true
+        for i in 1:2
+            node = getfield(element.connections, i)
+            if !is_grounded(node) && node ∉ visited_nodes
+                all_visited = false
+                break
+            end
+        end
+        all_visited && push!(visited, uidx)
+    end
+
+    return elements[sort!(collect(visited))]
 end
 
 """

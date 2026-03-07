@@ -18,7 +18,7 @@ using HexFlowBasicComponents, HexFlowSwitchComponents
 # ComponentBehavior Mandatories
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional
-import HexComponentsAPI: get_fluidtags, on_click!, update_flowbehav!, render_map_elem!
+import HexComponentsAPI: get_fluidtags, on_click!, update_flowbehav!, render_map_elem!, get_actions, do_action!
 # Behavior Fragment Dependencies
 import HexFlowBasicComponents: stall!, unstall!, is_stalled
 import HexFlowSwitchComponents: set_target_conductance_to_min!, set_target_conductance_to_max!
@@ -151,9 +151,12 @@ end
 
 "Clicking the pump un-stalls it."
 function on_click!(comp::TurboPumpCompBehav; kwargs...)
-    unstall!(comp.stall_state)
+    do_action!(comp.stall_state, :unstall)
     return nothing
 end
+
+get_actions(comp::TurboPumpCompBehav; kwargs...) = get_actions(comp.stall_state; kwargs...)
+do_action!(comp::TurboPumpCompBehav, action_id::Symbol; kwargs...) = do_action!(comp.stall_state, action_id; kwargs...)
 
 "Updates turbine active state and stalls if turbine input pressure is negative."
 function update_flowbehav!(comp::TurboPumpCompBehav; mna_state::MNA_State, tile::TileCoord, rotation::HexAxis, kwargs...)
@@ -333,6 +336,37 @@ function on_click!(comp::ElectricPumpCompBehav; kwargs...)
         on_click!(comp.switch)
     end
     return nothing
+end
+
+function get_actions(comp::ElectricPumpCompBehav; kwargs...)
+    # Get the switch actions (which would say "Open Valve" / "Close Valve")
+    switch_actions = get_actions(comp.switch)
+
+    # Rewrite to pump-appropriate labels
+    rewritten = map(switch_actions) do action
+        if action.id === :open_valve
+            label = "Turn Pump On"
+            tooltip = action.enabled ? "Activate pump to begin pressurising fluid" : "Pump is already on"
+            return ActionInfo(:pump_on, label, action.enabled, tooltip)
+        elseif action.id === :close_valve
+            label = "Turn Pump Off"
+            tooltip = action.enabled ? "Deactivate pump" : "Pump is already off"
+            return ActionInfo(:pump_off, label, action.enabled, tooltip)
+        else
+            return action
+        end
+    end
+
+    return Tuple(rewritten)
+end
+
+function do_action!(comp::ElectricPumpCompBehav, action_id::Symbol; kwargs...)
+    if action_id === :pump_on
+        return do_action!(comp.switch, :open_valve)
+    elseif action_id === :pump_off
+        return do_action!(comp.switch, :close_valve)
+    end
+    return (false, "Action :$(action_id) not recognised by ElectricPumpCompBehav")
 end
 
 # Rendering traits for different electric pump types

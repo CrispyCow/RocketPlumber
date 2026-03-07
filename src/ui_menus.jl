@@ -8,6 +8,25 @@ using FilePathsBase, Printf, StaticArrays
 using HexFrame, FlowEngine, FlowMap, HexFlowProcGen
 using HexFluids
 using HexFlowCalculator, HexFlowControl
+using HexComponentsAPI
+
+# Fluid property editor UI state
+const _density_editor_state = Dict{Symbol, Any}(
+    :selected_index => Int32(0),
+    :input_value => 0.0,
+    :last_selected_fluid => nothing,
+)
+
+const _exhaust_vel_editor_state = Dict{Symbol, Any}(
+    :selected_index => Int32(0),
+    :input_value => 0.0,
+    :last_selected_fluid => nothing,
+)
+
+# Mass tunables editor UI state
+const _component_mass_editor_state = Dict{Symbol, Any}(:input_value => 0.0)
+const _tile_mass_editor_state = Dict{Symbol, Any}(:input_value => 0.0)
+const _particle_accel_editor_state = Dict{Symbol, Any}(:input_value => 0.0)
 
 "Render the pause menu when active, with options to close, save map, exit to menu, or quit."
 function ui_pause_menu_render!(inputstate::InputState, snapshot::FlowCalculatorSnapshot, window::GLFW.Window)
@@ -157,13 +176,14 @@ function enqueue_map_override!(flowcalc_ipc::FlowCalculatorIPC, gamemap::GameMap
 end
 
 """
-Show a listbox of non-primary ships and return `(selected_name, gamemap)`, or
+Show a listbox of ships and return `(selected_name, gamemap)`, or
 `(nothing, gamemap)` when no ships are available (with a placeholder message).
+Set `exclude_primary=false` to include the primary ship in the list.
 """
-function _ship_selector_ui!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, key::Symbol, label::String, empty_msg::String = "No other ships (only primary exists)")
+function _ship_selector_ui!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, key::Symbol, label::String, empty_msg::String = "No other ships (only primary exists)"; exclude_primary::Bool = true)
     current_gamemap = (flowcalc_ipc.get_snapshot()).gamemap
     all_ship_names = get_all_ship_names(current_gamemap)
-    selectable_ships = filter(n -> n != :primary, all_ship_names)
+    selectable_ships = exclude_primary ? filter(n -> n != :primary, all_ship_names) : all_ship_names
     display_names = safe_ship_display_name.(selectable_ships)
 
     if isempty(selectable_ships)
@@ -264,7 +284,125 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             end
             CImGui.TreePop()
         end
+
+        # Export Ship
+        if CImGui.TreeNode("Export Ship")
+            selected, current_gamemap = _ship_selector_ui!(inputstate, flowcalc_ipc, :export_ship_index, "Ship", "No ships available"; exclude_primary = false)
+            if !isnothing(selected) && CImGui.Button("Save Ship...", (button_width, button_height))
+                save_path = save_file(absolute(Path(joinpath(dirname(@__FILE__), "..", "maps"))); filterlist = "jld2")
+                if !isnothing(save_path)
+                    exported_ship = deepcopy(get_ship(current_gamemap, selected))
+                    # Centre the ship so its surface centroid lands on (0,0)
+                    centroid = get_surface_centroid(exported_ship)
+                    if !isnothing(centroid)
+                        offset_ship!(exported_ship, TileCoord(-round_to_tile(centroid)))
+                    end
+                    exported_map = GameMap(exported_ship)
+                    savemap(exported_map, "$save_path")
+                    @info "Exported ship :$(selected) to $(save_path)"
+                end
+            end
+            CImGui.TreePop()
+        end
     end
+
+
+    if CImGui.CollapsingHeader("Parameter Tuning")
+        if CImGui.TreeNode("Edit Fluid Densities")
+            densities = get_fluid_densities()
+            fluid_keys = sort(collect(keys(densities)); by = UInt8)
+
+            if isempty(fluid_keys)
+                CImGui.Text("No fluid densities configured")
+            else
+                labels = [something(fluid_tag_label(k), string(k)) for k in fluid_keys]
+
+                selected_idx = gui_listbox_int!(_density_editor_state, :selected_index, "##density_fluid", labels, Int32(0))
+                selected_idx = clamp(selected_idx, Int32(0), Int32(length(fluid_keys) - 1))
+                _density_editor_state[:selected_index] = selected_idx
+
+                selected_fluid = fluid_keys[Int(selected_idx) + 1]
+                current_val = densities[selected_fluid]
+
+                if get(_density_editor_state, :last_selected_fluid, nothing) != selected_fluid
+                    _density_editor_state[:input_value] = current_val
+                    _density_editor_state[:last_selected_fluid] = selected_fluid
+                end
+
+                CImGui.Text("Current: $(format_value(current_val))")
+                input_val = gui_input_double!(_density_editor_state, :input_value, "##density_input", current_val; step_small = 0.01, step_fast = 0.1, fmt = "%.3f")
+
+                if CImGui.Button("Apply##density", ImVec2(-1, 0))
+                    set_fluid_density!(selected_fluid, input_val)
+                end
+            end
+
+            CImGui.TreePop()
+        end
+
+        if CImGui.TreeNode("Edit Fluid Exhaust Velocities")
+            velocities = get_fluid_exhaust_velocities()
+            fluid_keys = sort(collect(keys(velocities)); by = UInt8)
+
+            if isempty(fluid_keys)
+                CImGui.Text("No fluid exhaust velocities configured")
+            else
+                labels = [something(fluid_tag_label(k), string(k)) for k in fluid_keys]
+
+                selected_idx = gui_listbox_int!(_exhaust_vel_editor_state, :selected_index, "##exhaust_fluid", labels, Int32(0))
+                selected_idx = clamp(selected_idx, Int32(0), Int32(length(fluid_keys) - 1))
+                _exhaust_vel_editor_state[:selected_index] = selected_idx
+
+                selected_fluid = fluid_keys[Int(selected_idx) + 1]
+                current_val = velocities[selected_fluid]
+
+                if get(_exhaust_vel_editor_state, :last_selected_fluid, nothing) != selected_fluid
+                    _exhaust_vel_editor_state[:input_value] = current_val
+                    _exhaust_vel_editor_state[:last_selected_fluid] = selected_fluid
+                end
+
+                CImGui.Text("Current: $(format_value(current_val))")
+                input_val = gui_input_double!(_exhaust_vel_editor_state, :input_value, "##exhaust_input", current_val; step_small = 1.0, step_fast = 10.0, fmt = "%.3f")
+
+                if CImGui.Button("Apply##exhaust", ImVec2(-1, 0))
+                    set_fluid_exhaust_velocity!(selected_fluid, input_val)
+                end
+            end
+
+            CImGui.TreePop()
+        end
+
+        if CImGui.TreeNode("Default Component Mass")
+            current_val = get_default_component_mass()
+            CImGui.Text("Current: $(format_value(current_val))")
+            input_val = gui_input_double!(_component_mass_editor_state, :input_value, "##comp_mass_input", current_val; step_small = 1.0, step_fast = 10.0, fmt = "%.1f")
+            if CImGui.Button("Apply##comp_mass", ImVec2(-1, 0))
+                set_default_component_mass!(Float64(input_val))
+            end
+            CImGui.TreePop()
+        end
+
+        if CImGui.TreeNode("Tile Mass")
+            current_val = get_tile_mass()
+            CImGui.Text("Current: $(format_value(current_val))")
+            input_val = gui_input_double!(_tile_mass_editor_state, :input_value, "##tile_mass_input", current_val; step_small = 1.0, step_fast = 10.0, fmt = "%.1f")
+            if CImGui.Button("Apply##tile_mass", ImVec2(-1, 0))
+                set_tile_mass!(Float64(input_val))
+            end
+            CImGui.TreePop()
+        end
+
+        if CImGui.TreeNode("Particle Acceleration Scale")
+            current_val = get_particle_accel_scale()
+            CImGui.Text("Current: $(format_value(current_val))")
+            input_val = gui_input_double!(_particle_accel_editor_state, :input_value, "##particle_accel_input", current_val; step_small = 0.0001, step_fast = 0.001, fmt = "%.6f")
+            if CImGui.Button("Apply##particle_accel", ImVec2(-1, 0))
+                set_particle_accel_scale!(Float64(input_val))
+            end
+            CImGui.TreePop()
+        end
+    end
+
 
     if (CImGui.CollapsingHeader("Proc Gen"))
         seed = gui_input_u32!(inputstate, :proc_gen_seed, "Random Seed", UInt32(999))
@@ -413,6 +551,21 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
                 @info "Dev: generated encounter" name = display_name class = enc_class richness = enc_richness
             end
 
+            if CImGui.Button("Generate & Dock (Optimal)", ImVec2(-1, 30)) && fuel_valid
+                new_shipmap = generate_encounter(
+                    enc_class, enc_fuel, enc_richness,
+                    enc_seed, class_config
+                )
+                display_name = generate_encounter_name(enc_seed, enc_class)
+                encounter_map = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
+                encounter_ship_optimal_dir!(
+                    encounter_map, new_shipmap, display_name,
+                    enc_seed; max_view_bounds = max_view_bounds
+                )
+                enqueue_map_override!(flowcalc_ipc, encounter_map)
+                @info "Dev: generated encounter (optimal dir)" name = display_name class = enc_class richness = enc_richness
+            end
+
             if CImGui.Button("Generate (No Dock)", ImVec2(-1, 30)) && fuel_valid
                 new_shipmap = generate_encounter(
                     enc_class, enc_fuel, enc_richness,
@@ -427,6 +580,7 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
 
     end
 
+    
     if CImGui.CollapsingHeader("Rendering")
         button_width = 200.0
         button_height = 30.0
@@ -459,49 +613,107 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
 end
 
 # ===============================================================
-# Confirmation Popup
+# Action Popup
 # ===============================================================
 
-"""
-Render a world-anchored confirmation popup.
-The window tracks `world_position` through panning/zooming, with a close (X) button
-and a confirm button that executes the stored action.
-"""
-function ui_confirmation_popup_render!(inputstate::InputState, viewstate::ViewState)
-    popup = inputstate.active_popup
+"Render the world-anchored action popup. Handles both action list and confirmation sub-pane."
+function ui_action_popup_render!(inputstate::InputState, viewstate::ViewState, flowcalc_ipc::FlowCalculatorIPC)
+    popup = inputstate.action_popup
     popup === nothing && return nothing
 
-    # Convert world-space anchor to screen-space window coordinates
     screen_x, screen_y = world_to_screen(popup.world_position.x, popup.world_position.y, viewstate)
 
-    popup_width = 220.0
-    popup_height = 110.0
+    popup_width = 240.0
+    flags = CImGui.ImGuiWindowFlags_NoResize |
+            CImGui.ImGuiWindowFlags_NoCollapse |
+            CImGui.ImGuiWindowFlags_AlwaysAutoResize
 
     CImGui.SetNextWindowPos((screen_x, screen_y), CImGui.ImGuiCond_Always)
-    CImGui.SetNextWindowSize((popup_width, popup_height), CImGui.ImGuiCond_Always)
-
-    flags = CImGui.ImGuiWindowFlags_NoResize |
-        CImGui.ImGuiWindowFlags_NoCollapse
+    CImGui.SetNextWindowSizeConstraints((popup_width, 0.0), (popup_width, 400.0))
 
     p_open = Ref(true)
-    CImGui.Begin("Confirm##popup", p_open, flags)
+    CImGui.Begin("$(popup.window_title)##action_popup", p_open, flags)
 
-    CImGui.TextWrapped(popup.message)
-    CImGui.Dummy((0.0, 4.0))
-
-    button_width = popup_width - 16.0 # window padding
-    CImGui.SetCursorPosX((popup_width - button_width) / 2.0)
-    if CImGui.Button("Confirm?", (button_width, 28.0))
-        popup.action()
-        inputstate.active_popup = nothing
+    if !isnothing(popup.pending_confirmation)
+        _render_confirmation_pane!(popup, inputstate, flowcalc_ipc, viewstate, popup_width)
+    else
+        _render_action_list!(popup, inputstate, flowcalc_ipc, viewstate)
     end
 
     CImGui.End()
 
-    # Handle close (X) button
     if !p_open[]
-        inputstate.active_popup = nothing
+        _close_popup!(inputstate)
     end
-
     return nothing
+end
+
+"Render the confirmation sub-pane for an action requiring player confirmation."
+function _render_confirmation_pane!(popup::ActionPopupState, inputstate, flowcalc_ipc, viewstate, popup_width)
+    action = popup.pending_confirmation
+    CImGui.TextWrapped(action.confirmation_message)
+    CImGui.Dummy((0.0, 4.0))
+    button_width = popup_width - 16.0
+    CImGui.SetCursorPosX((popup_width - button_width) / 2.0)
+    if CImGui.Button("Confirm", (button_width, 28.0))
+        _execute_action!(inputstate, popup, action, flowcalc_ipc, viewstate)
+    end
+end
+
+"Render the action button list, then any target-specific extras (e.g. component delete)."
+function _render_action_list!(popup::ActionPopupState, inputstate, flowcalc_ipc, viewstate)
+    for action in popup.actions
+        if button_with_disable(action.label, ImVec2(-1, 0), !action.enabled; tooltip = action.tooltip)
+            if !isnothing(action.confirmation_message)
+                popup.pending_confirmation = action
+            else
+                _execute_action!(inputstate, popup, action, flowcalc_ipc, viewstate)
+            end
+        end
+    end
+    _render_target_extras!(popup, popup.target, inputstate, flowcalc_ipc, viewstate)
+end
+
+"Default: no extra UI elements for this popup target type."
+_render_target_extras!(popup, target::AbstractPopupTarget, inputstate, flowcalc_ipc, viewstate) = nothing
+
+"Component popups get a separator and a 'Delete Component' button with confirmation."
+function _render_target_extras!(popup, target::ComponentPopupTarget, inputstate, flowcalc_ipc, viewstate)
+    isempty(popup.actions) || CImGui.Separator()
+    delete_action = ActionInfo(:delete_component, "Delete Component", true,
+        "Remove this component from the ship.", "Delete this component permanently?")
+    if button_with_disable(delete_action.label, ImVec2(-1, 0), false; tooltip = delete_action.tooltip)
+        popup.pending_confirmation = delete_action
+    end
+end
+
+#= ---------- Action Execution Dispatch ----------- =#
+
+"Execute an action, dispatching on popup target type. Closes the popup afterwards."
+function _execute_action!(inputstate, popup::ActionPopupState, action::ActionInfo, flowcalc_ipc, viewstate)
+    _execute_target_action!(popup.target, action, flowcalc_ipc, viewstate)
+    _close_popup!(inputstate)
+    return nothing
+end
+
+"Execute a component action — delete or regular DoActionCommand."
+function _execute_target_action!(target::ComponentPopupTarget, action::ActionInfo, flowcalc_ipc, viewstate)
+    if action.id === :delete_component
+        cmd = create_delete_command(flowcalc_ipc.command_queue, target.coord)
+    else
+        cmd = create_do_action_command(flowcalc_ipc.command_queue, target.coord, action.id)
+    end
+    try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+end
+
+"Execute a ship action via the ship action dispatch system."
+function _execute_target_action!(target::ShipPopupTarget, action::ActionInfo, flowcalc_ipc, viewstate)
+    execute_ship_action!(target.ship_name, action.id, flowcalc_ipc, viewstate)
+end
+
+"Close the action popup and clear all right-click selection state."
+function _close_popup!(inputstate)
+    inputstate.action_popup = nothing
+    inputstate.rightclick_selectedcoord = nothing
+    inputstate.rightclick_selectedship = nothing
 end

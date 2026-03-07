@@ -17,14 +17,12 @@ using HexFlowBasicComponents
 # ComponentBehavior Mandatories
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional
-import HexComponentsAPI: get_fluidtags, update_flowbehav!, on_click!, render_map_elem!, map_rotation, can_be_moved
+import HexComponentsAPI: get_fluidtags, update_flowbehav!, on_click!, render_map_elem!, map_rotation, can_be_moved, get_component_wet_mass, get_actions, do_action!
 # Behavior Fragment Dependencies
 import HexFlowBasicComponents: stall!, unstall!, is_stalled, StallBehavFrag
 
 # Concrete Component Behavior Exports
 export ThevininTankCompBehav, GasTankBehavFrag, LiquidTankBehavFrag
-
-const target_UPS::Float64 = 60.0
 
 # ===============================================================
 # Behavior Fragments
@@ -121,7 +119,7 @@ function update_flowbehav!(tank::TankBehavFrag; tile::TileCoord, mna_state::MNA_
 
     # Update stored charge - if the new charge would go negative, stall instead of updating
     current = get(mna_state.vsource_currents, tank_vsource_element_id, 0.0)
-    delta = current / target_UPS
+    delta = current / BASE_UPS
     prospective_charge = tank.state.charge + delta
 
     if prospective_charge < 0.0
@@ -142,8 +140,35 @@ stall!(tank::TankBehavFrag) = stall!(tank.stallstate)
 unstall!(tank::TankBehavFrag) = unstall!(tank.stallstate)
 
 function on_click!(tank::TankBehavFrag; kwargs...)
-    unstall!(tank) # Clicking the tank un-stalls it
+    do_action!(tank.stallstate, :unstall)
     return nothing
+end
+
+function get_actions(tank::TankBehavFrag; kwargs...)
+    # Vent action
+    is_empty = tank.state.charge ≈ 0.0
+    vent_tooltip = is_empty ? "Tank already empty" : "Vent tank contents to space. Warning: will lose whatever is stored in this tank"
+    vent_action = ActionInfo(:vent_tank, "Vent Tank", !is_empty, vent_tooltip, is_empty ? nothing : "Are you sure? This will lose all fuel in the tank.")
+
+    # Unstall action (delegated to StallBehavFrag)
+    unstall_actions = get_actions(tank.stallstate)
+
+    return (vent_action, unstall_actions...)
+end
+
+function do_action!(tank::TankBehavFrag, action_id::Symbol; kwargs...)
+    if action_id === :vent_tank
+        # stalls the tank to seal it
+        stall!(tank)
+
+        if tank.state.charge <= 0.0
+            return (false, "Tank already empty")
+        end
+        tank.state.charge = 0.0
+        return (true, "Tank vented")
+    end
+    # Delegate remaining actions to StallBehavFrag
+    return do_action!(tank.stallstate, action_id)
 end
 
 function can_be_moved(tank::TankBehavFrag; kwargs...)
@@ -171,6 +196,8 @@ is_stalled(behav::T) where {T <: AbstractTankBehavFrag} = is_stalled(behav.tank)
 stall!(behav::T) where {T <: AbstractTankBehavFrag} = stall!(behav.tank)
 unstall!(behav::T) where {T <: AbstractTankBehavFrag} = unstall!(behav.tank)
 on_click!(behav::T; kwargs...) where {T <: AbstractTankBehavFrag} = on_click!(behav.tank; kwargs...)
+get_actions(behav::T; kwargs...) where {T <: AbstractTankBehavFrag} = get_actions(behav.tank; kwargs...)
+do_action!(behav::T, action_id::Symbol; kwargs...) where {T <: AbstractTankBehavFrag} = do_action!(behav.tank, action_id; kwargs...)
 render_map_elem!(queue::Vector{RenderCommand}, behav::T; kwargs...) where {T <: AbstractTankBehavFrag} = render_map_elem!(queue, behav.tank; kwargs...)
 map_rotation(behav::T, rotation::HexAxis) where {T <: AbstractTankBehavFrag} = rotation # No rotation restriction by default
 can_be_moved(behav::T; kwargs...) where {T <: AbstractTankBehavFrag} = can_be_moved(behav.tank; kwargs...)
@@ -342,8 +369,19 @@ function get_fluidtags(comp::ThevininTankCompBehav)
     return NodeFluidTags(; (Symbol(n) => comp.fluid for n in comp.out_nodes)...)
 end
 
+"Wet mass of a tank: charge x fluid density. Returns 0.0 if the requested fluid doesn't match this tank's fluid."
+function get_component_wet_mass(comp::ThevininTankCompBehav; fluid::Union{FluidTags, Nothing} = nothing, kwargs...)
+    if fluid !== nothing && fluid != comp.fluid
+        return 0.0
+    end
+    density = lookup_fluid_density(comp.fluid)
+    return density === nothing ? 0.0 : comp.tank.tank.state.charge * density
+end
+
 update_flowbehav!(comp::ThevininTankCompBehav; kwargs...) = update_flowbehav!(comp.tank; kwargs...)
 on_click!(comp::ThevininTankCompBehav; kwargs...) = on_click!(comp.tank; kwargs...)
+get_actions(comp::ThevininTankCompBehav; kwargs...) = get_actions(comp.tank; kwargs...)
+do_action!(comp::ThevininTankCompBehav, action_id::Symbol; kwargs...) = do_action!(comp.tank, action_id; kwargs...)
 is_stalled(comp::ThevininTankCompBehav) = is_stalled(comp.tank)
 map_rotation(comp::ThevininTankCompBehav, rotation::HexAxis) = map_rotation(comp.tank, rotation)
 can_be_moved(comp::ThevininTankCompBehav; kwargs...) = can_be_moved(comp.tank; kwargs...)

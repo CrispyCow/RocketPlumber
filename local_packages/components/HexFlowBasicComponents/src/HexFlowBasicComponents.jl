@@ -19,7 +19,7 @@ using HexFrame, HexElements, HexFluids, HexComponentsAPI, RenderEngine, HexFlowR
 # ComponentBehavior Mandatories
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional
-import HexComponentsAPI: get_fluidtags, update_flowbehav!, render_map_elem!, map_rotation
+import HexComponentsAPI: get_fluidtags, update_flowbehav!, render_map_elem!, map_rotation, get_actions, do_action!
 
 # Behavior Fragment Exports
 export HorizontalFlipOnlyBehavFrag
@@ -161,6 +161,24 @@ function render_map_elem!(queue::Vector{RenderCommand}, behav::StallBehavFrag; g
         push!(queue, render_basic_tile(glmap, :test_stalled, HexFrame.Q_POS, position; draw_height = overlay_height, pos_offset = pos_offset))
     end
     return nothing
+end
+
+function get_actions(stall::StallBehavFrag; kwargs...)
+    stalled = is_stalled(stall)
+    tooltip = stalled ? "Try to reactivate stalled component" : "Component is not currently stalled"
+    return (ActionInfo(:unstall, "Unstall Component", stalled, tooltip),)
+end
+
+function do_action!(stall::StallBehavFrag, action_id::Symbol; kwargs...)
+    if action_id === :unstall
+        if is_stalled(stall)
+            unstall!(stall)
+            return (true, "Component unstalled")
+        else
+            return (false, "Component is not currently stalled")
+        end
+    end
+    return (false, "Action :$(action_id) not recognised by StallBehavFrag")
 end
 
 # ===============================================================

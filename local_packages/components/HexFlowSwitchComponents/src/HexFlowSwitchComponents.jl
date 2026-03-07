@@ -17,7 +17,7 @@ using HexFlowBasicComponents
 # ComponentBehavior Mandatories
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional
-import HexComponentsAPI: get_fluidtags, update_flowbehav!, on_click!, render_map_elem!
+import HexComponentsAPI: get_fluidtags, update_flowbehav!, on_click!, render_map_elem!, get_actions, do_action!
 
 # Behavior Fragment Exports
 export SwitchBehavFrag, get_switch_percentage, get_target_percentage
@@ -340,17 +340,46 @@ get_switch_percentage(behav::BoolSwitchBehavFrag) = get_switch_percentage(behav.
 
 
 function on_click!(behav::BoolSwitchBehavFrag; kwargs...)
-    max_conductance = behav.switch.max_conductance
-    min_conductance = behav.switch.min_conductance
-    target_conductance = behav.switch.state.target_conductance
+    target = behav.switch.state.target_conductance
+    max_c = behav.switch.max_conductance
+    min_c = behav.switch.min_conductance
 
-    return if target_conductance ≈ max_conductance # Toggle target conductance between on and off
-        set_target_conductance_to_min!(behav)
-    elseif target_conductance ≈ min_conductance
-        set_target_conductance_to_max!(behav)
+    if target ≈ max_c
+        do_action!(behav, :close_valve)
+    elseif target ≈ min_c
+        do_action!(behav, :open_valve)
     else
         error("Bool switch reached invalid target")
     end
+    return nothing
+end
+
+function get_actions(behav::BoolSwitchBehavFrag; kwargs...)
+    target = behav.switch.state.target_conductance
+    max_c = behav.switch.max_conductance
+    min_c = behav.switch.min_conductance
+
+    is_open = target ≈ max_c
+    is_closed = target ≈ min_c
+
+    open_tooltip = is_open ? "Valve is already open" : "Open valve to allow flow"
+    close_tooltip = is_closed ? "Valve is already closed" : "Close valve to block flow"
+
+    open_action = ActionInfo(:open_valve, "Open Valve", !is_open, open_tooltip)
+    close_action = ActionInfo(:close_valve, "Close Valve", !is_closed, close_tooltip)
+
+    return (open_action, close_action)
+end
+
+function do_action!(behav::BoolSwitchBehavFrag, action_id::Symbol; kwargs...)
+    if action_id === :open_valve
+        set_target_conductance_to_max!(behav)
+        return (true, "Valve opened")
+    elseif action_id === :close_valve
+        set_target_conductance_to_min!(behav)
+        return (true, "Valve closed")
+    end
+    return (false, "Action :$(action_id) not recognised by BoolSwitchBehavFrag")
 end
 
 "Sets the switch target conductance to its minimum value (OFF state)."
@@ -448,6 +477,34 @@ function step_conductance_down!(behav::SteppedSwitchBehavFrag)
     return set_target_conductance!(sw, new_target_conductance)
 end
 
+function get_actions(behav::SteppedSwitchBehavFrag; kwargs...)
+    target = behav.switch.state.target_conductance
+    max_c = behav.switch.max_conductance
+    min_c = behav.switch.min_conductance
+
+    at_max = target ≈ max_c
+    at_min = target ≈ min_c
+
+    open_tooltip = at_max ? "Valve is already fully open" : "Step valve further open"
+    close_tooltip = at_min ? "Valve is already fully closed" : "Step valve further closed"
+
+    open_action = ActionInfo(:step_valve_open, "Step Valve Open", !at_max, open_tooltip)
+    close_action = ActionInfo(:step_valve_close, "Step Valve Close", !at_min, close_tooltip)
+
+    return (open_action, close_action)
+end
+
+function do_action!(behav::SteppedSwitchBehavFrag, action_id::Symbol; kwargs...)
+    if action_id === :step_valve_open
+        step_conductance_up!(behav)
+        return (true, "Valve stepped open")
+    elseif action_id === :step_valve_close
+        step_conductance_down!(behav)
+        return (true, "Valve stepped closed")
+    end
+    return (false, "Action :$(action_id) not recognised by SteppedSwitchBehavFrag")
+end
+
 # ===============================================================
 # Concrete Component Behaviors
 # ===============================================================
@@ -494,6 +551,8 @@ get_tunables(comp::BoolSwitchCompBehav) = get_tunables(comp.switch)
 set_tunables(comp::BoolSwitchCompBehav, tunables::NTuple{3, Real}) = @set comp.switch = set_tunables(comp.switch, tunables)
 update_flowbehav!(comp::BoolSwitchCompBehav; kwargs...) = update_flowbehav!(comp.switch; kwargs...)
 on_click!(comp::BoolSwitchCompBehav; kwargs...) = on_click!(comp.switch; kwargs...)
+get_actions(comp::BoolSwitchCompBehav; kwargs...) = get_actions(comp.switch; kwargs...)
+do_action!(comp::BoolSwitchCompBehav, action_id::Symbol; kwargs...) = do_action!(comp.switch, action_id; kwargs...)
 
 function render_base_elem!(queue::Vector{RenderCommand}, comp::BoolSwitchCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     max_conductance = comp.switch.switch.max_conductance
@@ -541,6 +600,8 @@ produce_rel_elements(comp::BigAdjustableValveCompBehav) = produce_rel_elements(c
 get_tunables(comp::BigAdjustableValveCompBehav) = get_tunables(comp.switch)
 set_tunables(comp::BigAdjustableValveCompBehav, tunables::NTuple{4, Real}) = @set comp.switch = set_tunables(comp.switch, tunables)
 update_flowbehav!(comp::BigAdjustableValveCompBehav; kwargs...) = update_flowbehav!(comp.switch; kwargs...)
+get_actions(comp::BigAdjustableValveCompBehav; kwargs...) = get_actions(comp.switch; kwargs...)
+do_action!(comp::BigAdjustableValveCompBehav, action_id::Symbol; kwargs...) = do_action!(comp.switch, action_id; kwargs...)
 
 function get_fluidtags(::BigAdjustableValveCompBehav)
     # Valve is liquid only - prevents placement in turbine arm of turbopump where zero conductance would cause singularity
@@ -551,16 +612,17 @@ function get_fluidtags(::BigAdjustableValveCompBehav)
 end
 
 function on_click!(comp::BigAdjustableValveCompBehav; relative_clicksite = nothing, kwargs...)
-    return if relative_clicksite !== nothing
+    if relative_clicksite !== nothing
         eps = 1.0e-6 # Small deadzone to avoid toggle due to tiny floating point jitter
         y = relative_clicksite.y
         if y > eps # Click above horizontal - step up
-            step_conductance_up!(comp.switch)
+            do_action!(comp.switch, :step_valve_open)
         elseif y < -eps # Click below horizontal - step down
-            step_conductance_down!(comp.switch)
+            do_action!(comp.switch, :step_valve_close)
         end
         # If exactly on horizontal (y ≈ 0), do nothing
     end
+    return nothing
 end
 
 function render_base_elem!(queue::Vector{RenderCommand}, comp::BigAdjustableValveCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)

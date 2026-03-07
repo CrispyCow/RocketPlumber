@@ -32,6 +32,48 @@ HexComponentsAPI.get_pipe_tunables(::MockPipeBehav) = ()
 HexComponentsAPI.set_pipe_tunables(::MockPipeBehav, ::NTuple{0, Real}) = MockPipeBehav()
 HexComponentsAPI.render_pipe_base!(queue, ::MockPipeBehav; kwargs...) = nothing
 
+#= ---------- Additional Mock for DoActionCommand ----------- =#
+
+# external counter for action execution
+const action_count = Ref(0)
+
+mutable struct ActionCompBehav <: ComponentBehavior end
+HexComponentsAPI.produce_rel_elements(::ActionCompBehav) = ()
+HexComponentsAPI.get_tunables(::ActionCompBehav) = ()
+HexComponentsAPI.set_tunables(::ActionCompBehav, ::NTuple{0, Real}) = ActionCompBehav()
+HexComponentsAPI.render_base_elem!(queue, ::ActionCompBehav; kwargs...) = nothing
+import HexComponentsAPI: get_actions, do_action!, placement_valid
+function get_actions(comp::ActionCompBehav; kwargs...)
+    return (ActionInfo(:flip, "Flip", true, "Flip state"),)
+end
+function do_action!(comp::ActionCompBehav, action_id::Symbol; kwargs...)
+    if action_id === :flip
+        action_count[] += 1
+        return (true, "Flipped")
+    end
+    return (false, "Unknown action")
+end
+function placement_valid(comp::ActionCompBehav, coord::TileCoord, gamemap::GameMap; kwargs...)
+    return (true, "")
+end
+
+struct RotationSensitiveCompBehav{N} <: ComponentBehavior
+    valid_rotations::NTuple{N, HexAxis}
+end
+HexComponentsAPI.produce_rel_elements(::RotationSensitiveCompBehav) = ()
+HexComponentsAPI.get_tunables(::RotationSensitiveCompBehav) = ()
+HexComponentsAPI.set_tunables(comp::RotationSensitiveCompBehav, ::NTuple{0, Real}) = comp
+HexComponentsAPI.render_base_elem!(queue, ::RotationSensitiveCompBehav; kwargs...) = nothing
+function placement_valid(comp::RotationSensitiveCompBehav, coord::TileCoord, gamemap::GameMap; rotation::HexAxis, ship_name::Symbol = :primary, kwargs...)
+    if !is_on_surface_tile(coord, gamemap; ship_name = ship_name)
+        return (false, "Not on ship surface")
+    end
+    if rotation ∉ comp.valid_rotations
+        return (false, "Rotation invalid")
+    end
+    return (true, "")
+end
+
 #= ---------- Test Helpers ----------- =#
 
 "No-op console sink — captures nothing"
@@ -150,6 +192,46 @@ end
         @test isnothing(get_component(gamemap, TileCoord(0, 1); ship_name = :primary))
     end
 
+    @testset "MoveCommand{TileCoord} — rejects invalid in-place rotation" begin
+        gamemap = GameMap()
+        coord = TileCoord(0, 0)
+
+        process_and_log!(
+            create_set_tile_command(cq, coord, RotationSensitiveCompBehav((Q_POS,)), Q_POS),
+            gamemap
+        )
+
+        logs = process_and_log!(
+            create_move_command(cq, coord, coord, HexFrame.R_POS),
+            gamemap
+        )
+
+        placed = get_component(gamemap, coord; ship_name = :primary)
+        @test !isnothing(placed)
+        @test placed.rotation == Q_POS
+        @test any(contains(l, "Cannot rotate in place") || contains(l, "Rotation invalid") for l in logs)
+    end
+
+    @testset "MoveCommand{TileCoord} — allows valid in-place rotation" begin
+        gamemap = GameMap()
+        coord = TileCoord(0, 0)
+
+        process_and_log!(
+            create_set_tile_command(cq, coord, RotationSensitiveCompBehav((Q_POS, HexFrame.R_POS)), Q_POS),
+            gamemap
+        )
+
+        logs = process_and_log!(
+            create_move_command(cq, coord, coord, HexFrame.R_POS),
+            gamemap
+        )
+
+        placed = get_component(gamemap, coord; ship_name = :primary)
+        @test !isnothing(placed)
+        @test placed.rotation == HexFrame.R_POS
+        @test any(contains(l, "rotated in place") for l in logs)
+    end
+
     #= ---------- MoveCommand{EdgeCoord} ----------- =#
     @testset "MoveCommand{EdgeCoord}" begin
         gamemap = GameMap()
@@ -191,6 +273,36 @@ end
         logs = process_and_log!(cmd, gamemap)
         @test isnothing(get_component(gamemap, coord; ship_name = :primary))
         @test any(contains(l, "deleted") || contains(l, "Deleted") for l in logs)
+    end
+
+    #= ---------- DoActionCommand tests ----------- =#
+
+    @testset "DoActionCommand" begin
+        gamemap = GameMap()
+        coord = TileCoord(0, 0)
+
+        # place the action component
+        process_and_log!(create_set_tile_command(cq, coord, ActionCompBehav(), Q_POS), gamemap)
+        @test !isnothing(get_component(gamemap, coord; ship_name = :primary))  # ensure placement succeeded
+        @test action_count[] == 0
+
+        # sanity check: manual invocation should work
+        wrapped = get_component(gamemap, coord; ship_name = :primary)
+        do_action!(wrapped, :flip)
+        @test action_count[] == 1
+        # reset for command test
+        action_count[] = 0
+
+        # perform action (sanbox validation + real apply will call the action twice)
+        cmd = create_do_action_command(cq, coord, :flip)
+        logs = process_and_log!(cmd, gamemap)
+        @test action_count[] == 2
+        @test !isempty(logs)  # at least some message logged
+
+        # action on nonexistent component should log error and do nothing
+        gamemap2 = GameMap()
+        logs2 = process_and_log!(create_do_action_command(cq, TileCoord(5,5), :flip), gamemap2)
+        @test any(contains(l, "No component") for l in logs2)
     end
 
     @testset "DeleteAtCommand{TileCoord} — missing component" begin
@@ -462,8 +574,9 @@ end
 
     @test (@atomic ss.should_exit) == false
     @test (@atomic ss.is_paused) == false
-    @test (@atomic ss.target_ups) == 60.0
+    @test (@atomic ss.target_ups) == BASE_UPS
     @test (@atomic ss.actual_ups) == 0.0
+    @test (@atomic ss.target_spacemap_time) == 0.0
 end
 
 @testset "FlowCalculatorSharedState — atomic operations" begin
@@ -480,6 +593,9 @@ end
 
     @atomic ss.actual_ups = 59.5
     @test (@atomic ss.actual_ups) == 59.5
+
+    @atomic ss.target_spacemap_time = 42.0
+    @test (@atomic ss.target_spacemap_time) == 42.0
 end
 
 @testset "FlowCalculatorSharedState — keyword constructor" begin
@@ -487,6 +603,7 @@ end
     @test (@atomic ss.target_ups) == 30.0
     @test (@atomic ss.is_paused) == true
     @test (@atomic ss.should_exit) == false  # default
+    @test (@atomic ss.target_spacemap_time) == 0.0  # default
 end
 
 # ===============================================================
@@ -509,7 +626,7 @@ end
     # Simulate 100ms elapsed by backdating last_loop_time
     t.last_loop_time = time() - 0.1
 
-    target_update_time = 1.0 / 60.0  # ~16.67ms
+    target_update_time = 1.0 / BASE_UPS  # ~16.67ms
     HexFlowCalculator.accumulate_time!(t, target_update_time)
 
     @test t.delta_time >= 0.05            # at least ~50ms with tolerance
@@ -519,7 +636,7 @@ end
 
 @testset "accumulate_time! — immediate call" begin
     t = TimingState()
-    target_update_time = 1.0 / 60.0
+    target_update_time = 1.0 / BASE_UPS
 
     # Called immediately — delta_time should be tiny
     HexFlowCalculator.accumulate_time!(t, target_update_time)
@@ -528,7 +645,7 @@ end
 
 @testset "accumulate_time! — accumulator saturation" begin
     t = TimingState()
-    target_update_time = 1.0 / 60.0
+    target_update_time = 1.0 / BASE_UPS
 
     # Simulate a very large elapsed time (1 second)
     t.last_loop_time = time() - 1.0
@@ -595,24 +712,27 @@ end
 @testset "handle_thrusters! — empty map" begin
     gs = GameState()
     gm = GameMap()
+    derived = DerivedMapState()
     mna = MNA_State()
 
-    handle_thrusters!(gs, gm, mna)
+    handle_thrusters!(gs, gm, derived, mna)
 
     # No components → no thrust
     @test gs.thrust ≈ SVector(0.0, 0.0)
-    @test gs.acceleration ≈ SVector(0.0, 0.0)
+    @test gs.acceleration_ship_frame ≈ SVector(0.0, 0.0)
+    @test gs.acceleration_space_map_frame ≈ SVector(0.0, 0.0)
 end
 
 @testset "handle_thrusters! — velocity unchanged with no thrust" begin
     gs = GameState()
     gm = GameMap()
+    derived = DerivedMapState()
     mna = MNA_State()
 
     set_velocity!(gm, SVector(100.0, 50.0))
     initial_vel = get_velocity(gm)
 
-    handle_thrusters!(gs, gm, mna)
+    handle_thrusters!(gs, gm, derived, mna)
 
     # With no thrust, velocity should remain unchanged
     @test get_velocity(gm) ≈ initial_vel
@@ -621,11 +741,13 @@ end
 @testset "handle_thrusters! — sets acceleration per-second" begin
     gs = GameState()
     gm = GameMap()
+    derived = DerivedMapState()
     mna = MNA_State()
 
-    # base_ups defaults to 60 — acceleration should be per-second (× 60)
-    handle_thrusters!(gs, gm, mna; base_ups = 60.0)
-    @test gs.acceleration ≈ SVector(0.0, 0.0)  # zero thrust → zero accel
+    # base_ups defaults to BASE_UPS, acceleration is stored in per-second units (F/m)
+    handle_thrusters!(gs, gm, derived, mna; base_ups = BASE_UPS)
+    @test gs.acceleration_ship_frame ≈ SVector(0.0, 0.0)  # zero thrust → zero accel
+    @test gs.acceleration_space_map_frame ≈ SVector(0.0, 0.0)
 end
 
 # ===============================================================

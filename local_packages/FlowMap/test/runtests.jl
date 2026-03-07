@@ -1101,19 +1101,19 @@ end
 
 @testset "get_mass" begin
     gm = GameMap()
-    # Default: 1 surface tile => 1000.0 mass
-    @test get_mass(gm) == 1000.0
+    # Default: 1 surface tile at 100.0 per tile, no components
+    @test get_mass(gm) == 100.0
 
     # Custom mass per tile
     @test get_mass(gm; mass_per_tile = 500.0) == 500.0
 
     # Multiple surface tiles
     set_surface_tile!(gm, TileCoord(1, 0))
-    @test get_mass(gm) == 2000.0
+    @test get_mass(gm) == 200.0
 
     # Multi-ship
     add_ship!(gm, :other, ShipMap())
-    @test get_mass(gm) == 3000.0  # 2 + 1 tiles
+    @test get_mass(gm) == 300.0  # 2 + 1 tiles
 end
 
 # ===============================================================

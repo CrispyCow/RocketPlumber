@@ -35,6 +35,7 @@ export tile_queued_render!, node_queued_render!, pipe_queued_render!, ship_surfa
 export tile_particle_spawn!
 export create_particle_group, spawn_particles!, update_particle_physics!
 export thrust_dust_particle_effect!, render_particles!
+export get_particle_accel_scale, set_particle_accel_scale!
 export animation_sprite_picker, animation_vibe_offset, animation_rotate
 
 # Const exports
@@ -44,6 +45,19 @@ export DEFAULT_EMPTY_FLUID_COLOUR
 #= Global references for file paths (set during __init__) =#
 const SHADER_DIR = Ref{String}()
 const TEXTURE_ATLAS_DIR = Ref{String}()
+
+#= ---------- Particle Acceleration Tuning ----------- =#
+
+const _particle_accel_scale = Threads.Atomic{Float64}(0.2)
+
+"Visual scaling factor applied to ship acceleration when drifting particles."
+get_particle_accel_scale()::Float64 = _particle_accel_scale[]
+
+"Set the visual scaling factor for particle acceleration drift."
+function set_particle_accel_scale!(value::Float64)
+    _particle_accel_scale[] = value
+    return nothing
+end
 
 #= Basic Constants and Helper Functions =#
 const ColourType = SVector{4, Float32}
@@ -259,6 +273,9 @@ function get_ship_surface_colour(ship_name::Symbol)::SVector{4, Float32}
     
     return SVector{4, Float32}(r, g, b, 1.0f0)
 end
+
+"Pale bright green tint applied to the selected ship's surface tiles."
+const SHIP_SELECTED_TINT = SVector{4, Float32}(0.7f0, 1.0f0, 0.7f0, 1.0f0)
 
 """
 Compute BaseSpriteUniforms for any sprite. This function contains the common logic
@@ -633,16 +650,15 @@ end
 
 "Render ship surface background tiles with per-ship colour tint and position offset"
 function ship_surface_queued_render!(
-        queue::Vector{RenderCommand},
-        map::GLObjectMap,
-        gamemap::GameMap
+        queue::Vector{RenderCommand}, map::GLObjectMap, gamemap::GameMap;
+        selected_ship::Union{Nothing, Symbol} = nothing
     )
     isempty(gamemap.ships) && return nothing
 
     for (ship_name, ship) in gamemap.ships
         ship_offset = get_render_offset(ship)
-        ship_colour = get_ship_surface_colour(ship_name)
-        
+        ship_colour = (ship_name === selected_ship ? SHIP_SELECTED_TINT : get_ship_surface_colour(ship_name))
+
         for coord in get_all_surface_tiles(ship)
             push!(
                 queue, render_basic_tile(
@@ -790,15 +806,13 @@ function spawn_particles!(
 end
 
 """
-Update particle physics using broadcasting for efficient vectorized updates.
-Note: Tick gating is handled at the ParticleManager level.
+Update particle physics for a single group. Applies the ship's real acceleration
+(from `gamestate.acceleration_ship_frame`, per-second units) scaled by `get_particle_accel_scale()`
+to drift particles, simulating the ship accelerating past its own exhaust and dust.
+Ship-frame acceleration is used so particle drift is always relative to the ship body,
+regardless of any manoeuvre rotation applied for space-map velocity integration.
 """
-function update_particle_physics!(
-        group::ParticleGroup,
-        gamestate,
-        surface_count::Int;
-        mass_per_surface::Float64 = 10000.0
-    )
+function update_particle_physics!(group::ParticleGroup, gamestate; base_ups::Float64 = BASE_UPS, delta_ticks::Int = 1)
     @timeit render_loop_timer "update_physics" begin
         current_tick = gamestate.ticks
         particles = group.particles
@@ -811,17 +825,18 @@ function update_particle_physics!(
 
         length(particles) == 0 && return nothing # exit early if no particles remain
 
-        # Apply physics using broadcasting
+        # Use ship-frame acceleration with visual scaling and per-tick integration
         @timeit render_loop_timer "physics_calc" begin
-            thrust_corrected = SVector{2, Float64}(-gamestate.thrust[1], gamestate.thrust[2])  # x-axis inverted in coordinate system
-            mass = surface_count * mass_per_surface
-            acceleration = thrust_corrected .* (1.0 / mass)
+            accel = gamestate.acceleration_ship_frame
+            accel_corrected = SVector{2, Float64}(-accel[1], accel[2]) # x-axis inverted for render coords
+            accel_per_tick = accel_corrected * (get_particle_accel_scale() / base_ups)
 
-            particles.velocity .+= Ref(acceleration)  # Update velocities (Float64 precision)
+            # apply for every tick that has elapsed since last update
+            particles.velocity .+= Ref(accel_per_tick * delta_ticks)
 
-            # Update positions: Float32 <- (Float64 + velocity) for precision
+            # Update positions: Float32 <- (Float64 + velocity*dt) for precision
             positions_f64 = SVector{2, Float64}.(particles.position)
-            positions_f64 .+= particles.velocity
+            positions_f64 .+= particles.velocity * delta_ticks
             particles.position .= SVector{2, Float32}.(positions_f64)
         end
     end
@@ -829,26 +844,21 @@ function update_particle_physics!(
     return nothing
 end
 
-"""
-Update particle physics for all groups in a ParticleManager.
-Only updates if game tick has incremented (gated at manager level).
-"""
-function update_particle_physics!(
-        manager::ParticleManager,
-        gamestate,
-        surface_count::Int;
-        kwargs...
-    )
+"Update particle physics for all groups, gated to once per game tick."
+function update_particle_physics!(manager::ParticleManager, gamestate; kwargs...)
     current_tick = gamestate.ticks
 
     # Only update if tick has incremented
     if current_tick == manager.last_update_tick
         return nothing
     end
+
+    # compute how many ticks have elapsed since last update
+    delta_ticks = current_tick - manager.last_update_tick
     manager.last_update_tick = current_tick
 
     for group in values(manager.groups)
-        update_particle_physics!(group, gamestate, surface_count; kwargs...)
+        update_particle_physics!(group, gamestate; kwargs..., delta_ticks = delta_ticks)
     end
     return nothing
 end
@@ -991,7 +1001,7 @@ function thrust_dust_particle_effect!(
         num_particles_per_tile::Int = 2,
         colour::SVector{4, Float32} = SVector{4, Float32}(0.5f0, 0.5f0, 0.5f0, 1.0f0)
     )
-    PARTICLE_LIFETIME_TICKS = 90
+    PARTICLE_LIFETIME_TICKS = Int(1.5 * BASE_UPS)  # 1.5 seconds at BASE_UPS
     PARTICLE_VELOCITY_RANGE = 0.2
 
     @timeit render_loop_timer "spawn_effect" begin
@@ -1195,7 +1205,7 @@ The `speed` parameter controls rotation rate (positive = clockwise, negative = c
 Returns a 2x2 rotation matrix suitable for sprite rendering uniforms.
 """
 function animation_rotate(gameticks::Integer, speed::Float64)::SMatrix{2, 2, Float32}
-    angle_degrees = Float32(gameticks * speed * (1.0 / 60))
+    angle_degrees = Float32(gameticks * speed * (1.0 / BASE_UPS))
     angle_rad = deg2rad(angle_degrees)
     cos_a = Float32(cos(angle_rad))
     sin_a = Float32(sin(angle_rad))

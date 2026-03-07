@@ -5,11 +5,15 @@ using StaticArrays, GLFW, Dates
 
 # Type exports
 export PlacementModes, INSPECT, MOVE, PIPE, DELETE, TILE, SURFACE_EDIT
-export ConfirmationPopup, HintData, InputState, ViewState, GameState
+export SimSpeed, SIM_1X, SIM_2X, SIM_4X, SIM_MAX
+export AbstractPopupTarget, ComponentPopupTarget, ShipPopupTarget
+export ActionPopupState, HintData, InputState, ViewState, GameState
 
 # Function exports
 export create_consolebuffer, get_viewtransform
 export get_lastinstate!, update_lastinstate!, get_instate, get_inrising!
+export set_placementmode!
+export sim_speed_to_ups, increase_sim_speed, decrease_sim_speed, sim_speed_label
 
 # ===============================================================
 # Placement Modes
@@ -17,6 +21,59 @@ export get_lastinstate!, update_lastinstate!, get_instate, get_inrising!
 
 "Placement mode enum for hex tile placement"
 @enum PlacementModes INSPECT MOVE PIPE DELETE TILE SURFACE_EDIT
+
+"Set placement mode, clearing any active selection and action popup."
+function set_placementmode!(inputstate, mode::PlacementModes)
+    if inputstate.placementmode != mode
+        inputstate.selectedcoord = nothing
+        inputstate.rightclick_selectedcoord = nothing
+        inputstate.rightclick_selectedship = nothing
+        inputstate.action_popup = nothing
+        inputstate.placementmode = mode
+    end
+    return nothing
+end
+
+# ===============================================================
+# Simulation Speed
+# ===============================================================
+
+"Simulation speed multiplier. Controls target UPS as a multiple of BASE_UPS."
+@enum SimSpeed SIM_1X SIM_2X SIM_4X SIM_MAX
+
+"Convert a SimSpeed to its target UPS value."
+function sim_speed_to_ups(speed::SimSpeed)::Float64
+    speed === SIM_1X  && return BASE_UPS
+    speed === SIM_2X  && return BASE_UPS * 2.0
+    speed === SIM_4X  && return BASE_UPS * 4.0
+    speed === SIM_MAX && return 1000.0
+    return BASE_UPS
+end
+
+"Increase SimSpeed by one step, clamped to SIM_MAX."
+function increase_sim_speed(speed::SimSpeed)::SimSpeed
+    speed === SIM_1X  && return SIM_2X
+    speed === SIM_2X  && return SIM_4X
+    speed === SIM_4X  && return SIM_MAX
+    return SIM_MAX
+end
+
+"Decrease SimSpeed by one step, clamped to SIM_1X."
+function decrease_sim_speed(speed::SimSpeed)::SimSpeed
+    speed === SIM_MAX && return SIM_4X
+    speed === SIM_4X  && return SIM_2X
+    speed === SIM_2X  && return SIM_1X
+    return SIM_1X
+end
+
+"Get a short display label for the SimSpeed."
+function sim_speed_label(speed::SimSpeed)::String
+    speed === SIM_1X  && return "1X"
+    speed === SIM_2X  && return "2X"
+    speed === SIM_4X  && return "4X"
+    speed === SIM_MAX && return "Max"
+    return "?"
+end
 
 # ===============================================================
 # Data Structures
@@ -30,11 +87,28 @@ export get_lastinstate!, update_lastinstate!, get_instate, get_inrising!
     is_visible::Bool = true
 end
 
-"Generalised confirmation popup with a message, world-space anchor, and action closure"
-@kwdef mutable struct ConfirmationPopup
-    message::String
-    world_position::CartesianCoord
-    action::Function
+#= ---------- Action Popup Target Types ----------- =#
+
+"Abstract type for popup-specific data. Concrete subtypes identify the popup target."
+abstract type AbstractPopupTarget end
+
+"Popup target for a tile component."
+struct ComponentPopupTarget <: AbstractPopupTarget
+    coord::TileCoord
+end
+
+"Popup target for a ship."
+struct ShipPopupTarget <: AbstractPopupTarget
+    ship_name::Symbol
+end
+
+"State for the world-anchored action popup window, parameterised on popup target type."
+@kwdef mutable struct ActionPopupState{T <: AbstractPopupTarget}
+    target::T
+    world_position::CartesianCoord              # Anchor point in world space
+    actions::Tuple                              # Tuple of ActionInfo
+    window_title::String                        # ImGui window title
+    pending_confirmation::Union{Nothing, ActionInfo} = nothing  # Action awaiting confirmation
 end
 
 "Input state for placement, selection, and control"
@@ -49,18 +123,20 @@ end
     pendingcomponent::ComponentBehavior
     pendingpipebehavior::PipeBehavior
     selectedcoord::Union{Nothing, TileCoord, EdgeCoord} = nothing
+    rightclick_selectedcoord::Union{Nothing, TileCoord} = nothing
+    rightclick_selectedship::Union{Nothing, Symbol} = nothing
     last_command_time::Float64 = 0.0
     gui_inputs::Dict{Symbol, Any} = Dict{Symbol, Any}()  # for storing ImGui input field states
     # last key states
     last_keystates::Dict{GLFW.Key, Bool} = Dict{GLFW.Key, Bool}()
     last_mousestates::Dict{GLFW.MouseButton, Bool} = Dict{GLFW.MouseButton, Bool}()
     # control state
-    is_paused::Bool = false # FlowCalculator loop pause
+    sim_speed::SimSpeed = SIM_1X
     escape_menu_active::Bool = false
     editor_mode::Bool = false
     dev_utils_menu_active::Bool = false
     spacemap_active::Bool = false
-    active_popup::Union{Nothing, ConfirmationPopup} = nothing
+    action_popup::Union{Nothing, ActionPopupState} = nothing
     # loop status
     should_exit_gameloop::Bool = false
     return_symbol::Symbol = :default
@@ -78,14 +154,22 @@ end
     ship_bounds::HexFrame.CartesianBounds = (X_POS=5.0, X_NEG=-5.0, Y_POS=5.0, Y_NEG=-5.0)
     frame_count::Int64 = 0
     last_update_time::Float64 = 0.0
+    pan_drag_anchor::Union{Nothing, SVector{2, Float64}} = nothing # world-space anchor for middle-click pan
     background_particles::Any = nothing  # ParticleManager - can't type without circular dep
     foreground_particles::Any = nothing  # ParticleManager - can't type without circular dep
 end
 
-"Game state tracking thrust, acceleration, and simulation ticks"
+"""
+Game state tracking thrust, acceleration, and simulation ticks.
+
+`acceleration_ship_frame` is thrust/mass in ship-local coordinates (thrust always points +X).
+`acceleration_space_map_frame` is the same value rotated into the inertial space-map frame
+during manoeuvre burn phases; identical to ship frame when not burning.
+"""
 @kwdef mutable struct GameState
     thrust::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
-    acceleration::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
+    acceleration_ship_frame::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
+    acceleration_space_map_frame::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
     ticks::Int64 = 0
 end
 

@@ -72,7 +72,7 @@ group = pm.groups[colour]
 bottom_left = SVector(-1000.0f0, -1000.0f0)
 top_right = SVector(1000.0f0, 1000.0f0)
 
-visible = HexFlowRendering.cull_particles_to_buffer!(pm, group, bottom_left, top_right, time(), 60.0, gm2)
+visible = HexFlowRendering.cull_particles_to_buffer!(pm, group, bottom_left, top_right, time(), BASE_UPS, gm2)
 @test visible == 0  # Particle should be culled as it's behind the visually-offset ship
 
 # Spawn a particle at a distant tile; it should NOT be culled
@@ -80,7 +80,7 @@ pm2 = ParticleManager()
 pos2 = glvec(TileCoord(10,10))
 spawn_particles!(pm2, [pos2], [SVector{2, Float64}(0.0,0.0)], 0, 10; colour = colour)
 group2 = pm2.groups[colour]
-visible2 = HexFlowRendering.cull_particles_to_buffer!(pm2, group2, bottom_left, top_right, time(), 60.0, gm2)
+visible2 = HexFlowRendering.cull_particles_to_buffer!(pm2, group2, bottom_left, top_right, time(), BASE_UPS, gm2)
 @test visible2 == 1
 
 println("HexFlowRendering fractional offset culling tests passed")

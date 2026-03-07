@@ -3,21 +3,34 @@ module HexComponentsAPI
 using HexFrame, HexElements, HexFluids
 using StaticArrays, Accessors
 
+# Simulation Constants
+export BASE_UPS
+
 # General Exports
-export Sprite, Component, ComponentOnTile, TunableProps
+export Sprite, Component, ComponentOnTile, TunableProps, ActionInfo
 
 # Tile Component Behavior Exports
 export ComponentBehavior
 export produce_rel_elements, produce_abs_elements
 export get_tunables, set_tunables, render_base_elem!, render_map_elem!
-export get_fluidtags, update_flowbehav!, on_click!, get_thrust, map_rotation, can_be_moved, placement_valid
+export get_fluidtags, update_flowbehav!, on_click!, get_thrust, get_component_mass, map_rotation, can_be_moved, placement_valid
+export get_component_dry_mass, get_component_wet_mass
 export collect_effect_particles!
+export get_actions, do_action!
+export get_default_component_mass, set_default_component_mass!
 
 # Pipe Behavior Exports
 export PipeBehavior
 export get_conductance, get_pipe_tunables, set_pipe_tunables, render_pipe_base!, render_pipe_map!
 export get_pipe_fluidtags, can_pipe_be_moved, get_tile_pipe_equivalent
 
+
+# ===============================================================
+# Simulation Constants
+# ===============================================================
+
+"Number of simulation ticks per simulation-second. All per-tick physics use this as their time base."
+const BASE_UPS::Float64 = 60.0
 
 # ===============================================================
 # Component Behaviors
@@ -54,6 +67,7 @@ OPTIONAL METHODS:
     update_flowbehav!(behav::T; kwargs...)::Nothing
     on_click!(behav::T; kwargs...)::Nothing
     get_thrust(behav::T; kwargs...)::SVector{2, Float64}
+    get_component_mass(behav::T; kwargs...)::Float64
     collect_effect_particles!(manager, behav::T; kwargs...)::Nothing
     map_rotation(behav::T, rotation::HexAxis)::HexAxis
     can_be_moved(behav::T; kwargs...)::(Bool, String)
@@ -75,6 +89,19 @@ struct TunableProps
     type_desc::String
     unit_desc::String
 end
+
+"Describes a single action that a component can perform, for display in a popup UI."
+struct ActionInfo
+    id::Symbol                                  # Unique identifier for this action on this component
+    label::String                               # Button text displayed in the UI
+    enabled::Bool                               # Whether the action button is currently clickable
+    tooltip::String                             # Hover text — explains the action or why it's disabled
+    confirmation_message::Union{Nothing, String} # If set, show a confirmation pane before executing
+end
+
+"Convenience constructor preserving the existing 4-arg call sites."
+ActionInfo(id, label, enabled, tooltip) = ActionInfo(id, label, enabled, tooltip, nothing)
+
 "Error for concrete ComponentBehavior without required method get_tunables"
 function get_tunables(behav::T) where {T <: ComponentBehavior}
     error("Required method get_tunables not implemented for $(nameof(T))")
@@ -110,6 +137,32 @@ on_click!(behav::T; kwargs...) where {T <: ComponentBehavior} = nothing
 
 "Default thrust is zero vector for non-nozzles"
 get_thrust(behav::T; kwargs...) where {T <: ComponentBehavior} = SVector{2, Float64}(0.0, 0.0)
+
+const _default_component_mass = Threads.Atomic{Float64}(20.0)
+"Get the default mass assigned to components that don't override `get_component_mass`."
+get_default_component_mass()::Float64 = _default_component_mass[]
+"Set the default mass assigned to components that don't override `get_component_mass`."
+function set_default_component_mass!(value::Float64)
+    _default_component_mass[] = value
+    return nothing
+end
+
+"Dry (structural) mass of a component, excluding any stored fluid. Defaults to the tunable default component mass."
+get_component_dry_mass(behav::T; kwargs...) where {T <: ComponentBehavior} = get_default_component_mass()
+
+"Mass of fluid stored in a component. If `fluid` is `nothing`, returns total fluid mass; if a specific FluidTags, returns mass of only that fluid. Defaults to 0.0 (no stored fluid)."
+get_component_wet_mass(behav::T; fluid::Union{FluidTags, Nothing} = nothing, kwargs...) where {T <: ComponentBehavior} = 0.0
+
+"Total mass of a component (dry + wet). Override `get_component_dry_mass` and/or `get_component_wet_mass` rather than this."
+get_component_mass(behav::T; kwargs...) where {T <: ComponentBehavior} = get_component_dry_mass(behav) + get_component_wet_mass(behav)
+
+"Default get_actions returns an empty tuple, component has no actions."
+get_actions(behav::T; kwargs...) where {T <: ComponentBehavior} = ()
+
+"Default do_action! returns failure, action not implemented for this component type."
+function do_action!(behav::T, action_id::Symbol; kwargs...) where {T <: ComponentBehavior}
+    return (false, "Action :$(action_id) not implemented for $(nameof(T))")
+end
 
 "Default collect_effect_particles! does nothing (component produces no particles)"
 collect_effect_particles!(manager, behav::T; kwargs...) where {T <: ComponentBehavior} = nothing
@@ -160,9 +213,14 @@ function on_click!(comp::ComponentOnTile; unrotated_clicksite = nothing, kwargs.
     return nothing
 end
 get_thrust(comp::ComponentOnTile; kwargs...) = get_thrust(comp.component; rotation = comp.rotation, kwargs...)
+get_component_mass(comp::ComponentOnTile; kwargs...) = get_component_mass(comp.component; kwargs...)
+get_component_dry_mass(comp::ComponentOnTile; kwargs...) = get_component_dry_mass(comp.component; kwargs...)
+get_component_wet_mass(comp::ComponentOnTile; kwargs...) = get_component_wet_mass(comp.component; kwargs...)
 map_rotation(comp::ComponentOnTile, rotation::HexAxis) = map_rotation(comp.component, rotation)
 can_be_moved(comp::ComponentOnTile; kwargs...) = can_be_moved(comp.component; kwargs...)
 placement_valid(comp::ComponentOnTile, coord, surface; kwargs...) = placement_valid(comp.component, coord, surface; rotation = comp.rotation, kwargs...)
+get_actions(comp::ComponentOnTile; kwargs...) = get_actions(comp.component; kwargs...)
+do_action!(comp::ComponentOnTile, action_id::Symbol; kwargs...) = do_action!(comp.component, action_id; kwargs...)
 
 "General implementation which leverages the existing ComponentBehavior produce_rel_elements function"
 function produce_abs_elements(tilecomp::ComponentOnTile, tile::TileCoord)

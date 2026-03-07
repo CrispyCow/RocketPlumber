@@ -71,6 +71,14 @@ function make_small_surface()
     return tiles
 end
 
+"Creates a bare ShipMap with a small random-walk surface for encounter testing."
+function make_bare_shipmap(seed::UInt32)
+    ship = ShipMap()
+    empty!(ship.ship_tiles)
+    stacked_random_tile_walk!(ship.ship_tiles, TileCoord(0, 0), 2, 2, seed)
+    return ship
+end
+
 
 # ===============================================================
 # Utility function tests
@@ -495,13 +503,6 @@ end
 # ===============================================================
 
 @testset "encounter_ship! and depart_ship!" begin
-
-    function make_bare_shipmap(seed::UInt32)
-        ship = ShipMap()
-        empty!(ship.ship_tiles)
-        stacked_random_tile_walk!(ship.ship_tiles, TileCoord(0, 0), 2, 2, seed)
-        return ship
-    end
 
     @testset "encounter_ship! adds a ship with ApproachingDockStat" begin
         gm = GameMap()
@@ -1069,15 +1070,289 @@ end
         sm = make_encounter_sm()
         sm.velocity = SVector(100.0, 0.0)
         sm.target_time_years = 1.0
+        sm.last_stop_time = -1.0  # well before start so easing doesn't throttle the step
 
-        advanced = step_space_map_time!(sm; max_step=1.0)
+        advanced = step_space_map_time!(sm, sm.target_time_years; max_step=1.0)
         @test advanced == true
         @test sm.time_years ≈ 1.0
         @test sm.position[1] ≈ 100.0
 
         # At target — no further advance
         sm.target_time_years = 1.0
-        advanced2 = step_space_map_time!(sm; max_step=1.0)
+        advanced2 = step_space_map_time!(sm, sm.target_time_years; max_step=1.0)
         @test advanced2 == false
+    end
+end
+
+# ===============================================================
+# _offset_ship_until_clear! tests
+# ===============================================================
+
+@testset "_offset_ship_until_clear!" begin
+
+    @testset "steps outward until no overlap" begin
+        gm = GameMap()
+        # Ship placed at primary's location (origin) — overlaps
+        trial = ShipMap()
+        empty!(trial.ship_tiles)
+        push!(trial.ship_tiles, TileCoord(0, 0))
+
+        steps = HexFlowProcGen._offset_ship_until_clear!(gm, trial, HexFrame.Q_POS)
+        @test steps >= 3  # at least 1 step to clear + 2 spacing
+
+        # Ship should no longer overlap
+        @test HexFlowProcGen._is_surface_overlap(gm, trial) == false
+    end
+
+    @testset "no overlap from start — only spacing applied" begin
+        gm = GameMap()
+        trial = ShipMap()
+        empty!(trial.ship_tiles)
+        push!(trial.ship_tiles, TileCoord(50, 50))  # far from primary
+
+        steps = HexFlowProcGen._offset_ship_until_clear!(gm, trial, HexFrame.Q_POS)
+        @test steps == HexFlowProcGen.MIN_SPACING  # only spacing, no overlap steps
+    end
+
+    @testset "works with all 6 directions" begin
+        gm = GameMap()
+        for dir in instances(HexFrame.HexAxis)
+            trial = ShipMap()
+            empty!(trial.ship_tiles)
+            push!(trial.ship_tiles, TileCoord(0, 0))
+
+            steps = HexFlowProcGen._offset_ship_until_clear!(gm, trial, dir)
+            @test steps >= 3
+            @test HexFlowProcGen._is_surface_overlap(gm, trial) == false
+        end
+    end
+
+    @testset "returns consistent result for same setup" begin
+        gm = GameMap()
+        trial1 = ShipMap()
+        empty!(trial1.ship_tiles)
+        push!(trial1.ship_tiles, TileCoord(0, 0))
+        steps1 = HexFlowProcGen._offset_ship_until_clear!(gm, trial1, HexFrame.R_NEG)
+
+        trial2 = ShipMap()
+        empty!(trial2.ship_tiles)
+        push!(trial2.ship_tiles, TileCoord(0, 0))
+        steps2 = HexFlowProcGen._offset_ship_until_clear!(gm, trial2, HexFrame.R_NEG)
+
+        @test steps1 == steps2
+    end
+end
+
+# ===============================================================
+# encounter_ship_optimal_dir! tests
+# ===============================================================
+
+@testset "encounter_ship_optimal_dir!" begin
+
+    @testset "adds a ship with ApproachingDockStat" begin
+        gm = GameMap()
+        newship = make_bare_shipmap(UInt32(0xAAAA))
+
+        before = Set(keys(gm.ships))
+        encounter_ship_optimal_dir!(gm, newship, "opt_test", UInt32(0xAAAA))
+        after = Set(keys(gm.ships))
+
+        new_ships = collect(setdiff(after, before))
+        @test length(new_ships) == 1
+
+        status = FlowMap.get_docking_status(gm, new_ships[1])
+        @test status isa FlowMap.ApproachingDockStat
+    end
+
+    @testset "picks direction requiring least offset" begin
+        # Create a primary ship elongated along the S axis (q varies, r=0).
+        # S_NEG/S_POS walk along the line and require many steps;
+        # perpendicular directions (Q_POS, R_NEG, etc.) clear in one step.
+        gm = GameMap()
+        empty!(gm.ships[:primary].ship_tiles)
+        for q in Int16(-5):Int16(5)
+            push!(gm.ships[:primary].ship_tiles, TileCoord(q, Int16(0)))
+        end
+
+        newship = ShipMap()
+        empty!(newship.ship_tiles)
+        push!(newship.ship_tiles, TileCoord(0, 0))
+
+        # Measure distances for each direction
+        centroid_tile = HexFrame.round_to_tile(get_surface_centroid(gm, :primary))
+        dists = Dict{HexFrame.HexAxis, Int}()
+        for dir in instances(HexFrame.HexAxis)
+            trial = deepcopy(newship)
+            offset_ship!(trial, centroid_tile)
+            dists[dir] = HexFlowProcGen._offset_ship_until_clear!(gm, trial, dir)
+        end
+
+        # Perpendicular directions should be much shorter than along-the-line directions
+        @test dists[HexFrame.R_NEG] < dists[HexFrame.S_NEG]
+        @test dists[HexFrame.R_POS] < dists[HexFrame.S_POS]
+        @test dists[HexFrame.Q_POS] < dists[HexFrame.S_NEG]
+    end
+
+    @testset "deterministic for same seed" begin
+        gm1 = GameMap()
+        gm2 = GameMap()
+        newship = make_bare_shipmap(UInt32(0xBBBB))
+
+        encounter_ship_optimal_dir!(gm1, deepcopy(newship), "det_test", UInt32(0xBBBB))
+        encounter_ship_optimal_dir!(gm2, deepcopy(newship), "det_test", UInt32(0xBBBB))
+
+        key1 = only(setdiff(keys(gm1.ships), [:primary]))
+        key2 = only(setdiff(keys(gm2.ships), [:primary]))
+
+        s1 = FlowMap.get_docking_status(gm1, key1)
+        s2 = FlowMap.get_docking_status(gm2, key2)
+        @test FlowMap.get_approach_axis(s1) == FlowMap.get_approach_axis(s2)
+    end
+
+    @testset "spreads ships around when multiple docked" begin
+        gm = GameMap()
+
+        # Dock 3 ships in sequence — they should spread out rather than stack
+        dirs_used = HexFrame.HexAxis[]
+        for i in 1:3
+            newship = make_bare_shipmap(UInt32(0x1000 + i))
+            before = Set(keys(gm.ships))
+            encounter_ship_optimal_dir!(gm, newship, "spread_$(i)", UInt32(0x1000 + i))
+            after = Set(keys(gm.ships))
+            new_name = only(setdiff(after, before))
+
+            # Connect the ship so it's part of the overlap check for subsequent encounters
+            for _ in 1:500
+                FlowMap.update_docking!(gm; ship_name = new_name)
+                if FlowMap.get_docking_status(gm, new_name) isa FlowMap.ConnectedDockStat
+                    break
+                end
+            end
+
+            status = FlowMap.get_docking_status(gm, new_name)
+            push!(dirs_used, FlowMap.get_approach_axis(status))
+        end
+
+        # With 3 ships, we should have at least 2 unique directions
+        @test length(unique(dirs_used)) >= 2
+    end
+end
+
+# ===============================================================
+# redock_ship! tests
+# ===============================================================
+
+@testset "redock_ship!" begin
+
+    @testset "moves ship closer after gap opens" begin
+        # Set up primary + distant secondary along Q_POS axis
+        gm = GameMap()
+        sec = ShipMap()
+        empty!(sec.ship_tiles)
+        push!(sec.ship_tiles, TileCoord(10, -10))
+        sec.docking_status = FlowMap.ConnectedDockStat(HexFrame.Q_POS)
+        add_ship!(gm, :secondary, sec)
+
+        success, msg = redock_ship!(gm, :secondary)
+        @test success == true
+
+        # Ship should be in ApproachingDockStat (animating)
+        status = FlowMap.get_docking_status(gm, :secondary)
+        @test status isa FlowMap.ApproachingDockStat
+        @test FlowMap.get_approach_axis(status) == HexFrame.Q_POS
+    end
+
+    @testset "already close — no movement" begin
+        gm = GameMap()
+        # Place secondary just past minimum: primary at (0,0), secondary at (3, -3)
+        # which is exactly 1 clear step + 2 spacing along Q_POS (step = TileCoord(1,-1))
+        sec = ShipMap()
+        empty!(sec.ship_tiles)
+        push!(sec.ship_tiles, TileCoord(3, -3))
+        sec.docking_status = FlowMap.ConnectedDockStat(HexFrame.Q_POS)
+        add_ship!(gm, :secondary, sec)
+
+        success, msg = redock_ship!(gm, :secondary)
+        @test success == true
+        @test occursin("already as close", msg)
+    end
+
+    @testset "animation completes and preserves approach axis" begin
+        gm = GameMap()
+        sec = ShipMap()
+        empty!(sec.ship_tiles)
+        push!(sec.ship_tiles, TileCoord(10, -10))
+        sec.docking_status = FlowMap.ConnectedDockStat(HexFrame.R_POS)
+        add_ship!(gm, :secondary, sec)
+
+        redock_ship!(gm, :secondary)
+        status = FlowMap.get_docking_status(gm, :secondary)
+
+        if status isa FlowMap.ApproachingDockStat
+            # Animate to completion
+            for _ in 1:2000
+                FlowMap.update_docking!(gm; ship_name = :secondary)
+                s = FlowMap.get_docking_status(gm, :secondary)
+                if s isa FlowMap.ConnectedDockStat
+                    break
+                end
+            end
+        end
+
+        final_status = FlowMap.get_docking_status(gm, :secondary)
+        @test final_status isa FlowMap.ConnectedDockStat
+        @test FlowMap.get_approach_axis(final_status) == HexFrame.R_POS
+    end
+
+    @testset "preserves lateral position" begin
+        gm = GameMap()
+        # Ship at (0, 10) with approach_axis R_POS (step towards primary = R_NEG = TileCoord(0,-1))
+        # Ship should stay at q=0 column when walking along r axis
+        sec = ShipMap()
+        empty!(sec.ship_tiles)
+        push!(sec.ship_tiles, TileCoord(0, 10))
+        sec.docking_status = FlowMap.ConnectedDockStat(HexFrame.R_POS)
+        add_ship!(gm, :secondary, sec)
+
+        redock_ship!(gm, :secondary)
+
+        new_tiles = get_all_surface_tiles(gm.ships[:secondary])
+        for tile in new_tiles
+            @test tile.q == 0
+        end
+    end
+
+    @testset "error cases" begin
+        gm = GameMap()
+        # Cannot redock primary
+        success, _ = redock_ship!(gm, :primary)
+        @test success == false
+
+        # Cannot redock nonexistent ship
+        success, _ = redock_ship!(gm, :nonexistent)
+        @test success == false
+
+        # Cannot redock ship without approach axis
+        sec = ShipMap()
+        empty!(sec.ship_tiles)
+        push!(sec.ship_tiles, TileCoord(5, -5))
+        sec.docking_status = FlowMap.ConnectedDockStat(nothing)
+        add_ship!(gm, :no_axis, sec)
+        success, _ = redock_ship!(gm, :no_axis)
+        @test success == false
+
+        # Cannot redock ship that isn't connected
+        sec2 = ShipMap()
+        empty!(sec2.ship_tiles)
+        push!(sec2.ship_tiles, TileCoord(8, -8))
+        approaching_motion = FlowMap.RenderPosOffsetState(
+            current_offset = HexFrame.AxialCoord(5.0, -5.0),
+            target_offset = HexFrame.AxialCoord(0.0, 0.0),
+            offset_step = 0.1,
+        )
+        sec2.docking_status = FlowMap.ApproachingDockStat(approaching_motion, HexFrame.Q_POS)
+        add_ship!(gm, :approaching, sec2)
+        success, _ = redock_ship!(gm, :approaching)
+        @test success == false
     end
 end

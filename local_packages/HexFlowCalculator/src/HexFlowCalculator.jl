@@ -14,7 +14,7 @@ export FlowCalculatorSnapshot, FlowCalculatorSharedState, FlowCalculatorIPC, Tim
 # Type exports - Commands
 export CommandStatus, APPLIED, REJECTED, QUEUED_FAILED
 export MapEditCommand, SetTileCommand, SetPipeBehaviorCommand, MoveCommand
-export DeleteAtCommand, ClickTileCommand, AddShipSurfaceCommand, RemoveShipSurfaceCommand
+export DeleteAtCommand, ClickTileCommand, DoActionCommand, AddShipSurfaceCommand, RemoveShipSurfaceCommand
 export MapOverrideCommand
 export CommandQueue
 
@@ -24,7 +24,7 @@ export create_command_queue
 
 # Function exports - Commands
 export create_set_tile_command, create_set_pipe_behavior_command, create_move_command
-export create_delete_command, create_click_tile_command
+export create_delete_command, create_click_tile_command, create_do_action_command
 export create_add_ship_surface_command, create_remove_ship_surface_command
 export create_map_override_command
 export try_enqueue_command!
@@ -57,16 +57,18 @@ mutable struct FlowCalculatorSharedState
     @atomic is_paused::Bool
     @atomic target_ups::Float64
     @atomic actual_ups::Float64
+    @atomic target_spacemap_time::Float64
 end
 
 "Keyword constructor for FlowCalculatorSharedState with defaults"
 function FlowCalculatorSharedState(;
         should_exit::Bool = false,
         is_paused::Bool = false,
-        target_ups::Float64 = 60.0,
-        actual_ups::Float64 = 0.0
+        target_ups::Float64 = BASE_UPS,
+        actual_ups::Float64 = 0.0,
+        target_spacemap_time::Float64 = 0.0
     )
-    return FlowCalculatorSharedState(should_exit, is_paused, target_ups, actual_ups)
+    return FlowCalculatorSharedState(should_exit, is_paused, target_ups, actual_ups, target_spacemap_time)
 end
 
 "Timing state for the FlowCalculator fixed-timestep accumulator."
@@ -161,6 +163,15 @@ end
     response_channel::Union{Nothing, Channel{CommandStatus}}
 end
 @struct_hash_equal ClickTileCommand
+
+"Execute a named action on a tile component."
+@kwdef struct DoActionCommand <: MapEditCommand
+    id::UInt64
+    coord::TileCoord
+    action_id::Symbol
+    response_channel::Union{Nothing, Channel{CommandStatus}}
+end
+@struct_hash_equal DoActionCommand
 
 "Add a ship surface tile at coordinate."
 @kwdef struct AddShipSurfaceCommand <: MapEditCommand
@@ -388,6 +399,12 @@ function apply_mapedit_command!(
     # Same-coord move: rotate component in place
     if command.source_coord == command.dest_coord
         rotated_comptile = ComponentOnTile(source_comptile.component, new_rotation)
+        is_valid, reason = placement_valid(rotated_comptile, command.source_coord, gamemap; ship_name = source_ship)
+        if !is_valid
+            threadsafe_console_push("Cannot rotate in place: $reason")
+            return nothing
+        end
+
         set_component!(gamemap, command.source_coord, rotated_comptile; ship_name = source_ship)
         threadsafe_console_push("Component rotated in place at $(command.source_coord)")
         return nothing
@@ -548,6 +565,23 @@ end
 
 function apply_mapedit_command!(
         gamemap::GameMap,
+        command::DoActionCommand,
+        threadsafe_console_push::Function
+    )
+    ship_with_comp = find_ship_with_component(gamemap, command.coord)
+    if isnothing(ship_with_comp)
+        threadsafe_console_push("No component at $(command.coord)")
+        return nothing
+    end
+
+    tilecomp = get_component(gamemap, command.coord; ship_name = ship_with_comp)
+    success, message = do_action!(tilecomp, command.action_id)
+    threadsafe_console_push(message)
+    return nothing
+end
+
+function apply_mapedit_command!(
+        gamemap::GameMap,
         command::AddShipSurfaceCommand,
         threadsafe_console_push::Function
     )
@@ -664,6 +698,7 @@ function process_command!(
             test_mna_state = MNA_State()
 
             # Test the sandbox with full validation (use tick 0 for validation)
+            update_components!(sandbox, test_mna_state)
             update_map!(sandbox, test_derivedmapstate, test_mna_state, Int64(0))
             update_mna!(test_derivedmapstate, test_mna_state, Int64(0))
         end
@@ -780,6 +815,21 @@ function create_click_tile_command(
         id = cq.next_command_id(),
         coord = coord,
         unrotated_clicksite = unrotated_clicksite,
+        response_channel = response_channel
+    )
+end
+
+"Create a `DoActionCommand` for executing a named action on a tile component."
+function create_do_action_command(
+        cq::CommandQueue,
+        coord::TileCoord,
+        action_id::Symbol;
+        response_channel::Union{Nothing, Channel} = nothing
+    )::DoActionCommand
+    return DoActionCommand(
+        id = cq.next_command_id(),
+        coord = coord,
+        action_id = action_id,
         response_channel = response_channel
     )
 end
@@ -925,22 +975,22 @@ function update_mna!(derivedmapstate::DerivedMapState, mna_state::MNA_State, cur
 end
 
 "Sum thrust from all components, integrate velocity, and track burn progress during manoeuvres."
-function handle_thrusters!(gamestate::GameState, gamemap::GameMap, mna_state::MNA_State; base_ups::Float64 = 60.0)
+function handle_thrusters!(gamestate::GameState, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State; base_ups::Float64 = BASE_UPS)
     # Compute total thrust vector from all nozzle components (ship space)
     thrust = SVector{2, Float64}(0.0, 0.0)
     for (_, ship) in gamemap.ships
         for (tile, comp) in get_all_components(ship)
-            thrust += get_thrust(comp; tile = tile, mna_state = mna_state)
+            thrust += get_thrust(comp; tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
         end
     end
     gamestate.thrust = thrust
 
-    # Ship-space acceleration per tick
+    # Acceleration in per-second units (thrust is a continuous force, F/m gives accel/s²)
     mass = get_mass(gamemap)
-    accel_tick = mass > 0.0 ? thrust / mass : SVector{2, Float64}(0.0, 0.0)
+    accel_per_second = mass > 0.0 ? thrust / mass : SVector{2, Float64}(0.0, 0.0)
 
     # Default: ship space = space map space (no rotation)
-    applied_accel_tick = accel_tick
+    applied_accel_per_second = accel_per_second
 
     #= During a burn phase the ship conceptually rotates so that its +X axis
        aligns with the burn direction in space-map space.  We rotate the ship-
@@ -959,22 +1009,24 @@ function handle_thrusters!(gamestate::GameState, gamemap::GameMap, mna_state::MN
             s = sin(burn_angle)
 
             # Rotate ship-space acceleration into space-map space
-            applied_accel_tick = SVector(
-                c * accel_tick[1] - s * accel_tick[2],
-                s * accel_tick[1] + c * accel_tick[2],
+            applied_accel_per_second = SVector(
+                c * accel_per_second[1] - s * accel_per_second[2],
+                s * accel_per_second[1] + c * accel_per_second[2],
             )
 
-            # Track burn progress in ship space (both vectors are ship-space, clean subtraction)
-            manoeuvre.burn_remaining_dv -= accel_tick
+            # Track burn progress in ship space: subtract ΔV gained this tick
+            manoeuvre.burn_remaining_dv -= accel_per_second / base_ups
         end
     end
 
-    # Store acceleration as per-second for UI display
-    gamestate.acceleration = applied_accel_tick * base_ups
+    # Store both frames for downstream consumers
+    gamestate.acceleration_ship_frame = accel_per_second
+    gamestate.acceleration_space_map_frame = applied_accel_per_second
 
-    # Integrate velocity: accumulate acceleration each tick (space-map space)
+    # Integrate velocity: one tick's worth of acceleration (space-map space)
+    accel_per_tick = applied_accel_per_second / base_ups
     current_velocity = get_velocity(gamemap)
-    new_velocity = current_velocity + applied_accel_tick
+    new_velocity = current_velocity + accel_per_tick
     set_velocity!(gamemap, new_velocity)
 
     return nothing
@@ -1265,6 +1317,9 @@ function flowcalculator_loop!(
     mna_state = initial_snapshot.mna
     gamestate = initial_snapshot.gamestate
 
+    # Initialise the shared target spacemap time from the loaded map
+    @atomic shared_state.target_spacemap_time = get_target_time(gamemap.space_map)
+
     # Main loop
     while true
         try
@@ -1311,8 +1366,9 @@ function flowcalculator_loop!(
                     @timeit flowcalc_loop_timer "Component Updates" update_components!(gamemap, mna_state)
                     update_map!(gamemap, derivedmapstate, mna_state, gamestate.ticks)
                     update_mna!(derivedmapstate, mna_state, gamestate.ticks)
-                    @timeit flowcalc_loop_timer "Thruster Handling" handle_thrusters!(gamestate, gamemap, mna_state)
-                    step_space_map_time!(gamemap.space_map)
+                    @timeit flowcalc_loop_timer "Thruster Handling" handle_thrusters!(gamestate, gamemap, derivedmapstate, mna_state)
+                    target_time = @atomic shared_state.target_spacemap_time
+                    step_space_map_time!(gamemap.space_map, target_time)
                     update_manoeuvre_phase!(gamestate, gamemap; console_push = threadsafe_console_push)
 
                     _publish_snapshot!(set_snapshot, gamemap, derivedmapstate, mna_state, gamestate, timing.current_time)

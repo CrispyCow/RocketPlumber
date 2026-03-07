@@ -106,7 +106,7 @@ function mapgen_fluidtransfer()
         initial_energy = 1000000.0,
         max_conductance = 0.5,
         min_conductance = 0.0,
-        change_rate = 0.4 / 60
+        change_rate = 0.4 / BASE_UPS
     )
 
     pump_2 = ElectricPumpCompBehav(
@@ -116,7 +116,7 @@ function mapgen_fluidtransfer()
         initial_energy = 1000000.0,
         max_conductance = 0.5,
         min_conductance = 0.0,
-        change_rate = 0.4 / 60
+        change_rate = 0.4 / BASE_UPS
     )
 
     pump_3 = ElectricPumpCompBehav(
@@ -126,7 +126,7 @@ function mapgen_fluidtransfer()
         initial_energy = 1000000.0,
         max_conductance = 0.5,
         min_conductance = 0.0,
-        change_rate = 0.4 / 60
+        change_rate = 0.4 / BASE_UPS
     )
 
     # Create turbopump with inactive turbine state
@@ -140,7 +140,7 @@ function mapgen_fluidtransfer()
     )
 
     # Create decomposition chamber
-    decomp = DecompChamberCompBehav(expansion_factor = 5.0)
+    decomp = DecompChamberCompBehav()
 
     # Create nozzles - separate instances
     nozzle_1 = BasicNozzleCompBehav(
@@ -160,7 +160,7 @@ function mapgen_fluidtransfer()
         max_conductance = 2.0,
         min_conductance = 0.0,
         percentage_step_size = Float64(0.05f0),
-        change_rate = Float64(0.25f0 / 60)
+        change_rate = Float64(0.25f0 / BASE_UPS)
     )
 
     # Create tile-based pipe components

@@ -176,10 +176,12 @@ let
         return (x, y)
     end
 
-    "Stores the latest scroll offsets (GLFW callback)"
+    "Stores the latest scroll offsets and forwards to CImGui (GLFW callback)"
     global function scroll_callback(window::GLFW.Window, xoffset::Cdouble, yoffset::Cdouble)
-        state.latest_x = xoffset
-        state.latest_y = yoffset
+        state.latest_x += xoffset  # accumulate to avoid losing rapid scroll events
+        state.latest_y += yoffset
+        # Forward to CImGui so ImGui windows can scroll
+        CImGui.lib.ImGui_ImplGlfw_ScrollCallback(Ptr{CImGui.lib.GLFWwindow}(window.handle), xoffset, yoffset)
         return nothing
     end
 end

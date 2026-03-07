@@ -212,8 +212,8 @@ update_flowbehav!(behav; kwargs...)
 # Click handling (default: no-op)
 on_click!(behav; kwargs...)
 
-# Thrust calculation (default: 0.0)
-get_thrust(behav; kwargs...)::Float64
+# Thrust calculation (default: zero vector)
+get_thrust(behav; tile, rotation, mna_state, derivedmapstate, kwargs...)::SVector{2, Float64}
 
 # Rotation mapping (default: identity)
 map_rotation(behav, rotation::HexAxis)::HexAxis

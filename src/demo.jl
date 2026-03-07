@@ -49,7 +49,7 @@ function get_demo_vector()::Vector{DemoLevel}
                     "[2/4] INFO: BASIC CONTROLS
                 Press WASD to pan the view and Q/E to zoom in and out.
                 Press space to pause the simulation and ESC to open the pause menu.
-                Press number keys 1-4 or click the buttons to switch between placement modes.
+                Press number keys 1-3 or click the buttons to switch between placement modes.
                 There is a panel in the bottom left showing the modes, you can also click these to switch modes."
                 ),
 
@@ -63,9 +63,11 @@ function get_demo_vector()::Vector{DemoLevel}
                 dedent(
                     "[4/4] INFO AND TASK: HOW TO PLACE PIPES AND CONNECT THE NOZZLE
                 To connect the nozzle you'll need some pipes! Pipes can be placed on the edges between hex tiles, or on the tiles themselves. \
-                Press 3 to enter Pipe Placement mode. This places 'scrap' pipes. There's always plenty of scrap lying around to make these! \
+                Press 3 to enter Pipe Editing mode. This places 'scrap' pipes. There's always plenty of scrap lying around to make these! \
                 You can press R to rotate the tile-placed pipes. No need to rotate edge-placed ones, there's only one way they can go! \
-                To actually place the pipes just click. Try to place pipes connecting the tank to the nozzle. Once you see thrust, mark this complete!"
+                To actually place the pipes just click. Try to place pipes connecting the tank to the nozzle. \
+                If you misplace a pipe, just click on it again to delete it. \
+                Once you've made the connection and see thrust, mark this complete!"
                 ),
             ]
         )
@@ -77,14 +79,14 @@ function get_demo_vector()::Vector{DemoLevel}
             title = "Getting moving with Big Pipes",
             hints = [
                 dedent(
-                    "[1/4] INFO: MAP GOAL
+                    "[1/6] INFO: MAP GOAL
                 Here is another ship with the parts for a cold gas thruster strewn around. Time to plumb it up and get the ship moving! \
                 With the exception of the 'scrap' pipes, you can't actually create new components for a ship out of thin air. \
                 Instead you have to move around ones you already have. Let's see how to do that!"
                 ),
 
                 dedent(
-                    "[2/4] INFO: HOW TO MOVE PARTS
+                    "[2/6] INFO: HOW TO MOVE PARTS
                 To move parts (both pipes and tile components) press 2 to enter Move mode. Select the part you want to move by clicking on it. \
                 You can now move the part with your mouse, and rotate it by pressing R. \
                 If you have changed your mind you can deselect the part by clicking on it again, or pressing ESC to leave Move mode. \
@@ -92,7 +94,7 @@ function get_demo_vector()::Vector{DemoLevel}
                 ),
 
                 dedent(
-                    "[3/4] TASK: MOVE AND PLUMB THE NOZZLE
+                    "[3/6] TASK: MOVE AND PLUMB THE NOZZLE
                 Start by moving the nozzle so it is in a better spot and pointing towards the left. \
                 Once you have done that it's time to plumb it to the tanks. \
                 You could do this with 'scrap' pipes like last time, but there are some nicer looking pipes lying around. \
@@ -101,11 +103,27 @@ function get_demo_vector()::Vector{DemoLevel}
                 ),
 
                 dedent(
-                    "[4/4] TASK: TRY TO MOVE A GAS TANK
+                    "[4/6] TASK: TRY TO MOVE A GAS TANK
                 While you are here try moving one of the gas tanks, you might notice this doesn't work! \
-                This is because you can't move a tank that's still got fluid in it. \
-                You will have to use the fuel first (or find another way to move it around, stay tuned). \
-                If you waited until all the gas has been used up you will see you can now move the tank (although I'd take my word for it, that will take a while). \
+                This is because you can't move a tank that's still got fluid in it, let's see if we can empty it. \
+                It's going to take a while to empty just with the nozzle. Go to the next task to see how to speed that up!"
+                ),
+
+                dedent(
+                    "[5/6] TASK: CHANGE THE SIMULATION SPEED
+                Sometimes things are going to take a while, but you can save time by temporarily increasing the simulation speed! \
+                To do this, on the top left of your screen you can press the 2X, 4X or MAX buttons, and then press 1X to return to normal speed. \
+                You can also access these same controls by pressing the '[' and ']' keys to slow down and speed up the simulation respectively. \
+                Try speeding up the simulation to empty the tank faster, and then slow it back down once it seems empty! \
+                If you try and move the tank again, you'll see it still doesn't work, gas tanks can be quite stubborn to get the last bit out of. \
+                Let's see how we can fix that! "
+                ),
+
+                dedent(
+                    "[6/6] TASK: VENT THEN MOVE A GAS TANK
+                If a tank has some fuel you want to get rid of, you can always empty it by venting to space!
+                If you right click on the tank you can see the 'actions' panel, and one of those actions is 'vent' which empties its contents, and allows it to be moved.
+                Try that now, and you'll see you can now move the tank around (and I'll explain what the 'stalled' state means later). \
                 Now you know how to move your ship parts around, you can mark this as complete!"
                 ),
             ]
@@ -129,7 +147,7 @@ function get_demo_vector()::Vector{DemoLevel}
                 This map is intended to highlight this effect. \
                 There's already a rather chaotic pipe network almost all the way between the tanks and the nozzle so there is not actually that much for you to do. \
                 Just place a few pipes to make the final connection, and enjoy the view! Feel free to try adding or deleting a few of the pipes to see what happens. \
-                You can enter inspect mode by pressing 1, and hover over nodes to see their pressure, or hover over pipes and nozzles to see their flow rates. \
+                You can hover over nodes to see their pressure, or hover over pipes and nozzles to see their flow rates. \
                 The units might not be what you expect, but that will be explained shortly."
                 ),
 
@@ -146,7 +164,7 @@ function get_demo_vector()::Vector{DemoLevel}
                 This might seem a bit familiar for anyone with an electronics background (Ohm's law!). \
                 That is not a coincidence. In addition to this being a decent approximation of fluid flow in the real world, this is because the game is actually based around a circuit analogy of fluid flow. \
                 Your pipes and pumps are converted into circuit elements, and the circuit is solved using circuit simulation algorithms that would not be out of place in a SPICE tool to give you your pressures (voltages) and flow rates (current). \
-                You can get a peek at the actual numbers by entering inspect mode (press 1) and hovering over the components, and pipes to see what circuit elements they correspond to!"
+                You can get a peek at the actual numbers by hovering over the components, and pipes to see what circuit elements they correspond to!"
                 ),
             ]
         )
@@ -174,7 +192,7 @@ function get_demo_vector()::Vector{DemoLevel}
 
                 dedent(
                     "[3/3] TASK: CONTROL THE NOZZLES
-                To control switched valves, press 1 to enter inspect mode and then simply click the nozzle. \
+                To control switched valves, you can right click on them to see their actions, or simply click the nozzle in inspect mode (press 1). \
                 This toggles it between on and off. It does take a small time for the valve to actuate, but this is the fastest-to-control rocket engine you'll ever get. \
                 Have a play with your nozzles, watch the cool particle effects, and when you are done you can mark this as complete!"
                 ),
@@ -217,7 +235,7 @@ function get_demo_vector()::Vector{DemoLevel}
                 dedent(
                     "[4/5] INFO: PUMPS FOR LIQUID FUELS
                 The second added complexity of liquid fuels is that they are not stored at high pressure in their tanks. \
-                Try hovering over the tank in inspect mode and you can verify that. \
+                Try hovering over the tank and you can verify that. \
                 To move fuel at the pressures required for a useful rocket engine you need a pump! \
                 Thankfully there is one lying nearby."
                 ),
@@ -225,7 +243,7 @@ function get_demo_vector()::Vector{DemoLevel}
                 dedent(
                     "[5/5] TASK: ADD THE PUMP
                 To add the pump to the engine, move it into the plumbing between the tank and the decomposition chamber. \
-                You might have to delete an existing pipe for this. You can press 4 to enter DELETE mode, simply click something to delete it. \
+                You might have to delete an existing pipe for this. You can press 5 to enter DELETE mode, simply click something to delete it. \
                 This pump is an electrically powered turbo-pump. \
                 It takes energy from an internal battery and uses it to pump a liquid at high pressure. \
                 It won't do anything when first installed, but that is just because you have to click on it in inspect mode to turn it on. \
@@ -349,8 +367,8 @@ function get_demo_vector()::Vector{DemoLevel}
                 dedent(
                     "[3/5] TASK: USING EDITOR MODE
                 Once you've pressed the grave key (`/~ key next to the 1 on your keyboard) you should see a few new mode options. \
-                Press 5 to enter 'create tile' mode which lets you place the different tiles to build a ship, you can cycle through the options with the scroll wheel, and tune their parameters in the 'properties' panel on the right of the screen. \
-                Press 6 to enter 'edit surface' mode that lets you click to add or remove ship surface to build on. \
+                Press 6 to enter 'create tile' mode which lets you place the different tiles to build a ship, you can cycle through the options with the scroll wheel, and tune their parameters in the 'properties' panel on the right of the screen. \
+                Press 7 to enter 'edit surface' mode that lets you click to add or remove ship surface to build on. \
                 If you enter 'pipe' mode, you will also notice an option in the properties panel to switch to the big pipes. \
                 Try using these new abilities to modify the ship!"
                 ),

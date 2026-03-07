@@ -43,9 +43,9 @@ export get_docking_status, set_docking_status!, update_docking!, clear_all_docki
 #= ---------- Space Map and Velocity Exports ----------- =#
 export get_velocity, set_velocity!, get_space_map_seed, get_time_years, set_time_years!
 export get_active_manoeuvre, set_active_manoeuvre!, clear_active_manoeuvre!, has_active_manoeuvre
-export initialise_spacemap!, get_spacemap, get_mass
+export initialise_spacemap!, get_spacemap, get_mass, get_tile_mass, set_tile_mass!, get_dry_mass, get_wet_mass
 export get_position, set_position!, get_target_time, set_target_time!
-export is_time_progressing, get_encounter_points
+export is_time_progressing, get_encounter_points, get_last_stop_time, set_last_stop_time!
 
 # ===============================================================
 # Game State Struct Types
@@ -264,6 +264,12 @@ set_target_time!(::SpaceMapEmpty, ::Float64) = nothing
 
 "Check whether time is currently being progressed (current < target)."
 is_time_progressing(::SpaceMapEmpty)::Bool = false
+
+"Get the last time a warp stopped (for easing). Always 0.0 for SpaceMapEmpty."
+get_last_stop_time(::SpaceMapEmpty)::Float64 = 0.0
+
+"Set the last stop time. No-op for SpaceMapEmpty."
+set_last_stop_time!(::SpaceMapEmpty, ::Float64) = nothing
 
 "Get the encounter points vector. Empty for SpaceMapEmpty."
 get_encounter_points(::SpaceMapEmpty) = EncounterPoint[]
@@ -1290,12 +1296,56 @@ set_target_time!(gamemap::GameMap, t::Float64) = set_target_time!(gamemap.space_
 "Check whether time is progressing on the game map."
 is_time_progressing(gamemap::GameMap)::Bool = is_time_progressing(gamemap.space_map)
 
+"Get the last stop time from the game map (for warp easing)."
+get_last_stop_time(gamemap::GameMap)::Float64 = get_last_stop_time(gamemap.space_map)
+
+"Set the last stop time on the game map."
+set_last_stop_time!(gamemap::GameMap, t::Float64) = set_last_stop_time!(gamemap.space_map, t)
+
 "Get encounter points from the game map."
 get_encounter_points(gamemap::GameMap) = get_encounter_points(gamemap.space_map)
 
-"Total mass of all ships based on surface tile count."
-function get_mass(gamemap::GameMap; mass_per_tile::Float64 = 1000.0)::Float64
-    return sum(count_surface_tiles(ship) for (_, ship) in gamemap.ships) * mass_per_tile
+"Dry mass of all ships: surface tile mass + structural component mass (no fuel)."
+function get_dry_mass(gamemap::GameMap; mass_per_tile::Float64 = get_tile_mass())::Float64
+    tile_mass = sum(count_surface_tiles(ship) for (_, ship) in gamemap.ships) * mass_per_tile
+
+    component_dry_mass = 0.0
+    for (_, ship) in gamemap.ships
+        for (_, comp) in get_all_components(ship)
+            component_dry_mass += get_component_dry_mass(comp)
+        end
+    end
+
+    return tile_mass + component_dry_mass
+end
+
+"Wet mass (stored fluid) across all ships. If `fluid` is `nothing`, returns total fluid mass; if a specific FluidTags, returns mass of only that fluid."
+function get_wet_mass(gamemap::GameMap; fluid::Union{FluidTags, Nothing} = nothing)::Float64
+    wet_mass = 0.0
+    for (_, ship) in gamemap.ships
+        for (_, comp) in get_all_components(ship)
+            wet_mass += get_component_wet_mass(comp; fluid = fluid)
+        end
+    end
+    return wet_mass
+end
+
+"Total mass of all ships: dry mass (tiles + structure) + wet mass (stored fluid)."
+function get_mass(gamemap::GameMap; mass_per_tile::Float64 = get_tile_mass())::Float64
+    return get_dry_mass(gamemap; mass_per_tile = mass_per_tile) + get_wet_mass(gamemap)
+end
+
+#= ---------- Tile Mass Tuning ----------- =#
+
+const _tile_mass = Threads.Atomic{Float64}(20.0)
+
+"Get the mass assigned to each ship surface tile."
+get_tile_mass()::Float64 = _tile_mass[]
+
+"Set the mass assigned to each ship surface tile."
+function set_tile_mass!(value::Float64)
+    _tile_mass[] = value
+    return nothing
 end
 
 end # module FlowMap

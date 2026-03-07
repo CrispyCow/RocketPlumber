@@ -137,6 +137,7 @@ using SquirrelNoise
 include(joinpath(dirname(@__FILE__), "initial_window_setup.jl"))
 include(joinpath(dirname(@__FILE__), "interactions.jl"))
 include(joinpath(dirname(@__FILE__), "components.jl"))
+include(joinpath(dirname(@__FILE__), "map_loading.jl"))
 include(joinpath(dirname(@__FILE__), "ui_common.jl"))
 include(joinpath(dirname(@__FILE__), "ui_game.jl"))
 include(joinpath(dirname(@__FILE__), "ui_menus.jl"))

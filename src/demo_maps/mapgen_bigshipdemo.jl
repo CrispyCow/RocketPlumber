@@ -1141,37 +1141,37 @@ function mapgen_bigshipdemo()
 
     # Decomposition chambers
     components[TileCoord(-10, 0)] = ComponentOnTile(
-        DecompChamberCompBehav(expansion_factor = 5.0), HexFrame.S_NEG
+        DecompChamberCompBehav(), HexFrame.S_NEG
     )
     components[TileCoord(-8, 11)] = ComponentOnTile(
-        DecompChamberCompBehav(expansion_factor = 5.0), HexFrame.S_POS
+        DecompChamberCompBehav(), HexFrame.S_POS
     )
     components[TileCoord(-12, 4)] = ComponentOnTile(
-        DecompChamberCompBehav(expansion_factor = 5.0), HexFrame.Q_POS
+        DecompChamberCompBehav(), HexFrame.Q_POS
     )
     components[TileCoord(-12, 8)] = ComponentOnTile(
-        DecompChamberCompBehav(expansion_factor = 5.0), HexFrame.Q_POS
+        DecompChamberCompBehav(), HexFrame.Q_POS
     )
     components[TileCoord(-10, 10)] = ComponentOnTile(
-        DecompChamberCompBehav(expansion_factor = 5.0), HexFrame.R_NEG
+        DecompChamberCompBehav(), HexFrame.R_NEG
     )
     components[TileCoord(-7, -4)] = ComponentOnTile(
-        DecompChamberCompBehav(expansion_factor = 5.0), HexFrame.R_POS
+        DecompChamberCompBehav(), HexFrame.R_POS
     )
     components[TileCoord(-10, 11)] = ComponentOnTile(
-        DecompChamberCompBehav(expansion_factor = 5.0), HexFrame.R_NEG
+        DecompChamberCompBehav(), HexFrame.R_NEG
     )
     components[TileCoord(-8, -3)] = ComponentOnTile(
-        DecompChamberCompBehav(expansion_factor = 5.0), HexFrame.R_POS
+        DecompChamberCompBehav(), HexFrame.R_POS
     )
     components[TileCoord(-10, -1)] = ComponentOnTile(
-        DecompChamberCompBehav(expansion_factor = 5.0), HexFrame.S_NEG
+        DecompChamberCompBehav(), HexFrame.S_NEG
     )
     components[TileCoord(-12, 6)] = ComponentOnTile(
-        DecompChamberCompBehav(expansion_factor = 5.0), HexFrame.Q_POS
+        DecompChamberCompBehav(), HexFrame.Q_POS
     )
     components[TileCoord(-7, 11)] = ComponentOnTile(
-        DecompChamberCompBehav(expansion_factor = 5.0), HexFrame.S_POS
+        DecompChamberCompBehav(), HexFrame.S_POS
     )
 
     # Big tile-based pipes (high conductance)

@@ -52,7 +52,7 @@ function mapgen_turbopumpintro()
     )
 
     # Create decomposition chamber instance
-    decomp_chamber = DecompChamberCompBehav(expansion_factor = 5.0)
+    decomp_chamber = DecompChamberCompBehav()
 
     # Create nozzle instance
     nozzle = BasicNozzleCompBehav(
