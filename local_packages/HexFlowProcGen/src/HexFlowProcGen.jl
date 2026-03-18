@@ -1065,7 +1065,7 @@ get_encounter_config(::SpaceMapEmpty)::Nothing = nothing
 "Overwrite the game map's space map with a new `SpaceMapState`."
 function initialise_spacemap!(
         gamemap::GameMap, seed::UInt32, config::EncounterSystemConfig,
-        velocity::SVector{2, Float64} = SVector{2, Float64}(1.0, 0.0)
+        velocity::SVector{2, Float64} = SVector{2, Float64}(10.0, 0.0)
     )
     gamemap.space_map = SpaceMapState(
         seed = seed, velocity = velocity, time_years = 0.0,

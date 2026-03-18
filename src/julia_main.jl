@@ -129,6 +129,7 @@ using HexFrame, HexElements, HexFluids, HexFlowTelemetry
 using HexComponentsAPI, FlowEngine, FlowMap, RenderEngine, HexFlowProcGen
 using HexFlowControl, HexFlowCalculator, HexFlowRendering
 using SquirrelNoise
+using HexFlowLearningSystem
 
 # ===============================================================
 # Load All Source Files Upfront
@@ -141,8 +142,9 @@ include(joinpath(dirname(@__FILE__), "map_loading.jl"))
 include(joinpath(dirname(@__FILE__), "ui_common.jl"))
 include(joinpath(dirname(@__FILE__), "ui_game.jl"))
 include(joinpath(dirname(@__FILE__), "ui_menus.jl"))
+include(joinpath(dirname(@__FILE__), "ui_learning.jl"))
 include(joinpath(dirname(@__FILE__), "gameloop.jl"))
-include(joinpath(dirname(@__FILE__), "demo.jl"))
+include(joinpath(dirname(@__FILE__), "tutorials.jl"))
 include(joinpath(dirname(@__FILE__), "startmenu.jl"))
 
 # ===============================================================

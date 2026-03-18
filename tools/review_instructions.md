@@ -51,6 +51,7 @@ The goal is to balance readability with conciseness. Comments should convey inte
       end
   end
   ```
+  And don't remove this style of comment if it's already present in the code
 - **Larger code sections**: Use block comments or multiple single-line comments to explain the section
   ```julia
   #=
@@ -131,7 +132,8 @@ Do not excessively break function signatures across multiple lines. I have a wid
 - If you can identify any obvious issues or edge cases, present them along with a fix
 
 ### Code Structure
-- **Duplicate code**: Look for code that could be easily extracted into a helper function; present a suggested pattern
+- **Duplicate code**: Look for code that could be easily extracted into a helper function; present a suggested pattern.
+- **Excessive abstraction**: Do not add excessive helper functions that do not address code duplication, they just add complexity and indirection
 - **Deeply nested flow control**: If unnecessary, propose approaches to simplify it (early returns, guard clauses, etc.)
 - **Missing functions**: Sometimes I might have implemented interface/type functions for some things but not others. Search the codebase and if you see utility in a simple additional function, suggest it
 

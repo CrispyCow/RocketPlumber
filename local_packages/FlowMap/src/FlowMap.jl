@@ -15,6 +15,10 @@ export EncounterClass, ENCOUNTER_SHIP, ENCOUNTER_FUEL_CACHE, ENCOUNTER_SCRAP
 export ManoeuvrePhase, PHASE_WAIT_APPROACH, PHASE_MAIN_BURN, PHASE_COAST, PHASE_DECEL_BURN, PHASE_ENCOUNTER_READY
 export EncounterPoint, EncounterEvent
 
+#= ---------- Learning Progress Exports ----------- =#
+export TutorialStatus, TUTORIAL_WAITING, TUTORIAL_IN_PROGRESS, TUTORIAL_COMPLETED
+export AbstractLearningSystem, NoLearningSystem, TutorialState, LearningProgress, SandboxLearningState
+
 #= ---------- Function Exports ----------- =#
 export add_ship!, remove_ship!, get_all_ship_names, has_ship, get_ship, offset_ship!, swap_primary!
 
@@ -32,6 +36,9 @@ export get_axial_bounds, get_cartesian_bounds, get_surface_centroid
 export find_ship_for_surface, find_ships_adjacent_to_coord, would_bridge_ships, find_valid_ship_for_placement, find_ship_with_component, find_ship_with_pipe
 export find_ship_for_node
 
+#= ---------- Learning System Exports ----------- =#
+export get_learning_system, set_learning_system!, has_learning_system, is_sandbox_learning
+
 #= ---------- Off-Ship Pipe Exports ----------- =#
 export can_place_pipe_offship, validate_offship_pipe_deletion, reassign_pipe_ownership!
 export is_node_on_any_ship_surface, flood_search_pipes_from_node!
@@ -42,7 +49,7 @@ export get_docking_status, set_docking_status!, update_docking!, clear_all_docki
 
 #= ---------- Space Map and Velocity Exports ----------- =#
 export get_velocity, set_velocity!, get_space_map_seed, get_time_years, set_time_years!
-export get_active_manoeuvre, set_active_manoeuvre!, clear_active_manoeuvre!, has_active_manoeuvre
+export get_active_manoeuvre, set_active_manoeuvre!, clear_active_manoeuvre!, has_active_manoeuvre, phase_description
 export initialise_spacemap!, get_spacemap, get_mass, get_tile_mass, set_tile_mass!, get_dry_mass, get_wet_mass
 export get_position, set_position!, get_target_time, set_target_time!
 export is_time_progressing, get_encounter_points, get_last_stop_time, set_last_stop_time!
@@ -175,6 +182,16 @@ Base.isless(a::EncounterEvent, b::EncounterEvent) = a.time < b.time
     PHASE_ENCOUNTER_READY   # Burns complete — encounter triggers automatically
 end
 
+"Return a player-facing description of the given manoeuvre phase."
+function phase_description(phase::ManoeuvrePhase)::String
+    phase == PHASE_WAIT_APPROACH && return "Waiting for Closest Approach"
+    phase == PHASE_MAIN_BURN && return "Performing Main Burn"
+    phase == PHASE_COAST && return "Waiting for Target Intercept"
+    phase == PHASE_DECEL_BURN && return "Performing Capture Burn"
+    phase == PHASE_ENCOUNTER_READY && return "Target Reached"
+    return "Unknown manoeuvre phase"
+end
+
 """
 Tracks an in-progress intercept manoeuvre via an explicit phase state machine.
 
@@ -294,11 +311,49 @@ The docking_status represents the ship's docking/approach/depart state for cosme
 end
 @struct_hash_equal ShipMap
 
+# ===============================================================
+# Learning System Types
+# ===============================================================
+
+abstract type AbstractLearningSystem end
+
+"Learning is disabled for this map."
+struct NoLearningSystem <: AbstractLearningSystem end
+@struct_hash_equal NoLearningSystem
+
+@enum TutorialStatus::UInt8 begin
+    TUTORIAL_WAITING = 0
+    TUTORIAL_IN_PROGRESS = 1
+    TUTORIAL_COMPLETED = 2
+end
+
+"Per-tutorial persistent state combining status and step progress."
+@kwdef mutable struct TutorialState
+    status::TutorialStatus = TUTORIAL_WAITING
+    "1-based index of the furthest unlocked step (for in-game tutorials). Defaults to 1."
+    unlocked_step::Int = 1
+    "Cached blocker message for the current frontier step. `nothing` means the step is unblocked or informational."
+    step_blocker::Union{Nothing, String} = nothing
+end
+
+"Persistent learning progress, saved with the map. Tutorials absent from `tutorials` are implicitly TUTORIAL_WAITING."
+@kwdef mutable struct LearningProgress <: AbstractLearningSystem
+    tutorials::Dict{Symbol, TutorialState} = Dict{Symbol, TutorialState}()
+end
+
+"Single sandbox tutorial state stored directly on a sandbox map."
+@kwdef mutable struct SandboxLearningState <: AbstractLearningSystem
+    tutorial_id::Symbol
+    level_index::Int = 1
+    tutorial_state::TutorialState = TutorialState(status = TUTORIAL_IN_PROGRESS)
+end
+
 
 "Top-level game map containing multiple named ships.  Always contains at least :primary."
 @kwdef mutable struct GameMap
     ships::Dict{Symbol, ShipMap} = Dict(:primary => ShipMap())
     space_map::AbstractSpaceMap = SpaceMapEmpty()
+    learning_system::AbstractLearningSystem = NoLearningSystem()
 end
 @struct_hash_equal GameMap
 
@@ -306,6 +361,21 @@ end
 function GameMap(ship::ShipMap)
     return GameMap(ships = Dict(:primary => ship))
 end
+
+"Get the learning system attached to a game map."
+get_learning_system(gamemap::GameMap)::AbstractLearningSystem = gamemap.learning_system
+
+"Set the learning system attached to a game map."
+function set_learning_system!(gamemap::GameMap, learning_system::AbstractLearningSystem)
+    gamemap.learning_system = learning_system
+    return nothing
+end
+
+"Check whether a game map has any learning system enabled."
+has_learning_system(gamemap::GameMap)::Bool = !(get_learning_system(gamemap) isa NoLearningSystem)
+
+"Check whether a game map is a sandbox tutorial session."
+is_sandbox_learning(gamemap::GameMap)::Bool = get_learning_system(gamemap) isa SandboxLearningState
 
 # ===============================================================
 # ShipMap Abstraction Functions

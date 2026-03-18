@@ -21,6 +21,7 @@ export CommandQueue
 # Function exports - Setup
 export create_snapshot_storage, create_threadsafe_consolebuffer
 export create_command_queue
+export set_max_reachable_bounds!, get_max_reachable_bounds
 
 # Function exports - Commands
 export create_set_tile_command, create_set_pipe_behavior_command, create_move_command
@@ -58,6 +59,10 @@ mutable struct FlowCalculatorSharedState
     @atomic target_ups::Float64
     @atomic actual_ups::Float64
     @atomic target_spacemap_time::Float64
+    @atomic view_bounds_x_pos::Float64
+    @atomic view_bounds_x_neg::Float64
+    @atomic view_bounds_y_pos::Float64
+    @atomic view_bounds_y_neg::Float64
 end
 
 "Keyword constructor for FlowCalculatorSharedState with defaults"
@@ -66,9 +71,42 @@ function FlowCalculatorSharedState(;
         is_paused::Bool = false,
         target_ups::Float64 = BASE_UPS,
         actual_ups::Float64 = 0.0,
-        target_spacemap_time::Float64 = 0.0
+        target_spacemap_time::Float64 = 0.0,
+        view_bounds_x_pos::Float64 = 5.0,
+        view_bounds_x_neg::Float64 = -5.0,
+        view_bounds_y_pos::Float64 = 5.0,
+        view_bounds_y_neg::Float64 = -5.0
     )
-    return FlowCalculatorSharedState(should_exit, is_paused, target_ups, actual_ups, target_spacemap_time)
+    return FlowCalculatorSharedState(
+        should_exit,
+        is_paused,
+        target_ups,
+        actual_ups,
+        target_spacemap_time,
+        view_bounds_x_pos,
+        view_bounds_x_neg,
+        view_bounds_y_pos,
+        view_bounds_y_neg,
+    )
+end
+
+"Push the render thread's computed max reachable bounds into shared state."
+function set_max_reachable_bounds!(shared_state::FlowCalculatorSharedState, bounds::HexFrame.CartesianBounds)
+    @atomic :monotonic shared_state.view_bounds_x_pos = bounds.X_POS
+    @atomic :monotonic shared_state.view_bounds_x_neg = bounds.X_NEG
+    @atomic :monotonic shared_state.view_bounds_y_pos = bounds.Y_POS
+    @atomic :monotonic shared_state.view_bounds_y_neg = bounds.Y_NEG
+    return nothing
+end
+
+"Read the current max reachable bounds from shared state."
+function get_max_reachable_bounds(shared_state::FlowCalculatorSharedState)::HexFrame.CartesianBounds
+    return (
+        X_POS = @atomic(:monotonic, shared_state.view_bounds_x_pos),
+        X_NEG = @atomic(:monotonic, shared_state.view_bounds_x_neg),
+        Y_POS = @atomic(:monotonic, shared_state.view_bounds_y_pos),
+        Y_NEG = @atomic(:monotonic, shared_state.view_bounds_y_neg),
+    )
 end
 
 "Timing state for the FlowCalculator fixed-timestep accumulator."
@@ -1112,6 +1150,39 @@ end
 # Manoeuvre phase state machine
 # ===============================================================
 
+"Spawn the active manoeuvre's target encounter onto the live calculator-thread map."
+function trigger_ready_encounter!(
+        gamemap::GameMap,
+        man::ManoeuvreData,
+        sm::SpaceMapState;
+        console_push::Function = identity,
+        max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing
+    )::Bool
+    target_index = man.target_encounter_index
+    if !(1 <= target_index <= length(sm.encounter_points))
+        clear_active_manoeuvre!(gamemap)
+        console_push("Manoeuvre cancelled: target encounter is no longer available.")
+        return false
+    end
+
+    ep = sm.encounter_points[target_index]
+    enc_seed = get_encounter_ship_seed(ep, sm.seed)
+
+    enc_config = get_encounter_config(sm)
+    class_config = enc_config.encounter_class_configs[ep.encounter_class]
+    new_shipmap = generate_encounter(ep.encounter_class, ep.fuel_tag, ep.richness, enc_seed, class_config)
+
+    encounter_ship_optimal_dir!(gamemap, new_shipmap, ep.display_name, enc_seed; max_view_bounds)
+    spawn_encounter_point!(ep, sm, sm.time_years)
+    rebuild_event_queue!(sm)
+
+    console_push("Encounter triggered: $(ep.display_name)")
+    @info "Encounter triggered" name = ep.display_name class = ep.encounter_class
+
+    clear_active_manoeuvre!(gamemap)
+    return true
+end
+
 """
 Advance the manoeuvre state machine one step.
 
@@ -1120,9 +1191,10 @@ to set `burn_target_dv` and `burn_remaining_dv`.  This rotation maps space-map +
 onto ship +X (i.e. the ship "turns" to face the burn direction).
 
 All phase transitions are centralised here so the UI is purely a display layer.
-Must be called once per tick, after `handle_thrusters!` and `step_space_map_time!`.
+Must be called once per tick near the start of the simulation pipeline, before
+component/MNA updates and spacemap time stepping.
 """
-function update_manoeuvre_phase!(gamestate::GameState, gamemap::GameMap; console_push::Function = identity)
+function update_manoeuvre_phase!(gamestate::GameState, gamemap::GameMap, ipc::FlowCalculatorIPC)
     !has_active_manoeuvre(gamemap) && return nothing
     sm = gamemap.space_map
     !(sm isa SpaceMapState) && return nothing
@@ -1130,6 +1202,8 @@ function update_manoeuvre_phase!(gamestate::GameState, gamemap::GameMap; console
     man = get_active_manoeuvre(gamemap)
     rem_mag = norm(man.burn_remaining_dv)
     thrust_mag = norm(gamestate.thrust)
+    console_push = ipc.console_push
+    max_view_bounds = get_max_reachable_bounds(ipc.shared_state)
 
     if man.phase == PHASE_WAIT_APPROACH
         # Guards: thrust outside a burn phase, or time warp that skips the main burn
@@ -1194,13 +1268,17 @@ function update_manoeuvre_phase!(gamestate::GameState, gamemap::GameMap; console
 
             current_velocity = get_velocity(gamemap)
             @info "Decel Burn completed:" current_velocity = current_velocity
+
+            trigger_ready_encounter!(gamemap, man, sm; console_push, max_view_bounds)
+            return nothing
         end
 
     elseif man.phase == PHASE_ENCOUNTER_READY
         # Guard: thrust after burns complete invalidates the final approach
         cancel_if_thrust!(gamemap, gamestate; console_push) && return nothing
+        trigger_ready_encounter!(gamemap, man, sm; console_push, max_view_bounds)
+        return nothing
     end
-    # PHASE_ENCOUNTER_READY transition to encounter_ship! is handled by the render thread
 
     return nothing
 end
@@ -1363,13 +1441,13 @@ function flowcalculator_loop!(
 
                     # Simulation pipeline
                     update_docking!(gamemap)
+                    update_manoeuvre_phase!(gamestate, gamemap, ipc)
                     @timeit flowcalc_loop_timer "Component Updates" update_components!(gamemap, mna_state)
                     update_map!(gamemap, derivedmapstate, mna_state, gamestate.ticks)
                     update_mna!(derivedmapstate, mna_state, gamestate.ticks)
                     @timeit flowcalc_loop_timer "Thruster Handling" handle_thrusters!(gamestate, gamemap, derivedmapstate, mna_state)
                     target_time = @atomic shared_state.target_spacemap_time
                     step_space_map_time!(gamemap.space_map, target_time)
-                    update_manoeuvre_phase!(gamestate, gamemap; console_push = threadsafe_console_push)
 
                     _publish_snapshot!(set_snapshot, gamemap, derivedmapstate, mna_state, gamestate, timing.current_time)
 

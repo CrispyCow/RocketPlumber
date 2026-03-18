@@ -37,10 +37,22 @@ JLD2.rconvert(::Type{FlowMap.ShipMap}, nt::NamedTuple) = FlowMap.ShipMap(
     docking_status = get(nt, :docking_status, FlowMap.ConnectedDockStat())
 )
 
-"Conversion for old `GameMap` saved representations that lack `space_map`"
+"Conversion for old `GameMap` saved representations that may lack `space_map` or use the legacy `learning_progress` field."
 JLD2.rconvert(::Type{FlowMap.GameMap}, nt::NamedTuple) = FlowMap.GameMap(
     ships = get(nt, :ships, Dict(:primary => FlowMap.ShipMap())),
     space_map = get(nt, :space_map, FlowMap.SpaceMapEmpty()),
+    learning_system = haskey(nt, :learning_system) ?
+        get(nt, :learning_system, FlowMap.NoLearningSystem()) :
+        get(nt, :learning_progress, FlowMap.LearningProgress()),
+)
+
+#= ---------- Learning System ----------- =#
+
+"Rebuild `TutorialState` from a NamedTuple; `step_blocker` is runtime-only and re-evaluated after load."
+JLD2.rconvert(::Type{FlowMap.TutorialState}, nt::NamedTuple) = FlowMap.TutorialState(
+    status = get(nt, :status, FlowMap.TUTORIAL_WAITING),
+    unlocked_step = get(nt, :unlocked_step, 1),
+    step_blocker = nothing,
 )
 
 #= ---------- SpaceMapEmpty ----------- =#

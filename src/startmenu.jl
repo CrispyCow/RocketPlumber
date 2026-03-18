@@ -13,6 +13,7 @@ using Random: RandomDevice
     PAGE_INITIAL
     PAGE_NEW_GAME
     PAGE_EXPLORER_SETTINGS
+    PAGE_TUTORIAL_SELECT
 end
 
 "Deferred action to execute outside the ImGui frame"
@@ -20,9 +21,29 @@ end
     ACTION_NONE
     ACTION_NEW_BLANK_MAP
     ACTION_LOAD_MAP
-    ACTION_START_DEMO
     ACTION_START_EXPLORER
+    ACTION_LAUNCH_SANDBOX
     ACTION_QUIT
+end
+
+# ===============================================================
+# Session State Machine Types
+# ===============================================================
+
+"Abstract session type for the start-menu state machine."
+abstract type GameSession end
+
+"Map session for blank maps, loaded maps, and explorer mode."
+struct MapSession <: GameSession
+    map_source::Union{Nothing, GameMap}
+end
+
+"Sandbox tutorial session with level progression and optional parent explorer map."
+struct SandboxSession <: GameSession
+    definition::SandboxTutorialDef
+    tutorial_id::Symbol
+    current_level::Int
+    parent_map::Union{Nothing, GameMap}
 end
 
 # ===============================================================
@@ -35,14 +56,17 @@ end
     action::StartMenuAction = ACTION_NONE
     menu_inputs::Dict{Symbol, Any} = Dict{Symbol, Any}()
     last_keystates::Dict{GLFW.Key, Bool} = Dict{GLFW.Key, Bool}()
+    selected_tutorial_id::Union{Nothing, Symbol} = nothing
+    sandbox_entries::Vector{LearningEntry} = sort(get_sandbox_learning_entries(); by = entry -> entry.priority)
 end
 
 # ===============================================================
 # Layout Constants
 # ===============================================================
 
-const MENU_BOX_W = 300.0
+const MENU_BOX_W = 350.0
 const MENU_BOX_H = 350.0
+const MENU_TUTORIAL_BOX_H = 520.0
 const MENU_BUTTON_HEIGHT = 50.0
 const MENU_BUTTON_PADDING = 40.0
 const MENU_BACK_BUTTON_W = 80.0
@@ -52,7 +76,7 @@ const MENU_BACK_BUTTON_H = 30.0
 # Page Renderers
 # ===============================================================
 
-"Render the initial landing page: New Game, Load Game, Demo, Quit"
+"Render the initial landing page: New Game, Load Game, Tutorials, Quit."
 function render_page_initial!(state::StartMenuState, box_w::Float64, button_width::Float64, button_height::Float64)
     CImGui.Dummy((0.0, 20.0))
 
@@ -71,9 +95,12 @@ function render_page_initial!(state::StartMenuState, box_w::Float64, button_widt
     CImGui.Dummy((0.0, 10.0))
 
     CImGui.SetCursorPosX((box_w - button_width) / 2)
-    if CImGui.Button("Start Demo/Tutorial", (button_width, button_height))
-        @info "Demo/Tutorial selected"
-        state.action = ACTION_START_DEMO
+    if CImGui.Button("Tutorials", (button_width, button_height))
+        @info "Tutorials selected"
+        state.page = PAGE_TUTORIAL_SELECT
+    end
+    if CImGui.IsItemHovered()
+        CImGui.SetTooltip("Access the game's tutorials and demos outside of the in-game learning system.")
     end
     CImGui.Dummy((0.0, 10.0))
 
@@ -101,12 +128,18 @@ function render_page_new_game!(state::StartMenuState, box_w::Float64, button_wid
         @info "Explorer Mode settings selected"
         state.page = PAGE_EXPLORER_SETTINGS
     end
+    if CImGui.IsItemHovered()
+        CImGui.SetTooltip("Start a new exploration game where you begin in a simple ship you need to repair and navigate through space.")
+    end
     CImGui.Dummy((0.0, 10.0))
 
     CImGui.SetCursorPosX((box_w - button_width) / 2)
     if CImGui.Button("New Blank Ship", (button_width, button_height))
         @info "Blank Ship selected"
         state.action = ACTION_NEW_BLANK_MAP
+    end
+    if CImGui.IsItemHovered()
+        CImGui.SetTooltip("Create a new blank ship with no components on it. Intended for use in creative/editor mode or debugging.")
     end
 
     return nothing
@@ -131,14 +164,49 @@ function render_page_explorer_settings!(state::StartMenuState, box_w::Float64, b
         state.menu_inputs[:explorer_seed] = rand(RandomDevice(), UInt32)
     end
 
+    learning_enabled = Bool(get!(state.menu_inputs, :explorer_learning_enabled, true))
+    @cref CImGui.Checkbox("Learning Helper Active", &learning_enabled)
+    state.menu_inputs[:explorer_learning_enabled] = learning_enabled
+
     # Spacer for future settings
-    CImGui.Dummy((0.0, 80.0))
+    CImGui.Dummy((0.0, 60.0))
 
     # Start button
     CImGui.SetCursorPosX((box_w - button_width) / 2)
     if CImGui.Button("Start Explorer Mode", (button_width, button_height))
         @info "Starting Explorer Mode"
         state.action = ACTION_START_EXPLORER
+    end
+
+    return nothing
+end
+
+"Render the tutorial selector page."
+function render_page_tutorial_select!(state::StartMenuState, box_w::Float64, button_width::Float64, button_height::Float64, escape_rising::Bool)
+    if CImGui.Button("< Back", (MENU_BACK_BUTTON_W, MENU_BACK_BUTTON_H)) || escape_rising
+        state.page = PAGE_INITIAL
+        return nothing
+    end
+
+    CImGui.Dummy((0.0, 10.0))
+    CImGui.Text("Tutorials & Demos")
+    CImGui.Separator()
+    CImGui.Dummy((0.0, 5.0))
+    CImGui.Text("Individual Tutorials:")
+    CImGui.Dummy((0.0, 5.0))
+
+    for entry in state.sandbox_entries
+        def = entry.definition
+
+        CImGui.SetCursorPosX((box_w - button_width) / 2)
+        if CImGui.Button(def.title, (button_width, 35.0))
+            state.selected_tutorial_id = entry.id
+            state.action = ACTION_LAUNCH_SANDBOX
+        end
+
+        if CImGui.IsItemHovered()
+            CImGui.SetTooltip(def.description)
+        end
     end
 
     return nothing
@@ -155,10 +223,11 @@ based on the current state. Must be called within `ui_renderwrap`.
 function ui_start_menu_render!(state::StartMenuState, window::GLFW.Window)
     winsize = GLFW.GetWindowSize(window)
     win_w, win_h = Float64(winsize.width), Float64(winsize.height)
-    pos = ((win_w - MENU_BOX_W) / 2, (win_h - MENU_BOX_H) / 2)
+    box_h = state.page == PAGE_TUTORIAL_SELECT ? MENU_TUTORIAL_BOX_H : MENU_BOX_H
+    pos = ((win_w - MENU_BOX_W) / 2, (win_h - box_h) / 2)
 
     CImGui.SetNextWindowPos(pos, CImGui.ImGuiCond_Always)
-    CImGui.SetNextWindowSize((MENU_BOX_W, MENU_BOX_H), CImGui.ImGuiCond_Always)
+    CImGui.SetNextWindowSize((MENU_BOX_W, box_h), CImGui.ImGuiCond_Always)
 
     flags = CImGui.ImGuiWindowFlags_NoResize |
         CImGui.ImGuiWindowFlags_NoMove |
@@ -171,6 +240,8 @@ function ui_start_menu_render!(state::StartMenuState, window::GLFW.Window)
         "Rocket Plumber: New Game"
     elseif state.page == PAGE_EXPLORER_SETTINGS
         "Rocket Plumber: Explorer Mode"
+    elseif state.page == PAGE_TUTORIAL_SELECT
+        "Rocket Plumber: Tutorials"
     else
         error("Unhandled start menu page for title: $(state.page)")
     end
@@ -186,6 +257,8 @@ function ui_start_menu_render!(state::StartMenuState, window::GLFW.Window)
         render_page_new_game!(state, MENU_BOX_W, button_width, MENU_BUTTON_HEIGHT, escape_rising)
     elseif state.page == PAGE_EXPLORER_SETTINGS
         render_page_explorer_settings!(state, MENU_BOX_W, button_width, MENU_BUTTON_HEIGHT, escape_rising)
+    elseif state.page == PAGE_TUTORIAL_SELECT
+        render_page_tutorial_select!(state, MENU_BOX_W, button_width, MENU_BUTTON_HEIGHT, escape_rising)
     else
         error("Unhandled start menu page: $(state.page)")
     end
@@ -196,57 +269,145 @@ function ui_start_menu_render!(state::StartMenuState, window::GLFW.Window)
 end
 
 # ===============================================================
+# Session Helpers
+# ===============================================================
+
+"Look up a sandbox tutorial definition by ID, returning `nothing` when invalid or empty."
+function _find_sandbox_definition(id::Symbol)::Union{Nothing, SandboxTutorialDef}
+    entries = get_sandbox_learning_entries()
+    entry_idx = findfirst(entry -> entry.id == id, entries)
+    isnothing(entry_idx) && return nothing
+
+    definition = entries[entry_idx].definition
+    definition isa SandboxTutorialDef || return nothing
+    isempty(definition.levels) && return nothing
+    return definition
+end
+
+"Run a map session by entering the main game loop with its map source."
+function run_session(window::GLFW.Window, session::MapSession)::GameLoopResult
+    return enter_gameloop(window; map_source = session.map_source)
+end
+
+"Run a sandbox tutorial session for the current level."
+function run_session(window::GLFW.Window, session::SandboxSession)::GameLoopResult
+    level = session.definition.levels[session.current_level]
+    sandbox_map = level.map_generator()
+    set_learning_system!(
+        sandbox_map,
+        SandboxLearningState(tutorial_id = session.tutorial_id, level_index = session.current_level),
+    )
+    return enter_gameloop(window; map_source = sandbox_map)
+end
+
+"Determine the next session after a map session exits."
+function next_session(::MapSession, result::GameLoopResult)::Union{Nothing, GameSession}
+    if result.exit_reason == EXIT_SANDBOX_STARTED && !isnothing(result.tutorial_id)
+        definition = _find_sandbox_definition(result.tutorial_id)
+        isnothing(definition) && return nothing
+        return SandboxSession(definition, result.tutorial_id, 1, result.saved_gamemap)
+    end
+
+    return nothing
+end
+
+"Determine the next session after a sandbox session exits."
+function next_session(session::SandboxSession, result::GameLoopResult)::Union{Nothing, GameSession}
+    if result.exit_reason == EXIT_SANDBOX_COMPLETED
+        if session.current_level < length(session.definition.levels)
+            return SandboxSession(session.definition, session.tutorial_id, session.current_level + 1, session.parent_map)
+        end
+
+        if !isnothing(session.parent_map)
+            learning_system = get_learning_system(session.parent_map)
+            if learning_system isa LearningProgress
+                complete_tutorial!(learning_system, session.tutorial_id)
+            end
+        end
+
+        return !isnothing(session.parent_map) ? MapSession(session.parent_map) : nothing
+    end
+
+    if result.exit_reason == EXIT_MENU
+        return !isnothing(session.parent_map) ? MapSession(session.parent_map) : nothing
+    end
+
+    return nothing
+end
+
+"Create the initial session for a start-menu action."
+function _create_session_for_action(state::StartMenuState, action::StartMenuAction, window::GLFW.Window)::Union{Nothing, GameSession}
+    if action == ACTION_NEW_BLANK_MAP
+        return MapSession(nothing)
+
+    elseif action == ACTION_LOAD_MAP
+        maps_path = Path(joinpath(dirname(@__FILE__), "..", "maps"))
+        start_dir = isdir(maps_path) ? absolute(maps_path) : Path(homedir())
+        file_path = pick_file(start_dir; filterlist = "jld2")
+        isnothing(file_path) && return nothing
+
+        @info "Selected file: $file_path"
+        return MapSession(loadmap_from_source("$file_path"))
+
+    elseif action == ACTION_START_EXPLORER
+        seed = UInt32(get(state.menu_inputs, :explorer_seed, UInt32(42)))
+        learning_enabled = Bool(get(state.menu_inputs, :explorer_learning_enabled, true))
+        @info "Generating explorer mode map with seed=$seed"
+
+        ship = generate_starter_ship(seed)
+        gamemap = GameMap(ships = Dict(:primary => ship))
+        initialise_spacemap!(gamemap, seed, encounter_system_config)
+        initialise_encounter_system!(gamemap.space_map)
+        learning_system = learning_enabled ? LearningProgress() : NoLearningSystem()
+        set_learning_system!(gamemap, learning_system)
+        if learning_system isa LearningProgress
+            activate_tutorial!(learning_system, :welcome_explorer)
+        end
+
+        return MapSession(gamemap)
+
+    elseif action == ACTION_LAUNCH_SANDBOX
+        id = state.selected_tutorial_id
+        isnothing(id) && return nothing
+
+        definition = _find_sandbox_definition(id)
+        isnothing(definition) && return nothing
+        return SandboxSession(definition, id, 1, nothing)
+
+    elseif action == ACTION_QUIT
+        GLFW.SetWindowShouldClose(window, true)
+        return nothing
+    end
+
+    error("Unhandled start menu action: $(action)")
+end
+
+# ===============================================================
 # Action Handler
 # ===============================================================
 
 """
 Handle the latched action from the start menu. Called outside `ui_renderwrap`
 to avoid nested ImGui frames when entering the game loop or file dialogs.
-Returns `true` if the window should close.
+
+Creates an initial session for the action, then runs the session state machine
+until it returns `nothing` or the GLFW window-close flag is set.
 """
-function handle_start_menu_action!(state::StartMenuState, window::GLFW.Window)::Bool
+function handle_start_menu_action!(state::StartMenuState, window::GLFW.Window)
     action = state.action
 
-    # If no action was latched, do nothing
-    action == ACTION_NONE && return false
-
-    # if we have an action, reset page to initial for when we return to the start menu
+    action == ACTION_NONE && return nothing
     state.page = PAGE_INITIAL
 
-    # main handler for start menu actions, called after rendering to avoid nested ImGui calls
-    if action == ACTION_NEW_BLANK_MAP
-        enter_gameloop(window)
+    session = _create_session_for_action(state, action, window)
+    isnothing(session) && return nothing
 
-    elseif action == ACTION_LOAD_MAP
-        maps_path = Path(joinpath(dirname(@__FILE__), "..", "maps"))
-        start_dir = isdir(maps_path) ? absolute(maps_path) : Path(homedir())
-        file_path = pick_file(start_dir; filterlist = "jld2")
-        if !isnothing(file_path)
-            @info "Selected file: $file_path"
-            enter_gameloop(window, map_source = "$file_path")
-        end
-
-    elseif action == ACTION_START_DEMO
-        enter_demo(get_demo_vector(), window)
-
-    elseif action == ACTION_START_EXPLORER
-        seed = UInt32(get(state.menu_inputs, :explorer_seed, UInt32(42)))
-        @info "Generating explorer mode map with seed=$seed"
-        ship = generate_starter_ship(seed)
-        gamemap = GameMap(ships = Dict(:primary => ship))
-        initialise_spacemap!(gamemap, seed, encounter_system_config)
-        initialise_encounter_system!(gamemap.space_map)
-        enter_gameloop(window, map_source = gamemap)
-
-    elseif action == ACTION_QUIT
-        GLFW.SetWindowShouldClose(window, true)
-        return true
-
-    else
-        error("Unhandled start menu action: $(action)")
+    while !isnothing(session) && !GLFW.WindowShouldClose(window)
+        result = run_session(window, session)
+        session = next_session(session, result)
     end
 
-    return false
+    return nothing
 end
 
 # ===============================================================

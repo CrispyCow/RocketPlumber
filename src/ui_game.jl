@@ -298,7 +298,6 @@ function predict_player_position_with_manoeuvre(
     end
 
     sort!(pending_events, by = first)
-
     pos = current_pos
     vel = current_vel
     t_cursor = current_time
@@ -316,6 +315,48 @@ function predict_player_position_with_manoeuvre(
 
     pos += vel * (target_time - t_cursor)
     return pos
+end
+
+"Clear the current space-map selection and its cached preview state."
+function clear_spacemap_selection!(inputstate::InputState)
+    inputstate.gui_inputs[:spacemap_selected_idx] = 0
+    inputstate.gui_inputs[:spacemap_selected_iteration] = 0
+    inputstate.gui_inputs[:spacemap_prev_selected_idx] = 0
+    inputstate.gui_inputs[:spacemap_prev_selected_iteration] = 0
+    return nothing
+end
+
+"Return the selected encounter index after validating it against the live encounter list."
+function validate_spacemap_selection!(inputstate::InputState, encounter_points)::Int
+    selected_idx = get!(inputstate.gui_inputs, :spacemap_selected_idx, 0)::Int
+    selected_iteration = get!(inputstate.gui_inputs, :spacemap_selected_iteration, 0)::Int
+
+    selected_idx == 0 && return 0
+    if selected_idx < 0 || selected_idx > length(encounter_points)
+        clear_spacemap_selection!(inputstate)
+        return 0
+    end
+
+    if encounter_points[selected_idx].iteration != selected_iteration
+        clear_spacemap_selection!(inputstate)
+        return 0
+    end
+
+    return selected_idx
+end
+
+"Reset the preview delta-V slider when the selected encounter changes."
+function reset_spacemap_preview_dv!(inputstate::InputState, selected_idx::Int, selected_iteration::Int, min_dv::Float64)
+    prev_selected = get!(inputstate.gui_inputs, :spacemap_prev_selected_idx, 0)::Int
+    prev_iteration = get!(inputstate.gui_inputs, :spacemap_prev_selected_iteration, 0)::Int
+
+    if selected_idx != prev_selected || selected_iteration != prev_iteration
+        inputstate.gui_inputs[:spacemap_delta_v] = Cfloat(min_dv)
+        inputstate.gui_inputs[:spacemap_prev_selected_idx] = selected_idx
+        inputstate.gui_inputs[:spacemap_prev_selected_iteration] = selected_iteration
+    end
+
+    return nothing
 end
 
 "Log-scaled encounter arrow length with guaranteed minimum visibility."
@@ -377,7 +418,6 @@ Read-only: all phase transitions happen in the calculator.
 function ui_velocity_tracker_render(
         gamestate::GameState, gamemap::GameMap,
         inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC,
-        max_view_bounds::Union{HexFrame.CartesianBounds, Nothing}
     )
     velocity = get_velocity(gamemap)
     accel_world = gamestate.acceleration_space_map_frame
@@ -406,7 +446,7 @@ function ui_velocity_tracker_render(
     # Window sizing: taller when manoeuvre text is shown
     base_height = 320.0
     speed_controls_height = 60.0
-    manoeuvre_extra = has_manoeuvre ? 80.0 : 0.0
+    manoeuvre_extra = has_manoeuvre ? 110.0 : 0.0
     total_height = base_height + speed_controls_height + manoeuvre_extra
 
     ui_window("Velocity Tracker", (0.0, 0.0), (VELOCITY_TRACKER_WIDTH, total_height))
@@ -433,20 +473,19 @@ function ui_velocity_tracker_render(
         @atomic :monotonic flowcalc_ipc.shared_state.is_paused = !is_paused
     end
 
-    CImGui.Separator()
+    CImGui.SeparatorText("Ship Info")
 
     CImGui.Text(@sprintf("Velocity:     %.2f", vel_mag))
     CImGui.Text(@sprintf("Acceleration: %.4f", accel_mag))
     CImGui.Text(@sprintf("Mass:         %.1f", get_mass(gamemap)))
-    CImGui.Text(@sprintf("Min Rem. deltaV: %.1f", estimate_min_delta_v(gamemap)))
-    CImGui.Separator()
+    CImGui.Text(@sprintf("Ship delta-V: %.1f", estimate_min_delta_v(gamemap)))
 
     # Choose axis labels and colours
     if show_dv_mode
         axis_colour = DV_COLOUR
         grid_colour = DV_GRID_COLOUR
-        x_label = "deltaV X"
-        y_label = "deltaV Y"
+        x_label = "delta-V X"
+        y_label = "delta-V Y"
     else
         axis_colour = ACCEL_COLOUR
         grid_colour = ACCEL_GRID_COLOUR
@@ -504,29 +543,30 @@ function ui_velocity_tracker_render(
             Float64[-y_axis[2], y_axis[2]]
         )
 
-        # Acceleration arrow (green line from origin)
-        if accel_mag > 1.0e-10
-            if show_dv_mode
-                accel_dir = accel_plot / max(norm(accel_plot), 1.0e-10)
-                accel_display = accel_dir * (axis_range * 0.6)
-                ImPlot.SetNextLineStyle(ImVec4(0.4, 1.0, 0.4, 0.5), 3.5)
-                ImPlot.PlotLine("##accel_dir", Float64[0.0, accel_display[1]], Float64[0.0, accel_display[2]])
-            else
-                ImPlot.SetNextLineStyle(ACCEL_COLOUR, 2.5)
-                ImPlot.PlotLine("Acceleration", Float64[0.0, accel_plot[1]], Float64[0.0, accel_plot[2]])
-                ImPlot.SetNextMarkerStyle(ImPlot.ImPlotMarker_Circle, 5.0, ACCEL_COLOUR)
-                ImPlot.PlotScatter("##accel_tip", Float64[accel_plot[1]], Float64[accel_plot[2]])
-            end
-        end
-
         # Remaining ΔV arrow (amber, only during burn phases)
         if show_dv_mode
             rem_dv = manoeuvre.burn_remaining_dv
             if norm(rem_dv) > 1.0e-10
                 ImPlot.SetNextLineStyle(DV_COLOUR, 2.5)
                 ImPlot.PlotLine("Remaining ΔV", Float64[0.0, rem_dv[1]], Float64[0.0, rem_dv[2]])
-                ImPlot.SetNextMarkerStyle(ImPlot.ImPlotMarker_Diamond, 6.0, DV_COLOUR)
+                ImPlot.SetNextMarkerStyle(ImPlot.ImPlotMarker_Circle, 4.0, DV_COLOUR)
                 ImPlot.PlotScatter("##dv_tip", Float64[rem_dv[1]], Float64[rem_dv[2]])
+            end
+        end
+
+
+        # Acceleration arrow (green line from origin)
+        if accel_mag > 1.0e-10
+            if show_dv_mode
+                accel_dir = accel_plot / max(norm(accel_plot), 1.0e-10)
+                accel_display = accel_dir * (axis_range * 0.3)
+                ImPlot.SetNextLineStyle(ImVec4(0.4, 1.0, 0.4, 0.5), 4.0)
+                ImPlot.PlotLine("##accel_dir", Float64[0.0, accel_display[1]], Float64[0.0, accel_display[2]])
+            else
+                ImPlot.SetNextLineStyle(ACCEL_COLOUR, 2.5)
+                ImPlot.PlotLine("Acceleration", Float64[0.0, accel_plot[1]], Float64[0.0, accel_plot[2]])
+                ImPlot.SetNextMarkerStyle(ImPlot.ImPlotMarker_Circle, 5.0, ACCEL_COLOUR)
+                ImPlot.PlotScatter("##accel_tip", Float64[accel_plot[1]], Float64[accel_plot[2]])
             end
         end
 
@@ -541,70 +581,27 @@ function ui_velocity_tracker_render(
 
     # Manoeuvre phase status (read-only — all transitions in the calculator)
     if has_manoeuvre
-        CImGui.Separator()
+        CImGui.SeparatorText("Manoeuvre Info")
         phase = manoeuvre.phase
+        CImGui.TextWrapped(phase_description(phase))
 
         if phase == PHASE_WAIT_APPROACH
-            CImGui.TextColored(
-                ImVec4(0.6, 0.8, 1.0, 1.0),
-                "Manoeuvre planned — open Space Map (M) to wait."
-            )
+            CImGui.TextWrapped("Open Space Map (M) and progress time until closest approach.")
 
         elseif phase == PHASE_MAIN_BURN
             rem_dv = manoeuvre.burn_remaining_dv
-            CImGui.TextColored(ImVec4(1.0, 0.7, 0.2, 1.0), "Phase: Main Burn")
-            CImGui.Text(@sprintf("Remaining delta-V: (%.2f, %.2f)", rem_dv[1], rem_dv[2]))
+            CImGui.TextWrapped(@sprintf("Remaining delta-V: (%.2f, %.2f)", rem_dv[1], rem_dv[2]))
 
         elseif phase == PHASE_COAST
-            CImGui.TextColored(
-                ImVec4(0.4, 0.8, 1.0, 1.0),
-                "Main burn complete — open Space Map (M)."
-            )
+            CImGui.TextWrapped("Open Space Map (M) and progress time until intercept.")
 
         elseif phase == PHASE_DECEL_BURN
             rem_dv = manoeuvre.burn_remaining_dv
-            CImGui.TextColored(ImVec4(1.0, 0.5, 0.2, 1.0), "Phase: Capture Burn")
-            CImGui.Text(@sprintf("Remaining delta-V: (%.2f, %.2f)", rem_dv[1], rem_dv[2]))
+            CImGui.TextWrapped(@sprintf("Remaining delta-V: (%.2f, %.2f)", rem_dv[1], rem_dv[2]))
 
         elseif phase == PHASE_ENCOUNTER_READY
-            CImGui.TextColored(ImVec4(0.3, 1.0, 0.3, 1.0), "Encounter imminent...")
-
-            # Auto-trigger encounter when thrust is near zero
-            thrust_mag = norm(gamestate.thrust)
-            already_triggered = get(inputstate.gui_inputs, :encounter_triggered, false)::Bool
-            if thrust_mag < 0.1 && !already_triggered
-                inputstate.gui_inputs[:encounter_triggered] = true
-                sm = gamemap.space_map
-                if sm isa SpaceMapState
-                    ep = sm.encounter_points[manoeuvre.target_encounter_index]
-                    enc_seed = get_encounter_ship_seed(ep, sm.seed)
-
-                    enc_config = get_encounter_config(sm)
-                    class_config = enc_config.encounter_class_configs[ep.encounter_class]
-                    new_shipmap = generate_encounter(ep.encounter_class, ep.fuel_tag, ep.richness, enc_seed, class_config)
-
-                    encounter_map = deepcopy(gamemap)
-                    clear_active_manoeuvre!(encounter_map)
-                    encounter_ship_optimal_dir!(encounter_map, new_shipmap, ep.display_name, enc_seed; max_view_bounds)
-
-                    # Recycle encountered point immediately so it disappears from the space map.
-                    if encounter_map.space_map isa SpaceMapState
-                        encounter_sm = encounter_map.space_map::SpaceMapState
-                        if manoeuvre.target_encounter_index >= 1 && manoeuvre.target_encounter_index <= length(encounter_sm.encounter_points)
-                            encountered_point = encounter_sm.encounter_points[manoeuvre.target_encounter_index]
-                            spawn_encounter_point!(encountered_point, encounter_sm, encounter_sm.time_years)
-                            rebuild_event_queue!(encounter_sm)
-                        end
-                    end
-
-                    enqueue_map_override!(flowcalc_ipc, encounter_map)
-                    @info "Encounter triggered" name = ep.display_name class = ep.encounter_class
-                end
-            end
+            CImGui.TextWrapped("Encounter triggering...")
         end
-    else
-        # Clear the guard flag when no manoeuvre is active
-        inputstate.gui_inputs[:encounter_triggered] = false
     end
 
     CImGui.End()
@@ -659,8 +656,7 @@ Must be called within ui_renderwrap.
 """
 function ui_propertybox_render!(
         inputstate::InputState, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State,
-        winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}},
-        flowcalc_ipc::FlowCalculatorIPC
+        winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}}, flowcalc_ipc::FlowCalculatorIPC
     )
     pendcomp = inputstate.pendingcomponent
     win_float = to_float(winsize)
@@ -784,34 +780,19 @@ function render_spacemap_active_manoeuvre_panel!(
         gamemap::GameMap,
         gamestate::GameState,
     )
-    encounter_points = get_encounter_points(gamemap)
     manoeuvre = get_active_manoeuvre(gamemap)
     time_progressing = is_time_progressing(gamemap)
+    timewarp_blocked = is_timewarp_blocked(gamemap, gamestate)
 
     phase = manoeuvre.phase
-    target_idx = manoeuvre.target_encounter_index
 
-    CImGui.TextColored(ImVec4(1.0, 0.7, 0.2, 1.0), "MANOEUVRE ACTIVE")
+    CImGui.TextColored(ImVec4(1.0, 0.7, 0.2, 1.0), "Manoeuvre Active")
     CImGui.Spacing()
 
-    if target_idx >= 1 && target_idx <= length(encounter_points)
-        ep = encounter_points[target_idx]
-        CImGui.TextColored(
-            fluid_tag_to_imvec4(ep.fuel_tag),
-            "Target: $(ep.display_name) ($(encounter_class_label(ep.encounter_class)))"
-        )
-        fuel_label = fluid_tag_label(ep.fuel_tag)
-        if !isnothing(fuel_label)
-            CImGui.TextColored(fluid_tag_to_imvec4(ep.fuel_tag), "Fuel: $fuel_label")
-        end
-    end
-
-    CImGui.Text("Phase: $(string(phase))")
-    CImGui.Text(@sprintf("Main Burn deltaV: %.1f", norm(manoeuvre.main_burn_dv)))
-    CImGui.Text(@sprintf("Capture Burn deltaV: %.1f", norm(manoeuvre.decel_burn_dv)))
+    CImGui.Text(phase_description(phase))
+    CImGui.Text(@sprintf("Main Burn delta-V: %.1f", norm(manoeuvre.main_burn_dv)))
+    CImGui.Text(@sprintf("Capture Burn delta-V: %.1f", norm(manoeuvre.decel_burn_dv)))
     CImGui.Spacing()
-
-    timewarp_blocked = is_timewarp_blocked(gamemap, gamestate)
 
     if phase == PHASE_WAIT_APPROACH && !time_progressing
         if button_with_disable("Wait for Closest Approach", ImVec2(-1, 30), timewarp_blocked)
@@ -834,110 +815,103 @@ function render_spacemap_active_manoeuvre_panel!(
     return nothing
 end
 
-function render_spacemap_encounter_planning_panel!(
+"Render read-only information for the selected or targeted encounter."
+function render_spacemap_target_info!(gamemap::GameMap, selected_idx::Int)
+    encounter_points = get_encounter_points(gamemap)
+    player_pos = get_position(gamemap)
+    player_vel = get_velocity(gamemap)
+    current_time = get_time_years(gamemap)::Float64
+
+    target_idx = selected_idx
+    if has_active_manoeuvre(gamemap)
+        target_idx = get_active_manoeuvre(gamemap).target_encounter_index
+    end
+
+    if target_idx < 1 || target_idx > length(encounter_points)
+        CImGui.TextWrapped("Click an encounter point on the map to select it.")
+        return nothing
+    end
+
+    ep = encounter_points[target_idx]
+    ep_pos = get_encounter_position(ep, current_time)
+    distance = norm(ep_pos - player_pos)
+
+    CImGui.TextColored(
+        fluid_tag_to_imvec4(ep.fuel_tag),
+        "$(encounter_class_label(ep.encounter_class)): $(ep.display_name)"
+    )
+    fuel_label = fluid_tag_label(ep.fuel_tag)
+    if !isnothing(fuel_label)
+        CImGui.TextColored(fluid_tag_to_imvec4(ep.fuel_tag), "Fuel: $fuel_label")
+    end
+    CImGui.Text(@sprintf("Richness: %.1f", ep.richness))
+    CImGui.Text(@sprintf("Distance: %.0f", distance))
+    CImGui.Text(@sprintf("Relative Vel: %.1f", norm(ep.velocity - player_vel)))
+    return nothing
+end
+
+"Render manoeuvre preview controls for the selected encounter."
+function render_spacemap_manoeuvre_planning_panel!(
         inputstate::InputState,
         flowcalc_ipc::FlowCalculatorIPC,
         gamemap::GameMap,
+        selected_idx::Int,
     )
-    sm = gamemap.space_map::SpaceMapState
+    selected_idx == 0 && return nothing
+
     player_pos = get_position(gamemap)
     player_vel = get_velocity(gamemap)
     current_time = get_time_years(gamemap)::Float64
     encounter_points = get_encounter_points(gamemap)
+    selected_iteration = get(inputstate.gui_inputs, :spacemap_selected_iteration, 0)::Int
+    ep = encounter_points[selected_idx]
+    min_dv = calculate_minimum_intercept_dv(player_vel, ep.velocity) + 1.0
+    closest_approach = compute_closest_approach(player_pos, player_vel, ep, current_time)
 
-    CImGui.TextColored(ImVec4(0.6, 0.8, 1.0, 1.0), "ENCOUNTER PLANNING")
+    CImGui.TextColored(ImVec4(0.6, 0.8, 1.0, 1.0), "Intercept Calculated")
     CImGui.Spacing()
 
-    selected_idx = get!(inputstate.gui_inputs, :spacemap_selected_idx, 0)::Int
-    selected_iteration = get!(inputstate.gui_inputs, :spacemap_selected_iteration, 0)::Int
-    prev_selected = get!(inputstate.gui_inputs, :spacemap_prev_selected_idx, 0)::Int
+    reset_spacemap_preview_dv!(inputstate, selected_idx, selected_iteration, min_dv)
 
-    if selected_idx < 0 || selected_idx > length(encounter_points)
-        selected_idx = 0
-        inputstate.gui_inputs[:spacemap_selected_idx] = 0
-        inputstate.gui_inputs[:spacemap_selected_iteration] = 0
+    delta_v_slider = get!(inputstate.gui_inputs, :spacemap_delta_v, Cfloat(min_dv))::Cfloat
+    delta_v_slider = max(delta_v_slider, Cfloat(min_dv))
+
+    CImGui.Text(@sprintf("Closest Approach: %.0f at T=%.3f yr", closest_approach.distance, closest_approach.time))
+    CImGui.Text(@sprintf("Min Intercept delta-V: %.1f", min_dv))
+    CImGui.Spacing()
+
+    slider_min = Float32(max(min_dv, 1.0))
+    slider_max = Float32(max(min_dv * 3.0, 100.0))
+    CImGui.SetNextItemWidth(-1)
+    @cref CImGui.SliderFloat("##dv_slider", &delta_v_slider, slider_min, slider_max, "delta-V: %.0f")
+    inputstate.gui_inputs[:spacemap_delta_v] = delta_v_slider
+    total_dv = Float64(delta_v_slider)
+
+    preview_manoeuvre = plan_intercept_manoeuvre(
+        player_pos, player_vel, ep, current_time, total_dv
+    )
+
+    if !isnothing(preview_manoeuvre)
+        time_to_intercept = preview_manoeuvre.intercept_time - current_time
+        CImGui.Text(@sprintf("Time to Intercept: %.3f yr", time_to_intercept))
     end
 
-    # Deselect automatically if the ship has been recycled (iteration counter changed)
-    if selected_idx > 0 && encounter_points[selected_idx].iteration != selected_iteration
-        selected_idx = 0
-        inputstate.gui_inputs[:spacemap_selected_idx] = 0
-        inputstate.gui_inputs[:spacemap_selected_iteration] = 0
-    end
+    CImGui.Spacing()
+    can_plan = !isnothing(preview_manoeuvre)
 
-    if selected_idx == 0
-        CImGui.TextWrapped("Click an encounter point on the map to select it.")
-    else
-        ep = encounter_points[selected_idx]
-        ep_pos = get_encounter_position(ep, current_time)
-        distance = norm(ep_pos - player_pos)
-        ca = compute_closest_approach(player_pos, player_vel, ep, current_time)
-
-        min_dv = calculate_minimum_intercept_dv(player_vel, ep.velocity) + 1.0
-
-        # Reset slider when selection changes
-        if selected_idx != prev_selected
-            inputstate.gui_inputs[:spacemap_delta_v] = Cfloat(min_dv)
-            inputstate.gui_inputs[:spacemap_prev_selected_idx] = selected_idx
-        end
-
-        delta_v_slider = get!(inputstate.gui_inputs, :spacemap_delta_v, Cfloat(min_dv))::Cfloat
-        # Clamp stored value to be at least min_dv
-        delta_v_slider = max(delta_v_slider, Cfloat(min_dv))
-
-        CImGui.TextColored(
-            fluid_tag_to_imvec4(ep.fuel_tag),
-            "$(encounter_class_label(ep.encounter_class)): $(ep.display_name)"
-        )
-        fuel_label = fluid_tag_label(ep.fuel_tag)
-        if !isnothing(fuel_label)
-            CImGui.TextColored(fluid_tag_to_imvec4(ep.fuel_tag), "Fuel: $fuel_label")
-        end
-        CImGui.Text(@sprintf("Richness: %.1f", ep.richness))
-        CImGui.Text(@sprintf("Distance: %.0f", distance))
-        CImGui.Text(@sprintf("Relative Vel: %.1f", norm(ep.velocity - player_vel)))
-        CImGui.Separator()
-        CImGui.Text(@sprintf("Closest Approach: %.0f", ca.distance))
-        CImGui.Text(@sprintf("  at T=%.3f yr", ca.time))
-        CImGui.Text(@sprintf("Min deltaV: %.1f", min_dv))
-        CImGui.Spacing()
-
-        slider_min = Float32(max(min_dv, 1.0))
-        slider_max = Float32(max(min_dv * 3.0, 100.0))
-        CImGui.SetNextItemWidth(-1)
-        @cref CImGui.SliderFloat("##dv_slider", &delta_v_slider, slider_min, slider_max, "deltaV: %.0f")
-        inputstate.gui_inputs[:spacemap_delta_v] = delta_v_slider
-        total_dv = Float64(delta_v_slider)
-
-        # Preview manoeuvre at current slider value
-        preview_manoeuvre = plan_intercept_manoeuvre(
-            player_pos, player_vel, ep, current_time, total_dv
-        )
-
+    button_tooltip = !can_plan ? "No manoeuvre preview available" : nothing
+    if button_with_disable("Plan Manoeuvre", ImVec2(-1, 35), !can_plan; tooltip = button_tooltip)
         if !isnothing(preview_manoeuvre)
-            time_to_intercept = preview_manoeuvre.intercept_time - current_time
-            CImGui.Text(@sprintf("Time to Intercept: %.3f yr", time_to_intercept))
-        end
-
-        CImGui.Spacing()
-        can_plan = !isnothing(preview_manoeuvre)
-
-        if button_with_disable("Plan Manoeuvre", ImVec2(-1, 35), !can_plan; tooltip = !can_plan ? "No manoeuvre preview available" : nothing)
-            if !isnothing(preview_manoeuvre)
-                modified_map = deepcopy(gamemap)
-                set_active_manoeuvre!(modified_map, preview_manoeuvre)
-                enqueue_map_override!(flowcalc_ipc, modified_map)
-                @info "Manoeuvre planned" target = ep.display_name dv = total_dv
-            end
+            modified_map = deepcopy(gamemap)
+            set_active_manoeuvre!(modified_map, preview_manoeuvre)
+            enqueue_map_override!(flowcalc_ipc, modified_map)
+            @info "Manoeuvre planned" target = ep.display_name dv = total_dv
         end
     end
 
-    if selected_idx > 0
-        CImGui.Spacing()
-        if CImGui.Button("Deselect", ImVec2(-1, 0))
-            inputstate.gui_inputs[:spacemap_selected_idx] = 0
-            inputstate.gui_inputs[:spacemap_selected_iteration] = 0
-        end
+    CImGui.Spacing()
+    if CImGui.Button("Deselect", ImVec2(-1, 0))
+        clear_spacemap_selection!(inputstate)
     end
 
     return nothing
@@ -951,7 +925,6 @@ function render_spacemap_left_panel!(
         left_width::Float32,
         panel_height::Float32,
     )
-    sm = gamemap.space_map::SpaceMapState
     player_pos = get_position(gamemap)
     player_vel = get_velocity(gamemap)
     current_time = get_time_years(gamemap)::Float64
@@ -983,25 +956,19 @@ function render_spacemap_left_panel!(
     # Advance time buttons — always shown, disabled while warping or blocked
     advance_disabled = time_progressing || first(timewarp_blocked)
     CImGui.Text("Advance Time:")
-    for (label, dt) in (("0.1 yr", 0.1), ("1 yr", 1.0), ("10 yr", 10.0))
-        if button_with_disable(label, ImVec2(75.0, 0.0), advance_disabled)
-            @atomic :monotonic flowcalc_ipc.shared_state.target_spacemap_time = current_time + dt
+    if CImGui.BeginTable("##advance_time", 3, CImGui.ImGuiTableFlags_SizingStretchSame)
+        for (label, dt) in (("0.1 yr", 0.1), ("1 yr", 1.0), ("10 yr", 10.0))
+            CImGui.TableNextColumn()
+            if button_with_disable(label, ImVec2(-1, 0), advance_disabled)
+                @atomic :monotonic flowcalc_ipc.shared_state.target_spacemap_time = current_time + dt
+            end
         end
-        CImGui.SameLine()
+        CImGui.EndTable()
     end
-    CImGui.NewLine()
 
     # "Stop Time Warp" — always visible, disabled unless a warp is active
-    stop_btn_width = CImGui.GetContentRegionAvail().x * 0.9f0
-    warp_not_active = !time_progressing
-    if warp_not_active
-        CImGui.BeginDisabled()
-    end
-    if CImGui.Button("Stop Time Warp", ImVec2(stop_btn_width, 0))
+    if button_with_disable("Stop Time Warp", ImVec2(-1, 0), !time_progressing)
         @atomic :monotonic flowcalc_ipc.shared_state.target_spacemap_time = current_time
-    end
-    if warp_not_active
-        CImGui.EndDisabled()
     end
 
     #= ---------- Position & velocity section ----------- =#
@@ -1009,19 +976,24 @@ function render_spacemap_left_panel!(
 
     CImGui.Text(@sprintf("Position: (%.0f, %.0f)", player_pos[1], player_pos[2]))
     CImGui.Text(@sprintf("Velocity: %.1f", norm(player_vel)))
-    CImGui.Text(@sprintf("Min Rem. deltaV: %.1f", estimate_min_delta_v(gamemap)))
+    CImGui.Text(@sprintf("Ship delta-V: %.1f", estimate_min_delta_v(gamemap)))
     CImGui.Spacing()
 
-    #= ---------- Encounter / manoeuvre section ----------- =#
-    CImGui.SeparatorText("ENCOUNTER PLANNING")
+    selected_idx = validate_spacemap_selection!(inputstate, encounter_points)
 
-    if has_manoeuvre
-        render_spacemap_active_manoeuvre_panel!(flowcalc_ipc, gamemap, gamestate)
-        CImGui.EndChild()
-        return nothing
+    #= ---------- Target information section ----------- =#
+    CImGui.SeparatorText("TARGET INFORMATION")
+    render_spacemap_target_info!(gamemap, selected_idx)
+
+    #= ---------- Manoeuvre planning section ----------- =#
+    if has_manoeuvre || selected_idx > 0
+        CImGui.SeparatorText("MANOEUVRE PLANNING")
+        if has_manoeuvre
+            render_spacemap_active_manoeuvre_panel!(flowcalc_ipc, gamemap, gamestate)
+        else
+            render_spacemap_manoeuvre_planning_panel!(inputstate, flowcalc_ipc, gamemap, selected_idx)
+        end
     end
-
-    render_spacemap_encounter_planning_panel!(inputstate, flowcalc_ipc, gamemap)
 
     CImGui.EndChild()
     return nothing
@@ -1044,7 +1016,7 @@ function render_spacemap_trajectory_previews!(
     if has_manoeuvre
         manoeuvre = get_active_manoeuvre(gamemap)
     else
-        selected_idx = get(inputstate.gui_inputs, :spacemap_selected_idx, 0)::Int
+        selected_idx = validate_spacemap_selection!(inputstate, encounter_points)
         if selected_idx >= 1 && selected_idx <= n_enc
             ep = encounter_points[selected_idx]
             manoeuvre = plan_intercept_manoeuvre(
@@ -1149,7 +1121,7 @@ function render_spacemap_plot_area!(
         ImPlot.PlotScatter("##player", Float64[player_pos[1]], Float64[player_pos[2]])
 
         n_enc = length(encounter_points)
-        selected_idx = get(inputstate.gui_inputs, :spacemap_selected_idx, 0)::Int
+        selected_idx = validate_spacemap_selection!(inputstate, encounter_points)
         if n_enc > 0
             enc_cfg = sm.encounter_config
             total_viewport_width = sm.viewport_half_width * 2.0
@@ -1250,8 +1222,12 @@ function render_spacemap_plot_area!(
                         best_idx = i
                     end
                 end
-                inputstate.gui_inputs[:spacemap_selected_idx] = best_idx
-                inputstate.gui_inputs[:spacemap_selected_iteration] = best_idx > 0 ? encounter_points[best_idx].iteration : 0
+                if best_idx > 0
+                    inputstate.gui_inputs[:spacemap_selected_idx] = best_idx
+                    inputstate.gui_inputs[:spacemap_selected_iteration] = encounter_points[best_idx].iteration
+                else
+                    clear_spacemap_selection!(inputstate)
+                end
             end
         end
 
@@ -1268,9 +1244,9 @@ function render_spacemap_plot_area!(
 end
 
 """
-Render the full-screen encounter planning space map overlay.
+Render the full-screen space map overlay.
 Uses ImPlot to show encounters in 2D space. Left panel has time controls,
-manoeuvre status, and encounter selection. Right area has the scatter plot.
+target information, and manoeuvre planning. Right area has the scatter plot.
 Must be called within ui_renderwrap.
 """
 function ui_spacemap_render!(
@@ -1289,9 +1265,9 @@ function ui_spacemap_render!(
 
     CImGui.SetNextWindowPos(ImVec2(0.0, 0.0))
     CImGui.SetNextWindowSize(ImVec2(win_float.width, win_float.height))
-    CImGui.SetNextWindowFocus()
     flags = CImGui.ImGuiWindowFlags_NoTitleBar | CImGui.ImGuiWindowFlags_NoResize |
-        CImGui.ImGuiWindowFlags_NoMove | CImGui.ImGuiWindowFlags_NoScrollbar
+        CImGui.ImGuiWindowFlags_NoMove | CImGui.ImGuiWindowFlags_NoScrollbar |
+        CImGui.ImGuiWindowFlags_NoBringToFrontOnFocus
     CImGui.PushStyleVar(CImGui.ImGuiStyleVar_WindowBorderSize, 0.0)
     CImGui.PushStyleColor(CImGui.ImGuiCol_WindowBg, ImVec4(0.05, 0.05, 0.1, 0.97))
 

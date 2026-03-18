@@ -13,8 +13,6 @@ using HexFlowCalculator
 
 const toolbarheight = 200.0
 const propertyboxwidth = 350.0
-const hintboxwidth = 350.0
-const hintboxheight = 400.0
 
 #= ---------- Window Configuration ---------- =#
 

@@ -2,7 +2,7 @@
 
 julia_version = "1.12.1"
 manifest_format = "2.0"
-project_hash = "910919873fb61240ac2f3661fb59d4467cc271aa"
+project_hash = "0adf62f872ff59123791f59b64d0d7ca17f63ecd"
 
 [[deps.ATK_jll]]
 deps = ["Artifacts", "Glib_jll", "JLLWrappers", "Libdl"]
@@ -451,6 +451,12 @@ path = "local_packages/HexFlowControl"
 uuid = "c4f7b3e2-9a5d-4c8e-b1f2-3e8d9a5c7f1b"
 version = "0.1.0"
 
+[[deps.HexFlowLearningSystem]]
+deps = ["FlowMap", "HexFlowCalculator", "HexFlowControl"]
+path = "local_packages/HexFlowLearningSystem"
+uuid = "565e34eb-39a4-4998-8996-68e8c8e9dd3e"
+version = "0.1.0"
+
 [[deps.HexFlowNozzleComponents]]
 deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowRendering", "HexFlowSwitchComponents", "HexFluids", "HexFrame", "RenderEngine", "StaticArrays"]
 path = "local_packages/components/HexFlowNozzleComponents"
@@ -500,7 +506,7 @@ uuid = "83376590-ca7c-4863-a202-c842a58accce"
 version = "0.1.0"
 
 [[deps.HexFluids]]
-deps = ["HexFrame"]
+deps = ["HexFrame", "Test"]
 path = "local_packages/HexFluids"
 uuid = "98a914a9-3572-461b-8ee2-d8d3de40252c"
 version = "0.1.0"

@@ -13,8 +13,8 @@ function poll_keys!(viewstate::ViewState, window::GLFW.Window)
     end
 
     # Framerate-independent rates
-    pan_rate_per_sec = 7.0f0 
-    zoom_rate_per_sec = 2.50f0
+    pan_rate_per_sec = 7.0f0
+    zoom_rate_per_sec = 2.5f0
 
     # Calculate time delta and update timestamp
     current_time = time()
@@ -66,7 +66,7 @@ function update_ship_bounds!(viewstate::ViewState, gamemap::GameMap)
         X_POS = centre_x + half_span_x,
         X_NEG = centre_x - half_span_x,
         Y_POS = centre_y + half_span_y,
-        Y_NEG = centre_y - half_span_y
+        Y_NEG = centre_y - half_span_y,
     )
 
     return nothing
@@ -88,7 +88,7 @@ function apply_view_limits!(viewstate::ViewState)
     # Calculate visible area in world units (inverse of zoom)
     # The hex_size_pixels constant is 256 (from get_viewtransform)
     hex_size_pixels = 256.0f0
-    visible_width = viewstate.fb_width / (viewstate.view_zoom * hex_size_pixels) 
+    visible_width = viewstate.fb_width / (viewstate.view_zoom * hex_size_pixels)
     visible_height = viewstate.fb_height / (viewstate.view_zoom * hex_size_pixels)
 
     # === Zoom Limit ===
@@ -104,10 +104,10 @@ function apply_view_limits!(viewstate::ViewState)
     # Enforce a reasonable hard minimum zoom to prevent unusable views
     MIN_VIEW_ZOOM = 0.01f0
     min_zoom = max(min_zoom, MIN_VIEW_ZOOM)
-    
+
     # Clamp zoom (allow zooming in indefinitely, but limit zoom out)
     viewstate.view_zoom = max(viewstate.view_zoom, min_zoom)
-    
+
     # Recalculate visible area after zoom clamp
     visible_width = viewstate.fb_width / (viewstate.view_zoom * hex_size_pixels)
     visible_height = viewstate.fb_height / (viewstate.view_zoom * hex_size_pixels)
@@ -127,7 +127,7 @@ function apply_view_limits!(viewstate::ViewState)
     # We want: camera_centre_x - visible_width/2 < bounds.X_POS - margin (can't pan too far right)
     # And: camera_centre_x + visible_width/2 > bounds.X_NEG + margin (can't pan too far left)
     # camera_centre = -view (since view is offset applied to world)
-    
+
     max_pan_x = -(bounds.X_NEG + margin_x - visible_width / 2.0f0)
     min_pan_x = -(bounds.X_POS - margin_x + visible_width / 2.0f0)
     max_pan_y = -(bounds.Y_NEG + margin_y - visible_height / 2.0f0)
@@ -139,13 +139,13 @@ function apply_view_limits!(viewstate::ViewState)
     else
         viewstate.view_x = clamp(viewstate.view_x, min_pan_x, max_pan_x)
     end
-    
+
     if min_pan_y > max_pan_y
         viewstate.view_y = -bounds_centre_y
     else
         viewstate.view_y = clamp(viewstate.view_y, min_pan_y, max_pan_y)
     end
-    
+
     return nothing
 end
 
@@ -153,51 +153,51 @@ end
 Calculate the maximum reachable viewport bounds given the current ship bounds and zoom limits.
 Returns a HexFrame.CartesianBounds representing the union of all possible viewports the user can pan/zoom to.
 """
-function get_max_reachable_bounds(viewstate::ViewState)
+function calc_max_reachable_bounds(viewstate::ViewState)
     bounds = viewstate.ship_bounds
-    
+
     # Calculate limits based on ship span
     ship_span_x = bounds.X_POS - bounds.X_NEG
     ship_span_y = bounds.Y_POS - bounds.Y_NEG
     ship_span_max = max(ship_span_x, ship_span_y)
-    
+
     # Max visible span allowed by zoom limit
     # Matches constant in apply_view_limits!
     max_visible_span = ship_span_max * 5.0f0
-    
+
     # Using the same constant as apply_view_limits!
     hex_size_pixels = 256.0f0
-    
+
     # Calculate minimum zoom based on screen dimensions
     min_zoom_x = viewstate.fb_width / (max_visible_span * hex_size_pixels)
     min_zoom_y = viewstate.fb_height / (max_visible_span * hex_size_pixels)
     min_zoom = max(min_zoom_x, min_zoom_y)
-    
+
     # Enforce hard minimum
     MIN_VIEW_ZOOM = 0.01f0
     min_zoom = max(min_zoom, MIN_VIEW_ZOOM)
-    
+
     # Calculate world dimensions at this minimum zoom (max potential view size)
     max_view_width = viewstate.fb_width / (min_zoom * hex_size_pixels)
     max_view_height = viewstate.fb_height / (min_zoom * hex_size_pixels)
-    
+
     # Pan limits (margin logic) based on current apply_view_limits! implementation
     margin_fraction = 0.1f0
     margin_x = ship_span_x * margin_fraction
     margin_y = ship_span_y * margin_fraction
-    
+
     # Calculate maximal extents
     # Max right view edge: Ship Right Edge - Margin + Full View Width
     max_right = bounds.X_POS - margin_x + max_view_width
     # Min left view edge: Ship Left Edge + Margin - Full View Width
     min_left = bounds.X_NEG + margin_x - max_view_width
-    
+
     # Max top view edge: Ship Top Edge - Margin + Full View Height
     max_top = bounds.Y_POS - margin_y + max_view_height
     # Min bottom view edge: Ship Bottom Edge + Margin - Full View Height
     min_bottom = bounds.Y_NEG + margin_y - max_view_height
-    
-    return (X_POS=Float64(max_right), X_NEG=Float64(min_left), Y_POS=Float64(max_top), Y_NEG=Float64(min_bottom))
+
+    return (X_POS = Float64(max_right), X_NEG = Float64(min_left), Y_POS = Float64(max_top), Y_NEG = Float64(min_bottom))
 end
 
 "Poll key rising edges and mutate InputState and FlowCalculatorSharedState (tool rotation, placement mode, pause, time warp, exit)"
@@ -331,8 +331,10 @@ function poll_windowstate!(viewstate::ViewState, window::GLFW.Window)
 end
 
 "Poll scroll wheel deltas and apply cursor-centred zoom to ViewState"
-function poll_scrollwheel_zoom!(inputstate::InputState, viewstate::ViewState,
-        cimgui_io::Union{Nothing, Ptr{CImGui.lib.ImGuiIO}} = nothing)
+function poll_scrollwheel_zoom!(
+        inputstate::InputState, viewstate::ViewState,
+        cimgui_io::Union{Nothing, Ptr{CImGui.lib.ImGuiIO}} = nothing
+    )
     isdefined(Main, :take_scrollstate!) || return nothing
     _, yoff = Main.take_scrollstate!()
     yoff == 0.0 && return nothing
@@ -343,7 +345,7 @@ function poll_scrollwheel_zoom!(inputstate::InputState, viewstate::ViewState,
     end
 
     # Exponential zoom: scroll up = zoom in, scroll down = zoom out
-    scroll_zoom_sensitivity = 0.20
+    scroll_zoom_sensitivity = 0.2
     zoom_old = viewstate.view_zoom
     viewstate.view_zoom *= exp(scroll_zoom_sensitivity * yoff)
 
@@ -556,8 +558,10 @@ function render_cursor_ghosts!(queue::Vector{RenderCommand}, glmap::GLObjectMap,
             if existing_pipe
                 # Hovering over existing pipe — red delete indicator overlay
                 pipe_behav, _ = get_pipe_any_ship(gamemap, edge)
-                render_pipe_base!(queue, pipe_behav; glmap = glmap, rotation = HexFrame.Q_POS,
-                    position = edge, transparency = 0.5, colour = GHOST_COLOUR_INVALID, render_height_offset = Int32(100000))
+                render_pipe_base!(
+                    queue, pipe_behav; glmap = glmap, rotation = HexFrame.Q_POS,
+                    position = edge, transparency = 0.5, colour = GHOST_COLOUR_INVALID, render_height_offset = Int32(100000)
+                )
             else
                 # Empty edge — show placement ghost with validity colouring
                 pipe_behav = inputstate.pendingpipebehavior
@@ -628,8 +632,12 @@ function render_cursor_ghosts!(queue::Vector{RenderCommand}, glmap::GLObjectMap,
                 indicator_colour = can_move ?
                     SVector{4, Float32}(1.0, 0.9, 0.2, 0.6) :  # Yellow — valid move target
                     SVector{4, Float32}(1.0, 0.4, 0.4, 0.6)     # Red — cannot move
-                push!(queue, render_basic_sprite(glmap, :MoveArrow_arrow_start, rotmat_2D(0.0), hover_target;
-                    colour = indicator_colour, draw_height = Int32(100100), scale = 1.5))
+                push!(
+                    queue, render_basic_sprite(
+                        glmap, :MoveArrow_arrow_start, rotmat_2D(0.0), hover_target;
+                        colour = indicator_colour, draw_height = Int32(100100), scale = 1.5
+                    )
+                )
             end
         end
 
@@ -673,8 +681,10 @@ function render_cursor_ghosts!(queue::Vector{RenderCommand}, glmap::GLObjectMap,
                 end
 
                 ghost_colour = valid_dest ? GHOST_COLOUR_VALID : GHOST_PIPE_COLOUR_INVALID
-                render_pipe_base!(queue, actual_pipe; glmap = glmap, rotation = HexFrame.Q_POS,
-                    position = ghost_edge, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000))
+                render_pipe_base!(
+                    queue, actual_pipe; glmap = glmap, rotation = HexFrame.Q_POS,
+                    position = ghost_edge, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000)
+                )
             end
         end
 
@@ -940,12 +950,12 @@ function flowcalc_tileplacer!(
     end
 
     coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
-    
+
     # Block interactions on ships with non-zero render offset
     if is_on_offset_ship(coord, gamemap)
         return
     end
-    
+
     command = create_set_tile_command(command_queue, coord, inputstate.pendingcomponent, inputstate.toolrotation)
     try_enqueue_command!(command_queue, command, threadsafe_console_push)
     return nothing
@@ -970,7 +980,7 @@ function flowcalc_pipeplacer!(
     if element isa VertexCoord
         element = round_to_edge(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
     end
-    
+
     # Block interactions on ships with non-zero render offset
     if is_on_offset_ship(element, gamemap)
         return nothing
@@ -980,7 +990,7 @@ function flowcalc_pipeplacer!(
         edge::EdgeCoord = element
         existing, _ = has_pipe_any_ship(gamemap, edge)
         if existing
-           
+
             # Delete existing pipe (toggle behaviour)
             command = create_delete_command(command_queue, edge)
         else
@@ -1018,7 +1028,7 @@ function flowcalc_moveplacer!(
     if element === nothing
         return
     end
-    
+
     # Block interactions on ships with non-zero render offset
     if is_on_offset_ship(element, gamemap)
         return
@@ -1097,7 +1107,7 @@ function flowcalc_deleteplacer!(
     end
 
     element = get_clicked(inputstate)
-    
+
     # Nodes (vertices) cannot be deleted — filter before command creation
     if element isa VertexCoord
         threadsafe_console_push("Cannot delete a node")
@@ -1108,7 +1118,7 @@ function flowcalc_deleteplacer!(
     if is_on_offset_ship(element, gamemap)
         return
     end
-    
+
     command = create_delete_command(command_queue, element)
     try_enqueue_command!(command_queue, command, threadsafe_console_push)
 
@@ -1151,7 +1161,7 @@ function flowcalc_surfaceeditor!(
     end
 
     coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
-    
+
     # Block interactions on ships with non-zero render offset
     if is_on_offset_ship(coord, gamemap)
         return
@@ -1299,7 +1309,7 @@ function execute_ship_action!(
 
     elseif action_id === :undock
         current_map = deepcopy(flowcalc_ipc.get_snapshot().gamemap)
-        max_bounds = get_max_reachable_bounds(viewstate)
+        max_bounds = calc_max_reachable_bounds(viewstate)
         success, reason = depart_ship!(current_map, ship_name; max_view_bounds = max_bounds)
         if success
             cmd = create_map_override_command(flowcalc_ipc.command_queue, current_map)

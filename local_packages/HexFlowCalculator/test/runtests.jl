@@ -7,11 +7,46 @@ using HexComponentsAPI
 using HexFlowControl
 using FlowEngine
 using HexFlowProcGen
+using HexFluids
 using StaticArrays
 using LinearAlgebra
 
 "Minimal encounter config for tests that only need a SpaceMapState."
 const _test_enc_config = EncounterSystemConfig()
+
+"Minimal encounter config for tests that need a valid generated encounter ship."
+function make_trigger_test_encounter_config()
+    class_config = EncounterClassConfig(
+        NoScaling(1.0),
+        HullSizeConfig(LinearScaling(2.0, 0.0), LinearScaling(2.0, 0.0)),
+        LinearScaling(0.0, 0.0),
+        Dict{FluidTags, FuelTagConfig}(
+            HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), WeightedComponentSet[]),
+        ),
+        PipeSpawnOptions[],
+    )
+
+    return EncounterSystemConfig(
+        n_points = 1,
+        encounter_class_configs = Dict(ENCOUNTER_SHIP => class_config),
+    )
+end
+
+"Minimal encounter point for calculator-thread trigger tests."
+function make_trigger_test_encounter_point()
+    return EncounterPoint(
+        index = 1,
+        base_velocity = 100.0,
+        position = SVector(500.0, 0.0),
+        velocity = SVector(-100.0, 0.0),
+        spawn_time = 0.0,
+        ship_type_seed = UInt32(0x1234),
+        encounter_class = ENCOUNTER_SHIP,
+        fuel_tag = HexFluids.COLD_GAS,
+        display_name = "Test Vessel",
+        richness = 1.0,
+    )
+end
 
 # ===============================================================
 # Mock Implementations
@@ -91,6 +126,18 @@ function process_and_log!(cmd, gamemap)
     logs, console = make_log_console()
     HexFlowCalculator.process_command!(cmd, gamemap, console)
     return logs
+end
+
+"Minimal FlowCalculatorIPC for unit tests that call update_manoeuvre_phase! directly."
+function make_test_ipc(; shared_state::FlowCalculatorSharedState = FlowCalculatorSharedState())
+    return FlowCalculatorIPC(
+        shared_state = shared_state,
+        command_queue = create_command_queue(),
+        set_snapshot = (_snapshot) -> nothing,
+        get_snapshot = () -> FlowCalculatorSnapshot(),
+        console_push = silent_console,
+        console_see = () -> String[],
+    )
 end
 
 "Create a two-ship GameMap for multi-ship routing tests.
@@ -301,7 +348,7 @@ end
 
         # action on nonexistent component should log error and do nothing
         gamemap2 = GameMap()
-        logs2 = process_and_log!(create_do_action_command(cq, TileCoord(5,5), :flip), gamemap2)
+        logs2 = process_and_log!(create_do_action_command(cq, TileCoord(5, 5), :flip), gamemap2)
         @test any(contains(l, "No component") for l in logs2)
     end
 
@@ -491,7 +538,7 @@ end
     @test result3 ≈ SVector(5.0, 0.0)
 
     # Near-zero → zero
-    result4 = HexFlowCalculator._spacemap_to_ship(SVector(1e-12, 0.0))
+    result4 = HexFlowCalculator._spacemap_to_ship(SVector(1.0e-12, 0.0))
     @test result4 ≈ SVector(0.0, 0.0)
 
     # Negative dv — magnitude still positive
@@ -577,6 +624,7 @@ end
     @test (@atomic ss.target_ups) == BASE_UPS
     @test (@atomic ss.actual_ups) == 0.0
     @test (@atomic ss.target_spacemap_time) == 0.0
+    @test get_max_reachable_bounds(ss) == (X_POS = 5.0, X_NEG = -5.0, Y_POS = 5.0, Y_NEG = -5.0)
 end
 
 @testset "FlowCalculatorSharedState — atomic operations" begin
@@ -598,12 +646,22 @@ end
     @test (@atomic ss.target_spacemap_time) == 42.0
 end
 
+@testset "FlowCalculatorSharedState — bounds accessors" begin
+    ss = FlowCalculatorSharedState()
+    bounds = (X_POS = 12.0, X_NEG = -8.0, Y_POS = 7.5, Y_NEG = -3.5)
+
+    set_max_reachable_bounds!(ss, bounds)
+
+    @test get_max_reachable_bounds(ss) == bounds
+end
+
 @testset "FlowCalculatorSharedState — keyword constructor" begin
-    ss = FlowCalculatorSharedState(target_ups = 30.0, is_paused = true)
+    ss = FlowCalculatorSharedState(target_ups = 30.0, is_paused = true, view_bounds_x_pos = 12.0)
     @test (@atomic ss.target_ups) == 30.0
     @test (@atomic ss.is_paused) == true
     @test (@atomic ss.should_exit) == false  # default
     @test (@atomic ss.target_spacemap_time) == 0.0  # default
+    @test (@atomic ss.view_bounds_x_pos) == 12.0
 end
 
 # ===============================================================
@@ -693,7 +751,7 @@ end
     nc = NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_POS)
     result = scale_voltage_dict(Dict(nc => 10.0))
     @test haskey(result, nc)
-    @test result[nc] <= 1.0 + 1e-10  # scaled to at most 1.0
+    @test result[nc] <= 1.0 + 1.0e-10  # scaled to at most 1.0
     @test result[nc] > 0.0
 end
 
@@ -897,21 +955,24 @@ end
 @testset "update_manoeuvre_phase! — no manoeuvre is no-op" begin
     gs = GameState()
     gm = GameMap()
+    ipc = make_test_ipc()
 
     # Should not error when no manoeuvre is active
-    HexFlowCalculator.update_manoeuvre_phase!(gs, gm)
+    @test HexFlowCalculator.update_manoeuvre_phase!(gs, gm, ipc) === nothing
 end
 
 @testset "update_manoeuvre_phase! — SpaceMapEmpty is no-op" begin
     gs = GameState()
     gm = GameMap()  # SpaceMapEmpty
+    ipc = make_test_ipc()
 
-    HexFlowCalculator.update_manoeuvre_phase!(gs, gm)
+    @test HexFlowCalculator.update_manoeuvre_phase!(gs, gm, ipc) === nothing
 end
 
 @testset "update_manoeuvre_phase! — WAIT_APPROACH with thrust cancels" begin
     gs = GameState()
     gm = GameMap()
+    ipc = make_test_ipc()
     initialise_spacemap!(gm, UInt32(1), _test_enc_config)
     set_time_years!(gm, 0.0)
 
@@ -925,7 +986,7 @@ end
 
     # Apply thrust above threshold — should cancel during WAIT_APPROACH
     gs.thrust = SVector(10.0, 0.0)
-    HexFlowCalculator.update_manoeuvre_phase!(gs, gm)
+    HexFlowCalculator.update_manoeuvre_phase!(gs, gm, ipc)
 
     @test !has_active_manoeuvre(gm)
 end
@@ -933,11 +994,14 @@ end
 @testset "update_manoeuvre_phase! — WAIT_APPROACH transitions to MAIN_BURN" begin
     gs = GameState()
     gm = GameMap()
+    ipc = make_test_ipc()
     initialise_spacemap!(gm, UInt32(1), _test_enc_config)
 
     # Add a dummy encounter point so the encounter index lookup succeeds
-    ep = EncounterPoint(index = 1, base_velocity = 100.0,
-        position = SVector(500.0, 0.0), velocity = SVector(-100.0, 0.0), spawn_time = 0.0)
+    ep = EncounterPoint(
+        index = 1, base_velocity = 100.0,
+        position = SVector(500.0, 0.0), velocity = SVector(-100.0, 0.0), spawn_time = 0.0
+    )
     push!(get_encounter_points(gm), ep)
 
     man = ManoeuvreData(
@@ -955,7 +1019,7 @@ end
     set_target_time!(gm, 0.0)  # target behind current → not progressing
     gs.thrust = SVector(0.0, 0.0)  # no thrust
 
-    HexFlowCalculator.update_manoeuvre_phase!(gs, gm)
+    HexFlowCalculator.update_manoeuvre_phase!(gs, gm, ipc)
 
     @test has_active_manoeuvre(gm)
     updated_man = get_active_manoeuvre(gm)
@@ -966,6 +1030,7 @@ end
 @testset "update_manoeuvre_phase! — ENCOUNTER_READY with thrust cancels" begin
     gs = GameState()
     gm = GameMap()
+    ipc = make_test_ipc()
     initialise_spacemap!(gm, UInt32(1), _test_enc_config)
 
     man = ManoeuvreData(
@@ -977,9 +1042,59 @@ end
 
     # Thrust above threshold → cancel
     gs.thrust = SVector(5.0, 0.0)
-    HexFlowCalculator.update_manoeuvre_phase!(gs, gm)
+    HexFlowCalculator.update_manoeuvre_phase!(gs, gm, ipc)
 
     @test !has_active_manoeuvre(gm)
+end
+
+@testset "update_manoeuvre_phase! — DECEL_BURN completion triggers encounter" begin
+    gs = GameState()
+    gm = GameMap()
+    ipc = make_test_ipc()
+    initialise_spacemap!(gm, UInt32(42), make_trigger_test_encounter_config())
+    set_surface_tile!(gm, TileCoord(0, 0))
+    push!(get_encounter_points(gm), make_trigger_test_encounter_point())
+    set_time_years!(gm, 5.0)
+    set_target_time!(gm, 5.0)
+
+    man = ManoeuvreData(
+        main_burn_dv = SVector(1.0, 0.0),
+        decel_burn_dv = SVector(-1.0, 0.0),
+        target_encounter_index = 1,
+    )
+    man.phase = PHASE_DECEL_BURN
+    man.burn_target_dv = SVector(0.0, 0.0)
+    man.burn_remaining_dv = SVector(0.0, 0.0)
+    set_active_manoeuvre!(gm, man)
+
+    @test HexFlowCalculator.update_manoeuvre_phase!(gs, gm, ipc) === nothing
+
+    @test !has_active_manoeuvre(gm)
+    @test any(ship_name -> ship_name != :primary, get_all_ship_names(gm))
+end
+
+@testset "update_manoeuvre_phase! — ENCOUNTER_READY triggers encounter even with future target time" begin
+    gs = GameState()
+    gm = GameMap()
+    ipc = make_test_ipc()
+    initialise_spacemap!(gm, UInt32(42), make_trigger_test_encounter_config())
+    set_surface_tile!(gm, TileCoord(0, 0))
+    push!(get_encounter_points(gm), make_trigger_test_encounter_point())
+    set_time_years!(gm, 5.0)
+    set_target_time!(gm, 10.0)
+
+    man = ManoeuvreData(
+        main_burn_dv = SVector(1.0, 0.0),
+        decel_burn_dv = SVector(-1.0, 0.0),
+        target_encounter_index = 1,
+    )
+    man.phase = PHASE_ENCOUNTER_READY
+    set_active_manoeuvre!(gm, man)
+
+    @test HexFlowCalculator.update_manoeuvre_phase!(gs, gm, ipc) === nothing
+
+    @test !has_active_manoeuvre(gm)
+    @test any(ship_name -> ship_name != :primary, get_all_ship_names(gm))
 end
 
 # ===============================================================

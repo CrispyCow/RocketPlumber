@@ -1,4 +1,4 @@
-﻿# ===============================================================
+# ===============================================================
 # Helper Functions for the Game Main Loop
 # ===============================================================
 
@@ -153,30 +153,37 @@ end
 
 "Renders the CImGui UI elements, which mutates the inputstate"
 function ui_rendering!(
-        inputstate::InputState,
-        flowcalc_ipc::FlowCalculatorIPC,
-        snapshot::FlowCalculatorSnapshot,
-        viewstate::ViewState,
-        window::GLFW.Window,
-        tutorial_hint::Union{Nothing, HintData} = nothing
+        inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, snapshot::FlowCalculatorSnapshot,
+        viewstate::ViewState, window::GLFW.Window;
+        learning_state::Union{Nothing, LearningSystemState} = nothing
     )
     pendingcomponent_typeupdate!(inputstate)
-    
+
     # Calculate bounds for interactions
-    max_view_bounds = get_max_reachable_bounds(viewstate)
-    
+    max_view_bounds = calc_max_reachable_bounds(viewstate)
+    set_max_reachable_bounds!(flowcalc_ipc.shared_state, max_view_bounds)
+
     return ui_renderwrap() do
-        ui_velocity_tracker_render(snapshot.gamestate, snapshot.gamemap, inputstate, flowcalc_ipc, max_view_bounds)
-        ui_toolbar_render!(inputstate, GLFW.GetWindowSize(window), flowcalc_ipc.console_see)
-        ui_propertybox_render!(inputstate, snapshot.gamemap, snapshot.derived, snapshot.mna, GLFW.GetWindowSize(window), flowcalc_ipc)
-        ui_pause_menu_render!(inputstate, snapshot, window)
-        ui_action_popup_render!(inputstate, viewstate, flowcalc_ipc)
-        ui_dev_utils_menu_render!(inputstate, flowcalc_ipc, snapshot, viewstate, GLFW.GetWindowSize(window), max_view_bounds)
+        if !isnothing(learning_state) && is_sandbox_learning(learning_state)
+            active_entry = get_active_entry(learning_state)
+            if !isnothing(active_entry)
+                ui_tutorial_banner_render!(active_entry.definition.title, GLFW.GetWindowSize(window))
+            end
+        end
+
+        if !inputstate.spacemap_active
+            ui_velocity_tracker_render(snapshot.gamestate, snapshot.gamemap, inputstate, flowcalc_ipc)
+            ui_toolbar_render!(inputstate, GLFW.GetWindowSize(window), flowcalc_ipc.console_see)
+            ui_propertybox_render!(inputstate, snapshot.gamemap, snapshot.derived, snapshot.mna, GLFW.GetWindowSize(window), flowcalc_ipc)
+            ui_action_popup_render!(inputstate, viewstate, flowcalc_ipc)
+            ui_dev_utils_menu_render!(inputstate, flowcalc_ipc, snapshot, viewstate, GLFW.GetWindowSize(window), max_view_bounds)
+        end
+
+        ui_pause_menu_render!(inputstate, snapshot, window, learning_state)
         ui_spacemap_render!(inputstate, flowcalc_ipc, snapshot, GLFW.GetWindowSize(window), max_view_bounds)
 
-        # Render hint box if hint data exists and is visible
-        if !isnothing(tutorial_hint) && tutorial_hint.is_visible
-            ui_hintbox_render!(tutorial_hint, inputstate, GLFW.GetWindowSize(window))
+        if !isnothing(learning_state)
+            ui_learning_system_render!(learning_state, inputstate, GLFW.GetWindowSize(window))
         end
     end
 end
@@ -198,8 +205,31 @@ end
 # Game Main Loop
 # ===============================================================
 
+"Result returned from `enter_gameloop`. Always carries the exit reason, saved map, and optional tutorial ID."
+@kwdef struct GameLoopResult
+    exit_reason::ExitReason
+    tutorial_id::Union{Nothing, Symbol} = nothing
+    saved_gamemap::GameMap
+end
+
+"Build the runtime learning state from the loaded map's learning-system type."
+function build_learning_runtime_state(gamemap::GameMap, entries::Vector{LearningEntry} = get_learning_entries())::Union{Nothing, LearningSystemState}
+    learning_system = get_learning_system(gamemap)
+    learning_system isa NoLearningSystem && return nothing
+
+    effective_entries = learning_system isa SandboxLearningState ? get_sandbox_learning_entries() : entries
+    # Lower numbers indicate higher priority for both display and trigger evaluation.
+    sorted_entries = sort(effective_entries; by = entry -> entry.priority)
+
+    return LearningSystemState(
+        map_learning = learning_system,
+        entries = sorted_entries,
+        active_hint_id = learning_system isa SandboxLearningState ? learning_system.tutorial_id : nothing,
+    )
+end
+
 "Enter the main game loop with a map loaded from a file path (String), a pre-generated GameMap, or an empty map (nothing)."
-function enter_gameloop(window::GLFW.Window; map_source::Union{Nothing, String, GameMap} = nothing, tutorial_hint::Union{Nothing, HintData} = nothing)
+function enter_gameloop(window::GLFW.Window; map_source::Union{Nothing, String, GameMap, ShipMap} = nothing)::GameLoopResult
     #= Loop Setup =#
     ui_loadingscreen_render(window, "Instantiating game state")
     attach_glfw_callbacks!(window)
@@ -210,6 +240,7 @@ function enter_gameloop(window::GLFW.Window; map_source::Union{Nothing, String, 
 
     ui_loadingscreen_render(window, "Loading map")
     loaded_gamemap::GameMap = loadmap_from_source(map_source)
+    learning_state = build_learning_runtime_state(loaded_gamemap)
     initial_snapshot::FlowCalculatorSnapshot = FlowCalculatorSnapshot(
         gamemap = loaded_gamemap,
         timestamp = time()
@@ -235,15 +266,29 @@ function enter_gameloop(window::GLFW.Window; map_source::Union{Nothing, String, 
     #= Main Loop =#
     ui_loadingscreen_render(window, "Entering main loop")
 
-    while !g_inputstate.should_exit_gameloop
+    while isnothing(g_inputstate.exit_reason) && !GLFW.WindowShouldClose(window)
         g_viewstate.frame_count += 1
         updatefps(window)
         @timeit render_loop_timer "Get Snapshot" g_snapshot::FlowCalculatorSnapshot = g_flowcalc_ipc.get_snapshot()
 
+        # Learning system tick (main game only, not sandbox)
+        if !isnothing(learning_state)
+            learning_inputs = LearningInputs(
+                gamemap = g_snapshot.gamemap,
+                gamestate = g_snapshot.gamestate,
+                inputstate = g_inputstate,
+                flowcalc_shared_state = g_flowcalc_ipc.shared_state,
+            )
+            learning_system_tick!(learning_state, learning_inputs)
+        end
+
         # RENDERING Start
         glClear(GL_COLOR_BUFFER_BIT)
         custom_rendering!(g_renderqueue, g_globjmap, g_snapshot, g_flowcalc_ipc.shared_state, g_inputstate, g_viewstate)
-        @timeit render_loop_timer "UI Rendering" ui_rendering!(g_inputstate, g_flowcalc_ipc, g_snapshot, g_viewstate, window, tutorial_hint)
+        @timeit render_loop_timer "UI Rendering" ui_rendering!(
+            g_inputstate, g_flowcalc_ipc, g_snapshot, g_viewstate, window;
+            learning_state = learning_state
+        )
         GLFW.SwapBuffers(window)
         # RENDERING End
 
@@ -253,6 +298,21 @@ function enter_gameloop(window::GLFW.Window; map_source::Union{Nothing, String, 
         print_gc_statistics()
     end # main loop
 
+    # Build result
+    saved_map = deepcopy(g_flowcalc_ipc.get_snapshot().gamemap)
+    if !isnothing(learning_state)
+        set_learning_system!(saved_map, deepcopy(learning_state.map_learning))
+    end
+
+    reason = something(g_inputstate.exit_reason, EXIT_QUIT)
+
+    result = GameLoopResult(
+        exit_reason = reason,
+        tutorial_id = g_inputstate.pending_sandbox_id,
+        saved_gamemap = saved_map,
+    )
+
     cleanup!(g_flowcalc_ipc, g_globjmap, window)
-    return g_inputstate.return_symbol
+
+    return result
 end # enter_gameloop

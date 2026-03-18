@@ -1,0 +1,16 @@
+name = "HexFlowLearningSystem"
+uuid = "565e34eb-39a4-4998-8996-68e8c8e9dd3e"
+version = "0.1.0"
+authors = ["Christos Lillis <christos.lillis@gmail.com>"]
+
+[deps]
+FlowMap = "86ae9052-88d6-4179-aacc-02095df7ba41"
+HexFlowCalculator = "d8e9f3a2-7b4c-4e1d-9f3a-2c5b8e7d9f1a"
+HexFlowControl = "c4f7b3e2-9a5d-4c8e-b1f2-3e8d9a5c7f1b"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+HexComponentsAPI = "a2289db6-e3a5-4e05-9c21-8734dce2bbd4"
+
+[targets]
+test = ["Test", "HexComponentsAPI"]

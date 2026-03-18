@@ -56,6 +56,7 @@ using HexFrame, HexElements, HexFluids, HexFlowTelemetry
 using HexComponentsAPI, FlowEngine, FlowMap, RenderEngine, HexFlowProcGen
 using HexFlowControl, HexFlowCalculator, HexFlowRendering
 using SquirrelNoise
+using HexFlowLearningSystem
 
 # ===============================================================
 # Startup Sequence
@@ -75,7 +76,8 @@ include_with_loadingscreen(window, "gameloop.jl")
 include_with_loadingscreen(window, "ui_common.jl")
 include_with_loadingscreen(window, "ui_game.jl")
 include_with_loadingscreen(window, "ui_menus.jl")
-include_with_loadingscreen(window, "demo.jl")
+include_with_loadingscreen(window, "ui_learning.jl")
+include_with_loadingscreen(window, "tutorials.jl")
 
 # GAME LAUNCH
 include_with_loadingscreen(window, "startmenu.jl")

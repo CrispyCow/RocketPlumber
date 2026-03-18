@@ -6,6 +6,7 @@ using StaticArrays, GLFW, Dates
 # Type exports
 export PlacementModes, INSPECT, MOVE, PIPE, DELETE, TILE, SURFACE_EDIT
 export SimSpeed, SIM_1X, SIM_2X, SIM_4X, SIM_MAX
+export ExitReason, EXIT_QUIT, EXIT_MENU, EXIT_SANDBOX_COMPLETED, EXIT_SANDBOX_STARTED
 export AbstractPopupTarget, ComponentPopupTarget, ShipPopupTarget
 export ActionPopupState, HintData, InputState, ViewState, GameState
 
@@ -76,6 +77,18 @@ function sim_speed_label(speed::SimSpeed)::String
 end
 
 # ===============================================================
+# Exit Reason
+# ===============================================================
+
+"Reason the game loop exited. Stored on InputState to signal exit intent."
+@enum ExitReason begin
+    EXIT_QUIT
+    EXIT_MENU
+    EXIT_SANDBOX_COMPLETED
+    EXIT_SANDBOX_STARTED
+end
+
+# ===============================================================
 # Data Structures
 # ===============================================================
 
@@ -138,8 +151,8 @@ end
     spacemap_active::Bool = false
     action_popup::Union{Nothing, ActionPopupState} = nothing
     # loop status
-    should_exit_gameloop::Bool = false
-    return_symbol::Symbol = :default
+    exit_reason::Union{Nothing, ExitReason} = nothing
+    pending_sandbox_id::Union{Nothing, Symbol} = nothing
 end
 
 "View state for camera position, zoom, and window dimensions"

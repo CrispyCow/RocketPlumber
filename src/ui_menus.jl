@@ -29,11 +29,14 @@ const _tile_mass_editor_state = Dict{Symbol, Any}(:input_value => 0.0)
 const _particle_accel_editor_state = Dict{Symbol, Any}(:input_value => 0.0)
 
 "Render the pause menu when active, with options to close, save map, exit to menu, or quit."
-function ui_pause_menu_render!(inputstate::InputState, snapshot::FlowCalculatorSnapshot, window::GLFW.Window)
+function ui_pause_menu_render!(inputstate::InputState, snapshot::FlowCalculatorSnapshot, window::GLFW.Window,
+        learning_state::Union{Nothing, LearningSystemState} = nothing)
     # Menu must be active
     if !inputstate.escape_menu_active
         return nothing
     end
+
+    is_sandbox = !isnothing(learning_state) && is_sandbox_learning(learning_state)
 
     # Centre the menu box
     winsize = GLFW.GetWindowSize(window)
@@ -67,20 +70,26 @@ function ui_pause_menu_render!(inputstate::InputState, snapshot::FlowCalculatorS
     CImGui.Dummy((0.0, 10.0))
     CImGui.SetCursorPosX((box_w - button_width) / 2)
 
-    # Save map button
-    if CImGui.Button("Save Map", (button_width, button_height))
-        save_path = save_file(absolute(Path(joinpath(dirname(@__FILE__), "..", "maps"))); filterlist = "jld2")
-        if !isnothing(save_path)
-            savemap(snapshot.gamemap, "$save_path")
+    # Save map button (hidden in sandbox mode)
+    if !is_sandbox
+        if CImGui.Button("Save Map", (button_width, button_height))
+            save_path = save_file(absolute(Path(joinpath(dirname(@__FILE__), "..", "maps"))); filterlist = "jld2")
+            if !isnothing(save_path)
+                gamemap_to_save = deepcopy(snapshot.gamemap)
+                if !isnothing(learning_state)
+                    gamemap_to_save.learning_system = deepcopy(learning_state.map_learning)
+                end
+                savemap(gamemap_to_save, "$save_path")
+            end
         end
+        CImGui.Dummy((0.0, 10.0))
+        CImGui.SetCursorPosX((box_w - button_width) / 2)
     end
-    CImGui.Dummy((0.0, 10.0))
-    CImGui.SetCursorPosX((box_w - button_width) / 2)
 
     # Exit to menu button
-    if CImGui.Button("Exit to Menu", (button_width, button_height))
-        inputstate.return_symbol = :exit_to_startmenu
-        inputstate.should_exit_gameloop = true
+    exit_label = is_sandbox ? "Return to Game" : "Exit to Menu"
+    if CImGui.Button(exit_label, (button_width, button_height))
+        inputstate.exit_reason = EXIT_MENU
     end
     CImGui.Dummy((0.0, 20.0))
     CImGui.SetCursorPosX((box_w - button_width) / 2)
@@ -88,81 +97,9 @@ function ui_pause_menu_render!(inputstate::InputState, snapshot::FlowCalculatorS
     # Quit button
     if CImGui.Button("Quit", (button_width, button_height))
         @info "Quitting Game..."
-        inputstate.return_symbol = :exit_program
-        inputstate.should_exit_gameloop = true
+        inputstate.exit_reason = EXIT_QUIT
         GLFW.SetWindowShouldClose(window, true)
     end
-
-    CImGui.End()
-    return nothing
-end
-
-"""
-Render the hint/tutorial popup window.
-Displays hints with navigation buttons and completion tracking.
-Must be called within ui_renderwrap.
-"""
-function ui_hintbox_render!(
-        hint_data::HintData,
-        inputstate::InputState,
-        winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}}
-    )
-    # Calculate position (top right, immediately left of property box)
-    win_float = to_float(winsize)
-    pos_x = win_float.width - propertyboxwidth - hintboxwidth
-
-    # Window flags: allow resize and move
-    flags = CImGui.ImGuiWindowFlags_None
-
-    # Setup window
-    ui_window_setup("Hint: $(hint_data.title)", (pos_x, 0.0), (hintboxwidth, hintboxheight), flags)
-
-    # Get current hint text
-    current_hint = hint_data.hints[hint_data.current_hint_index]
-
-    # Scrollable text area
-    button_area_height = 80.0
-    text_area_height = hintboxheight - button_area_height - 60.0
-
-    CImGui.BeginChild("HintTextArea", (0.0, text_area_height), true)
-    CImGui.PushTextWrapPos(0.0)   # Wrap at window edge
-    CImGui.TextUnformatted(current_hint)
-    CImGui.PopTextWrapPos()
-    CImGui.EndChild()
-
-    CImGui.Spacing()
-
-    # Navigation buttons (Previous and Next, side by side)
-    button_width = (hintboxwidth - 30.0) / 2.0
-
-    # Previous button
-    at_first_hint = hint_data.current_hint_index == 1
-    at_first_hint && CImGui.BeginDisabled()
-    if CImGui.Button("< Previous", (button_width, 30.0))
-        hint_data.current_hint_index = max(1, hint_data.current_hint_index - 1)
-    end
-    at_first_hint && CImGui.EndDisabled()
-
-    CImGui.SameLine()
-
-    # Next button
-    at_last_hint = hint_data.current_hint_index == length(hint_data.hints)
-    at_last_hint && CImGui.BeginDisabled()
-    if CImGui.Button("Next >", (button_width, 30.0))
-        hint_data.current_hint_index = min(length(hint_data.hints), hint_data.current_hint_index + 1)
-    end
-    at_last_hint && CImGui.EndDisabled()
-
-    CImGui.Spacing()
-
-    # Mark Complete button (full width, only enabled at last hint)
-    !at_last_hint && CImGui.BeginDisabled()
-    if CImGui.Button("Mark Complete", (hintboxwidth - 20.0, 30.0))
-        @info "Hint Marked completed"
-        inputstate.return_symbol = :hint_completed
-        inputstate.should_exit_gameloop = true
-    end
-    !at_last_hint && CImGui.EndDisabled()
 
     CImGui.End()
     return nothing
@@ -224,7 +161,7 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
         # Initialise Space Map
         if CImGui.TreeNode("Initialise Space Map")
             spacemap_seed = gui_input_u32!(inputstate, :spacemap_init_seed, "Seed", UInt32(42))
-            init_vel_x = gui_input_double!(inputstate, :spacemap_init_vel_x, "Velocity X", 1.0)
+            init_vel_x = gui_input_double!(inputstate, :spacemap_init_vel_x, "Velocity X", 10.0)
             init_vel_y = gui_input_double!(inputstate, :spacemap_init_vel_y, "Velocity Y", 0.0)
 
             if CImGui.Button("Initialise Space Map", (button_width, button_height))
@@ -580,7 +517,7 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
 
     end
 
-    
+
     if CImGui.CollapsingHeader("Rendering")
         button_width = 200.0
         button_height = 30.0
@@ -625,8 +562,8 @@ function ui_action_popup_render!(inputstate::InputState, viewstate::ViewState, f
 
     popup_width = 240.0
     flags = CImGui.ImGuiWindowFlags_NoResize |
-            CImGui.ImGuiWindowFlags_NoCollapse |
-            CImGui.ImGuiWindowFlags_AlwaysAutoResize
+        CImGui.ImGuiWindowFlags_NoCollapse |
+        CImGui.ImGuiWindowFlags_AlwaysAutoResize
 
     CImGui.SetNextWindowPos((screen_x, screen_y), CImGui.ImGuiCond_Always)
     CImGui.SetNextWindowSizeConstraints((popup_width, 0.0), (popup_width, 400.0))
@@ -655,7 +592,7 @@ function _render_confirmation_pane!(popup::ActionPopupState, inputstate, flowcal
     CImGui.Dummy((0.0, 4.0))
     button_width = popup_width - 16.0
     CImGui.SetCursorPosX((popup_width - button_width) / 2.0)
-    if CImGui.Button("Confirm", (button_width, 28.0))
+    return if CImGui.Button("Confirm", (button_width, 28.0))
         _execute_action!(inputstate, popup, action, flowcalc_ipc, viewstate)
     end
 end
@@ -671,7 +608,7 @@ function _render_action_list!(popup::ActionPopupState, inputstate, flowcalc_ipc,
             end
         end
     end
-    _render_target_extras!(popup, popup.target, inputstate, flowcalc_ipc, viewstate)
+    return _render_target_extras!(popup, popup.target, inputstate, flowcalc_ipc, viewstate)
 end
 
 "Default: no extra UI elements for this popup target type."
@@ -680,9 +617,11 @@ _render_target_extras!(popup, target::AbstractPopupTarget, inputstate, flowcalc_
 "Component popups get a separator and a 'Delete Component' button with confirmation."
 function _render_target_extras!(popup, target::ComponentPopupTarget, inputstate, flowcalc_ipc, viewstate)
     isempty(popup.actions) || CImGui.Separator()
-    delete_action = ActionInfo(:delete_component, "Delete Component", true,
-        "Remove this component from the ship.", "Delete this component permanently?")
-    if button_with_disable(delete_action.label, ImVec2(-1, 0), false; tooltip = delete_action.tooltip)
+    delete_action = ActionInfo(
+        :delete_component, "Delete Component", true,
+        "Remove this component from the ship.", "Delete this component permanently?"
+    )
+    return if button_with_disable(delete_action.label, ImVec2(-1, 0), false; tooltip = delete_action.tooltip)
         popup.pending_confirmation = delete_action
     end
 end
@@ -703,17 +642,17 @@ function _execute_target_action!(target::ComponentPopupTarget, action::ActionInf
     else
         cmd = create_do_action_command(flowcalc_ipc.command_queue, target.coord, action.id)
     end
-    try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+    return try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
 end
 
 "Execute a ship action via the ship action dispatch system."
 function _execute_target_action!(target::ShipPopupTarget, action::ActionInfo, flowcalc_ipc, viewstate)
-    execute_ship_action!(target.ship_name, action.id, flowcalc_ipc, viewstate)
+    return execute_ship_action!(target.ship_name, action.id, flowcalc_ipc, viewstate)
 end
 
 "Close the action popup and clear all right-click selection state."
 function _close_popup!(inputstate)
     inputstate.action_popup = nothing
     inputstate.rightclick_selectedcoord = nothing
-    inputstate.rightclick_selectedship = nothing
+    return inputstate.rightclick_selectedship = nothing
 end
