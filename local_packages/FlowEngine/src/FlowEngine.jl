@@ -110,17 +110,17 @@ function add_pipes_abs_element!(abs_vector::Vector{AbsoluteElement}, edge::EdgeC
 end
 
 "Updates behaviors of all components on a single ShipMap"
-function update_components!(ship::ShipMap, mna_state::MNA_State)
+function update_components!(ship::ShipMap, mna_state::MNA_State, derivedmapstate::DerivedMapState)
     for (coord, data) in ship.components
-        update_flowbehav!(data; tile = coord, mna_state = mna_state)
+        update_flowbehav!(data; tile = coord, mna_state = mna_state, derivedmapstate = derivedmapstate)
     end
     return nothing
 end
 
 "Updates behaviors of all components on the GameMap by delegating to each ShipMap"
-function update_components!(gamemap::GameMap, mna_state::MNA_State)
+function update_components!(gamemap::GameMap, mna_state::MNA_State, derivedmapstate::DerivedMapState)
     for (_, ship) in gamemap.ships
-        update_components!(ship, mna_state)
+        update_components!(ship, mna_state, derivedmapstate)
     end
     return nothing
 end

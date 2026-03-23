@@ -25,8 +25,9 @@ end
 
 struct DummyCompUpdate <: ComponentBehavior end
 import HexComponentsAPI: update_flowbehav!
-function update_flowbehav!(::DummyCompUpdate; tile::TileCoord, mna_state::MNA_State, kwargs...)
-    mna_state.node_voltages[NodeCoord(tile, HexFrame.NODE_INTERNAL)] = 3.21
+function update_flowbehav!(::DummyCompUpdate; tile::TileCoord, mna_state::MNA_State, derivedmapstate::DerivedMapState, kwargs...)
+    derived_value = get(derivedmapstate.nodeactualfluids, NodeCoord(tile, HexFrame.NODE_INTERNAL), HexFluids.NONE)
+    mna_state.node_voltages[NodeCoord(tile, HexFrame.NODE_INTERNAL)] = derived_value === HexFluids.COLD_GAS ? 3.21 : -1.0
     return nothing
 end
 
@@ -92,7 +93,13 @@ end
     add_ship!(gm, :two, sec)
     set_component!(gm, TileCoord(5,5), ComponentOnTile(DummyCompUpdate(), HexFrame.Q_POS); ship_name = :two)
     ms = MNA_State()
-    update_components!(gm, ms)
+    derived = DerivedMapState(
+        nodeactualfluids = Dict(
+            NodeCoord(TileCoord(0,0), HexFrame.NODE_INTERNAL) => HexFluids.COLD_GAS,
+            NodeCoord(TileCoord(5,5), HexFrame.NODE_INTERNAL) => HexFluids.COLD_GAS,
+        )
+    )
+    update_components!(gm, ms, derived)
     @test NodeCoord(TileCoord(0,0), HexFrame.NODE_INTERNAL) in keys(ms.node_voltages)
     @test NodeCoord(TileCoord(5,5), HexFrame.NODE_INTERNAL) in keys(ms.node_voltages)
     @test ms.node_voltages[NodeCoord(TileCoord(0,0), HexFrame.NODE_INTERNAL)] ≈ 3.21
@@ -102,7 +109,12 @@ end
     ship_single = ShipMap()
     set_component!(ship_single, TileCoord(7,7), ComponentOnTile(DummyCompUpdate(), HexFrame.Q_POS))
     ms2 = MNA_State()
-    update_components!(ship_single, ms2)
+    derived2 = DerivedMapState(
+        nodeactualfluids = Dict(
+            NodeCoord(TileCoord(7,7), HexFrame.NODE_INTERNAL) => HexFluids.COLD_GAS,
+        )
+    )
+    update_components!(ship_single, ms2, derived2)
     @test NodeCoord(TileCoord(7,7), HexFrame.NODE_INTERNAL) in keys(ms2.node_voltages)
     @test ms2.node_voltages[NodeCoord(TileCoord(7,7), HexFrame.NODE_INTERNAL)] ≈ 3.21
 end

@@ -60,6 +60,16 @@ HexComponentsAPI.get_tunables(::MockCompBehav) = ()
 HexComponentsAPI.set_tunables(::MockCompBehav, ::NTuple{0, Real}) = MockCompBehav()
 HexComponentsAPI.render_base_elem!(queue, ::MockCompBehav; kwargs...) = nothing
 
+struct DerivedStateCompBehav <: ComponentBehavior end
+HexComponentsAPI.produce_rel_elements(::DerivedStateCompBehav) = ()
+HexComponentsAPI.get_tunables(::DerivedStateCompBehav) = ()
+HexComponentsAPI.set_tunables(::DerivedStateCompBehav, ::NTuple{0, Real}) = DerivedStateCompBehav()
+HexComponentsAPI.render_base_elem!(queue, ::DerivedStateCompBehav; kwargs...) = nothing
+function HexComponentsAPI.update_flowbehav!(::DerivedStateCompBehav; tile::TileCoord, derivedmapstate::DerivedMapState, kwargs...)
+    derivedmapstate.nodeactualfluids[NodeCoord(tile, HexFrame.NODE_INTERNAL)] = HexFluids.COLD_GAS
+    return nothing
+end
+
 """Minimal mock pipe for command-processing tests."""
 struct MockPipeBehav <: PipeBehavior end
 HexComponentsAPI.get_conductance(::MockPipeBehav) = 1.0
@@ -165,6 +175,19 @@ end
         logs = process_and_log!(cmd, gamemap)
 
         @test !isnothing(get_component(gamemap, coord; ship_name = :primary))
+    end
+
+    @testset "SetTileCommand — supports derived-state-aware updates" begin
+        gamemap = GameMap()
+        coord = TileCoord(0, 0)
+
+        logs = process_and_log!(
+            create_set_tile_command(cq, coord, DerivedStateCompBehav(), Q_POS),
+            gamemap
+        )
+
+        @test !isnothing(get_component(gamemap, coord; ship_name = :primary))
+        @test !any(contains(log, "Invalid map edit") for log in logs)
     end
 
     @testset "SetTileCommand — rejects off-surface" begin
@@ -1070,6 +1093,12 @@ end
     @test HexFlowCalculator.update_manoeuvre_phase!(gs, gm, ipc) === nothing
 
     @test !has_active_manoeuvre(gm)
+
+    # Encounter is now enqueued — drain the command queue to apply it
+    while isready(ipc.command_queue.command_channel)
+        cmd = take!(ipc.command_queue.command_channel)
+        HexFlowCalculator.process_command!(cmd, gm, silent_console, throw_errors = true)
+    end
     @test any(ship_name -> ship_name != :primary, get_all_ship_names(gm))
 end
 
@@ -1094,6 +1123,12 @@ end
     @test HexFlowCalculator.update_manoeuvre_phase!(gs, gm, ipc) === nothing
 
     @test !has_active_manoeuvre(gm)
+
+    # Encounter is now enqueued — drain the command queue to apply it
+    while isready(ipc.command_queue.command_channel)
+        cmd = take!(ipc.command_queue.command_channel)
+        HexFlowCalculator.process_command!(cmd, gm, silent_console, throw_errors = true)
+    end
     @test any(ship_name -> ship_name != :primary, get_all_ship_names(gm))
 end
 

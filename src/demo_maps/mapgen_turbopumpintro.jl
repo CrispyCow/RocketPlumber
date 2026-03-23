@@ -46,9 +46,8 @@ function mapgen_turbopumpintro()
 
     # Create turbopump instance
     turbopump = TurboPumpCompBehav(
-        pump_voltage = 50.0,
+        max_pump_voltage = 50.0,
         series_conductance = 1.0,
-        turbine_gain = -0.2,
     )
 
     # Create decomposition chamber instance

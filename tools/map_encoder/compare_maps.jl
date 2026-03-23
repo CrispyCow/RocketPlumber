@@ -35,6 +35,7 @@ using HexFlowProcGen
 
 # Import components to ensure types are available for JLD2 reconstruction  
 include(joinpath(dirname(@__FILE__), "..", "..", "src", "components.jl"))
+include(joinpath(dirname(@__FILE__), "..", "..", "src", "map_loading.jl"))
 
 # Helper function to resolve map path from various input formats
 function resolve_map_path(input::String)
@@ -56,49 +57,9 @@ function resolve_map_path(input::String)
     end
 end
 
-# Modified loadmap function to accept file paths and load multi-ship GameMap
-function loadmap(map_input::Union{Nothing,String})
-    if isnothing(map_input)
-        @info "No map loaded..."
-        return GameMap()
-    else
-        map_path = resolve_map_path(map_input)
-        # Open the JLD2 file and look for known top-level keys: `ships` or `stored_gamemap`
-        jldopen(map_path, "r") do f
-            if haskey(f, "ships")
-                ships = read(f, "ships")
-                @info "Map loaded successfully from: $map_path (ships)"
-                return GameMap(ships = ships)
-            elseif haskey(f, "stored_gamemap")
-                gm = read(f, "stored_gamemap")
-                try
-                    if hasproperty(gm, :ships)
-                        @info "Map loaded successfully from: $map_path (stored_gamemap)"
-                        return gm
-                    end
-                catch
-                end
-
-                if isa(gm, Array)
-                    d = Dict{Symbol, ShipMap}()
-                    for p in gm
-                        d[p.first] = p.second
-                    end
-                    @info "Map loaded successfully from: $map_path (stored_gamemap as array)"
-                    return GameMap(ships = d)
-                end
-
-                if isa(gm, Dict) && haskey(gm, :ships)
-                    @info "Map loaded successfully from: $map_path (stored_gamemap as dict)"
-                    return GameMap(ships = gm[:ships])
-                end
-
-                error("Could not interpret stored_gamemap structure in: $map_path")
-            else
-                error("Map file does not contain 'ships' or 'stored_gamemap': $map_path")
-            end
-        end
-    end
+"Load a map through the app's canonical save-upgrade path."
+function load_game_map(map_input::Union{Nothing, String})
+    return isnothing(map_input) ? loadmap(nothing) : loadmap(resolve_map_path(map_input))
 end
 
 
@@ -665,7 +626,7 @@ Main comparison function that loads original map and executes generated code.
 function compare_map_files(original_map_input::String, generator_file::String)
     # Load original map
     println("Loading original map: $original_map_input")
-    original_map = loadmap(original_map_input)
+    original_map = load_game_map(original_map_input)
     
     # Extract map name from path for function lookup
     # Strip .jld2 extension and get basename

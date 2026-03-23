@@ -22,7 +22,7 @@ import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, rende
 import HexComponentsAPI: get_fluidtags, update_flowbehav!, render_map_elem!, map_rotation, get_actions, do_action!
 
 # Behavior Fragment Exports
-export HorizontalFlipOnlyBehavFrag
+export HorizontalFlipOnlyBehavFrag, NoRotationBehavFrag
 export PlainSpriteBehavFrag, BasicElemBehavFrag, FluidTagBehavFrag
 export BinaryStateBehavFrag, FloatStateBehavFrag
 export getstate, settrue!, setfalse!, setstate!
@@ -47,6 +47,14 @@ function map_rotation(::HorizontalFlipOnlyBehavFrag, rotation::HexAxis)::HexAxis
         return HexFrame.Q_NEG
     end
 end
+
+#= ---------- NoRotationBehavFrag ----------- =#
+
+"Behavior fragment that locks rotation to Q_POS regardless of input"
+struct NoRotationBehavFrag end
+
+"Map all attempted rotations to Q_POS"
+map_rotation(::NoRotationBehavFrag, rotation::HexAxis)::HexAxis = HexFrame.Q_POS
 
 #= ---------- PlainSpriteBehavFrag ----------- =#
 

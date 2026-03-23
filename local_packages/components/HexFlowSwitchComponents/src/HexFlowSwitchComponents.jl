@@ -2,8 +2,10 @@
 Switch and valve component implementations for flow control.
 
 This module provides concrete implementations of ComponentBehavior for switches and valves:
-- BoolSwitchCompBehav: Binary ON/OFF switch
-- BigAdjustableValveCompBehav: Stepped adjustable valve with visual feedback
+- StandardValveCompBehav{S, V}: Unified valve parameterised by switch type and size
+
+Switch types (S): SteppedSwitchBehavFrag (adjustable), BoolSwitchBehavFrag (on/off)
+Valve sizes (V): LargeValve, TinyValve
 
 All components follow the ComponentBehavior interface defined in HexComponentsAPI.
 """
@@ -20,12 +22,11 @@ import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, rende
 import HexComponentsAPI: get_fluidtags, update_flowbehav!, on_click!, render_map_elem!, get_actions, do_action!
 
 # Behavior Fragment Exports
-export SwitchBehavFrag, get_switch_percentage, get_target_percentage
+export SwitchBehavFrag, get_switch_percentage, get_target_percentage, calculate_growth_factor
 export BoolSwitchBehavFrag, set_target_conductance_to_min!, set_target_conductance_to_max!
 export SteppedSwitchBehavFrag, step_conductance_up!, step_conductance_down!
 # Concrete Component Behavior Exports
-export BoolSwitchCompBehav
-export BigAdjustableValveCompBehav
+export StandardValveCompBehav, AbstractSwitchBehavFrag, ValveSize, LargeValve, TinyValve
 
 # ===============================================================
 # Behavior Fragments
@@ -35,10 +36,6 @@ export BigAdjustableValveCompBehav
 
 # Minimum practical conductance for exponential growth starting from zero
 const MIN_PRACTICAL_CONDUCTANCE = 0.005 # was 0.00025, but made larger to reduce fine valve control
-
-# TODO: Next time making breaking changes to component structs, cache jump_value and growth_factor
-# as fields in SwitchBehavFrag to avoid recomputing growth_factor on every update. Could even replace change_rate with growth_factor directly.
-# For now, prioritizing backward compatibility with saved maps.
 
 "Mutable state for switch conductance tracking"
 mutable struct SwitchState
@@ -51,7 +48,7 @@ struct SwitchBehavFrag
     connection::RelativeElementConnections
     max_conductance::Float64
     min_conductance::Float64
-    change_rate::Float64 # Change rate in linear conductance per tick (used to calculate growth_factor)
+    growth_factor::Float64  # Precomputed exponential growth base (k) — must be ≥ 1.0001
     state::SwitchState
 end
 
@@ -86,7 +83,7 @@ function SwitchBehavFrag(;
         connection::RelativeElementConnections,
         max_conductance::Float64,
         min_conductance::Float64,
-        change_rate::Float64,
+        growth_factor::Float64,
         target_conductance::Float64 = min_conductance,
         current_conductance::Float64 = min_conductance
     )
@@ -107,14 +104,13 @@ function SwitchBehavFrag(;
         )
     end
 
-    # Validate that growth_factor will be stable (calculates it to check)
-    calculate_growth_factor(max_conductance, min_conductance, change_rate)
+    growth_factor = max(growth_factor, 1.0001) # Enforce minimum growth factor to prevent instability
 
     return SwitchBehavFrag(
         connection,
         max_conductance,
         min_conductance,
-        change_rate,
+        growth_factor,
         SwitchState(target_conductance, current_conductance)
     )
 end
@@ -140,24 +136,23 @@ function get_tunables(switch::SwitchBehavFrag)::NTuple{3, TunableProps}
         get_unitstring(HexElements.CONST_RESISTOR)
     )
 
-    change_rate_props = TunableProps(
-        switch.change_rate,
-        "Switch Change Rate",
-        "Conductance per Tick (1/R)/tick"
+    growth_factor_props = TunableProps(
+        switch.growth_factor,
+        "Growth Factor",
+        "Exp base per tick"
     )
 
-    return (max_conductance_props, min_conductance_props, change_rate_props)
+    return (max_conductance_props, min_conductance_props, growth_factor_props)
 end
 
 function set_tunables(switch::SwitchBehavFrag, tunables::NTuple{3, T})::SwitchBehavFrag where {T <: Real}
     float_vals = Float64.(tunables)
 
-    # Reconstruct with new tunables (growth_factor will be recalculated when needed)
     newswitch = SwitchBehavFrag(
         connection = switch.connection,
         max_conductance = float_vals[1],
         min_conductance = float_vals[2],
-        change_rate = float_vals[3],
+        growth_factor = float_vals[3],
         target_conductance = switch.state.target_conductance,
         current_conductance = switch.state.current_conductance
     )
@@ -169,8 +164,7 @@ function update_flowbehav!(switch::SwitchBehavFrag; kwargs...)
     current = switch.state.current_conductance
     min_c = switch.min_conductance
     max_c = switch.max_conductance
-    k = calculate_growth_factor(max_c, min_c, switch.change_rate)
-    jump = MIN_PRACTICAL_CONDUCTANCE
+    k = switch.growth_factor
 
     # Handle edge cases
     if max_c ≈ min_c || target ≈ current
@@ -183,7 +177,7 @@ function update_flowbehav!(switch::SwitchBehavFrag; kwargs...)
     if increasing
         # Moving toward higher conductance
         if current ≈ min_c && min_c ≈ 0.0
-            new_current = jump # Jump from zero to jump_value
+            new_current = MIN_PRACTICAL_CONDUCTANCE # Jump from zero to a stable minimum value
         else
             new_current = current * k # Exponential growth
         end
@@ -199,7 +193,7 @@ function update_flowbehav!(switch::SwitchBehavFrag; kwargs...)
             new_current = target
         end
 
-        if new_current < min_c + jump * 0.1 # Snap to min if we're within a fraction of jump, adds pseudo-hysteresis
+        if new_current < min_c + MIN_PRACTICAL_CONDUCTANCE * 0.1 # Snap to min once we're close to the minimum
             new_current = min_c
         end
     end
@@ -228,7 +222,7 @@ end
 # ===============================================================
 
 "Convert conductance to percentage in exponential space (0.0 = min, 1.0 = max)."
-function conductance_to_exp_percentage(conductance::Float64, min_c::Float64, max_c::Float64, change_rate::Float64)::Float64
+function conductance_to_exp_percentage(conductance::Float64, min_c::Float64, max_c::Float64, growth_factor::Float64)::Float64
     if max_c ≈ min_c
         return 0.0
     end
@@ -239,7 +233,7 @@ function conductance_to_exp_percentage(conductance::Float64, min_c::Float64, max
         return 1.0
     end
 
-    k = calculate_growth_factor(max_c, min_c, change_rate)
+    k = growth_factor
     base = (min_c > 0.0) ? min_c : MIN_PRACTICAL_CONDUCTANCE
 
     total_ticks = log(k, max_c / base) # Total ticks needed to go from base to max
@@ -250,7 +244,7 @@ function conductance_to_exp_percentage(conductance::Float64, min_c::Float64, max
 end
 
 "Convert percentage to conductance in exponential space."
-function exp_percentage_to_conductance(percentage::Float64, min_c::Float64, max_c::Float64, change_rate::Float64)::Float64
+function exp_percentage_to_conductance(percentage::Float64, min_c::Float64, max_c::Float64, growth_factor::Float64)::Float64
     if max_c ≈ min_c
         return min_c
     end
@@ -264,7 +258,7 @@ function exp_percentage_to_conductance(percentage::Float64, min_c::Float64, max_
         return max_c
     end
 
-    k = calculate_growth_factor(max_c, min_c, change_rate)
+    k = growth_factor
     base = (min_c > 0.0) ? min_c : MIN_PRACTICAL_CONDUCTANCE
 
     total_ticks = log(k, max_c / base) # Total ticks needed to go from base to max
@@ -280,7 +274,7 @@ function get_switch_percentage(switch::SwitchBehavFrag)::Float64
         switch.state.current_conductance,
         switch.min_conductance,
         switch.max_conductance,
-        switch.change_rate
+        switch.growth_factor
     )
 end
 
@@ -290,7 +284,7 @@ function get_target_percentage(switch::SwitchBehavFrag)::Float64
         switch.state.target_conductance,
         switch.min_conductance,
         switch.max_conductance,
-        switch.change_rate
+        switch.growth_factor
     )
 end
 
@@ -301,13 +295,16 @@ get_tunables(behav::T) where {T <: AbstractSwitchBehavior} = get_tunables(behav.
 set_tunables(behav::T, tunables::NTuple{N, Real}) where {N, T <: AbstractSwitchBehavior} = @set behav.switch = set_tunables(behav.switch, tunables)
 update_flowbehav!(behav::T; kwargs...) where {T <: AbstractSwitchBehavior} = update_flowbehav!(behav.switch; kwargs...)
 
+"Abstract type for switch behaviour fragments that can be composed into a valve."
+abstract type AbstractSwitchBehavFrag end
+
 #= ---------- BoolSwitchBehavFrag ----------- =#
 
 """
-Switch fragment with binary behavior (ON/OFF) that can be clicked to toggle state.
-Contains switch logic but no rendering - purely behavioral.
+Switch fragment with binary behaviour (ON/OFF) that can be clicked to toggle state.
+Contains switch logic but no rendering -- purely behavioural.
 """
-struct BoolSwitchBehavFrag
+struct BoolSwitchBehavFrag <: AbstractSwitchBehavFrag
     switch::SwitchBehavFrag
 end
 
@@ -316,7 +313,7 @@ function BoolSwitchBehavFrag(;
         connection::RelativeElementConnections,
         max_conductance::Float64,
         min_conductance::Float64,
-        change_rate::Float64,
+        growth_factor::Float64,
         target_conductance::Float64 = min_conductance,
         current_conductance::Float64 = min_conductance
     )
@@ -324,7 +321,7 @@ function BoolSwitchBehavFrag(;
         connection = connection,
         max_conductance = max_conductance,
         min_conductance = min_conductance,
-        change_rate = change_rate,
+        growth_factor = growth_factor,
         target_conductance = target_conductance,
         current_conductance = current_conductance
     )
@@ -337,6 +334,7 @@ get_tunables(behav::BoolSwitchBehavFrag) = get_tunables(behav.switch)
 set_tunables(behav::BoolSwitchBehavFrag, tunables::NTuple{3, Real}) = BoolSwitchBehavFrag(set_tunables(behav.switch, tunables))
 update_flowbehav!(behav::BoolSwitchBehavFrag; kwargs...) = update_flowbehav!(behav.switch; kwargs...)
 get_switch_percentage(behav::BoolSwitchBehavFrag) = get_switch_percentage(behav.switch)
+get_target_percentage(behav::BoolSwitchBehavFrag) = get_target_percentage(behav.switch)
 
 
 function on_click!(behav::BoolSwitchBehavFrag; kwargs...)
@@ -395,11 +393,11 @@ end
 #= ---------- SteppedSwitchBehavFrag ----------- =#
 
 """
-Switch fragment with stepped behavior that can be clicked to adjust conductance in discrete steps.
-Steps are in logarithmic/exponential space to match the switching behavior.
-Contains switch logic but no rendering - purely behavioral.
+Switch fragment with stepped behaviour that can be clicked to adjust conductance in discrete steps.
+Steps are in logarithmic/exponential space to match the switching behaviour.
+Contains switch logic but no rendering -- purely behavioural.
 """
-struct SteppedSwitchBehavFrag
+struct SteppedSwitchBehavFrag <: AbstractSwitchBehavFrag
     switch::SwitchBehavFrag
     percentage_step_size::Float64  # Step size in logarithmic percentage space (0.0 to 1.0)
 end
@@ -409,7 +407,7 @@ function SteppedSwitchBehavFrag(;
         connection::RelativeElementConnections,
         max_conductance::Float64,
         min_conductance::Float64,
-        change_rate::Float64,
+        growth_factor::Float64,
         percentage_step_size::Float64,
         target_conductance::Float64 = min_conductance,
         current_conductance::Float64 = min_conductance
@@ -418,7 +416,7 @@ function SteppedSwitchBehavFrag(;
         connection = connection,
         max_conductance = max_conductance,
         min_conductance = min_conductance,
-        change_rate = change_rate,
+        growth_factor = growth_factor,
         target_conductance = target_conductance,
         current_conductance = current_conductance
     )
@@ -456,7 +454,7 @@ function step_conductance_up!(behav::SteppedSwitchBehavFrag)
     new_target_percentage = min(current_target_percentage + behav.percentage_step_size, 1.0) # Step up in exponential space
 
     # Convert back to conductance and set
-    new_target_conductance = exp_percentage_to_conductance(new_target_percentage, sw.min_conductance, sw.max_conductance, sw.change_rate)
+    new_target_conductance = exp_percentage_to_conductance(new_target_percentage, sw.min_conductance, sw.max_conductance, sw.growth_factor)
     return set_target_conductance!(sw, new_target_conductance)
 end
 
@@ -472,7 +470,7 @@ function step_conductance_down!(behav::SteppedSwitchBehavFrag)
         new_target_percentage,
         sw.min_conductance,
         sw.max_conductance,
-        sw.change_rate
+        sw.growth_factor
     )
     return set_target_conductance!(sw, new_target_conductance)
 end
@@ -509,161 +507,191 @@ end
 # Concrete Component Behaviors
 # ===============================================================
 
-#= ---------- BoolSwitchCompBehav ----------- =#
+#= ---------- Valve Size Types ----------- =#
+
+"Abstract type for valve physical size variants."
+abstract type ValveSize end
+struct LargeValve <: ValveSize end
+struct TinyValve  <: ValveSize end
+
+#= ---------- StandardValveCompBehav{S, V} ----------- =#
 
 """
-Switch which can be switched between ON and OFF.
-Conductance changes at a set rate adding some delay.
-A different sprite dispatches based on switch state.
+Unified valve component parameterised by switch type and physical size.
+S determines switching behaviour: 'SteppedSwitchBehavFrag' for adjustable valves, 'BoolSwitchBehavFrag' for on/off valves.
+V determines physical size and sprites: 'LargeValve' or 'TinyValve'.
 """
-struct BoolSwitchCompBehav <: ComponentBehavior
-    switch::BoolSwitchBehavFrag
-    on_sprite::Symbol
-    off_sprite::Symbol
+struct StandardValveCompBehav{S <: AbstractSwitchBehavFrag, V <: ValveSize} <: ComponentBehavior
+    switch::S
 end
 
-"Keyword constructor for BoolSwitchCompBehav."
-function BoolSwitchCompBehav(;
-        connection::RelativeElementConnections,
-        max_conductance::Float64,
-        min_conductance::Float64,
-        change_rate::Float64,
-        target_conductance::Float64 = min_conductance,
-        current_conductance::Float64 = min_conductance,
-        on_sprite::Symbol,
-        off_sprite::Symbol
-    )
-    switchfrag = BoolSwitchBehavFrag(
-        connection = connection,
-        max_conductance = max_conductance,
-        min_conductance = min_conductance,
-        change_rate = change_rate,
-        target_conductance = target_conductance,
-        current_conductance = current_conductance
-    )
-
-    return BoolSwitchCompBehav(switchfrag, on_sprite, off_sprite)
-end
-
-# Delegation methods
-produce_rel_elements(comp::BoolSwitchCompBehav) = produce_rel_elements(comp.switch)
-get_tunables(comp::BoolSwitchCompBehav) = get_tunables(comp.switch)
-set_tunables(comp::BoolSwitchCompBehav, tunables::NTuple{3, Real}) = @set comp.switch = set_tunables(comp.switch, tunables)
-update_flowbehav!(comp::BoolSwitchCompBehav; kwargs...) = update_flowbehav!(comp.switch; kwargs...)
-on_click!(comp::BoolSwitchCompBehav; kwargs...) = on_click!(comp.switch; kwargs...)
-get_actions(comp::BoolSwitchCompBehav; kwargs...) = get_actions(comp.switch; kwargs...)
-do_action!(comp::BoolSwitchCompBehav, action_id::Symbol; kwargs...) = do_action!(comp.switch, action_id; kwargs...)
-
-function render_base_elem!(queue::Vector{RenderCommand}, comp::BoolSwitchCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
-    max_conductance = comp.switch.switch.max_conductance
-    min_conductance = comp.switch.switch.min_conductance
-    current_conductance = comp.switch.switch.state.current_conductance
-    midpoint = (min_conductance + max_conductance) / 2
-    sprite = current_conductance < midpoint ? comp.off_sprite : comp.on_sprite
-    push!(queue, render_basic_tile(glmap, sprite, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset), pos_offset = pos_offset))
-    return nothing
-end
-
-#= ---------- BigAdjustableValveCompBehav ----------- =#
-
-"""
-Adjustable valve component that can be clicked at different positions to step conductance up or down.
-Visual feedback shows both current valve position and target setpoint arrows.
-"""
-struct BigAdjustableValveCompBehav <: ComponentBehavior
-    switch::SteppedSwitchBehavFrag
-end
-
-"Keyword constructor for BigAdjustableValveCompBehav."
-function BigAdjustableValveCompBehav(;
-        max_conductance::Float64,
-        min_conductance::Float64,
-        change_rate::Float64,
-        percentage_step_size::Float64,
-        target_conductance::Float64 = min_conductance,
-        current_conductance::Float64 = min_conductance
-    )
+"Construct a StandardValveCompBehav with adjustable (stepped) switching."
+function StandardValveCompBehav(::Type{SteppedSwitchBehavFrag}, ::Type{V};
+        max_conductance::Float64, min_conductance::Float64 = 0.0, growth_factor::Float64,
+        percentage_step_size::Float64 = 0.05, target_conductance::Float64 = min_conductance,
+        current_conductance::Float64 = min_conductance) where {V <: ValveSize}
     switchfrag = SteppedSwitchBehavFrag(
-        connection = RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG),
-        max_conductance = max_conductance,
-        min_conductance = min_conductance,
-        change_rate = change_rate,
+        connection           = RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG),
+        max_conductance      = max_conductance,
+        min_conductance      = min_conductance,
+        growth_factor        = growth_factor,
         percentage_step_size = percentage_step_size,
-        target_conductance = target_conductance,
+        target_conductance   = target_conductance,
+        current_conductance  = current_conductance
+    )
+    return StandardValveCompBehav{SteppedSwitchBehavFrag, V}(switchfrag)
+end
+
+"Construct a StandardValveCompBehav with on/off (boolean) switching."
+function StandardValveCompBehav(::Type{BoolSwitchBehavFrag}, ::Type{V};
+        max_conductance::Float64, min_conductance::Float64 = 0.0, growth_factor::Float64,
+        target_conductance::Float64 = min_conductance,
+        current_conductance::Float64 = min_conductance) where {V <: ValveSize}
+    switchfrag = BoolSwitchBehavFrag(
+        connection       = RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG),
+        max_conductance  = max_conductance,
+        min_conductance  = min_conductance,
+        growth_factor    = growth_factor,
+        target_conductance  = target_conductance,
         current_conductance = current_conductance
     )
-    return BigAdjustableValveCompBehav(switchfrag)
+    return StandardValveCompBehav{BoolSwitchBehavFrag, V}(switchfrag)
 end
 
-# Delegation methods
-produce_rel_elements(comp::BigAdjustableValveCompBehav) = produce_rel_elements(comp.switch)
-get_tunables(comp::BigAdjustableValveCompBehav) = get_tunables(comp.switch)
-set_tunables(comp::BigAdjustableValveCompBehav, tunables::NTuple{4, Real}) = @set comp.switch = set_tunables(comp.switch, tunables)
-update_flowbehav!(comp::BigAdjustableValveCompBehav; kwargs...) = update_flowbehav!(comp.switch; kwargs...)
-get_actions(comp::BigAdjustableValveCompBehav; kwargs...) = get_actions(comp.switch; kwargs...)
-do_action!(comp::BigAdjustableValveCompBehav, action_id::Symbol; kwargs...) = do_action!(comp.switch, action_id; kwargs...)
+#= ---------- Sprite Trait Functions ----------- =#
 
-function get_fluidtags(::BigAdjustableValveCompBehav)
-    # Valve is liquid only - prevents placement in turbine arm of turbopump where zero conductance would cause singularity
-    return NodeFluidTags(
-        NODE_Q_POS = HexFluids.ANY_LIQUID,
-        NODE_Q_NEG = HexFluids.ANY_LIQUID
-    )
+# Size-dispatched sprites (shared between adjustable and on/off)
+fluidmask_sprite(::StandardValveCompBehav{S, LargeValve}) where S = :Valves_Large_fluidmask
+fluidmask_sprite(::StandardValveCompBehav{S, TinyValve})  where S = :Valves_Tiny_fluidmask
+valvebody_sprite(::StandardValveCompBehav{S, LargeValve}) where S = :Valves_Large_valvebody
+valvebody_sprite(::StandardValveCompBehav{S, TinyValve})  where S = :Valves_Tiny_valvebody
+static_sprite(::StandardValveCompBehav{S, LargeValve})    where S = :Valves_Large_static
+static_sprite(::StandardValveCompBehav{S, TinyValve})     where S = :Valves_Tiny_static
+valve_travel_px(::StandardValveCompBehav{S, LargeValve})  where S = 100.0f0
+valve_travel_px(::StandardValveCompBehav{S, TinyValve})   where S = 25.0f0
+
+# Switch-type-dispatched control box sprite
+controlbox_sprite(::StandardValveCompBehav{SteppedSwitchBehavFrag}) = :Valves_Adjustable_controlbox
+controlbox_sprite(::StandardValveCompBehav{BoolSwitchBehavFrag})    = :Valves_OnOff_controlbox
+
+#= ---------- Interface Delegation ----------- =#
+
+produce_rel_elements(comp::StandardValveCompBehav) = produce_rel_elements(comp.switch)
+update_flowbehav!(comp::StandardValveCompBehav; kwargs...) = update_flowbehav!(comp.switch; kwargs...)
+get_fluidtags(::StandardValveCompBehav) = NodeFluidTags()
+
+get_tunables(comp::StandardValveCompBehav{SteppedSwitchBehavFrag}) = get_tunables(comp.switch)
+get_tunables(comp::StandardValveCompBehav{BoolSwitchBehavFrag})    = get_tunables(comp.switch)
+
+function set_tunables(comp::StandardValveCompBehav{SteppedSwitchBehavFrag, V}, tunables::NTuple{4, Real}) where V
+    return StandardValveCompBehav{SteppedSwitchBehavFrag, V}(set_tunables(comp.switch, tunables))
 end
 
-function on_click!(comp::BigAdjustableValveCompBehav; relative_clicksite = nothing, kwargs...)
+function set_tunables(comp::StandardValveCompBehav{BoolSwitchBehavFrag, V}, tunables::NTuple{3, Real}) where V
+    return StandardValveCompBehav{BoolSwitchBehavFrag, V}(set_tunables(comp.switch, tunables))
+end
+
+get_actions(comp::StandardValveCompBehav; kwargs...) = get_actions(comp.switch; kwargs...)
+do_action!(comp::StandardValveCompBehav, action_id::Symbol; kwargs...) = do_action!(comp.switch, action_id; kwargs...)
+
+#= ---------- on_click! ----------- =#
+
+function on_click!(comp::StandardValveCompBehav{SteppedSwitchBehavFrag}; relative_clicksite = nothing, kwargs...)
     if relative_clicksite !== nothing
-        eps = 1.0e-6 # Small deadzone to avoid toggle due to tiny floating point jitter
+        eps = 1.0e-6
         y = relative_clicksite.y
-        if y > eps # Click above horizontal - step up
+        if y > eps          # Click above horizontal -- step open
             do_action!(comp.switch, :step_valve_open)
-        elseif y < -eps # Click below horizontal - step down
+        elseif y < -eps     # Click below horizontal -- step close
             do_action!(comp.switch, :step_valve_close)
         end
-        # If exactly on horizontal (y ≈ 0), do nothing
     end
     return nothing
 end
 
-function render_base_elem!(queue::Vector{RenderCommand}, comp::BigAdjustableValveCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
-    valve_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :BigAdjustableValve_valvebody, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = valve_height, pos_offset = pos_offset))
+function on_click!(comp::StandardValveCompBehav{BoolSwitchBehavFrag}; relative_clicksite = nothing, kwargs...)
+    if relative_clicksite !== nothing
+        eps = 1.0e-6
+        y = relative_clicksite.y
+        if y > eps          # Click above horizontal -- open
+            do_action!(comp.switch, :open_valve)
+        elseif y < -eps     # Click below horizontal -- close
+            do_action!(comp.switch, :close_valve)
+        end
+    end
+    return nothing
+end
 
+#= ---------- Rendering ----------- =#
+
+function render_base_elem!(queue::Vector{RenderCommand}, comp::StandardValveCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
+    # Fluid mask (behind layer)
+    fluidmask_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset)
+    push!(queue, render_basic_tile(glmap, fluidmask_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = fluidmask_height, pos_offset = pos_offset))
+
+    # Valve body
+    valve_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100) + Int32(render_height_offset)
+    push!(queue, render_basic_tile(glmap, valvebody_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = valve_height, pos_offset = pos_offset))
+
+    # Static housing
     static_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :BigAdjustableValve_static, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = static_height, pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, static_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = static_height, pos_offset = pos_offset))
+
+    # Control box -- dispatched by switch type
+    controlbox_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + 50) + Int32(render_height_offset)
+    push!(queue, render_basic_tile(glmap, controlbox_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = controlbox_height, pos_offset = pos_offset))
+
+    # Act point line indicator
+    indicator_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + 100) + Int32(render_height_offset)
+    push!(queue, render_basic_tile(glmap, :Valves_actpointline, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = indicator_height, pos_offset = pos_offset))
+
+    # Set point arrow indicator
+    push!(queue, render_basic_tile(glmap, :Valves_setpointarrow, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = indicator_height, pos_offset = pos_offset))
 
     return nothing
 end
 
-function render_map_elem!(queue::Vector{RenderCommand}, comp::BigAdjustableValveCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
+function render_map_elem!(queue::Vector{RenderCommand}, comp::StandardValveCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     node_q_pos = map_element(HexFrame.NODE_Q_POS, position, rotation)
     fluid = get(derivedmapstate.nodeactualfluids, node_q_pos, HexFluids.NONE)
     colour = get_fluid_colour(fluid)
 
+    # Fluid mask -- fluid-type dependent rendering
     fluidmask_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset)
-
     if HexFluids.is_liquid(fluid)
-        push!(queue, render_liquid_tile(glmap, :BigAdjustableValve_fluidmask, rotation, position, gameticks; colour = colour, draw_height = fluidmask_height, pos_offset = pos_offset))
+        push!(queue, render_liquid_tile(glmap, fluidmask_sprite(comp), rotation, position, gameticks; colour = colour, draw_height = fluidmask_height, pos_offset = pos_offset))
     elseif HexFluids.is_gas(fluid)
-        push!(queue, render_gas_tile(glmap, :BigAdjustableValve_fluidmask, rotation, position, gameticks; colour = colour, draw_height = fluidmask_height, pos_offset = pos_offset))
+        push!(queue, render_gas_tile(glmap, fluidmask_sprite(comp), rotation, position, gameticks; colour = colour, draw_height = fluidmask_height, pos_offset = pos_offset))
     else
-        push!(queue, render_basic_tile(glmap, :BigAdjustableValve_fluidmask, rotation, position; colour = colour, draw_height = fluidmask_height, pos_offset = pos_offset))
+        push!(queue, render_basic_tile(glmap, fluidmask_sprite(comp), rotation, position; colour = colour, draw_height = fluidmask_height, pos_offset = pos_offset))
     end
 
+    # Valve body -- shifted vertically by current valve position
     switch_percentage = get_switch_percentage(comp.switch)
-    valve_y_offset = 100.0 * switch_percentage
-    valve_offset = SVector{2, Float32}(0.0, valve_y_offset)
+    valve_y_offset = Float32(valve_travel_px(comp)) * Float32(switch_percentage)
+    valve_offset = SVector{2, Float32}(0.0f0, valve_y_offset)
     valve_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :BigAdjustableValve_valvebody, rotation, position; sprite_offset_tweak_px = valve_offset, draw_height = valve_height, pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, valvebody_sprite(comp), rotation, position; sprite_offset_tweak_px = valve_offset, draw_height = valve_height, pos_offset = pos_offset))
 
+    # Static housing
     static_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :BigAdjustableValve_static, rotation, position; draw_height = static_height, pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, static_sprite(comp), rotation, position; draw_height = static_height, pos_offset = pos_offset))
 
+    # Control box - dispatched by switch type
+    controlbox_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + 50) + Int32(render_height_offset)
+    push!(queue, render_basic_tile(glmap, controlbox_sprite(comp), rotation, position; draw_height = controlbox_height, pos_offset = pos_offset))
+
+    # Act point line - shifted vertically by actual valve position
+    actpoint_y_offset = Float32(130.0 * switch_percentage)
+    actpoint_offset = SVector{2, Float32}(0.0f0, actpoint_y_offset)
+    indicator_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + 100) + Int32(render_height_offset)
+    push!(queue, render_basic_tile(glmap, :Valves_actpointline, rotation, position; sprite_offset_tweak_px = actpoint_offset, draw_height = indicator_height, pos_offset = pos_offset))
+
+    # Set point arrow - shifted vertically by target set point
     target_percentage = get_target_percentage(comp.switch)
-    arrow_y_offset = 100.0 * target_percentage
-    arrow_offset = SVector{2, Float32}(0.0, arrow_y_offset)
-    arrow_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + 100) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :BigAdjustableValve_setpointarrows, rotation, position; sprite_offset_tweak_px = arrow_offset, draw_height = arrow_height, pos_offset = pos_offset))
+    arrow_y_offset = Float32(130.0 * target_percentage)
+    arrow_offset = SVector{2, Float32}(0.0f0, arrow_y_offset)
+    push!(queue, render_basic_tile(glmap, :Valves_setpointarrow, rotation, position; sprite_offset_tweak_px = arrow_offset, draw_height = indicator_height, pos_offset = pos_offset))
 
     return nothing
 end

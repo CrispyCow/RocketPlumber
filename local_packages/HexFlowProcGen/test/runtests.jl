@@ -71,6 +71,16 @@ function make_small_surface()
     return tiles
 end
 
+"A wider surface for pipe-placement tests — the mutual-connection filter needs room for isolated edges."
+function make_pipe_test_surface()
+    tiles = Set{TileCoord}()
+    for q in -3:3
+        push!(tiles, TileCoord(q, 0))
+        push!(tiles, TileCoord(q, 1))
+    end
+    return tiles
+end
+
 "Creates a bare ShipMap with a small random-walk surface for encounter testing."
 function make_bare_shipmap(seed::UInt32)
     ship = ShipMap()
@@ -324,34 +334,47 @@ end
     end
 
     @testset "place_random_pipes!" begin
-        surface = make_small_surface()
+        surface = make_pipe_test_surface()
         gm = make_test_gamemap(surface)
         set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS))
 
-        place_random_pipes!(gm, :MockPipe, UInt32(0xAAAA); pipe_density = 1.0)
+        place_random_pipes!(gm, :MockPipe, UInt32(0xAAAA); pipe_density = 0.3)
 
         pipes = get_ship(gm, :primary).pipe_behaviors
         @test !isempty(pipes)
         @test all(p isa MockPipeBehav for (_, p) in pipes)
+
+        # Verify no two placed pipes share a vertex
+        placed_edges = collect(keys(pipes))
+        for i in eachindex(placed_edges), j in (i+1):length(placed_edges)
+            a, b = placed_edges[i], placed_edges[j]
+            @test a.v1 != b.v1 && a.v1 != b.v2 && a.v2 != b.v1 && a.v2 != b.v2
+        end
     end
 
     @testset "place_connected_pipes!" begin
-        surface = make_small_surface()
+        surface = make_pipe_test_surface()
         gm = make_test_gamemap(surface)
-        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS))
+        set_component!(gm, TileCoord(-2, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS))
+        set_component!(gm, TileCoord(2, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS))
 
-        place_connected_pipes!(gm, :MockPipe, UInt32(0xBBBB); pipe_density = 1.0)
+        place_connected_pipes!(gm, :MockPipe, UInt32(0xBBBB); pipe_density = 0.2)
 
+        # Verify the mutual-connection invariant: no two placed pipes share a vertex
         pipes = get_ship(gm, :primary).pipe_behaviors
-        @test !isempty(pipes)
+        placed_edges = collect(keys(pipes))
+        for i in eachindex(placed_edges), j in (i+1):length(placed_edges)
+            a, b = placed_edges[i], placed_edges[j]
+            @test a.v1 != b.v1 && a.v1 != b.v2 && a.v2 != b.v1 && a.v2 != b.v2
+        end
     end
 
     @testset "place_pipeset! single" begin
-        surface = make_small_surface()
+        surface = make_pipe_test_surface()
         gm = make_test_gamemap(surface)
         set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS))
 
-        opts = PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES, 1.0)
+        opts = PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES, 0.3)
         place_pipeset!(gm, opts, UInt32(0xCCCC))
         @test !isempty(get_ship(gm, :primary).pipe_behaviors)
     end

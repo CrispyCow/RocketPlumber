@@ -9,7 +9,6 @@ All components follow the ComponentBehavior interface defined in HexComponentsAP
 """
 module HexFlowPumpComponents
 
-using Accessors
 using ColorSchemes
 using StaticArrays
 using HexFrame, HexElements, HexFluids, FlowEngine, FlowMap, HexComponentsAPI, RenderEngine, HexFlowRendering
@@ -25,6 +24,7 @@ import HexFlowSwitchComponents: set_target_conductance_to_min!, set_target_condu
 
 # Behavior Fragment Exports
 export PumpBehavFrag
+export RotorStateBehavFrag
 # Concrete Component Behavior Exports
 export TurboPumpCompBehav
 export ElectricPumpCompBehav, ElectricTurboPump, ElectricTransferPump
@@ -41,18 +41,24 @@ struct PumpBehavFrag
 end
 
 const pump_element_index::Int = 1 # Pump voltage source element index
-const turbopump_turbine_element_index::Int = 3 # Turbopump turbine dependent current source element index
+
+"Return the pump voltage after applying a clamped 0-1 scale factor."
+get_scaled_pump_voltage(p::PumpBehavFrag, voltage_scale::Real)::Float64 = p.pump_voltage * clamp(Float64(voltage_scale), 0.0, 1.0)
+
+"Construct the pump's voltage-source element with an externally supplied scale factor."
+function make_pump_element(p::PumpBehavFrag, voltage_scale::Real; active::Bool = true)::RelativeElement
+    voltage = active ? get_scaled_pump_voltage(p, voltage_scale) : 0.0
+    return RelativeElement(
+        RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.NODE_Q_POS),
+        voltage,
+        HexElements.CONST_VOLTAGE;
+        active = active
+    )
+end
 
 "Produces a single voltage source element for the pump, active only when powered."
 function produce_rel_elements(p::PumpBehavFrag, is_pump_powered::Bool)::NTuple{1, RelativeElement}
-    voltage = is_pump_powered ? p.pump_voltage : 0.0 # Pump produces no pressure when not powered
-
-    rel1 = RelativeElement(
-        RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.NODE_Q_POS),
-        voltage, HexElements.CONST_VOLTAGE
-    )
-
-    return (rel1,)
+    return (make_pump_element(p, is_pump_powered ? 1.0 : 0.0; active = true),)
 end
 
 function get_tunables(p::PumpBehavFrag)::NTuple{1, TunableProps}
@@ -85,59 +91,158 @@ function update_energy!(frag::EnergyStoreBehavFrag, delta_energy::Float64)
     return nothing
 end
 
+#= ---------- RotorStateBehavFrag ----------- =#
+
+"Encapsulates rotor RPM state and inertial tuning for pump spin-up and spin-down."
+struct RotorStateBehavFrag
+    rpm::FloatStateBehavFrag
+    max_rpm::Float64
+    rotor_inertia::Float64
+    friction_coefficient::Float64
+
+    function RotorStateBehavFrag(rpm::FloatStateBehavFrag, max_rpm::Float64, rotor_inertia::Float64, friction_coefficient::Float64)
+        # clamp above zero to prevent weird edge cases with negative or zero values
+        friction_coefficient = max(friction_coefficient, 1e-6)
+        rotor_inertia = max(rotor_inertia, 1e-6)
+        max_rpm = max(max_rpm, 1e-6)
+        setstate!(rpm, max(getstate(rpm), 0.0))
+
+        return new(rpm, max_rpm, rotor_inertia, friction_coefficient)
+    end
+end
+
+"Construct a rotor fragment with a clamped initial RPM value."
+function RotorStateBehavFrag(; current_rpm::Real = 0.0, max_rpm::Real, rotor_inertia::Real, friction_coefficient::Real)
+    max_rpm_f = Float64(max_rpm)
+    rpm_state = FloatStateBehavFrag(clamp(Float64(current_rpm), 0.0, max_rpm_f))
+    return RotorStateBehavFrag(rpm_state, max_rpm_f, Float64(rotor_inertia), Float64(friction_coefficient))
+end
+
+"Gets current rotor RPM from state."
+get_current_rpm(frag::RotorStateBehavFrag)::Float64 = getstate(frag.rpm)
+
+"Gets the current rotor RPM as a 0-1 fraction of max RPM."
+get_rpm_fraction(frag::RotorStateBehavFrag)::Float64 = clamp(get_current_rpm(frag) / frag.max_rpm, 0.0, 1.0)
+
+"Changes RPM by delta, clamped at zero"
+function update_rpm!(frag::RotorStateBehavFrag, delta_rpm::Float64)
+    setstate!(frag.rpm, max(get_current_rpm(frag) + delta_rpm, 0.0))
+    return nothing
+end
+
+const TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE::Float64 = 1.0e-3
+const TURBOPUMP_TURBINE_POWER_SCALING::Float64 = 1.0e-4
+const TURBOPUMP_RENDER_MAX_ROTATION_SPEED::Float64 = 900.0
+const TURBOPUMP_SMOKE_CURRENT_THRESHOLD::Float64 = 0.02
+
 # ===============================================================
 # Concrete Component Behaviors
 # ===============================================================
 
 #= ---------- TurboPumpCompBehav ----------- =#
 
-"Rocket engine turbopump component behavior, powered by gas flowing through the turbine."
+"""
+Rocket engine turbopump with variable-conductance turbine.
+
+The turbine conductance drops linearly with RPM: G(RPM) = max_turbine_conductance x max(1 - RPM/max_rpm, 0).
+This gives easy cold-start (high gas flow at low RPM) and natural self-limiting (zero gas flow at max RPM).
+"""
 struct TurboPumpCompBehav <: ComponentBehavior
-    pump::PumpBehavFrag
-    series_conductance::Float64
-    turbine_gain::Float64
-    stall_state::StallBehavFrag
-    turbine_active_state::BinaryStateBehavFrag
+    max_pump_voltage::Float64         # pump pressure at full RPM
+    series_conductance::Float64       # pump-side Thévenin series conductance
+    max_turbine_conductance::Float64  # turbine conductance at 0 RPM (drops to 0 at max_rpm)
+    cycle_efficiency::Float64         # turbine energy conversion factor (0–1)
+    rotor::RotorStateBehavFrag        # RPM state, inertia, friction, max_rpm
+    stall_state::StallBehavFrag       # stall detection and unstall action
 end
 
-"Practical keyword based constructor for TurboPumpCompBehav"
-function TurboPumpCompBehav(; pump_voltage::Float64, series_conductance::Float64, turbine_gain::Float64)
-    pumpfrag = PumpBehavFrag(pump_voltage)
-    return TurboPumpCompBehav(pumpfrag, series_conductance, turbine_gain, StallBehavFrag(), BinaryStateBehavFrag(true))
+"Practical keyword-based constructor for TurboPumpCompBehav."
+function TurboPumpCompBehav(;
+        max_pump_voltage::Real,
+        series_conductance::Real,
+        max_turbine_conductance::Real = 0.3,
+        cycle_efficiency::Real = 0.6,
+        current_rpm::Real = 0.0,
+        max_rpm::Real = 3000.0,
+        rotor_inertia::Real = 100.0,
+        friction_coefficient::Real = 0.02,
+        stall_state::StallBehavFrag = StallBehavFrag()
+    )
+    rotor = RotorStateBehavFrag(
+        current_rpm = current_rpm,
+        max_rpm = max_rpm,
+        rotor_inertia = rotor_inertia,
+        friction_coefficient = friction_coefficient
+    )
+    return TurboPumpCompBehav(
+        Float64(max_pump_voltage),
+        max(Float64(series_conductance), 0.0),
+        max(Float64(max_turbine_conductance), 0.0),
+        max(Float64(cycle_efficiency), 1e-6),
+        rotor,
+        stall_state
+    )
 end
 
-"Produces pump voltage source, series resistor, and turbine-dependent current source."
+"Compute effective turbine conductance at the current RPM."
+function effective_turbine_conductance(comp::TurboPumpCompBehav; exponent::Float64 = 0.7)::Float64
+    rpm_frac = clamp(get_current_rpm(comp.rotor) / comp.rotor.max_rpm, 0.0, 1.0)
+    return comp.max_turbine_conductance * max(1.0 - rpm_frac^exponent, 0.0)
+end
+
+"Produces pump voltage source, series resistor, and variable-conductance turbine resistor."
 function produce_rel_elements(comp::TurboPumpCompBehav)::NTuple{3, RelativeElement}
-    # Pump elements are produced by the pump fragment. The pump is powered when the turbine is active.
-    is_pump_powered = getstate(comp.turbine_active_state)
-    pump_rels = produce_rel_elements(comp.pump, is_pump_powered)
+    active = !is_stalled(comp.stall_state)
+    rpm_fraction = get_rpm_fraction(comp.rotor)
+    pump_voltage = active ? comp.max_pump_voltage * rpm_fraction : 0.0
 
-    # Series resistor connecting internal to Q_NEG
-    rel2 = RelativeElement(
+    pump_source = RelativeElement(
+        RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.NODE_Q_POS),
+        pump_voltage,
+        HexElements.CONST_VOLTAGE;
+        active = active
+    )
+    series_resistor = RelativeElement(
         RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.NODE_Q_NEG),
-        comp.series_conductance, HexElements.CONST_RESISTOR
+        comp.series_conductance,
+        HexElements.CONST_RESISTOR;
+        active = active
     )
-
-    # Turbine dependent current source (deactivated if stalled or pruned)
-    is_active::Bool = !is_stalled(comp.stall_state)
-    rel3 = RelativeElement(
+    turbine_resistor = RelativeElement(
         RelativeElementConnections(HexFrame.NODE_S_POS, HexFrame.GROUND),
-        comp.turbine_gain, HexElements.C_DEP_CURRENT; dependent_index = 1, active = is_active
+        effective_turbine_conductance(comp),
+        HexElements.CONST_RESISTOR;
+        active = active
     )
 
-    return (pump_rels[1], rel2, rel3)
+    return (pump_source, series_resistor, turbine_resistor)
 end
 
-function get_tunables(comp::TurboPumpCompBehav)::NTuple{3, TunableProps}
-    pump_tun = get_tunables(comp.pump)
-    return (pump_tun[1], TunableProps(comp.series_conductance, "Series conductance (resistor)", "1/Ω"), TunableProps(comp.turbine_gain, "Turbine gain (dependent current coefficient)", "A/A"))
+function get_tunables(comp::TurboPumpCompBehav)::NTuple{8, TunableProps}
+    return (
+        TunableProps(comp.max_pump_voltage, "Max pump voltage", "V"),
+        TunableProps(comp.series_conductance, "Series conductance", "1/R"),
+        TunableProps(comp.max_turbine_conductance, "Max turbine conductance", "1/R"),
+        TunableProps(get_current_rpm(comp.rotor), "Current RPM", "RPM"),
+        TunableProps(comp.rotor.max_rpm, "Max RPM", "RPM"),
+        TunableProps(comp.rotor.rotor_inertia, "Rotor inertia", ""),
+        TunableProps(comp.rotor.friction_coefficient, "Friction coefficient", "power/RPM"),
+        TunableProps(comp.cycle_efficiency, "Cycle efficiency", ""),
+    )
 end
 
-function set_tunables(comp::TurboPumpCompBehav, tunables::NTuple{3, T})::TurboPumpCompBehav where {T <: Real}
+function set_tunables(comp::TurboPumpCompBehav, tunables::NTuple{8, T})::TurboPumpCompBehav where {T <: Real}
     vals = Float64.(tunables)
-    comp = @set comp.pump = set_tunables(comp.pump, (vals[1],))
-    comp = @set comp.series_conductance = vals[2]
-    comp = @set comp.turbine_gain = vals[3]
+    newrotor = RotorStateBehavFrag(comp.rotor.rpm, vals[5], vals[6], vals[7])
+    comp = TurboPumpCompBehav(
+        vals[1],
+        max(vals[2], 0.0),
+        max(vals[3], 0.0),
+        max(vals[8], 1e-6),
+        newrotor,
+        comp.stall_state
+    )
+    setstate!(comp.rotor.rpm, clamp(vals[4], 0.0, comp.rotor.max_rpm))
     return comp
 end
 
@@ -158,18 +263,46 @@ end
 get_actions(comp::TurboPumpCompBehav; kwargs...) = get_actions(comp.stall_state; kwargs...)
 do_action!(comp::TurboPumpCompBehav, action_id::Symbol; kwargs...) = do_action!(comp.stall_state, action_id; kwargs...)
 
-"Updates turbine active state and stalls if turbine input pressure is negative."
-function update_flowbehav!(comp::TurboPumpCompBehav; mna_state::MNA_State, tile::TileCoord, rotation::HexAxis, kwargs...)
-    # Update turbine active state based on whether it was pruned
-    turbine_is_active::Bool = haskey(mna_state.csources, ElementID(tile, turbopump_turbine_element_index))
-    turbine_is_active ? settrue!(comp.turbine_active_state) : setfalse!(comp.turbine_active_state)
+"Updates rotor RPM from the previous tick's MNA solution and stalls on pump reversal."
+function update_flowbehav!(comp::TurboPumpCompBehav; mna_state::MNA_State, tile::TileCoord, rotation::HexAxis, derivedmapstate::DerivedMapState, kwargs...)
+    applied_inertia = comp.rotor.rotor_inertia * TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
+    friction_power = comp.rotor.friction_coefficient * (get_current_rpm(comp.rotor) + 200.0) # adds 'static' friction to help rpm get to zero
 
-    # Stall if turbine input pressure is negative (current flows backwards)
-    turbine_input_node = map_element(HexFrame.NODE_S_NEG, tile, rotation)
-    turbine_input_pressure = get(mna_state.node_voltages, turbine_input_node, 0.0)
-    if turbine_input_pressure < 0.0
+    # Normal flow is negative, positive means backdrive and should cause a stall
+    source_current = get(mna_state.vsource_currents, ElementID(tile, pump_element_index), 0.0)
+    if source_current > 0.0
         stall!(comp.stall_state)
     end
+
+    # When stalled, only friction acts (no turbine, no pump load)
+    if is_stalled(comp.stall_state)
+        delta_rpm = -friction_power / (applied_inertia * BASE_UPS)
+        update_rpm!(comp.rotor, delta_rpm)
+        return nothing
+    end
+
+    # Read turbine flow
+    s_pos_node = map_element(HexFrame.NODE_S_POS, tile, rotation)
+    s_pos_voltage = get(mna_state.node_voltages, s_pos_node, 0.0)
+    turbine_g = effective_turbine_conductance(comp)
+    turbine_current = max(s_pos_voltage * turbine_g, 0.0)
+    # Look up the fluid at the nozzle's input node
+    fluid = get(derivedmapstate.nodeactualfluids, s_pos_node, HexFluids.NONE)
+    density = something(lookup_fluid_density(fluid), 0.0)
+    exhaust_velocity = something(lookup_fluid_exhaust_velocity(fluid), 0.0)
+    # compute turbine power
+    turbine_power = density * turbine_current * exhaust_velocity^2 * TURBOPUMP_TURBINE_POWER_SCALING
+
+    # Pump load — voltage × current for the pump voltage source
+    pump_current = max(-Float64(source_current), 0.0)
+    rpm_fraction = get_rpm_fraction(comp.rotor)
+    pump_voltage = comp.max_pump_voltage * rpm_fraction
+    pump_power = pump_voltage * pump_current
+
+    # RPM integration
+    energy_in = comp.cycle_efficiency * turbine_power
+    delta_rpm = (energy_in - pump_power - friction_power) / (applied_inertia * BASE_UPS)
+    update_rpm!(comp.rotor, delta_rpm)
 
     return nothing
 end
@@ -177,9 +310,14 @@ end
 "Renders static turbopump elements: fluid mask, rotor, and static parts."
 function render_base_elem!(queue::Vector{RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     fluidmask_colour = DEFAULT_EMPTY_FLUID_COLOUR
+
+    # Fluid mask.
     push!(queue, render_basic_tile(glmap, :TurboPump1_fluidmask, rotation, position; scale = scale, colour = fluidmask_colour, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
+    # Rotor.
     push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 10 + render_height_offset), pos_offset = pos_offset))
+    # Static housing.
     push!(queue, render_basic_tile(glmap, :TurboPump1_static, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset), pos_offset = pos_offset))
+    # Vibrating pipework.
     push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + 10 + render_height_offset), pos_offset = pos_offset))
 
     return nothing
@@ -187,37 +325,54 @@ end
 
 "Renders turbopump with animations when active: spinning rotor, vibration, and smoke effects."
 function render_map_elem!(queue::Vector{RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
-    # Determine if turbine is on
-    turbine_current = get(mna_state.vsource_currents, ElementID(position, pump_element_index), 0.0)
-    non_trivial_current = abs(turbine_current) > 0.02
-    turbine_is_on = getstate(comp.turbine_active_state) && non_trivial_current
-
     # Get turbine fluid colour
     turbine_input_node = map_element(HexFrame.NODE_S_POS, position, rotation)
     fluid = get(derivedmapstate.nodeactualfluids, turbine_input_node, HexFluids.NONE)
-    colour = get_fluid_colour(fluid)
+    fluidmask_colour = if fluid == HexFluids.NONE
+        DEFAULT_EMPTY_FLUID_COLOUR
+    else
+        get_fluid_colour(fluid)
+    end
+
+    # get turbine state from MNA solution
+    source_current = get(mna_state.vsource_currents, ElementID(position, pump_element_index), 0.0)
+    pump_flow = max(-Float64(source_current), 0.0)
+    s_pos_voltage = get(mna_state.node_voltages, turbine_input_node, 0.0)
+    turbine_g = effective_turbine_conductance(comp)
+    turbine_current = max(s_pos_voltage * turbine_g, 0.0)
+    rpm_fraction = get_rpm_fraction(comp.rotor)
+    max_pump_flow = max(comp.max_pump_voltage * comp.series_conductance, 1.0e-6)
+    pump_flow_fraction = clamp(pump_flow / max_pump_flow, 0.0, 1.0)
 
     smoke_sprites = (:TurboPump1_smoke_1, :TurboPump1_smoke_2, :TurboPump1_smoke_3)
-    if turbine_is_on
-        # Render fluid mask with turbine fluid colour
-        push!(queue, render_basic_tile(glmap, :TurboPump1_fluidmask, rotation, position; colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
-        # Render spinning rotor
-        rotation_mat = animation_rotate(gameticks, 720.0)
-        push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; sprite_rotation_tweak_mat = rotation_mat, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100 + render_height_offset), pos_offset = pos_offset))
-        # Render static background
-        push!(queue, render_basic_tile(glmap, :TurboPump1_static, rotation, position; draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset), pos_offset = pos_offset))
 
-        # Render vibrating part with offset
-        vibe_offset = animation_vibe_offset(gameticks)
-        vibe_offset_vec = SVector{2, Float32}(Float32(vibe_offset[1]), Float32(vibe_offset[2]))
-        push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; sprite_offset_tweak_px = vibe_offset_vec, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + render_height_offset), pos_offset = pos_offset))
+    # Fluid mask.
+    push!(queue, render_basic_tile(glmap, :TurboPump1_fluidmask, rotation, position; colour = fluidmask_colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
 
-        # Render animated smoke effect with fluid colour
-        smoke_sprite = animation_sprite_picker(smoke_sprites, gameticks, 4)
-        push!(queue, render_basic_tile(glmap, smoke_sprite, rotation, position; colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM) + Int32(10) + Int32(render_height_offset), pos_offset = pos_offset))
+    # Rotor.
+    if rpm_fraction > 0.0
+        rotor_rotation = animation_rotate(gameticks, TURBOPUMP_RENDER_MAX_ROTATION_SPEED * rpm_fraction)
+        push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100 + render_height_offset), pos_offset = pos_offset, sprite_rotation_tweak_mat = rotor_rotation))
     else
-        # Render static base when turbine is off
-        render_base_elem!(queue, comp; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, render_height_offset = render_height_offset)
+        push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100 + render_height_offset), pos_offset = pos_offset))
+    end
+
+    # Static housing.
+    push!(queue, render_basic_tile(glmap, :TurboPump1_static, rotation, position; draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset), pos_offset = pos_offset))
+
+    # Vibrating pipework.
+    if pump_flow_fraction > 0.0
+        vibe_offset = animation_vibe_offset(gameticks; magnitude = 2.0 * pump_flow_fraction)
+        vibe_offset_vec = SVector{2, Float32}(Float32.(vibe_offset)...)
+        push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + render_height_offset), pos_offset = pos_offset, sprite_offset_tweak_px = vibe_offset_vec))
+    else
+        push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + render_height_offset), pos_offset = pos_offset))
+    end
+
+    # Turbine exhaust smoke.
+    if turbine_current > TURBOPUMP_SMOKE_CURRENT_THRESHOLD
+        smoke_sprite = animation_sprite_picker(smoke_sprites, gameticks, 4)
+        push!(queue, render_basic_tile(glmap, smoke_sprite, rotation, position; colour = fluidmask_colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM) + Int32(10) + Int32(render_height_offset), pos_offset = pos_offset))
     end
 
     # Render stall overlay
@@ -245,7 +400,7 @@ function ElectricPumpCompBehav(
         initial_energy::Float64,
         max_conductance::Float64,
         min_conductance::Float64,
-        change_rate::Float64
+        growth_factor::Float64
     ) where {T <: ElectricPumpType}
     @assert initial_energy ≤ max_energy "Initial energy ($initial_energy) exceeds max energy ($max_energy) for ElectricPumpCompBehav"
 
@@ -259,7 +414,7 @@ function ElectricPumpCompBehav(
         connection = switch_connection,
         max_conductance = max_conductance,
         min_conductance = min_conductance,
-        change_rate = change_rate,
+        growth_factor = growth_factor,
         target_conductance = min_conductance,
         current_conductance = min_conductance
     )
@@ -346,7 +501,7 @@ function get_actions(comp::ElectricPumpCompBehav; kwargs...)
     rewritten = map(switch_actions) do action
         if action.id === :open_valve
             label = "Turn Pump On"
-            tooltip = action.enabled ? "Activate pump to begin pressurising fluid" : "Pump is already on"
+            tooltip = action.enabled ? "Activate pump to begin pumping fluid" : "Pump is already on"
             return ActionInfo(:pump_on, label, action.enabled, tooltip)
         elseif action.id === :close_valve
             label = "Turn Pump Off"

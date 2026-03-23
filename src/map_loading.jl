@@ -177,6 +177,12 @@ function _build_map_typemap()::Dict{String, Any}
     return Dict(
         "FlowEngine.ShipMap" => JLD2.Upgrade(FlowMap.ShipMap),
         "FlowEngine.GameMap" => JLD2.Upgrade(FlowMap.GameMap),
+        "FlowMap.ShipMap" => JLD2.Upgrade(FlowMap.ShipMap),
+        "FlowMap.GameMap" => JLD2.Upgrade(FlowMap.GameMap),
+        "Main.ShipMap" => JLD2.Upgrade(FlowMap.ShipMap),
+        "Main.GameMap" => JLD2.Upgrade(FlowMap.GameMap),
+        "Main.FlowMap.ShipMap" => JLD2.Upgrade(FlowMap.ShipMap),
+        "Main.FlowMap.GameMap" => JLD2.Upgrade(FlowMap.GameMap),
         "FlowEngine.DockingStatus" => JLD2.Upgrade(FlowMap.DockingStatus),
         "FlowEngine.ConnectedDockStat" => JLD2.Upgrade(FlowMap.ConnectedDockStat),
         "FlowEngine.ApproachingDockStat" => JLD2.Upgrade(FlowMap.ApproachingDockStat),

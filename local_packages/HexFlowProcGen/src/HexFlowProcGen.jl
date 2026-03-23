@@ -340,32 +340,52 @@ function get_all_edgecoords_of_tiles(tiles::Set{TileCoord})
     return edgecoords
 end
 
-"Probabilistically place a pipe at `edge` based on noise and `pipe_density`."
-function noise_pipe_place_helper!(map::GameMap, edge::EdgeCoord, pipe_kind::Symbol, seed::UInt32; pipe_density)
-    used_pipe_density = clamp(pipe_density, 0.0, 1.0)
-    hashed_edge = UInt32(hash(edge, hash(pipe_kind)) & typemax(UInt32)) # mix in pipe kind to vary placement
-    roll = get_noise_zero_to_one(hashed_edge, seed)
-    if roll <= used_pipe_density
-        pipe_behav = roll_pipe(pipe_kind, hashed_edge, seed)
-        set_pipe!(map, edge, pipe_behav)
-    end
+"Hash an edge with a pipe kind to produce a deterministic UInt32 noise key."
+hash_pipe_edge(edge::EdgeCoord, pipe_kind::Symbol) = UInt32(hash(edge, hash(pipe_kind)) & typemax(UInt32))
 
-    return nothing
+"Remove edges that fail the noise density check for `pipe_kind`. Mutates `edges` in-place."
+function noise_filter_pipe_edges!(edges::Set{EdgeCoord}, pipe_kind::Symbol, seed::UInt32; pipe_density)
+    used_pipe_density = clamp(pipe_density, 0.0, 1.0)
+    filter!(edges) do edge
+        roll = get_noise_zero_to_one(hash_pipe_edge(edge, pipe_kind), seed)
+        roll <= used_pipe_density
+    end
+    return edges
 end
 
-"Probabilistically place pipes at multiple edges based on noise and `pipe_density`."
-function noise_pipe_place_helper!(map::GameMap, edges, pipe_kind::Symbol, seed::UInt32; pipe_density)
-    for edgecoord in edges
-        noise_pipe_place_helper!(map, edgecoord, pipe_kind, seed; pipe_density = pipe_density)
+"Remove edges that share a vertex with any other edge in the set."
+function filter_mutually_connected_edges!(edges::Set{EdgeCoord})
+    to_remove = EdgeCoord[]
+    for edge in edges
+        is_connected = false
+        for adj in get_edges(edge.v1)
+            if adj != edge && adj in edges
+                is_connected = true
+                break
+            end
+        end
+        if !is_connected
+            for adj in get_edges(edge.v2)
+                if adj != edge && adj in edges
+                    is_connected = true
+                    break
+                end
+            end
+        end
+        is_connected && push!(to_remove, edge)
     end
-
-    return nothing
+    for edge in to_remove
+        delete!(edges, edge)
+    end
+    return edges
 end
 
 "Place pipes on candidate edges connecting to exactly one existing node, filtered by `pipe_density`."
 function place_connected_pipes!(map::GameMap, pipe_kind::Symbol, seed::UInt32; pipe_density)
     ship_tiles = deepcopy(get_all_surface_tiles(map))
     available_edgecoords = get_all_edgecoords_of_tiles(ship_tiles)
+    # all_nodes covers component AND pipe-endpoint nodes (via list_elements), preventing a
+    # second pipe-placement call from bridging through an existing-pipe vertex.
     all_nodes = Set(keys(list_nodes(list_elements(map))))
 
     # Keep only edges that would connect to exactly one existing node
@@ -377,8 +397,15 @@ function place_connected_pipes!(map::GameMap, pipe_kind::Symbol, seed::UInt32; p
         end
     end
 
-    # Place pipes based on density
-    noise_pipe_place_helper!(map, available_edgecoords, pipe_kind, seed; pipe_density = pipe_density)
+    # Filter by noise density, then remove edges that would interconnect
+    noise_filter_pipe_edges!(available_edgecoords, pipe_kind, seed; pipe_density)
+    filter_mutually_connected_edges!(available_edgecoords)
+
+    # Place surviving edges
+    for edgecoord in available_edgecoords
+        pipe_behav = roll_pipe(pipe_kind, hash_pipe_edge(edgecoord, pipe_kind), seed)
+        set_pipe!(map, edgecoord, pipe_behav)
+    end
 
     return nothing
 end
@@ -387,6 +414,8 @@ end
 function place_random_pipes!(map::GameMap, pipe_kind::Symbol, seed::UInt32; pipe_density)
     ship_tiles = deepcopy(get_all_surface_tiles(map))
     available_edgecoords = get_all_edgecoords_of_tiles(ship_tiles)
+    # all_nodes covers component AND pipe-endpoint nodes (via list_elements), preventing a
+    # second pipe-placement call from bridging through an existing-pipe vertex.
     all_nodes = Set(keys(list_nodes(list_elements(map))))
 
     # Remove any edges that would bridge two existing nodes
@@ -399,8 +428,15 @@ function place_random_pipes!(map::GameMap, pipe_kind::Symbol, seed::UInt32; pipe
         end
     end
 
-    # Place pipes based on density
-    noise_pipe_place_helper!(map, available_edgecoords, pipe_kind, seed; pipe_density = pipe_density)
+    # Filter by noise density, then remove edges that would interconnect
+    noise_filter_pipe_edges!(available_edgecoords, pipe_kind, seed; pipe_density)
+    filter_mutually_connected_edges!(available_edgecoords)
+
+    # Place surviving edges
+    for edgecoord in available_edgecoords
+        pipe_behav = roll_pipe(pipe_kind, hash_pipe_edge(edgecoord, pipe_kind), seed)
+        set_pipe!(map, edgecoord, pipe_behav)
+    end
 
     return nothing
 end

@@ -48,13 +48,12 @@ const SwitchedTinyNozzle = SwitchedNozzleCompBehav(
     connected_node = HexFrame.NODE_Q_POS,
     max_conductance = 2.0,
     min_conductance = 0.0,
-    change_rate = 6.0 / BASE_UPS
+    growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS)
 )
 
 const TurboPump = TurboPumpCompBehav(
-    pump_voltage = 50.0,
+    max_pump_voltage = 50.0,
     series_conductance = 1.0,
-    turbine_gain = -0.2,
 )
 
 const ElecTurboPump = ElectricPumpCompBehav(
@@ -64,7 +63,7 @@ const ElecTurboPump = ElectricPumpCompBehav(
     initial_energy = 100000.0,
     max_conductance = 1.0,  # using old series_conductance as max
     min_conductance = 0.0,
-    change_rate = 1.0 / BASE_UPS  # takes about 1 second to switch (1.0/1.0)
+    growth_factor = calculate_growth_factor(1.0, 0.0, 1.0 / BASE_UPS)
 )
 
 const ElecTransferPump = ElectricPumpCompBehav(
@@ -74,7 +73,7 @@ const ElecTransferPump = ElectricPumpCompBehav(
     initial_energy = 150000.0,
     max_conductance = 0.5,  # using old series_conductance as max
     min_conductance = 0.0,
-    change_rate = 0.4 / BASE_UPS  # takes about 0.5 seconds to switch (0.2/0.4)
+    growth_factor = calculate_growth_factor(0.5, 0.0, 0.4 / BASE_UPS)
 )
 
 const TriGasTank = ThevininTankCompBehav(
@@ -95,11 +94,45 @@ const TriLiquidTank = ThevininTankCompBehav(
     series_conductance = 5.0
 )
 
-const BigAdjustableValve = BigAdjustableValveCompBehav(
-    max_conductance = 2.0,
+const PressureFedLiquidTank = PressureFedTankCompBehav(
+    PressureFedTankBehavFrag(
+        initial_liquid_charge = 150.0 / HexFluids.lookup_fluid_density(HexFluids.MONOPROP_LIQUID),
+        initial_gas_charge = 0.0,
+        max_liquid_charge = 200.0 / HexFluids.lookup_fluid_density(HexFluids.MONOPROP_LIQUID),
+        max_gas_pressure = 50.0,
+        gas_node = HexFrame.NODE_Q_POS
+    ),
+    (HexFrame.NODE_Q_NEG,),
+    5.0,
+    HexFluids.COLD_GAS,
+    HexFluids.MONOPROP_LIQUID,
+    NoRotationBehavFrag()
+)
+
+const LargeAdjValve = StandardValveCompBehav(SteppedSwitchBehavFrag, LargeValve;
+    max_conductance = 4.0,
     min_conductance = 0.0,
-    percentage_step_size = 0.05,  # 5% steps in log space
-    change_rate = 0.25 / BASE_UPS
+    growth_factor = calculate_growth_factor(4.0, 0.0, 2.0 / BASE_UPS),
+    percentage_step_size = 0.05
+)
+
+const TinyAdjValve = StandardValveCompBehav(SteppedSwitchBehavFrag, TinyValve;
+    max_conductance = 1.0,
+    min_conductance = 0.0,
+    growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
+    percentage_step_size = 0.05
+)
+
+const LargeOnOffValve = StandardValveCompBehav(BoolSwitchBehavFrag, LargeValve;
+    max_conductance = 4.0,
+    min_conductance = 0.0,
+    growth_factor = calculate_growth_factor(4.0, 0.0, 2.0 / BASE_UPS)
+)
+
+const TinyOnOffValve = StandardValveCompBehav(BoolSwitchBehavFrag, TinyValve;
+    max_conductance = 1.0,
+    min_conductance = 0.0,
+    growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS)
 )
 
 # Edge-based pipes
@@ -122,7 +155,11 @@ const component_list::Vector{ComponentBehavior} = ComponentBehavior[
     SwitchedTinyNozzle,
     TriGasTank,
     TriLiquidTank,
-    BigAdjustableValve,
+    PressureFedLiquidTank,
+    LargeAdjValve,
+    TinyAdjValve,
+    LargeOnOffValve,
+    TinyOnOffValve,
 ]
 
 # ==============================================================
@@ -157,46 +194,49 @@ function roll_component(::Val{:MediumNozzle_comp}, point, seed)
 end
 
 function roll_component(::Val{:SwitchedTinyNozzle_comp}, point, seed)
+    max_c = pick_from_range(1.0, 3.0, point, seed)
     return SwitchedNozzleCompBehav(
         throat_area = pick_from_range(0.15, 0.25, point, seed),
         connected_node = HexFrame.NODE_Q_POS,
-        max_conductance = pick_from_range(1.0, 3.0, point, seed),
+        max_conductance = max_c,
         min_conductance = 0.0,
-        change_rate = pick_from_range(6.0 / BASE_UPS, 10.0 / BASE_UPS, point, seed)
+        growth_factor = calculate_growth_factor(max_c, 0.0,
+            pick_from_range(6.0, 10.0, point, seed) / BASE_UPS)
     )
 end
 
 function roll_component(::Val{:TurboPump_comp}, point, seed)
     return TurboPumpCompBehav(
-        pump_voltage = pick_from_range(30.0, 70.0, point, seed),
-        series_conductance = pick_from_range(0.5, 2.0, point, seed),
-        turbine_gain = pick_from_range(-0.3, -0.1, point, seed),
+        max_pump_voltage = pick_from_range(45.0, 55.0, point, seed),
+        series_conductance = pick_from_range(0.8, 1.2, point, seed),
     )
 end
 
 function roll_component(::Val{:ElecTurboPump_comp}, point, seed)
     energy = pick_from_range(200000.0, 500000.0, point, seed)
+    max_c = pick_from_range(0.5, 2.0, point, seed)
     return ElectricPumpCompBehav(
         ElectricTurboPump;
         pump_voltage = pick_from_range(20.0, 50.0, point, seed),
         max_energy = energy,
         initial_energy = energy,
-        max_conductance = pick_from_range(0.5, 2.0, point, seed),
+        max_conductance = max_c,
         min_conductance = 0.0,
-        change_rate = 1.0 / BASE_UPS
+        growth_factor = calculate_growth_factor(max_c, 0.0, 1.0 / BASE_UPS)
     )
 end
 
 function roll_component(::Val{:ElecTransferPump_comp}, point, seed)
     energy = pick_from_range(150000.0, 200000.0, point, seed)
+    max_c = pick_from_range(0.3, 1.0, point, seed)
     return ElectricPumpCompBehav(
         ElectricTransferPump;
         pump_voltage = 5.0,
         max_energy = energy,
         initial_energy = energy,
-        max_conductance = pick_from_range(0.3, 1.0, point, seed),
+        max_conductance = max_c,
         min_conductance = 0.0,
-        change_rate = 0.4 / BASE_UPS
+        growth_factor = calculate_growth_factor(max_c, 0.0, 0.4 / BASE_UPS)
     )
 end
 
@@ -260,12 +300,79 @@ function roll_component(::Val{:TriLiquidTank_full_comp}, point, seed)
     )
 end
 
-function roll_component(::Val{:BigAdjustableValve_comp}, point, seed)
-    return BigAdjustableValveCompBehav(
+function roll_component(::Val{:PressureFedLiquidTank_comp}, point, seed)
+    liquid_density = HexFluids.lookup_fluid_density(HexFluids.MONOPROP_LIQUID)::Float64
+    max_charge = pick_from_range(150.0, 250.0, point, seed) / liquid_density
+    initial_charge = max_charge * pick_from_range(0.25, 0.75, get_noise(point, seed), seed)
+
+    return PressureFedTankCompBehav(
+        PressureFedTankBehavFrag(
+            initial_liquid_charge = initial_charge,
+            initial_gas_charge = 0.0,
+            max_liquid_charge = max_charge,
+            max_gas_pressure = pick_from_range(40.0, 60.0, point, seed),
+            gas_node = HexFrame.NODE_Q_POS
+        ),
+        (HexFrame.NODE_Q_NEG,),
+        pick_from_range(3.0, 7.0, point, seed),
+        HexFluids.COLD_GAS,
+        HexFluids.MONOPROP_LIQUID,
+        NoRotationBehavFrag()
+    )
+end
+
+function roll_component(::Val{:PressureFedLiquidTank_full_comp}, point, seed)
+    liquid_density = HexFluids.lookup_fluid_density(HexFluids.MONOPROP_LIQUID)::Float64
+    max_charge = pick_from_range(150.0, 250.0, point, seed) / liquid_density
+    initial_charge = max_charge * pick_from_range(0.75, 0.98, get_noise(point, seed), seed)
+
+    return PressureFedTankCompBehav(
+        PressureFedTankBehavFrag(
+            initial_liquid_charge = initial_charge,
+            initial_gas_charge = 0.0,
+            max_liquid_charge = max_charge,
+            max_gas_pressure = pick_from_range(40.0, 60.0, point, seed),
+            gas_node = HexFrame.NODE_Q_POS
+        ),
+        (HexFrame.NODE_Q_NEG,),
+        pick_from_range(3.0, 7.0, point, seed),
+        HexFluids.COLD_GAS,
+        HexFluids.MONOPROP_LIQUID,
+        NoRotationBehavFrag()
+    )
+end
+
+function roll_component(::Val{:LargeAdjValve_comp}, point, seed)
+    return StandardValveCompBehav(SteppedSwitchBehavFrag, LargeValve;
         max_conductance = 2.0,
-        min_conductance = 0.0,
-        percentage_step_size = 0.05,  # 5% steps in log space
-        change_rate = pick_from_range(0.25 / BASE_UPS, 0.5 / BASE_UPS, point, seed)
+        growth_factor = calculate_growth_factor(2.0, 0.0,
+            pick_from_range(1.0, 1.5, point, seed) / BASE_UPS),
+        percentage_step_size = 0.05
+    )
+end
+
+function roll_component(::Val{:TinyAdjValve_comp}, point, seed)
+    return StandardValveCompBehav(SteppedSwitchBehavFrag, TinyValve;
+        max_conductance = 2.0,
+        growth_factor = calculate_growth_factor(2.0, 0.0,
+            pick_from_range(5.0, 7.0, point, seed) / BASE_UPS),
+        percentage_step_size = 0.05
+    )
+end
+
+function roll_component(::Val{:LargeOnOffValve_comp}, point, seed)
+    return StandardValveCompBehav(BoolSwitchBehavFrag, LargeValve;
+        max_conductance = 2.0,
+        growth_factor = calculate_growth_factor(2.0, 0.0,
+            pick_from_range(1.0, 1.5, point, seed) / BASE_UPS)
+    )
+end
+
+function roll_component(::Val{:TinyOnOffValve_comp}, point, seed)
+    return StandardValveCompBehav(BoolSwitchBehavFrag, TinyValve;
+        max_conductance = 2.0,
+        growth_factor = calculate_growth_factor(2.0, 0.0,
+            pick_from_range(5.0, 7.0, point, seed) / BASE_UPS)
     )
 end
 
@@ -290,7 +397,7 @@ const NOZZLE_EDGE_PLACE = HexFlowProcGen.NOZZLE_EDGE_PLACE
 const CLUSTERED_PLACE = HexFlowProcGen.CLUSTERED_PLACE
 const RANDOM_PLACE = HexFlowProcGen.RANDOM_PLACE
 
-const shipset_starter = ShipComponentSet(
+shipset_starter = ShipComponentSet(
     "Starter Cold Gas",
     [
         CompSpawnOptions(:TriGasTank_full_comp, [(2, 100.0), (3, 200.0), (4, 100.0)], CLUSTERED_PLACE),
@@ -298,7 +405,7 @@ const shipset_starter = ShipComponentSet(
     ]
 )
 
-const shipset_simple_cold_gas = ShipComponentSet(
+shipset_simple_cold_gas = ShipComponentSet(
     "Simple Cold Gas",
     [
         CompSpawnOptions(:TriGasTank_comp, [(1, 100.0), (2, 200.0), (3, 200.0)], CLUSTERED_PLACE),
@@ -307,7 +414,7 @@ const shipset_simple_cold_gas = ShipComponentSet(
     ]
 )
 
-const shipset_electric_monoprop = ShipComponentSet(
+shipset_electric_monoprop = ShipComponentSet(
     "Electric Monoprop",
     [
         CompSpawnOptions(:TriLiquidTank_comp, [(1, 100.0), (2, 200.0), (3, 200.0)], CLUSTERED_PLACE),
@@ -317,14 +424,28 @@ const shipset_electric_monoprop = ShipComponentSet(
     ]
 )
 
-const shipset_turbine_monoprop = ShipComponentSet(
+shipset_turbine_monoprop = ShipComponentSet(
     "Turbine Monoprop",
     [
         CompSpawnOptions(:TriLiquidTank_comp, [(1, 20.0), (2, 200.0), (3, 200.0)], CLUSTERED_PLACE),
-        CompSpawnOptions(:BigAdjustableValve_comp, [(1, 100.0)], RANDOM_PLACE),
+        CompSpawnOptions(:TinyOnOffValve_comp, [(1, 200.0), (2, 200.0)], RANDOM_PLACE),
+        CompSpawnOptions(:TinyAdjValve_comp, [(0, 200.0), (1, 200.0)], RANDOM_PLACE),
         CompSpawnOptions(:TurboPump_comp, [(1, 100.0),], RANDOM_PLACE),
         CompSpawnOptions(:BasicDecompChamber_comp, [(1, 100.0), (2, 20.0)], RANDOM_PLACE),
         CompSpawnOptions(:SmallNozzle_comp, [(1, 100.0), (2, 10.0)], NOZZLE_EDGE_PLACE),
+    ]
+)
+
+shipset_pressure_fed_monoprop = ShipComponentSet(
+    "Pressure Fed Monoprop",
+    [
+        CompSpawnOptions(:PressureFedLiquidTank_full_comp, [(2, 100.0), (3, 200.0)], CLUSTERED_PLACE),
+        CompSpawnOptions(:TriGasTank_full_comp, [(1, 200.0)], CLUSTERED_PLACE),
+        CompSpawnOptions(:BasicDecompChamber_comp, [(1, 200.0)], RANDOM_PLACE),
+        CompSpawnOptions(:TinyOnOffValve_comp, [(1, 200.0), (2, 200.0)], RANDOM_PLACE),
+        CompSpawnOptions(:TinyAdjValve_comp, [(0, 200.0), (1, 200.0)], RANDOM_PLACE),
+        CompSpawnOptions(:TinyNozzle_comp, [(1, 100.0), (2, 200.0)], NOZZLE_EDGE_PLACE),
+        CompSpawnOptions(:SmallNozzle_comp, [(1, 100.0), (0, 200.0)], NOZZLE_EDGE_PLACE),
     ]
 )
 
@@ -393,8 +514,17 @@ compset_scrap_transfer_pump = ShipComponentSet("Scrap Transfer Pump", [
 compset_scrap_turbo_pump = ShipComponentSet("Scrap Turbo Pump", [
     CompSpawnOptions(:TurboPump_comp, [(1, 1.0)], RANDOM_PLACE),
 ])
-compset_scrap_valve = ShipComponentSet("Scrap Valve", [
-    CompSpawnOptions(:BigAdjustableValve_comp, [(1, 1.0)], RANDOM_PLACE),
+compset_scrap_large_adj_valve = ShipComponentSet("Scrap Large Adj Valve", [
+    CompSpawnOptions(:LargeAdjValve_comp, [(1, 1.0)], RANDOM_PLACE),
+])
+compset_scrap_tiny_adj_valve = ShipComponentSet("Scrap Tiny Adj Valve", [
+    CompSpawnOptions(:TinyAdjValve_comp, [(1, 1.0)], RANDOM_PLACE),
+])
+compset_scrap_large_onoff_valve = ShipComponentSet("Scrap Large OnOff Valve", [
+    CompSpawnOptions(:LargeOnOffValve_comp, [(1, 1.0)], RANDOM_PLACE),
+])
+compset_scrap_tiny_onoff_valve = ShipComponentSet("Scrap Tiny OnOff Valve", [
+    CompSpawnOptions(:TinyOnOffValve_comp, [(1, 1.0)], RANDOM_PLACE),
 ])
 compset_scrap_decomp = ShipComponentSet("Scrap Decomp Chamber", [
     CompSpawnOptions(:BasicDecompChamber_comp, [(1, 1.0)], RANDOM_PLACE),
@@ -409,8 +539,9 @@ _ship_coldgas_pool = WeightedComponentSet[
 ]
 
 _ship_monoprop_pool = WeightedComponentSet[
-    WeightedComponentSet(shipset_electric_monoprop, NoScaling(1.0)),
-    WeightedComponentSet(shipset_turbine_monoprop, GatedLinearScaling(0.5, 0.0, 5.0)),
+    WeightedComponentSet(shipset_pressure_fed_monoprop, NoScaling(1.0)),
+    WeightedComponentSet(shipset_electric_monoprop, GatedLinearScaling(0.5, 0.0, 3.0)),
+    WeightedComponentSet(shipset_turbine_monoprop, GatedLinearScaling(0.5, 0.1, 5.0)),
     WeightedComponentSet(compset_extra_liquid_tanks, GatedLinearScaling(0.3, 0.0, 2.0)),
 ]
 
@@ -430,7 +561,10 @@ _scrap_pool = WeightedComponentSet[
     WeightedComponentSet(compset_scrap_elec_pump, GatedLinearScaling(0.6, 0.0, 0.5)),
     WeightedComponentSet(compset_scrap_transfer_pump, GatedLinearScaling(0.6, 0.0, 0.3)),
     WeightedComponentSet(compset_scrap_turbo_pump, GatedLinearScaling(0.3, 0.0, 2.0)),
-    WeightedComponentSet(compset_scrap_valve, GatedLinearScaling(0.5, 0.0, 0.5)),
+    WeightedComponentSet(compset_scrap_large_adj_valve, GatedLinearScaling(0.5, 0.0, 0.5)),
+    WeightedComponentSet(compset_scrap_tiny_adj_valve, GatedLinearScaling(0.5, 0.0, 0.5)),
+    WeightedComponentSet(compset_scrap_large_onoff_valve, GatedLinearScaling(0.5, 0.0, 0.5)),
+    WeightedComponentSet(compset_scrap_tiny_onoff_valve, GatedLinearScaling(0.5, 0.0, 0.5)),
     WeightedComponentSet(compset_scrap_decomp, GatedLinearScaling(0.4, 0.0, 1.0)),
 ]
 
@@ -441,29 +575,29 @@ fuel_cache_pipeoptions = PipeSpawnOptions[
 ]
 
 # Per-class encounter generation configs
-const ship_class_config = EncounterClassConfig(
+ship_class_config = EncounterClassConfig(
     NoScaling(3.0),
     HullSizeConfig(LinearScaling(1.0, 0.6), LinearScaling(2.0, 8.0)),
     LinearScaling(1.0, 2.0),
     Dict{FluidTags, FuelTagConfig}(
         HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), _ship_coldgas_pool),
-        HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 2.0), _ship_monoprop_pool),
+        HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 2.5), _ship_monoprop_pool),
     ),
     standard_pipeoptions,
 )
 
-const fuel_cache_class_config = EncounterClassConfig(
+fuel_cache_class_config = EncounterClassConfig(
     NoScaling(3.0),
     HullSizeConfig(LinearScaling(1.0, 0.3), LinearScaling(8.0, 10.0)),
     LinearScaling(2.0, 3.0),
     Dict{FluidTags, FuelTagConfig}(
         HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), _cache_coldgas_pool),
-        HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 2.0), _cache_monoprop_pool),
+        HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 2.5), _cache_monoprop_pool),
     ),
     fuel_cache_pipeoptions,
 )
 
-const scrap_class_config = EncounterClassConfig(
+scrap_class_config = EncounterClassConfig(
     NoScaling(3.0),
     HullSizeConfig(LinearScaling(1.0, 0.8), LinearScaling(2.0, 2.0)),
     LinearScaling(0.0, 1.0),
@@ -473,7 +607,7 @@ const scrap_class_config = EncounterClassConfig(
     standard_pipeoptions,
 )
 
-const encounter_class_configs = Dict{EncounterClass, EncounterClassConfig}(
+encounter_class_configs = Dict{EncounterClass, EncounterClassConfig}(
     ENCOUNTER_SHIP => ship_class_config,
     ENCOUNTER_FUEL_CACHE => fuel_cache_class_config,
     ENCOUNTER_SCRAP => scrap_class_config,

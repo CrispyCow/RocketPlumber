@@ -29,8 +29,7 @@ float hash(vec2 p) {
 void main()
 {
     if (local_texcoord.x > x_uncliped) {
-        // black if clipped
-        outColor = vec4(0.0, 0.0, 0.0, 1.0);
+        discard;
     } else {
         // Base colour
         vec4 baseColor = texture(texunit, atlas_texcoord) * colour_multiply;

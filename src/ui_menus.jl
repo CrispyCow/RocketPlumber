@@ -479,12 +479,11 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
                     enc_seed, class_config
                 )
                 display_name = generate_encounter_name(enc_seed, enc_class)
-                encounter_map = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
-                encounter_ship!(
-                    encounter_map, new_shipmap, display_name,
-                    enc_seed, enc_dir; max_view_bounds = max_view_bounds
+                cmd = create_add_encounter_ship_command(
+                    flowcalc_ipc.command_queue, new_shipmap, display_name, enc_seed;
+                    dir = enc_dir, max_view_bounds = max_view_bounds
                 )
-                enqueue_map_override!(flowcalc_ipc, encounter_map)
+                try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
                 @info "Dev: generated encounter" name = display_name class = enc_class richness = enc_richness
             end
 
@@ -494,12 +493,11 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
                     enc_seed, class_config
                 )
                 display_name = generate_encounter_name(enc_seed, enc_class)
-                encounter_map = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
-                encounter_ship_optimal_dir!(
-                    encounter_map, new_shipmap, display_name,
-                    enc_seed; max_view_bounds = max_view_bounds
+                cmd = create_add_encounter_ship_command(
+                    flowcalc_ipc.command_queue, new_shipmap, display_name, enc_seed;
+                    max_view_bounds = max_view_bounds
                 )
-                enqueue_map_override!(flowcalc_ipc, encounter_map)
+                try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
                 @info "Dev: generated encounter (optimal dir)" name = display_name class = enc_class richness = enc_richness
             end
 

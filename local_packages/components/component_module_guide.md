@@ -33,7 +33,7 @@ using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowEngine, RenderEngi
 # ComponentBehavior Mandatories (or PipeBehavior Mandatories)
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional (or PipeBehavior Optional)
-import HexComponentsAPI: get_fluidtags, update_flowbehav!, render_map_elem!, on_click!
+import HexComponentsAPI: get_fluidtags, update_flowbehav!, render_map_elem!, on_click!, placement_valid, get_component_wet_mass, get_actions, do_action!, collect_effect_particles!
 # Dependencies on other component modules
 import HexFlowOtherModule: helper_function
 
@@ -104,7 +104,7 @@ Use consistent dividers to organize code:
 # ComponentBehavior Mandatories
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional
-import HexComponentsAPI: get_fluidtags, update_flowbehav!, render_map_elem!
+import HexComponentsAPI: get_fluidtags, update_flowbehav!, render_map_elem!, placement_valid, get_actions, do_action!
 # Dependencies
 import HexFlowBasicComponents: StallBehavFrag, stall!
 ```
@@ -153,11 +153,11 @@ struct SwitchBehavFrag
 end
 ```
 
-**Function docstrings**: Implementation packages do NOT use function docstrings
-- Interface is documented in `HexComponentsAPI`
-- Type signatures and parameter names are self-documenting
-- Complex algorithms use inline comments within function bodies
-- Constructor docstrings are minimal single-line when needed:
+**Function docstrings**: Implementation packages usually do not need them
+- Do not add function docstrings by default; the interface is already documented in `HexComponentsAPI`
+- Add a function docstring only when it explains a novel behaviour, non-obvious contract, or reusable pattern that would be hard to infer from the signature and body
+- Prefer inline comments inside complex bodies when the explanation is local to one implementation
+- Constructor docstrings are optional and should only be added when validation or usage is not obvious:
   ```julia
   "Keyword constructor for TankBehavFrag with validation."
   function TankBehavFrag(; kwargs...)
@@ -189,10 +189,12 @@ get_tunables(behav::MyComp)::NTuple{N, TunableProps}
 # Return new component with updated tunable values
 set_tunables(behav::MyComp, tunables::NTuple{N, Real})::MyComp
 
-# Push RenderCommands to queue for base (static) rendering
-render_base_elem!(queue::Vector{RenderCommand}, behav::MyComp; 
-                  glmap, rotation, position, scale=1.0, transparency=1.0, 
-                  render_height_offset::Integer=0, kwargs...)::Nothing
+# Push RenderCommands to queue for base (static) rendering.
+# Preserve pos_offset so ship render offsets and docking offsets are applied.
+render_base_elem!(queue::AbstractVector, behav::MyComp;
+                  glmap, rotation, position, pos_offset = nothing,
+                  scale = 1.0, transparency = 1.0,
+                  render_height_offset::Integer = 0, kwargs...)::Nothing
 ```
 
 ### Optional Methods (with defaults)
@@ -201,7 +203,9 @@ Override as needed:
 
 ```julia
 # Dynamic rendering (default: forwards to render_base_elem!)
-render_map_elem!(queue, behav; kwargs...)
+render_map_elem!(queue::AbstractVector, behav::MyComp;
+                 glmap, rotation, position, pos_offset = nothing,
+                 kwargs...)::Nothing
 
 # Fluid type constraints (default: NodeFluidTags())
 get_fluidtags(behav)::NodeFluidTags
@@ -215,15 +219,40 @@ on_click!(behav; kwargs...)
 # Thrust calculation (default: zero vector)
 get_thrust(behav; tile, rotation, mna_state, derivedmapstate, kwargs...)::SVector{2, Float64}
 
+# Dry mass contribution. Override this for structural mass.
+get_component_dry_mass(behav; kwargs...)::Float64
+
+# Wet mass contribution. Override this for stored fluid mass.
+get_component_wet_mass(behav; fluid::Union{FluidTags, Nothing} = nothing, kwargs...)::Float64
+
+# Total mass. Prefer overriding dry and/or wet mass rather than this.
+get_component_mass(behav; kwargs...)::Float64
+
+# Right-click popup actions. Return a tuple of ActionInfo values.
+get_actions(behav; kwargs...)
+
+# Execute a right-click action. Return (success, message).
+do_action!(behav, action_id::Symbol; kwargs...)::Tuple{Bool, String}
+
 # Rotation mapping (default: identity)
 map_rotation(behav, rotation::HexAxis)::HexAxis
 
 # Move restrictions (default: (true, ""))
 can_be_moved(behav; kwargs...)::(Bool, String)
 
+# Placement restrictions beyond the default "must be on ship surface" rule.
+placement_valid(behav, coord::TileCoord, gamemap::GameMap;
+                rotation::HexAxis, ship_name::Symbol = :primary,
+                kwargs...)::(Bool, String)
+
 # Particle effects (default: no-op)
 collect_effect_particles!(manager, behav; kwargs...)
 ```
+
+Notes:
+- `FlowMap` provides the default `placement_valid(..., gamemap::GameMap, ...)` implementation for normal surface placement. Override it only when the component has additional constraints, such as nozzles needing to hang off an edge.
+- Mass queries in ship physics use `get_component_dry_mass` and `get_component_wet_mass`, so components that store fluid should normally implement the wet-mass hook rather than overriding `get_component_mass` directly.
+- The action popup UI and calculator action command path use `get_actions` and `do_action!`, so interactive components should expose actions through those hooks rather than bespoke UI logic.
 
 ## PipeBehavior Interface
 
@@ -241,17 +270,21 @@ get_pipe_tunables(behav::MyPipe)::NTuple{N, TunableProps}
 # Return new pipe with updated tunables
 set_pipe_tunables(behav::MyPipe, tunables::NTuple{N, Real})::MyPipe
 
-# Push RenderCommands for base rendering
-render_pipe_base!(queue, behav; glmap, rotation, position, 
-                  scale=1.0, transparency=1.0, render_height_offset::Integer=0, 
-                  kwargs...)::Nothing
+# Push RenderCommands for base rendering.
+# Preserve pos_offset so ship render offsets and docking offsets are applied.
+render_pipe_base!(queue::AbstractVector, behav::MyPipe;
+                  glmap, rotation, position, pos_offset = nothing,
+                  scale = 1.0, transparency = 1.0,
+                  render_height_offset::Integer = 0, kwargs...)::Nothing
 ```
 
 ### Optional Methods
 
 ```julia
 # Dynamic rendering (default: forwards to render_pipe_base!)
-render_pipe_map!(queue, behav; kwargs...)
+render_pipe_map!(queue::AbstractVector, behav::MyPipe;
+                 glmap, rotation, position, pos_offset = nothing,
+                 kwargs...)::Nothing
 
 # Fluid constraints (default: FluidTags())
 get_pipe_fluidtags(behav)::FluidTags
@@ -345,16 +378,21 @@ HexFlowRendering.RENDER_HEIGHT_NODE            # 100000 (circuit nodes)
 HexFlowRendering.RENDER_HEIGHT_OVERLAY_BASE    # 101000 (UI overlays)
 ```
 
-Always add `render_height_offset` parameter to base heights for composability:
+Always add `render_height_offset` to base heights for composability, and preserve `pos_offset` when forwarding to render helpers:
 ```julia
-function render_base_elem!(queue, behav; render_height_offset::Integer=0, kwargs...)
-    static_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + 
+function render_base_elem!(queue::AbstractVector, behav;
+        glmap, rotation, position, pos_offset = nothing,
+        render_height_offset::Integer = 0, kwargs...)
+    static_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) +
                     Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :MySprite, rotation, position, 
-                                   draw_height = static_height))
+    push!(queue, render_basic_tile(glmap, :MySprite, rotation, position;
+                                   draw_height = static_height,
+                                   pos_offset = pos_offset))
     return nothing
 end
 ```
+
+The renderer passes `pos_offset` during normal map rendering to account for per-ship render offsets, so custom render methods and delegation wrappers should thread it through rather than dropping it.
 
 **Fluid colors**: Use `get_fluid_colour` from `HexFlowRendering`:
 ```julia
@@ -371,7 +409,7 @@ black = DEFAULT_EMPTY_FLUID_COLOUR  # exported from HexFlowRendering
 **Rendering helpers** from `HexFlowRendering`:
 ```julia
 # Tile rendering
-render_basic_tile(glmap, sprite, rotation, position; colour, scale, transparency, draw_height)
+render_basic_tile(glmap, sprite, rotation, position; colour, scale, transparency, draw_height, pos_offset)
 render_liquid_tile(glmap, sprite, rotation, position, gameticks; ...)
 render_gas_tile(glmap, sprite, rotation, position, gameticks; ...)
 
@@ -457,6 +495,9 @@ Benefits:
 7. **Follow naming**: `*BehavFrag`, `*CompBehav`, `*PipeBehav` patterns
 8. **Document types**: Struct docstrings explain purpose and behavior
 9. **Preserve immutability**: Use `@set` for updates, mutable structs only for state
+10. **Preserve render offsets**: If you override `render_base_elem!`, `render_map_elem!`, `render_pipe_base!`, or `render_pipe_map!`, thread `pos_offset` through every helper and delegate call
+11. **Use the mass hooks deliberately**: Override `get_component_dry_mass` and `get_component_wet_mass` when the component contributes structural or stored-fluid mass
+12. **Use action hooks for interactions**: Expose right-click actions through `get_actions` and `do_action!` instead of inventing ad-hoc UI paths
 
 ## Example: Simple Component
 
@@ -497,10 +538,16 @@ function set_tunables(comp::SimpleCompBehav, tunables::NTuple{1, Real})::SimpleC
     return SimpleCompBehav(comp.sprite, Float64(tunables[1]))
 end
 
-function render_base_elem!(queue::Vector{RenderCommand}, comp::SimpleCompBehav;
-                          glmap, rotation, position, render_height_offset::Integer=0, kwargs...)
+function render_base_elem!(queue::AbstractVector, comp::SimpleCompBehav;
+                          glmap, rotation, position, pos_offset = nothing,
+                          scale = 1.0, transparency = 1.0,
+                          render_height_offset::Integer = 0, kwargs...)
     height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, comp.sprite, rotation, position, draw_height=height))
+    push!(queue, render_basic_tile(glmap, comp.sprite, rotation, position;
+                                   scale = scale,
+                                   transparency = transparency,
+                                   draw_height = height,
+                                   pos_offset = pos_offset))
     return nothing
 end
 

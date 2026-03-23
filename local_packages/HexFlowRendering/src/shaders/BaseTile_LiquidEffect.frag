@@ -80,7 +80,7 @@ float fbm(vec2 p, float time_offset) {
 void main()
 {
     if (local_texcoord.x > x_uncliped) {
-        outColor = vec4(0.0, 0.0, 0.0, 1.0);
+        discard;
     } else {
         vec4 baseColor = texture(texunit, atlas_texcoord) * colour_multiply;
         float time = gameticks / 60.0;

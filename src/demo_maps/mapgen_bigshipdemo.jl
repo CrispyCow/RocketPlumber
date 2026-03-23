@@ -751,7 +751,7 @@ function mapgen_bigshipdemo()
             throat_area = 0.10000000149011612,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 0.10000000149011612
+            growth_factor = calculate_growth_factor(2.0, 0.0, 0.10000000149011612)
         ), HexFrame.Q_NEG
     )
     components[TileCoord(7, 3)] = ComponentOnTile(
@@ -760,7 +760,7 @@ function mapgen_bigshipdemo()
             throat_area = 0.10000000149011612,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 0.10000000149011612
+            growth_factor = calculate_growth_factor(2.0, 0.0, 0.10000000149011612)
         ), HexFrame.R_NEG
     )
     components[TileCoord(9, -11)] = ComponentOnTile(
@@ -769,7 +769,7 @@ function mapgen_bigshipdemo()
             throat_area = 0.10000000149011612,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 0.10000000149011612
+            growth_factor = calculate_growth_factor(2.0, 0.0, 0.10000000149011612)
         ), HexFrame.R_POS
     )
     components[TileCoord(9, -1)] = ComponentOnTile(
@@ -778,7 +778,7 @@ function mapgen_bigshipdemo()
             throat_area = 0.10000000149011612,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 0.10000000149011612
+            growth_factor = calculate_growth_factor(2.0, 0.0, 0.10000000149011612)
         ), HexFrame.R_POS
     )
     components[TileCoord(7, -7)] = ComponentOnTile(
@@ -787,7 +787,7 @@ function mapgen_bigshipdemo()
             throat_area = 0.10000000149011612,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 0.10000000149011612
+            growth_factor = calculate_growth_factor(2.0, 0.0, 0.10000000149011612)
         ), HexFrame.R_NEG
     )
     components[TileCoord(9, -8)] = ComponentOnTile(
@@ -796,7 +796,7 @@ function mapgen_bigshipdemo()
             throat_area = 0.10000000149011612,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 0.10000000149011612
+            growth_factor = calculate_growth_factor(2.0, 0.0, 0.10000000149011612)
         ), HexFrame.S_POS
     )
     components[TileCoord(10, -10)] = ComponentOnTile(
@@ -805,7 +805,7 @@ function mapgen_bigshipdemo()
             throat_area = 0.10000000149011612,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 0.10000000149011612
+            growth_factor = calculate_growth_factor(2.0, 0.0, 0.10000000149011612)
         ), HexFrame.Q_NEG
     )
     components[TileCoord(7, -10)] = ComponentOnTile(
@@ -814,7 +814,7 @@ function mapgen_bigshipdemo()
             throat_area = 0.10000000149011612,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 0.10000000149011612
+            growth_factor = calculate_growth_factor(2.0, 0.0, 0.10000000149011612)
         ), HexFrame.S_NEG
     )
     components[TileCoord(9, 2)] = ComponentOnTile(
@@ -823,7 +823,7 @@ function mapgen_bigshipdemo()
             throat_area = 0.10000000149011612,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 0.10000000149011612
+            growth_factor = calculate_growth_factor(2.0, 0.0, 0.10000000149011612)
         ), HexFrame.S_POS
     )
     components[TileCoord(7, 0)] = ComponentOnTile(
@@ -832,7 +832,7 @@ function mapgen_bigshipdemo()
             throat_area = 0.10000000149011612,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 0.10000000149011612
+            growth_factor = calculate_growth_factor(2.0, 0.0, 0.10000000149011612)
         ), HexFrame.S_NEG
     )
     components[TileCoord(6, 2)] = ComponentOnTile(
@@ -841,7 +841,7 @@ function mapgen_bigshipdemo()
             throat_area = 0.10000000149011612,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 0.10000000149011612
+            growth_factor = calculate_growth_factor(2.0, 0.0, 0.10000000149011612)
         ), HexFrame.Q_POS
     )
     components[TileCoord(6, -8)] = ComponentOnTile(
@@ -850,7 +850,7 @@ function mapgen_bigshipdemo()
             throat_area = 0.10000000149011612,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 0.10000000149011612
+            growth_factor = calculate_growth_factor(2.0, 0.0, 0.10000000149011612)
         ), HexFrame.Q_POS
     )
 
@@ -963,7 +963,7 @@ function mapgen_bigshipdemo()
             initial_energy = 100000.0,
             max_conductance = 1.0,
             min_conductance = 0.0,
-            change_rate = 0.016666666666666666
+            growth_factor = calculate_growth_factor(1.0, 0.0, 0.016666666666666666)
         ), HexFrame.R_NEG
     )
     components[TileCoord(-7, -3)] = ComponentOnTile(
@@ -974,7 +974,7 @@ function mapgen_bigshipdemo()
             initial_energy = 100000.0,
             max_conductance = 1.0,
             min_conductance = 0.0,
-            change_rate = 0.016666666666666666
+            growth_factor = calculate_growth_factor(1.0, 0.0, 0.016666666666666666)
         ), HexFrame.S_NEG
     )
     components[TileCoord(-8, -2)] = ComponentOnTile(
@@ -985,7 +985,7 @@ function mapgen_bigshipdemo()
             initial_energy = 100000.0,
             max_conductance = 1.0,
             min_conductance = 0.0,
-            change_rate = 0.016666666666666666
+            growth_factor = calculate_growth_factor(1.0, 0.0, 0.016666666666666666)
         ), HexFrame.S_NEG
     )
     components[TileCoord(-9, 9)] = ComponentOnTile(
@@ -996,7 +996,7 @@ function mapgen_bigshipdemo()
             initial_energy = 100000.0,
             max_conductance = 1.0,
             min_conductance = 0.0,
-            change_rate = 0.016666666666666666
+            growth_factor = calculate_growth_factor(1.0, 0.0, 0.016666666666666666)
         ), HexFrame.Q_POS
     )
     components[TileCoord(-9, -1)] = ComponentOnTile(
@@ -1007,7 +1007,7 @@ function mapgen_bigshipdemo()
             initial_energy = 100000.0,
             max_conductance = 1.0,
             min_conductance = 0.0,
-            change_rate = 0.016666666666666666
+            growth_factor = calculate_growth_factor(1.0, 0.0, 0.016666666666666666)
         ), HexFrame.Q_POS
     )
     components[TileCoord(-9, 0)] = ComponentOnTile(
@@ -1018,7 +1018,7 @@ function mapgen_bigshipdemo()
             initial_energy = 100000.0,
             max_conductance = 1.0,
             min_conductance = 0.0,
-            change_rate = 0.016666666666666666
+            growth_factor = calculate_growth_factor(1.0, 0.0, 0.016666666666666666)
         ), HexFrame.Q_POS
     )
     components[TileCoord(-9, 10)] = ComponentOnTile(
@@ -1029,7 +1029,7 @@ function mapgen_bigshipdemo()
             initial_energy = 100000.0,
             max_conductance = 1.0,
             min_conductance = 0.0,
-            change_rate = 0.016666666666666666
+            growth_factor = calculate_growth_factor(1.0, 0.0, 0.016666666666666666)
         ), HexFrame.Q_POS
     )
     components[TileCoord(-8, 10)] = ComponentOnTile(
@@ -1040,7 +1040,7 @@ function mapgen_bigshipdemo()
             initial_energy = 100000.0,
             max_conductance = 1.0,
             min_conductance = 0.0,
-            change_rate = 0.016666666666666666
+            growth_factor = calculate_growth_factor(1.0, 0.0, 0.016666666666666666)
         ), HexFrame.R_NEG
     )
 
@@ -1053,7 +1053,7 @@ function mapgen_bigshipdemo()
             initial_energy = 1.0e6,
             max_conductance = 0.20000000298023224,
             min_conductance = 0.0,
-            change_rate = 0.006666666666666667
+            growth_factor = calculate_growth_factor(0.20000000298023224, 0.0, 0.006666666666666667)
         ), HexFrame.S_NEG
     )
     components[TileCoord(-7, 5)] = ComponentOnTile(
@@ -1064,7 +1064,7 @@ function mapgen_bigshipdemo()
             initial_energy = 1.0e6,
             max_conductance = 0.20000000298023224,
             min_conductance = 0.0,
-            change_rate = 0.006666666666666667
+            growth_factor = calculate_growth_factor(0.20000000298023224, 0.0, 0.006666666666666667)
         ), HexFrame.R_NEG
     )
     components[TileCoord(-4, 5)] = ComponentOnTile(
@@ -1075,7 +1075,7 @@ function mapgen_bigshipdemo()
             initial_energy = 1.0e6,
             max_conductance = 0.20000000298023224,
             min_conductance = 0.0,
-            change_rate = 0.006666666666666667
+            growth_factor = calculate_growth_factor(0.20000000298023224, 0.0, 0.006666666666666667)
         ), HexFrame.Q_POS
     )
     components[TileCoord(-4, -1)] = ComponentOnTile(
@@ -1086,56 +1086,53 @@ function mapgen_bigshipdemo()
             initial_energy = 1.0e6,
             max_conductance = 0.20000000298023224,
             min_conductance = 0.0,
-            change_rate = 0.006666666666666667
+            growth_factor = calculate_growth_factor(0.20000000298023224, 0.0, 0.006666666666666667)
         ), HexFrame.Q_POS
     )
 
     # Turbopumps
     components[TileCoord(-10, 3)] = ComponentOnTile(
         TurboPumpCompBehav(
-            pump_voltage = 50.0,
-            series_conductance = 1.0,
-            turbine_gain = -0.20000000298023224
+            max_pump_voltage = 50.0,
+            series_conductance = 1.0
         ), HexFrame.Q_POS
     )
     components[TileCoord(-10, 5)] = ComponentOnTile(
         TurboPumpCompBehav(
-            pump_voltage = 50.0,
-            series_conductance = 1.0,
-            turbine_gain = -0.20000000298023224
+            max_pump_voltage = 50.0,
+            series_conductance = 1.0
         ), HexFrame.Q_POS
     )
     components[TileCoord(-10, 7)] = ComponentOnTile(
         TurboPumpCompBehav(
-            pump_voltage = 50.0,
-            series_conductance = 1.0,
-            turbine_gain = -0.20000000298023224
+            max_pump_voltage = 50.0,
+            series_conductance = 1.0
         ), HexFrame.Q_POS
     )
 
     # Adjustable valves
     components[TileCoord(-8, 5)] = ComponentOnTile(
-        BigAdjustableValveCompBehav(
+        StandardValveCompBehav(SteppedSwitchBehavFrag, LargeValve;
             max_conductance = 2.0,
             min_conductance = 0.0,
-            percentage_step_size = 0.05000000074505806,
-            change_rate = 0.004166666883975267
+            growth_factor = calculate_growth_factor(2.0, 0.0, 0.004166666883975267),
+            percentage_step_size = 0.05000000074505806
         ), HexFrame.R_NEG
     )
     components[TileCoord(-8, 3)] = ComponentOnTile(
-        BigAdjustableValveCompBehav(
+        StandardValveCompBehav(SteppedSwitchBehavFrag, LargeValve;
             max_conductance = 2.0,
             min_conductance = 0.0,
-            percentage_step_size = 0.05000000074505806,
-            change_rate = 0.004166666883975267
+            growth_factor = calculate_growth_factor(2.0, 0.0, 0.004166666883975267),
+            percentage_step_size = 0.05000000074505806
         ), HexFrame.S_NEG
     )
     components[TileCoord(-8, 4)] = ComponentOnTile(
-        BigAdjustableValveCompBehav(
+        StandardValveCompBehav(SteppedSwitchBehavFrag, LargeValve;
             max_conductance = 2.0,
             min_conductance = 0.0,
-            percentage_step_size = 0.05000000074505806,
-            change_rate = 0.004166666883975267
+            growth_factor = calculate_growth_factor(2.0, 0.0, 0.004166666883975267),
+            percentage_step_size = 0.05000000074505806
         ), HexFrame.Q_POS
     )
 

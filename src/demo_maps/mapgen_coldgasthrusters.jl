@@ -35,7 +35,7 @@ function mapgen_coldgasthrusters()
         connected_node = HexFrame.NODE_Q_POS,
         max_conductance = 2.0,
         min_conductance = 0.0,
-        change_rate = Float64(0.1f0)
+        growth_factor = calculate_growth_factor(2.0, 0.0, Float64(0.1f0))
     )
     components[TileCoord(4, -5)] = ComponentOnTile(switched_nozzle_1, HexFrame.R_NEG)
 
@@ -45,7 +45,7 @@ function mapgen_coldgasthrusters()
         connected_node = HexFrame.NODE_Q_POS,
         max_conductance = 2.0,
         min_conductance = 0.0,
-        change_rate = Float64(0.1f0)
+        growth_factor = calculate_growth_factor(2.0, 0.0, Float64(0.1f0))
     )
     components[TileCoord(4, -7)] = ComponentOnTile(switched_nozzle_2, HexFrame.S_NEG)
 
@@ -55,7 +55,7 @@ function mapgen_coldgasthrusters()
         connected_node = HexFrame.NODE_Q_POS,
         max_conductance = 2.0,
         min_conductance = 0.0,
-        change_rate = Float64(0.1f0)
+        growth_factor = calculate_growth_factor(2.0, 0.0, Float64(0.1f0))
     )
     components[TileCoord(6, -7)] = ComponentOnTile(switched_nozzle_3, HexFrame.Q_NEG)
 

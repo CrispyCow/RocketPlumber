@@ -49,11 +49,11 @@ Create a Julia file with a function named `mapgen_<mapname>()` that returns a Ga
 #### Component Reference Locations:
 To understand how to construct components, examine these files:
 - `src/components.jl` - Contains component constant definitions and constructor patterns
-- `src/components/basic_components.jl` - Basic component behaviors and fragments
-- `src/components/tank_components.jl` - Tank-related components
-- `src/components/pump_components.jl` - Pump and propulsion components  
-- `src/components/nozzle_components.jl` - Nozzle and thrust components
-- `src/components/switch_components.jl` - Switch and control components
+- `local_packages/components/HexFlowBasicComponents/src/HexFlowBasicComponents.jl` - Basic component behaviours and fragments
+- `local_packages/components/HexFlowTankComponents/src/HexFlowTankComponents.jl` - Tank-related components
+- `local_packages/components/HexFlowPumpComponents/src/HexFlowPumpComponents.jl` - Pump and propulsion components
+- `local_packages/components/HexFlowNozzleComponents/src/HexFlowNozzleComponents.jl` - Nozzle and thrust components
+- `local_packages/components/HexFlowSwitchComponents/src/HexFlowSwitchComponents.jl` - Switch and control components
 
 #### Key Constructor Patterns:
 Study `src/components.jl` to see how components are typically constructed:
@@ -61,9 +61,13 @@ Study `src/components.jl` to see how components are typically constructed:
 ```julia
 # Example patterns from components.jl:
 const TurboPump = TurboPumpCompBehav(
-    pump_voltage = 50.0,
+   max_pump_voltage = 50.0,
     series_conductance = 1.0,
-    turbine_gain = -0.2,
+   max_turbine_conductance = 0.3,
+   cycle_efficiency = 0.6,
+   max_rpm = 3000.0,
+   rotor_inertia = 1000.0,
+   friction_coefficient = 0.005,
 )
 
 const TriGasTank = ThevininTankCompBehav(GasTankBehavFrag, 3;
@@ -198,6 +202,10 @@ map.components[TileCoord(2, 0)] = ComponentOnTile(deepcopy(nozzle_template), Hex
 6. **Ship Surface**:
    - The `ship_tiles` field defines where components can be placed
    - It's a `Set{TileCoord}` containing all valid placement locations
+
+## Save Loading Note
+
+The encoder and comparison tools now load maps through `src/map_loading.jl` rather than reading raw JLD2 structures directly. That means any save-upgrade logic added there, including component migrations such as `TurboPumpCompBehav`, is part of the supported map-encoding workflow.
    - Components can only be placed on coordinates in the ship surface
    - Pipe endpoints must connect to nodes adjacent to ship surface tiles
 

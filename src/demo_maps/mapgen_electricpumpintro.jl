@@ -36,7 +36,7 @@ function mapgen_electricpumpintro()
         initial_energy = 100000.0,
         max_conductance = 1.0,
         min_conductance = 0.0,
-        change_rate = 1.0 / BASE_UPS
+        growth_factor = calculate_growth_factor(1.0, 0.0, 1.0 / BASE_UPS)
     )
 
     # Tile-based pipe at (-3, 1) - high-flow pipe connector

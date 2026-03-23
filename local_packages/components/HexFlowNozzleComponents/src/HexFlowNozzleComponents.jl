@@ -196,6 +196,7 @@ function collect_effect_particles!(
     nozzle_rel_element = produce_rel_elements(nozzle)[nozzle_element_index]
     nozzle_abs_element = map_element(nozzle_rel_element, tile, nozzle_element_index, rotation)
     nozzle_current = something(abs_element_get_current(nozzle_abs_element, derivedmapstate, mna_state), 0.0)
+    nozzle_current = max(nozzle_current, 0.0)
 
     # Calculate particle count
     ramp = exp_sat(nozzle_current, sqrt(nozzle.throat_area) * x90_current_factor)
@@ -319,7 +320,7 @@ function SwitchedNozzleCompBehav(;
         connected_node::NodePos,
         max_conductance::Float64,
         min_conductance::Float64,
-        change_rate::Float64
+        growth_factor::Float64
     )
     # Nozzle connects internal node to ground
     nozzlefrag = NozzleBehavFrag(HexFrame.NODE_INTERNAL, throat_area, StallBehavFrag())
@@ -330,7 +331,7 @@ function SwitchedNozzleCompBehav(;
         connection = switch_connection,
         max_conductance = max_conductance,
         min_conductance = min_conductance,
-        change_rate = change_rate,
+        growth_factor = growth_factor,
         target_conductance = min_conductance, # Start closed/off
         current_conductance = min_conductance
     )

@@ -106,7 +106,7 @@ function mapgen_fluidtransfer()
         initial_energy = 1000000.0,
         max_conductance = 0.5,
         min_conductance = 0.0,
-        change_rate = 0.4 / BASE_UPS
+        growth_factor = calculate_growth_factor(0.5, 0.0, 0.4 / BASE_UPS)
     )
 
     pump_2 = ElectricPumpCompBehav(
@@ -116,7 +116,7 @@ function mapgen_fluidtransfer()
         initial_energy = 1000000.0,
         max_conductance = 0.5,
         min_conductance = 0.0,
-        change_rate = 0.4 / BASE_UPS
+        growth_factor = calculate_growth_factor(0.5, 0.0, 0.4 / BASE_UPS)
     )
 
     pump_3 = ElectricPumpCompBehav(
@@ -126,17 +126,14 @@ function mapgen_fluidtransfer()
         initial_energy = 1000000.0,
         max_conductance = 0.5,
         min_conductance = 0.0,
-        change_rate = 0.4 / BASE_UPS
+        growth_factor = calculate_growth_factor(0.5, 0.0, 0.4 / BASE_UPS)
     )
 
-    # Create turbopump with inactive turbine state
-    # Note: Using direct struct construction to set turbine_active_state to false
+    # Create turbopump starting from rest so the engine has to spin it up in-map.
     turbopump = TurboPumpCompBehav(
-        PumpBehavFrag(50.0),
-        1.0,
-        Float64(-0.2f0),
-        StallBehavFrag(BinaryStateBehavFrag(false)),
-        BinaryStateBehavFrag(false)
+        max_pump_voltage = 50.0,
+        series_conductance = 1.0,
+        current_rpm = 0.0,
     )
 
     # Create decomposition chamber
@@ -156,11 +153,11 @@ function mapgen_fluidtransfer()
     )
 
     # Create adjustable valve
-    valve = BigAdjustableValveCompBehav(
+    valve = StandardValveCompBehav(SteppedSwitchBehavFrag, LargeValve;
         max_conductance = 2.0,
         min_conductance = 0.0,
-        percentage_step_size = Float64(0.05f0),
-        change_rate = Float64(0.25f0 / BASE_UPS)
+        growth_factor = calculate_growth_factor(2.0, 0.0, Float64(0.25f0 / BASE_UPS)),
+        percentage_step_size = Float64(0.05f0)
     )
 
     # Create tile-based pipe components

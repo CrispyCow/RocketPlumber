@@ -167,9 +167,8 @@ function mapgen_shipdemo()
 
     # === Turbopump ===
     turbopump = TurboPumpCompBehav(
-        pump_voltage = 50.0,
+        max_pump_voltage = 50.0,
         series_conductance = 1.0,
-        turbine_gain = -0.2,
     )
 
     # === Electric Pumps ===
@@ -180,7 +179,7 @@ function mapgen_shipdemo()
         initial_energy = 100000.0,
         max_conductance = 1.0,
         min_conductance = 0.0,
-        change_rate = 1.0 / BASE_UPS
+        growth_factor = calculate_growth_factor(1.0, 0.0, 1.0 / BASE_UPS)
     )
 
     # Create separate instances for electric transfer pumps
@@ -191,7 +190,7 @@ function mapgen_shipdemo()
         initial_energy = 1000000.0,
         max_conductance = 0.2,
         min_conductance = 0.0,
-        change_rate = 0.4 / BASE_UPS
+        growth_factor = calculate_growth_factor(0.2, 0.0, 0.4 / BASE_UPS)
     )
 
     elec_transfer_2 = ElectricPumpCompBehav(
@@ -201,7 +200,7 @@ function mapgen_shipdemo()
         initial_energy = 1000000.0,
         max_conductance = 0.2,
         min_conductance = 0.0,
-        change_rate = 0.4 / BASE_UPS
+        growth_factor = calculate_growth_factor(0.2, 0.0, 0.4 / BASE_UPS)
     )
 
     elec_transfer_3 = ElectricPumpCompBehav(
@@ -211,7 +210,7 @@ function mapgen_shipdemo()
         initial_energy = 1000000.0,
         max_conductance = 0.2,
         min_conductance = 0.0,
-        change_rate = 0.4 / BASE_UPS
+        growth_factor = calculate_growth_factor(0.2, 0.0, 0.4 / BASE_UPS)
     )
 
     elec_transfer_4 = ElectricPumpCompBehav(
@@ -221,15 +220,15 @@ function mapgen_shipdemo()
         initial_energy = 1000000.0,
         max_conductance = 0.2,
         min_conductance = 0.0,
-        change_rate = 0.4 / BASE_UPS
+        growth_factor = calculate_growth_factor(0.2, 0.0, 0.4 / BASE_UPS)
     )
 
     # === Adjustable Valve ===
-    adj_valve = BigAdjustableValveCompBehav(
+    adj_valve = StandardValveCompBehav(SteppedSwitchBehavFrag, LargeValve;
         max_conductance = 2.0,
         min_conductance = 0.0,
-        percentage_step_size = 0.05,
-        change_rate = 0.25 / BASE_UPS
+        growth_factor = calculate_growth_factor(2.0, 0.0, 0.25 / BASE_UPS),
+        percentage_step_size = 0.05
     )
 
     # === Nozzles ===
@@ -322,7 +321,7 @@ function mapgen_shipdemo()
             connected_node = HexFrame.NODE_Q_POS,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 6.0 / BASE_UPS
+            growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS)
         ), HexFrame.R_NEG
     )
     components[TileCoord(0, -4)] = ComponentOnTile(
@@ -331,7 +330,7 @@ function mapgen_shipdemo()
             connected_node = HexFrame.NODE_Q_POS,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 6.0 / BASE_UPS
+            growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS)
         ), HexFrame.S_NEG
     )
     components[TileCoord(0, 3)] = ComponentOnTile(
@@ -340,7 +339,7 @@ function mapgen_shipdemo()
             connected_node = HexFrame.NODE_Q_POS,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 6.0 / BASE_UPS
+            growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS)
         ), HexFrame.R_NEG
     )
     components[TileCoord(-2, -3)] = ComponentOnTile(
@@ -349,7 +348,7 @@ function mapgen_shipdemo()
             connected_node = HexFrame.NODE_Q_POS,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 6.0 / BASE_UPS
+            growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS)
         ), HexFrame.S_NEG
     )
     components[TileCoord(2, 2)] = ComponentOnTile(
@@ -358,7 +357,7 @@ function mapgen_shipdemo()
             connected_node = HexFrame.NODE_Q_POS,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 6.0 / BASE_UPS
+            growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS)
         ), HexFrame.R_NEG
     )
     components[TileCoord(2, -5)] = ComponentOnTile(
@@ -367,7 +366,7 @@ function mapgen_shipdemo()
             connected_node = HexFrame.NODE_Q_POS,
             max_conductance = 2.0,
             min_conductance = 0.0,
-            change_rate = 6.0 / BASE_UPS
+            growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS)
         ), HexFrame.S_NEG
     )
 

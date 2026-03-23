@@ -15,7 +15,7 @@ export FlowCalculatorSnapshot, FlowCalculatorSharedState, FlowCalculatorIPC, Tim
 export CommandStatus, APPLIED, REJECTED, QUEUED_FAILED
 export MapEditCommand, SetTileCommand, SetPipeBehaviorCommand, MoveCommand
 export DeleteAtCommand, ClickTileCommand, DoActionCommand, AddShipSurfaceCommand, RemoveShipSurfaceCommand
-export MapOverrideCommand
+export MapOverrideCommand, AddEncounterShipCommand
 export CommandQueue
 
 # Function exports - Setup
@@ -27,7 +27,7 @@ export set_max_reachable_bounds!, get_max_reachable_bounds
 export create_set_tile_command, create_set_pipe_behavior_command, create_move_command
 export create_delete_command, create_click_tile_command, create_do_action_command
 export create_add_ship_surface_command, create_remove_ship_surface_command
-export create_map_override_command
+export create_map_override_command, create_add_encounter_ship_command
 export try_enqueue_command!
 
 # Function exports - Main loop
@@ -234,6 +234,19 @@ end
     response_channel::Union{Nothing, Channel{CommandStatus}}
 end
 @struct_hash_equal MapOverrideCommand
+
+"Add an encounter ship to the map with optional space_map bookkeeping."
+@kwdef struct AddEncounterShipCommand <: MapEditCommand
+    id::UInt64
+    new_shipmap::ShipMap
+    ship_name_base::String
+    seed::UInt32
+    dir::Union{Nothing, HexFrame.HexAxis}       # nothing = auto-optimal, HexAxis = explicit
+    target_encounter_index::Union{Nothing, Int}  # nothing = dev utils (no space_map mutation)
+    max_view_bounds::Union{Nothing, HexFrame.CartesianBounds}
+    response_channel::Union{Nothing, Channel{CommandStatus}}
+end
+@struct_hash_equal AddEncounterShipCommand
 
 # ===============================================================
 # Thread-Safe Snapshot Storage
@@ -710,6 +723,33 @@ function apply_mapedit_command!(
     return nothing
 end
 
+"Add an encounter ship, with optional encounter point recycling for live encounters."
+function apply_mapedit_command!(
+        gamemap::GameMap,
+        command::AddEncounterShipCommand,
+        threadsafe_console_push::Function
+    )
+    if command.dir === nothing
+        encounter_ship_optimal_dir!(gamemap, command.new_shipmap, command.ship_name_base,
+            command.seed; max_view_bounds = command.max_view_bounds)
+    else
+        encounter_ship!(gamemap, command.new_shipmap, command.ship_name_base,
+            command.seed, command.dir; max_view_bounds = command.max_view_bounds)
+    end
+
+    # Recycle encounter point and clear manoeuvre if this is a live encounter
+    if command.target_encounter_index !== nothing
+        sm = gamemap.space_map
+        ep = sm.encounter_points[command.target_encounter_index]
+        spawn_encounter_point!(ep, sm, sm.time_years)
+        rebuild_event_queue!(sm)
+        clear_active_manoeuvre!(gamemap)
+        threadsafe_console_push("Encounter triggered: $(command.ship_name_base)")
+    end
+
+    return nothing
+end
+
 """
 Validate and apply a map edit command using sandbox-first execution.
 Applies the command to a deep copy first; only mutates the real `gamemap` if the
@@ -736,7 +776,7 @@ function process_command!(
             test_mna_state = MNA_State()
 
             # Test the sandbox with full validation (use tick 0 for validation)
-            update_components!(sandbox, test_mna_state)
+            update_components!(sandbox, test_mna_state, test_derivedmapstate)
             update_map!(sandbox, test_derivedmapstate, test_mna_state, Int64(0))
             update_mna!(test_derivedmapstate, test_mna_state, Int64(0))
         end
@@ -907,6 +947,26 @@ function create_map_override_command(
     return MapOverrideCommand(
         id = cq.next_command_id(),
         new_map = deepcopy(new_map),
+        response_channel = response_channel
+    )
+end
+
+"Create an `AddEncounterShipCommand` to add a generated encounter ship."
+function create_add_encounter_ship_command(
+        cq::CommandQueue, new_shipmap::ShipMap, ship_name_base::String, seed::UInt32;
+        dir::Union{Nothing, HexFrame.HexAxis} = nothing,
+        target_encounter_index::Union{Nothing, Int} = nothing,
+        max_view_bounds::Union{Nothing, HexFrame.CartesianBounds} = nothing,
+        response_channel::Union{Nothing, Channel} = nothing
+    )::AddEncounterShipCommand
+    return AddEncounterShipCommand(
+        id = cq.next_command_id(),
+        new_shipmap = deepcopy(new_shipmap),
+        ship_name_base = ship_name_base,
+        seed = seed,
+        dir = dir,
+        target_encounter_index = target_encounter_index,
+        max_view_bounds = max_view_bounds,
         response_channel = response_channel
     )
 end
@@ -1150,14 +1210,15 @@ end
 # Manoeuvre phase state machine
 # ===============================================================
 
-"Spawn the active manoeuvre's target encounter onto the live calculator-thread map."
+"Enqueue an encounter ship command for the active manoeuvre's target."
 function trigger_ready_encounter!(
         gamemap::GameMap,
         man::ManoeuvreData,
-        sm::SpaceMapState;
-        console_push::Function = identity,
-        max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing
+        sm::SpaceMapState,
+        ipc::FlowCalculatorIPC
     )::Bool
+    console_push = ipc.console_push
+    max_view_bounds = get_max_reachable_bounds(ipc.shared_state)
     target_index = man.target_encounter_index
     if !(1 <= target_index <= length(sm.encounter_points))
         clear_active_manoeuvre!(gamemap)
@@ -1172,13 +1233,16 @@ function trigger_ready_encounter!(
     class_config = enc_config.encounter_class_configs[ep.encounter_class]
     new_shipmap = generate_encounter(ep.encounter_class, ep.fuel_tag, ep.richness, enc_seed, class_config)
 
-    encounter_ship_optimal_dir!(gamemap, new_shipmap, ep.display_name, enc_seed; max_view_bounds)
-    spawn_encounter_point!(ep, sm, sm.time_years)
-    rebuild_event_queue!(sm)
+    cmd = create_add_encounter_ship_command(
+        ipc.command_queue, new_shipmap, ep.display_name, enc_seed;
+        target_encounter_index = target_index,
+        max_view_bounds = max_view_bounds
+    )
+    try_enqueue_command!(ipc.command_queue, cmd, console_push)
 
-    console_push("Encounter triggered: $(ep.display_name)")
-    @info "Encounter triggered" name = ep.display_name class = ep.encounter_class
+    @info "Encounter enqueued" name = ep.display_name class = ep.encounter_class
 
+    # Clear manoeuvre immediately to prevent re-enqueuing on subsequent ticks
     clear_active_manoeuvre!(gamemap)
     return true
 end
@@ -1203,7 +1267,6 @@ function update_manoeuvre_phase!(gamestate::GameState, gamemap::GameMap, ipc::Fl
     rem_mag = norm(man.burn_remaining_dv)
     thrust_mag = norm(gamestate.thrust)
     console_push = ipc.console_push
-    max_view_bounds = get_max_reachable_bounds(ipc.shared_state)
 
     if man.phase == PHASE_WAIT_APPROACH
         # Guards: thrust outside a burn phase, or time warp that skips the main burn
@@ -1269,14 +1332,14 @@ function update_manoeuvre_phase!(gamestate::GameState, gamemap::GameMap, ipc::Fl
             current_velocity = get_velocity(gamemap)
             @info "Decel Burn completed:" current_velocity = current_velocity
 
-            trigger_ready_encounter!(gamemap, man, sm; console_push, max_view_bounds)
+            trigger_ready_encounter!(gamemap, man, sm, ipc)
             return nothing
         end
 
     elseif man.phase == PHASE_ENCOUNTER_READY
         # Guard: thrust after burns complete invalidates the final approach
         cancel_if_thrust!(gamemap, gamestate; console_push) && return nothing
-        trigger_ready_encounter!(gamemap, man, sm; console_push, max_view_bounds)
+        trigger_ready_encounter!(gamemap, man, sm, ipc)
         return nothing
     end
 
@@ -1442,7 +1505,7 @@ function flowcalculator_loop!(
                     # Simulation pipeline
                     update_docking!(gamemap)
                     update_manoeuvre_phase!(gamestate, gamemap, ipc)
-                    @timeit flowcalc_loop_timer "Component Updates" update_components!(gamemap, mna_state)
+                    @timeit flowcalc_loop_timer "Component Updates" update_components!(gamemap, mna_state, derivedmapstate)
                     update_map!(gamemap, derivedmapstate, mna_state, gamestate.ticks)
                     update_mna!(derivedmapstate, mna_state, gamestate.ticks)
                     @timeit flowcalc_loop_timer "Thruster Handling" handle_thrusters!(gamestate, gamemap, derivedmapstate, mna_state)
