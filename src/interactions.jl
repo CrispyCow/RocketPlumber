@@ -270,6 +270,20 @@ function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedSt
         @atomic :monotonic shared_state.target_ups = sim_speed_to_ups(inputstate.sim_speed)
     end
 
+    # F12 capture controls: screenshot when idle, start recording with Shift, stop recording while active
+    if get_inrising!(inputstate, GLFW.KEY_F12, window)
+        if inputstate.is_recording
+            inputstate.is_recording = false
+        else
+            shift_held = get_instate(GLFW.KEY_LEFT_SHIFT, window) || get_instate(GLFW.KEY_RIGHT_SHIFT, window)
+            if shift_held
+                inputstate.is_recording = true
+            else
+                inputstate.screenshot_requested = true
+            end
+        end
+    end
+
     # Toolbar cycling (Z = previous, C = next) — wraps around
     if get_inrising!(inputstate, GLFW.KEY_Z, window)
         inputstate.toolbar = mod1(inputstate.toolbar - 1, length(component_list))

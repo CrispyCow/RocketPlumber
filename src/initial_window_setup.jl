@@ -198,7 +198,7 @@ let
     state = FPSState(time(), 0, 0.0)
 
     "Updates FPS counter in window title using exponential moving average"
-    global function updatefps(window::GLFW.Window)
+    global function updatefps(window::GLFW.Window, suffix::AbstractString)
         current = time()
         elapsed = current - state.previous
 
@@ -207,7 +207,7 @@ let
         if elapsed > update_period && state.frame_count > 0
             measured_fps = state.frame_count / elapsed
             state.smoothed_fps = state.smoothed_fps * 0.5 + measured_fps * 0.5  # Exponential moving average
-            GLFW.SetWindowTitle(window, @sprintf("opengl @ fps: %.2f", state.smoothed_fps))
+            GLFW.SetWindowTitle(window, @sprintf("opengl @ fps: %.2f %s", state.smoothed_fps, suffix))
 
             state.previous = current
             state.frame_count = 0

@@ -121,7 +121,7 @@ verify_required_artifacts()
 using LinearAlgebra, StaticArrays, GeometryBasics
 using ModernGL, GLFW, JLD2, CSyntax.CRef
 using TimerOutputs, Accessors, Printf, CSyntax
-using FilePathsBase, NativeFileDialog
+using FilePathsBase, NativeFileDialog, FFMPEG
 import CImGui, CImGui.lib
 using ImPlot
 # Custom Packages (working title: HexFlow; project: Rocket Plumber)
@@ -131,11 +131,13 @@ using HexFlowControl, HexFlowCalculator, HexFlowRendering
 using SquirrelNoise
 using HexFlowLearningSystem
 
+
 # ===============================================================
 # Load All Source Files Upfront
 # ===============================================================
 
 include(joinpath(dirname(@__FILE__), "initial_window_setup.jl"))
+include(joinpath(dirname(@__FILE__), "recording.jl"))
 include(joinpath(dirname(@__FILE__), "interactions.jl"))
 include(joinpath(dirname(@__FILE__), "components.jl"))
 include(joinpath(dirname(@__FILE__), "map_loading.jl"))

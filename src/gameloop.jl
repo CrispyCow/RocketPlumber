@@ -259,6 +259,8 @@ function enter_gameloop(window::GLFW.Window; map_source::Union{Nothing, String, 
     GLFW.SwapInterval(1) # 0=Disable VSync, 1=Enable VSync
     glClearColor(0.114, 0.161, 0.318, 1.0) # Set background colour to space cadet blue
 
+    g_recording = RecordingState()
+
     ui_loadingscreen_render(window, "Starting FlowCalculator")
     g_flowcalc_task = Threads.@spawn flowcalculator_loop!(g_flowcalc_ipc, deepcopy(initial_snapshot))
     @info "FlowCalculator task spawned: $(g_flowcalc_task)"
@@ -268,7 +270,7 @@ function enter_gameloop(window::GLFW.Window; map_source::Union{Nothing, String, 
 
     while isnothing(g_inputstate.exit_reason) && !GLFW.WindowShouldClose(window)
         g_viewstate.frame_count += 1
-        updatefps(window)
+        updatefps(window, g_inputstate.is_recording ? "(RECORDING)" : "")
         @timeit render_loop_timer "Get Snapshot" g_snapshot::FlowCalculatorSnapshot = g_flowcalc_ipc.get_snapshot()
 
         # Learning system tick (main game only, not sandbox)
@@ -289,6 +291,7 @@ function enter_gameloop(window::GLFW.Window; map_source::Union{Nothing, String, 
             g_inputstate, g_flowcalc_ipc, g_snapshot, g_viewstate, window;
             learning_state = learning_state
         )
+        recording_tick!(g_recording, g_inputstate, g_viewstate, window, g_flowcalc_ipc.console_push)
         GLFW.SwapBuffers(window)
         # RENDERING End
 
@@ -311,6 +314,11 @@ function enter_gameloop(window::GLFW.Window; map_source::Union{Nothing, String, 
         tutorial_id = g_inputstate.pending_sandbox_id,
         saved_gamemap = saved_map,
     )
+
+    # Stop recording if still active
+    if g_recording.is_recording
+        stop_recording!(g_recording, g_flowcalc_ipc.console_push)
+    end
 
     cleanup!(g_flowcalc_ipc, g_globjmap, window)
 

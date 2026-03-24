@@ -4,6 +4,9 @@ imgui.ini
 # Build outputs (timestamped build directories)
 build/outputs/
 
+# Recorded captures
+recordings/
+
 # Artifacts
 # Note: Keep Artifacts.toml tracked (it defines artifact bindings)
 !local_packages/HexFlowRendering/Artifacts.toml

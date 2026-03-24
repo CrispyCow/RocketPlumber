@@ -149,6 +149,8 @@ end
     editor_mode::Bool = false
     dev_utils_menu_active::Bool = false
     spacemap_active::Bool = false
+    is_recording::Bool = false
+    screenshot_requested::Bool = false
     action_popup::Union{Nothing, ActionPopupState} = nothing
     # loop status
     exit_reason::Union{Nothing, ExitReason} = nothing

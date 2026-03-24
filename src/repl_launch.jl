@@ -48,7 +48,7 @@ using Revise
 using LinearAlgebra, StaticArrays, GeometryBasics
 using ModernGL, GLFW, JLD2, CSyntax.CRef
 using TimerOutputs, Accessors, Printf, CSyntax
-using FilePathsBase, NativeFileDialog
+using FilePathsBase, NativeFileDialog, FFMPEG
 import CImGui, CImGui.lib
 using ImPlot
 # Custom Packages (working title: HexFlow; project: Rocket Plumber)
@@ -69,6 +69,7 @@ window = start_window()
 ui_loadingscreen_render(window, "Initialising")
 
 # load the rest of the game code, showing a loading screen at each step.
+include_with_loadingscreen(window, "recording.jl")
 include_with_loadingscreen(window, "interactions.jl")
 include_with_loadingscreen(window, "components.jl")
 include_with_loadingscreen(window, "map_loading.jl")
