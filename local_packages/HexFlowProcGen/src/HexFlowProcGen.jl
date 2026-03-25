@@ -2,7 +2,6 @@ module HexFlowProcGen
 
 using Random, LinearAlgebra, GeometryBasics, StaticArrays, Printf
 using HexFrame, FlowMap, SquirrelNoise, HexComponentsAPI, FlowEngine, HexFluids
-using DataStructures: BinaryMinHeap
 using StructEquality: @struct_hash_equal
 
 # Import FlowMap functions to extend with SpaceMapState methods
@@ -24,11 +23,9 @@ export generate_encounter, generate_encounter_name
 export encounter_ship!, encounter_ship_optimal_dir!, depart_ship!, redock_ship!
 export check_departure_pipe_connections
 export EncounterSystemConfig, initialise_encounter_system!
-export spawn_encounter_point!, get_encounter_position, predict_crossing_time
-export rebuild_event_queue!, check_line_shift!, process_encounter_events!
+export spawn_encounter_point!, get_encounter_position, check_encounter_bounds!
 export step_space_map_time!
 export calculate_minimum_intercept_dv, plan_intercept_manoeuvre
-export compute_closest_approach
 export get_encounter_ship_seed
 export generate_base_velocities
 export HullSizeConfig, FuelTagConfig, EncounterClassConfig
@@ -543,10 +540,8 @@ end
     max_angle_rad::Float64 = π / 8            # 22.5 degrees from horizontal
     viewport_half_width::Float64 = 400.0
     viewport_half_height::Float64 = 200.0
-    spawn_half_height::Float64 = 300.0        # Half-height of vertical spawn band (decoupled from viewport)
-    spawn_margin::Float64 = 100.0             # Distance from viewport edge to spawn lines
-    recycle_margin::Float64 = 50.0            # Extra distance from spawn lines to disappear lines
-    line_step_size::Float64 = 50.0            # Discrete step for shifting lines
+    spawn_box_offset::Float64 = 50.0          # Distance beyond the viewport to the spawn perimeter
+    disappear_box_offset::Float64 = 100.0     # Distance beyond the viewport to the recycle boundary
     encounter_class_configs::Dict{EncounterClass, EncounterClassConfig} = Dict()
 end
 
@@ -1042,7 +1037,7 @@ end
 # Encounter Point System — SpaceMapState
 # ===============================================================
 
-"Full space map state with seed, velocity, position, encounter points, and event queue."
+"Full space map state with seed, velocity, position, and encounter points."
 @kwdef mutable struct SpaceMapState <: AbstractSpaceMap
     seed::UInt32 = UInt32(0)
     velocity::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
@@ -1054,13 +1049,6 @@ end
     active_manoeuvre::Union{Nothing, ManoeuvreData} = nothing
     # Encounter system
     encounter_points::Vector{EncounterPoint} = EncounterPoint[]
-    event_queue::BinaryMinHeap{EncounterEvent} = BinaryMinHeap{EncounterEvent}()
-    neg_disappear_line_x::Float64 = -1600.0
-    neg_spawn_line_x::Float64 = -1500.0
-    pos_spawn_line_x::Float64 = 1500.0
-    pos_disappear_line_x::Float64 = 1600.0
-    last_line_step_x::Float64 = 0.0
-    line_step_size::Float64 = 200.0
     viewport_half_width::Float64 = 1000.0
     viewport_half_height::Float64 = 500.0
     encounter_config::EncounterSystemConfig
@@ -1131,34 +1119,8 @@ function get_encounter_position(ep::EncounterPoint, time::Float64)::SVector{2, F
     return ep.position + ep.velocity * dt
 end
 
-"Predict when an encounter point will cross a vertical line at `x_line`. Returns `nothing` if it never will."
-function predict_crossing_time(ep::EncounterPoint, x_line::Float64)::Union{Nothing, Float64}
-    vx = ep.velocity[1]
-    if abs(vx) < 1.0e-12
-        return nothing  # Moving purely vertically, never crosses
-    end
-    dt = (x_line - ep.position[1]) / vx
-    if dt < 0.0
-        return nothing  # Already past the line
-    end
-    return ep.spawn_time + dt
-end
-
-"""
-Spawn (or respawn) an encounter point at `spawn_line_x` with a new random trajectory.
-
-The `spawn_line_x` argument selects which boundary the point spawns on:
-- Pass `sm.neg_spawn_line_x` for a normal left-side spawn (ship moves rightward).
-- Pass `sm.pos_spawn_line_x` for a backfill spawn (ship overtaken by the player, placed
-  at the right-side spawn line still moving rightward, so it disappears quickly if
-  the player stops accelerating).
-
-In both cases the point's velocity is `sm.velocity + relative_vel` so the relative speed
-distribution is preserved regardless of which line is used.
-"""
-function spawn_encounter_point!(
-        ep::EncounterPoint, sm::SpaceMapState,
-        current_time::Float64, spawn_line_x::Float64 = sm.neg_spawn_line_x;
+"Spawn (or respawn) an encounter point on the perimeter of the spawn box with a new random trajectory."
+function spawn_encounter_point!(ep::EncounterPoint, sm::SpaceMapState, current_time::Float64;
         velocity_override::Union{Nothing, SVector{2, Float64}} = nothing
     )
     config = get_encounter_config(sm)
@@ -1169,11 +1131,25 @@ function spawn_encounter_point!(
     point_seed = get_noise(UInt32(ep.index), get_noise(UInt32(ep.iteration), sm.seed))
     ep.ship_type_seed = get_noise(UInt32(ep.index + 1000), get_noise(UInt32(ep.iteration), sm.seed))
 
-    # Random Y position along the spawn line
-    spawn_y_range = config.spawn_half_height
-    player_y_position = get_position(sm)[2]
-    y_pos = pick_from_range(player_y_position - spawn_y_range, player_y_position + spawn_y_range, ep.index * 1000 + ep.iteration, point_seed)
-    ep.position = SVector(spawn_line_x, y_pos)
+    # Spawn on one of the four box edges so encounters can arrive from any direction.
+    player_pos = get_position(sm)
+    spawn_x = sm.viewport_half_width + config.spawn_box_offset
+    spawn_y = sm.viewport_half_height + config.spawn_box_offset
+    edge = pick_element_from_noise((0, 1, 2, 3), ep.index * 6000 + ep.iteration, point_seed)
+
+    if edge == 0
+        y_pos = pick_from_range(player_pos[2] - spawn_y, player_pos[2] + spawn_y, ep.index * 1000 + ep.iteration, point_seed)
+        ep.position = SVector(player_pos[1] - spawn_x, y_pos)
+    elseif edge == 1
+        y_pos = pick_from_range(player_pos[2] - spawn_y, player_pos[2] + spawn_y, ep.index * 1000 + ep.iteration, point_seed)
+        ep.position = SVector(player_pos[1] + spawn_x, y_pos)
+    elseif edge == 2
+        x_pos = pick_from_range(player_pos[1] - spawn_x, player_pos[1] + spawn_x, ep.index * 1000 + ep.iteration, point_seed)
+        ep.position = SVector(x_pos, player_pos[2] + spawn_y)
+    else
+        x_pos = pick_from_range(player_pos[1] - spawn_x, player_pos[1] + spawn_x, ep.index * 1000 + ep.iteration, point_seed)
+        ep.position = SVector(x_pos, player_pos[2] - spawn_y)
+    end
 
     # Random speed: base_velocity ± variance
     speed_noise = get_noise_zero_to_one(ep.index * 2000 + ep.iteration, point_seed)
@@ -1202,84 +1178,25 @@ function spawn_encounter_point!(
     return nothing
 end
 
-"""
-Rebuild the event queue from scratch and recycle any points already outside the boundary lines.
-
-For each encounter point:
-- If its current position is already past `pos_disappear_line_x` (drifted too far forward)
-  it is respawned at `neg_spawn_line_x` (normal left-side spawn).
-- If its current position is already behind `neg_disappear_line_x` (player has outrun it)
-  it is respawned at `pos_spawn_line_x` (right-side backfill spawn).
-- Otherwise a crossing-time event is predicted and pushed to the queue as normal.
-
-Called after every discrete line shift in `check_line_shift!`.
-"""
-function rebuild_event_queue!(sm::SpaceMapState)
-    sm.event_queue = BinaryMinHeap{EncounterEvent}()
+"Check all encounter points against the disappear box and recycle any that have left it."
+function check_encounter_bounds!(sm::SpaceMapState)
+    config = get_encounter_config(sm)
+    disappear_x = sm.viewport_half_width + config.disappear_box_offset
+    disappear_y = sm.viewport_half_height + config.disappear_box_offset
     current_time = sm.time_years
+
     for ep in sm.encounter_points
-        current_x = get_encounter_position(ep, current_time)[1]
+        pos = get_encounter_position(ep, current_time)
+        rel = pos - sm.position
 
-        if current_x > sm.pos_disappear_line_x
-            # Point has drifted past the positive disappear line — recycle to left spawn
-            spawn_encounter_point!(ep, sm, current_time, sm.neg_spawn_line_x)
-        elseif current_x < sm.neg_disappear_line_x
-            # Player has outrun this point — backfill by spawning at the right spawn line
-            spawn_encounter_point!(ep, sm, current_time, sm.pos_spawn_line_x)
-        end
-
-        # Predict crossing time for points still within the boundaries and add to the event queue
-        crossing_time = predict_crossing_time(ep, sm.pos_disappear_line_x)
-        if !isnothing(crossing_time) && crossing_time > current_time
-            push!(sm.event_queue, EncounterEvent(crossing_time, ep.index))
+        if abs(rel[1]) > disappear_x || abs(rel[2]) > disappear_y
+            if sm.active_manoeuvre !== nothing && sm.active_manoeuvre.target_encounter_index == ep.index
+                sm.active_manoeuvre = nothing
+            end
+            spawn_encounter_point!(ep, sm, current_time)
         end
     end
-    return nothing
-end
 
-"""
-Shift all four boundary lines if the player has moved far enough, then rebuild the event queue.
-
-Lines shift in discrete steps of `line_step_size` so the spawn/disappear boundaries always
-stay just outside the viewport regardless of accumulated player travel.
-"""
-function check_line_shift!(sm::SpaceMapState)
-    player_x = sm.position[1]
-    step = sm.line_step_size
-    moved = player_x - sm.last_line_step_x
-
-    if abs(moved) >= step
-        n_steps = floor(Int, moved / step)
-        shift = n_steps * step
-        sm.last_line_step_x += shift
-        sm.neg_disappear_line_x += shift
-        sm.neg_spawn_line_x += shift
-        sm.pos_spawn_line_x += shift
-        sm.pos_disappear_line_x += shift
-        rebuild_event_queue!(sm)
-    end
-
-    return nothing
-end
-
-"Process encounter point recycling events up to the given time."
-function process_encounter_events!(sm::SpaceMapState, up_to_time::Float64)
-    while !isempty(sm.event_queue)
-        next_event = first(sm.event_queue)
-        if next_event.time > up_to_time
-            break
-        end
-        pop!(sm.event_queue)
-
-        ep = sm.encounter_points[next_event.index]
-        # Normal recycle: point has crossed pos_disappear_line_x, respawn at neg_spawn_line_x
-        spawn_encounter_point!(ep, sm, up_to_time, sm.neg_spawn_line_x)
-
-        crossing_time = predict_crossing_time(ep, sm.pos_disappear_line_x)
-        if !isnothing(crossing_time) && crossing_time > up_to_time
-            push!(sm.event_queue, EncounterEvent(crossing_time, ep.index))
-        end
-    end
     return nothing
 end
 
@@ -1290,14 +1207,9 @@ function initialise_encounter_system!(sm::SpaceMapState)
 
     sm.viewport_half_width = config.viewport_half_width
     sm.viewport_half_height = config.viewport_half_height
-    sm.line_step_size = config.line_step_size
-
-    player_x = sm.position[1]
-    sm.neg_spawn_line_x = player_x - config.viewport_half_width - config.spawn_margin
-    sm.neg_disappear_line_x = player_x - config.viewport_half_width - config.spawn_margin - config.recycle_margin
-    sm.pos_spawn_line_x = player_x + config.viewport_half_width + config.spawn_margin
-    sm.pos_disappear_line_x = player_x + config.viewport_half_width + config.spawn_margin + config.recycle_margin
-    sm.last_line_step_x = player_x
+    player_pos = sm.position
+    disappear_x = sm.viewport_half_width + config.disappear_box_offset
+    disappear_y = sm.viewport_half_height + config.disappear_box_offset
 
     base_velocities = generate_base_velocities(
         config.n_points, config.min_base_velocity,
@@ -1305,27 +1217,20 @@ function initialise_encounter_system!(sm::SpaceMapState)
     )
 
     sm.encounter_points = Vector{EncounterPoint}(undef, config.n_points)
-    sm.event_queue = BinaryMinHeap{EncounterEvent}()
 
     for i in 1:config.n_points
         ep = EncounterPoint(index = i, base_velocity = base_velocities[i])
-        spawn_encounter_point!(ep, sm, current_time, sm.neg_spawn_line_x)
+        spawn_encounter_point!(ep, sm, current_time)
 
         point_seed = get_noise(UInt32(ep.index), get_noise(UInt32(ep.iteration), sm.seed))
         x_pos = pick_from_range(
-            sm.neg_disappear_line_x, sm.pos_disappear_line_x,
+            player_pos[1] - disappear_x, player_pos[1] + disappear_x,
             ep.index * 4000 + ep.iteration, point_seed
         )
-        y_range = config.spawn_half_height
-        y_pos = pick_from_range(-y_range, y_range, ep.index * 5000 + ep.iteration, point_seed)
+        y_pos = pick_from_range(player_pos[2] - disappear_y, player_pos[2] + disappear_y, ep.index * 5000 + ep.iteration, point_seed)
         ep.position = SVector(x_pos, y_pos)
 
         sm.encounter_points[i] = ep
-
-        crossing_time = predict_crossing_time(ep, sm.pos_disappear_line_x)
-        if !isnothing(crossing_time) && crossing_time > current_time
-            push!(sm.event_queue, EncounterEvent(crossing_time, ep.index))
-        end
     end
 
     return nothing
@@ -1376,14 +1281,10 @@ function step_space_map_time!(sm::SpaceMapState, target_time::Float64; max_step:
     # Update player position (velocity is constant between manoeuvres)
     sm.position = sm.position + sm.velocity * dt
 
-    # Process encounter recycling events up to the new time
-    process_encounter_events!(sm, new_time)
-
     # Commit the new time
     sm.time_years = new_time
 
-    # Check if lines need to shift
-    check_line_shift!(sm)
+    check_encounter_bounds!(sm)
 
     # Record stop for future ease-in when warp completes
     if sm.time_years >= sm.target_time_years
@@ -1398,60 +1299,6 @@ end
 # ===============================================================
 
 """
-Compute the time, distance, and positions of closest approach between the player and an
-encounter point, assuming both travel in straight lines at constant velocity.
-
-Uses the quadratic minimisation approach: the squared distance
-f(t) = A*t² + B*t + C is minimised at t_min = -B / (2A).
-If the minimum lies in the past (diverging or parallel paths), returns the current
-time and current separation.
-"""
-function compute_closest_approach(
-        player_pos::SVector{2, Float64},
-        player_vel::SVector{2, Float64},
-        ep::EncounterPoint,
-        current_time::Float64
-    )
-    target_pos = get_encounter_position(ep, current_time)
-
-    # Relative position and velocity (target frame)
-    a = target_pos - player_pos
-    b = ep.velocity - player_vel
-
-    A = dot(b, b)
-    B = 2.0 * dot(a, b)
-
-    # No relative motion — distance is constant
-    if A < 1.0e-12
-        return (
-            time = current_time, distance = norm(a),
-            player_position = player_pos, target_position = target_pos,
-        )
-    end
-
-    t_min = -B / (2.0 * A)
-
-    # Closest approach in the past or right now — act immediately
-    if t_min <= 0.0
-        return (
-            time = current_time, distance = norm(a),
-            player_position = player_pos, target_position = target_pos,
-        )
-    end
-
-    closest_time = current_time + t_min
-    closest_distance = norm(a + b * t_min)
-    player_at_ca = player_pos + player_vel * t_min
-    target_at_ca = get_encounter_position(ep, closest_time)
-    return (
-        time = closest_time, distance = closest_distance,
-        player_position = player_at_ca, target_position = target_at_ca,
-    )
-end
-
-"""
-Calculate the minimum delta-V needed to intercept an encounter point.
-
 Returns the velocity-match ΔV plus a minimum surplus fraction for closing the gap.
 """
 function calculate_minimum_intercept_dv(
@@ -1459,20 +1306,75 @@ function calculate_minimum_intercept_dv(
         target_vel::SVector{2, Float64};
         min_surplus_fraction::Float64 = 0.05
     )::Float64
-    
     return norm(target_vel - player_vel) * (1.0 + min_surplus_fraction)
+end
+
+"""
+Compute the total ΔV for a direct intercept with coast duration `coast_time`.
+
+This models an immediate approach burn that puts the player on a collision course,
+followed by a capture burn at intercept to match velocities.
+"""
+function compute_direct_intercept_dv(
+        separation::SVector{2, Float64},
+        relative_vel::SVector{2, Float64},
+        coast_time::Float64
+    )::Float64
+    coast_time <= 1.0e-12 && return Inf
+
+    capture_dv = norm(separation) / coast_time
+    approach_dv = norm(separation / coast_time + relative_vel)
+    return approach_dv + capture_dv
+end
+
+"""
+Find the minimum direct-intercept coast time that fits within `total_dv`.
+
+The direct-intercept cost is continuous and non-increasing in `coast_time`, so bisection on
+the feasible interval is robust. Returns `nothing` when the supplied upper bound is
+already infeasible, in which case the caller should fall back to the existing plan.
+"""
+function find_direct_intercept_time(
+        separation::SVector{2, Float64},
+        relative_vel::SVector{2, Float64},
+        total_dv::Float64,
+        coast_time_upper::Float64;
+        max_iterations::Int = 60,
+        tolerance::Float64 = 1.0e-9
+    )::Union{Nothing, Float64}
+    coast_time_upper <= 1.0e-6 && return nothing
+
+    feasibility_tolerance = sqrt(eps(Float64)) * max(total_dv, 1.0)
+    dv_upper = compute_direct_intercept_dv(separation, relative_vel, coast_time_upper)
+    dv_upper > total_dv + feasibility_tolerance && return nothing
+
+    coast_time_lo = 1.0e-6
+    coast_time_hi = coast_time_upper
+
+    for _ in 1:max_iterations
+        coast_time_mid = (coast_time_lo + coast_time_hi) / 2.0
+        dv_mid = compute_direct_intercept_dv(separation, relative_vel, coast_time_mid)
+
+        if dv_mid > total_dv
+            coast_time_lo = coast_time_mid
+        else
+            coast_time_hi = coast_time_mid
+        end
+
+        (coast_time_hi - coast_time_lo) < tolerance && break
+    end
+
+    return coast_time_hi
 end
 
 """
 Plan an intercept manoeuvre at the given total ΔV budget.
 
-Manoeuvre model:
-1. Determine whether to burn immediately or wait for closest approach.
-   - Burn immediately if ships are diverging, or if convergence rate < close velocity.
-   - Wait for closest approach if ships are already converging faster than close velocity.
-2. Main burn: velocity match + surplus/2 toward the intercept position.
-3. Coast the remaining gap at close velocity (surplus/2).
-4. Deceleration burn: surplus/2 to re-match velocities.
+The approach burn sets the ship on a trajectory to reach the target's future position after `coast_time` years:
+    approach_burn_dv = relative_vel + separation / coast_time
+
+ The capture burn then removes the closing component so the ship arrives velocity-matched with the encounter point:
+    capture_burn_dv = -separation / coast_time
 
 Returns `ManoeuvreData` or `nothing` if the total ΔV is insufficient.
 """
@@ -1487,83 +1389,58 @@ function plan_intercept_manoeuvre(
     min_dv = calculate_minimum_intercept_dv(player_vel, ep.velocity)
     total_dv < min_dv && return nothing
 
+    target_pos = get_encounter_position(ep, current_time)
+    separation = target_pos - player_pos
     relative_vel = ep.velocity - player_vel
-    velocity_match = norm(relative_vel)
-    surplus = total_dv - velocity_match
-    close_velocity = surplus / 2.0
+    separation_magnitude = norm(separation)
 
-    ca = compute_closest_approach(player_pos, player_vel, ep, current_time)
-
-    # Decide whether to burn immediately or wait for closest approach.
-    # Convergence rate: how fast the separation is shrinking right now.
-    # Positive = converging, negative = diverging.
-    separation = get_encounter_position(ep, current_time) - player_pos
-    sep_dist = norm(separation)
-    sep_unit = sep_dist > 1.0e-6 ? separation / sep_dist : SVector(1.0, 0.0)
-    convergence_rate = -dot(relative_vel, sep_unit)  # positive when closing
-
-    # Burn immediately if diverging or converging slower than our planned close velocity
-    burn_immediately = convergence_rate < close_velocity
-
-    if burn_immediately
-        # First burn at the current position/time
-        burn_time = current_time
-        burn_player_pos = player_pos
-        burn_distance = sep_dist
-    else
-        # Wait for closest approach
-        burn_time = ca.time
-        burn_player_pos = ca.player_position
-        burn_distance = ca.distance
+    if separation_magnitude < 1.0e-9
+        approach_burn_dv = relative_vel
+        ship_space_approach_dv = SVector(norm(approach_burn_dv), 0.0)
+        return ManoeuvreData(
+            phase = PHASE_APPROACH_BURN,
+            burn_target_dv = ship_space_approach_dv,
+            burn_remaining_dv = ship_space_approach_dv,
+            approach_burn_dv = approach_burn_dv,
+            capture_burn_dv = SVector(0.0, 0.0),
+            approach_burn_time = current_time,
+            intercept_time = current_time,
+            target_encounter_index = ep.index,
+            capture_burn_position = target_pos,
+        )
     end
 
-    # Coast time: distance / close_velocity (close_velocity = surplus/2)
-    coast_time = if burn_distance > 1.0e-6 && close_velocity > 1.0e-6
-        burn_distance / close_velocity
-    else
-        0.0
-    end
+    velocity_match_dv = norm(relative_vel)
+    closing_dv_budget = total_dv - velocity_match_dv
+    closing_dv_budget <= 1.0e-9 && return nothing
 
-    intercept_time = burn_time + coast_time
+    #= By the triangle inequality `coast_time_upper = 2 * norm(separation) / closing_dv_budget` 
+       is guaranteed to be feasible whenever the manoeuvre has any closing ΔV available. =#
+    coast_time_upper = 2.0 * separation_magnitude / closing_dv_budget
+    intercept_coast_time = find_direct_intercept_time(separation, relative_vel, total_dv, coast_time_upper)
+    isnothing(intercept_coast_time) && return nothing
 
-    #= Direction from player at burn toward target at burn time.
-       After the main burn the player velocity-matches the target, so both
-       drift at ep.velocity.  The only relative closing happens via
-       dir_unit * close_velocity in the target's reference frame.  Therefore
-       the closing direction must point at wherever the target is when the
-       burn fires — NOT at the future intercept position. =#
-    target_pos_at_burn = get_encounter_position(ep, burn_time)
-    direction = target_pos_at_burn - burn_player_pos
-    dir_norm = norm(direction)
-    dir_unit = if dir_norm > 1.0e-6
-        direction / dir_norm
-    elseif velocity_match > 1.0e-6
-        relative_vel / velocity_match
-    else
-        SVector(1.0, 0.0)
-    end
+    #= The immediate approach burn adds the exact closing velocity needed to meet the
+       target at `intercept_coast_time`, while the capture burn removes that closing component
+       at intercept so the post-burn relative velocity is zero. =#
+    closing_velocity = separation / intercept_coast_time
+    approach_burn_dv = relative_vel + closing_velocity
+    capture_burn_dv = -closing_velocity
 
-    # Main burn: velocity match + surplus/2 closing component (space-map frame)
-    main_burn_dv = relative_vel + dir_unit * close_velocity
-
-    # Deceleration burn: surplus/2 opposite to closing direction (space-map frame)
-    decel_burn_dv = -dir_unit * close_velocity
-
-    # Intercept position for rendering / ManoeuvreData (where encounter happens in spacemap coords)
-    target_pos_at_intercept = get_encounter_position(ep, intercept_time)
+    ship_space_approach_dv = SVector(norm(approach_burn_dv), 0.0)
+    intercept_time = current_time + intercept_coast_time
+    capture_burn_position = get_encounter_position(ep, intercept_time)
 
     return ManoeuvreData(
-        phase = PHASE_WAIT_APPROACH,
-        main_burn_dv = main_burn_dv,
-        decel_burn_dv = decel_burn_dv,
-        closest_approach_time = burn_time,
+        phase = PHASE_APPROACH_BURN,
+        burn_target_dv = ship_space_approach_dv,
+        burn_remaining_dv = ship_space_approach_dv,
+        approach_burn_dv = approach_burn_dv,
+        capture_burn_dv = capture_burn_dv,
+        approach_burn_time = current_time,
         intercept_time = intercept_time,
         target_encounter_index = ep.index,
-        trajectory_start_pos = player_pos,
-        trajectory_start_time = current_time,
-        surplus_dv = surplus,
-        main_burn_position = burn_player_pos,
-        decel_burn_position = target_pos_at_intercept,
+        capture_burn_position = capture_burn_position,
     )
 end
 

@@ -192,7 +192,7 @@ Five element types (`ElementTypes` enum): `CONST_RESISTOR`, `CONST_VOLTAGE`, `CO
 ### Space Map and Encounters
 
 - `SpaceMapEmpty` (velocity only, tutorials) or `SpaceMapState` (full simulation with encounters and manoeuvres)
-- `ManoeuvreData`: 5-phase state machine (`PHASE_WAIT_APPROACH` through `PHASE_ENCOUNTER_READY`)
+- `ManoeuvreData`: 4 active phases (`PHASE_APPROACH_BURN` through `PHASE_ENCOUNTER_READY`), with a deprecated `PHASE_WAIT_APPROACH` value retained only for legacy save loading
 
 ### Docking System
 

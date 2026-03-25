@@ -1089,7 +1089,7 @@ end
         set_time_years!(sm, 1.0)
         set_position!(sm, SVector(1.0, 1.0))
         set_target_time!(sm, 1.0)
-        set_active_manoeuvre!(sm, ManoeuvreData(main_burn_dv = SVector(0.0, 0.0), decel_burn_dv = SVector(0.0, 0.0)))
+        set_active_manoeuvre!(sm, ManoeuvreData(approach_burn_dv = SVector(0.0, 0.0), capture_burn_dv = SVector(0.0, 0.0)))
         clear_active_manoeuvre!(sm)
     end
 
@@ -1134,40 +1134,42 @@ end
 
     @testset "ManoeuvreData" begin
         man = ManoeuvreData(
-            main_burn_dv = SVector(10.0, 0.0),
-            decel_burn_dv = SVector(-5.0, 0.0),
-            closest_approach_time = 1.0,
+            approach_burn_dv = SVector(10.0, 0.0),
+            capture_burn_dv = SVector(-5.0, 0.0),
+            approach_burn_time = 1.0,
             intercept_time = 2.0,
             target_encounter_index = 1,
         )
 
-        @test man.phase == PHASE_WAIT_APPROACH
-        @test man.main_burn_dv ≈ SVector(10.0, 0.0)
-        @test man.decel_burn_dv ≈ SVector(-5.0, 0.0)
-        @test man.closest_approach_time == 1.0
+        @test man.phase == PHASE_APPROACH_BURN
+        @test man.approach_burn_dv ≈ SVector(10.0, 0.0)
+        @test man.capture_burn_dv ≈ SVector(-5.0, 0.0)
+        @test man.approach_burn_time == 1.0
         @test man.intercept_time == 2.0
         @test man.target_encounter_index == 1
 
         # Mutable fields can be updated
-        man.phase = PHASE_MAIN_BURN
-        @test man.phase == PHASE_MAIN_BURN
+        man.phase = PHASE_APPROACH_BURN
+        @test man.phase == PHASE_APPROACH_BURN
 
         man.burn_remaining_dv = SVector(5.0, 0.0)
         @test man.burn_remaining_dv ≈ SVector(5.0, 0.0)
     end
 
     @testset "ManoeuvrePhase enum" begin
-        @test PHASE_WAIT_APPROACH isa ManoeuvrePhase
-        @test PHASE_MAIN_BURN isa ManoeuvrePhase
+        @test PHASE_APPROACH_BURN isa ManoeuvrePhase
         @test PHASE_COAST isa ManoeuvrePhase
-        @test PHASE_DECEL_BURN isa ManoeuvrePhase
+        @test PHASE_CAPTURE_BURN isa ManoeuvrePhase
         @test PHASE_ENCOUNTER_READY isa ManoeuvrePhase
 
-        @test phase_description(PHASE_WAIT_APPROACH) == "Waiting for Closest Approach"
-        @test phase_description(PHASE_MAIN_BURN) == "Performing Main Burn"
+        @test phase_description(PHASE_APPROACH_BURN) == "Performing Approach Burn"
         @test phase_description(PHASE_COAST) == "Waiting for Target Intercept"
-        @test phase_description(PHASE_DECEL_BURN) == "Performing Capture Burn"
+        @test phase_description(PHASE_CAPTURE_BURN) == "Performing Capture Burn"
         @test phase_description(PHASE_ENCOUNTER_READY) == "Target Reached"
+        @test Int(PHASE_APPROACH_BURN) == 1
+        @test Int(PHASE_COAST) == 2
+        @test Int(PHASE_CAPTURE_BURN) == 3
+        @test Int(PHASE_ENCOUNTER_READY) == 4
     end
 
     @testset "EncounterPoint" begin
@@ -1191,16 +1193,6 @@ end
         @test Int(ENCOUNTER_SHIP) != Int(ENCOUNTER_FUEL_CACHE)
         @test Int(ENCOUNTER_FUEL_CACHE) != Int(ENCOUNTER_SCRAP)
         @test Int(ENCOUNTER_SHIP) != Int(ENCOUNTER_SCRAP)
-    end
-
-    @testset "EncounterEvent ordering" begin
-        e1 = EncounterEvent(1.0, 1)
-        e2 = EncounterEvent(2.0, 2)
-        e3 = EncounterEvent(0.5, 3)
-
-        @test isless(e3, e1)
-        @test isless(e1, e2)
-        @test !isless(e2, e1)
     end
 
     @testset "initialise_spacemap! (moved to HexFlowProcGen)" begin

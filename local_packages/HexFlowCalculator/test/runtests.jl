@@ -847,7 +847,7 @@ end
 @testset "cancel_if_thrust! — above threshold cancels" begin
     gm = GameMap()
     initialise_spacemap!(gm, UInt32(1), _test_enc_config)
-    man = ManoeuvreData(main_burn_dv = SVector(1.0, 0.0), decel_burn_dv = SVector(-1.0, 0.0))
+    man = ManoeuvreData(approach_burn_dv = SVector(1.0, 0.0), capture_burn_dv = SVector(-1.0, 0.0))
     set_active_manoeuvre!(gm, man)
 
     gs = GameState()
@@ -860,7 +860,7 @@ end
 @testset "cancel_if_thrust! — at threshold" begin
     gm = GameMap()
     initialise_spacemap!(gm, UInt32(1), _test_enc_config)
-    man = ManoeuvreData(main_burn_dv = SVector(1.0, 0.0), decel_burn_dv = SVector(-1.0, 0.0))
+    man = ManoeuvreData(approach_burn_dv = SVector(1.0, 0.0), capture_burn_dv = SVector(-1.0, 0.0))
     set_active_manoeuvre!(gm, man)
 
     gs = GameState()
@@ -883,7 +883,7 @@ end
     set_time_years!(gm, 5.0)
     set_target_time!(gm, 3.0)  # target behind current → not progressing
 
-    man = ManoeuvreData(main_burn_dv = SVector(1.0, 0.0), decel_burn_dv = SVector(-1.0, 0.0))
+    man = ManoeuvreData(approach_burn_dv = SVector(1.0, 0.0), capture_burn_dv = SVector(-1.0, 0.0))
     set_active_manoeuvre!(gm, man)
 
     @test HexFlowCalculator.cancel_if_time_progressing!(gm) == false
@@ -896,7 +896,7 @@ end
     set_time_years!(gm, 5.0)
     set_target_time!(gm, 10.0)  # target ahead → progressing
 
-    man = ManoeuvreData(main_burn_dv = SVector(1.0, 0.0), decel_burn_dv = SVector(-1.0, 0.0))
+    man = ManoeuvreData(approach_burn_dv = SVector(1.0, 0.0), capture_burn_dv = SVector(-1.0, 0.0))
     set_active_manoeuvre!(gm, man)
 
     @test HexFlowCalculator.cancel_if_time_progressing!(gm) == true
@@ -908,7 +908,7 @@ end
     initialise_spacemap!(gm, UInt32(1), _test_enc_config)
     set_time_years!(gm, 5.0)
 
-    man = ManoeuvreData(main_burn_dv = SVector(1.0, 0.0), decel_burn_dv = SVector(-1.0, 0.0))
+    man = ManoeuvreData(approach_burn_dv = SVector(1.0, 0.0), capture_burn_dv = SVector(-1.0, 0.0))
     set_active_manoeuvre!(gm, man)
 
     @test HexFlowCalculator.cancel_if_time_wrong!(gm, 5.0) == false
@@ -920,7 +920,7 @@ end
     initialise_spacemap!(gm, UInt32(1), _test_enc_config)
     set_time_years!(gm, 5.0)
 
-    man = ManoeuvreData(main_burn_dv = SVector(1.0, 0.0), decel_burn_dv = SVector(-1.0, 0.0))
+    man = ManoeuvreData(approach_burn_dv = SVector(1.0, 0.0), capture_burn_dv = SVector(-1.0, 0.0))
     set_active_manoeuvre!(gm, man)
 
     @test HexFlowCalculator.cancel_if_time_wrong!(gm, 10.0) == true
@@ -932,7 +932,7 @@ end
     initialise_spacemap!(gm, UInt32(1), _test_enc_config)
     set_time_years!(gm, 5.0)
 
-    man = ManoeuvreData(main_burn_dv = SVector(1.0, 0.0), decel_burn_dv = SVector(-1.0, 0.0))
+    man = ManoeuvreData(approach_burn_dv = SVector(1.0, 0.0), capture_burn_dv = SVector(-1.0, 0.0))
     set_active_manoeuvre!(gm, man)
 
     # 5.005 is within default tolerance of 0.01
@@ -945,7 +945,7 @@ end
     initialise_spacemap!(gm, UInt32(1), _test_enc_config)
     set_target_time!(gm, 5.0)
 
-    man = ManoeuvreData(main_burn_dv = SVector(1.0, 0.0), decel_burn_dv = SVector(-1.0, 0.0))
+    man = ManoeuvreData(approach_burn_dv = SVector(1.0, 0.0), capture_burn_dv = SVector(-1.0, 0.0))
     set_active_manoeuvre!(gm, man)
 
     # Waypoint at 10.0, target time at 5.0 → target not past waypoint
@@ -958,7 +958,7 @@ end
     initialise_spacemap!(gm, UInt32(1), _test_enc_config)
     set_target_time!(gm, 5.0)
 
-    man = ManoeuvreData(main_burn_dv = SVector(1.0, 0.0), decel_burn_dv = SVector(-1.0, 0.0))
+    man = ManoeuvreData(approach_burn_dv = SVector(1.0, 0.0), capture_burn_dv = SVector(-1.0, 0.0))
     set_active_manoeuvre!(gm, man)
 
     # Waypoint at 3.0, target time at 5.0 → target has passed waypoint
@@ -992,29 +992,7 @@ end
     @test HexFlowCalculator.update_manoeuvre_phase!(gs, gm, ipc) === nothing
 end
 
-@testset "update_manoeuvre_phase! — WAIT_APPROACH with thrust cancels" begin
-    gs = GameState()
-    gm = GameMap()
-    ipc = make_test_ipc()
-    initialise_spacemap!(gm, UInt32(1), _test_enc_config)
-    set_time_years!(gm, 0.0)
-
-    man = ManoeuvreData(
-        main_burn_dv = SVector(1.0, 0.0),
-        decel_burn_dv = SVector(-1.0, 0.0),
-        closest_approach_time = 5.0,
-        intercept_time = 10.0,
-    )
-    set_active_manoeuvre!(gm, man)
-
-    # Apply thrust above threshold — should cancel during WAIT_APPROACH
-    gs.thrust = SVector(10.0, 0.0)
-    HexFlowCalculator.update_manoeuvre_phase!(gs, gm, ipc)
-
-    @test !has_active_manoeuvre(gm)
-end
-
-@testset "update_manoeuvre_phase! — WAIT_APPROACH transitions to MAIN_BURN" begin
+@testset "update_manoeuvre_phase! — APPROACH_BURN respects preloaded burn state" begin
     gs = GameState()
     gm = GameMap()
     ipc = make_test_ipc()
@@ -1028,17 +1006,17 @@ end
     push!(get_encounter_points(gm), ep)
 
     man = ManoeuvreData(
-        main_burn_dv = SVector(10.0, 0.0),
-        decel_burn_dv = SVector(-10.0, 0.0),
-        closest_approach_time = 5.0,
+        approach_burn_dv = SVector(10.0, 0.0),
+        capture_burn_dv = SVector(-10.0, 0.0),
+        burn_target_dv = SVector(10.0, 0.0),
+        burn_remaining_dv = SVector(10.0, 0.0),
+        approach_burn_time = 0.0,
         intercept_time = 10.0,
         target_encounter_index = 1,
     )
     set_active_manoeuvre!(gm, man)
-    @test man.phase == PHASE_WAIT_APPROACH
 
-    # Set time at closest_approach_time — should trigger transition
-    set_time_years!(gm, 5.0)
+    set_time_years!(gm, 0.0)
     set_target_time!(gm, 0.0)  # target behind current → not progressing
     gs.thrust = SVector(0.0, 0.0)  # no thrust
 
@@ -1046,8 +1024,9 @@ end
 
     @test has_active_manoeuvre(gm)
     updated_man = get_active_manoeuvre(gm)
-    @test updated_man.phase == PHASE_MAIN_BURN
-    @test updated_man.burn_remaining_dv ≈ SVector(10.0, 0.0)  # _spacemap_to_ship(main_burn_dv)
+    @test updated_man.phase == PHASE_APPROACH_BURN
+    @test updated_man.burn_remaining_dv ≈ SVector(10.0, 0.0)
+    @test updated_man.burn_target_dv ≈ SVector(10.0, 0.0)
 end
 
 @testset "update_manoeuvre_phase! — ENCOUNTER_READY with thrust cancels" begin
@@ -1057,8 +1036,8 @@ end
     initialise_spacemap!(gm, UInt32(1), _test_enc_config)
 
     man = ManoeuvreData(
-        main_burn_dv = SVector(1.0, 0.0),
-        decel_burn_dv = SVector(-1.0, 0.0),
+        approach_burn_dv = SVector(1.0, 0.0),
+        capture_burn_dv = SVector(-1.0, 0.0),
     )
     man.phase = PHASE_ENCOUNTER_READY
     set_active_manoeuvre!(gm, man)
@@ -1070,7 +1049,7 @@ end
     @test !has_active_manoeuvre(gm)
 end
 
-@testset "update_manoeuvre_phase! — DECEL_BURN completion triggers encounter" begin
+@testset "update_manoeuvre_phase! — CAPTURE_BURN completion triggers encounter" begin
     gs = GameState()
     gm = GameMap()
     ipc = make_test_ipc()
@@ -1081,11 +1060,11 @@ end
     set_target_time!(gm, 5.0)
 
     man = ManoeuvreData(
-        main_burn_dv = SVector(1.0, 0.0),
-        decel_burn_dv = SVector(-1.0, 0.0),
+        approach_burn_dv = SVector(1.0, 0.0),
+        capture_burn_dv = SVector(-1.0, 0.0),
         target_encounter_index = 1,
     )
-    man.phase = PHASE_DECEL_BURN
+    man.phase = PHASE_CAPTURE_BURN
     man.burn_target_dv = SVector(0.0, 0.0)
     man.burn_remaining_dv = SVector(0.0, 0.0)
     set_active_manoeuvre!(gm, man)
@@ -1113,8 +1092,8 @@ end
     set_target_time!(gm, 10.0)
 
     man = ManoeuvreData(
-        main_burn_dv = SVector(1.0, 0.0),
-        decel_burn_dv = SVector(-1.0, 0.0),
+        approach_burn_dv = SVector(1.0, 0.0),
+        capture_burn_dv = SVector(-1.0, 0.0),
         target_encounter_index = 1,
     )
     man.phase = PHASE_ENCOUNTER_READY

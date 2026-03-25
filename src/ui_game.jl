@@ -276,24 +276,20 @@ function predict_player_position_with_manoeuvre(
     target_time <= current_time && return current_pos
 
     # Collect (event_time, space-map ΔV) pairs for pending burns.
-    # main_burn_dv and decel_burn_dv are already in space-map space;
+    # approach_burn_dv and capture_burn_dv are already in space-map space;
     # burn_remaining_dv is in ship space and must be rotated back.
     pending_events = Tuple{Float64, SVector{2, Float64}}[]
 
-    if manoeuvre.phase == PHASE_WAIT_APPROACH
-        push!(pending_events, (manoeuvre.closest_approach_time, manoeuvre.main_burn_dv))
-        push!(pending_events, (manoeuvre.intercept_time, manoeuvre.decel_burn_dv))
-
-    elseif manoeuvre.phase == PHASE_MAIN_BURN
-        remaining_spacemap = _ship_to_spacemap(manoeuvre.burn_remaining_dv, manoeuvre.main_burn_dv)
+    if manoeuvre.phase == PHASE_APPROACH_BURN
+        remaining_spacemap = _ship_to_spacemap(manoeuvre.burn_remaining_dv, manoeuvre.approach_burn_dv)
         push!(pending_events, (current_time, remaining_spacemap))
-        push!(pending_events, (manoeuvre.intercept_time, manoeuvre.decel_burn_dv))
+        push!(pending_events, (manoeuvre.intercept_time, manoeuvre.capture_burn_dv))
 
     elseif manoeuvre.phase == PHASE_COAST
-        push!(pending_events, (manoeuvre.intercept_time, manoeuvre.decel_burn_dv))
+        push!(pending_events, (manoeuvre.intercept_time, manoeuvre.capture_burn_dv))
 
-    elseif manoeuvre.phase == PHASE_DECEL_BURN
-        remaining_spacemap = _ship_to_spacemap(manoeuvre.burn_remaining_dv, manoeuvre.decel_burn_dv)
+    elseif manoeuvre.phase == PHASE_CAPTURE_BURN
+        remaining_spacemap = _ship_to_spacemap(manoeuvre.burn_remaining_dv, manoeuvre.capture_burn_dv)
         push!(pending_events, (current_time, remaining_spacemap))
     end
 
@@ -429,13 +425,13 @@ function ui_velocity_tracker_render(
 
     # Show ΔV plot only during active burn phases
     show_dv_mode = has_manoeuvre &&
-        (manoeuvre.phase == PHASE_MAIN_BURN || manoeuvre.phase == PHASE_DECEL_BURN)
+        (manoeuvre.phase == PHASE_APPROACH_BURN || manoeuvre.phase == PHASE_CAPTURE_BURN)
 
     compass_angle = 0.0
     accel_plot = accel_world
     if show_dv_mode
         # Derive burn direction from the planned space-map ΔV vector
-        burn_dv = manoeuvre.phase == PHASE_MAIN_BURN ? manoeuvre.main_burn_dv : manoeuvre.decel_burn_dv
+        burn_dv = manoeuvre.phase == PHASE_APPROACH_BURN ? manoeuvre.approach_burn_dv : manoeuvre.capture_burn_dv
         burn_unit = normalise_or_default(burn_dv)
         compass_angle = atan(burn_unit[2], burn_unit[1])
 
@@ -585,17 +581,14 @@ function ui_velocity_tracker_render(
         phase = manoeuvre.phase
         CImGui.TextWrapped(phase_description(phase))
 
-        if phase == PHASE_WAIT_APPROACH
-            CImGui.TextWrapped("Open Space Map (M) and progress time until closest approach.")
-
-        elseif phase == PHASE_MAIN_BURN
+        if phase == PHASE_APPROACH_BURN
             rem_dv = manoeuvre.burn_remaining_dv
             CImGui.TextWrapped(@sprintf("Remaining delta-V: (%.2f, %.2f)", rem_dv[1], rem_dv[2]))
 
         elseif phase == PHASE_COAST
             CImGui.TextWrapped("Open Space Map (M) and progress time until intercept.")
 
-        elseif phase == PHASE_DECEL_BURN
+        elseif phase == PHASE_CAPTURE_BURN
             rem_dv = manoeuvre.burn_remaining_dv
             CImGui.TextWrapped(@sprintf("Remaining delta-V: (%.2f, %.2f)", rem_dv[1], rem_dv[2]))
 
@@ -790,15 +783,11 @@ function render_spacemap_active_manoeuvre_panel!(
     CImGui.Spacing()
 
     CImGui.Text(phase_description(phase))
-    CImGui.Text(@sprintf("Main Burn delta-V: %.1f", norm(manoeuvre.main_burn_dv)))
-    CImGui.Text(@sprintf("Capture Burn delta-V: %.1f", norm(manoeuvre.decel_burn_dv)))
+    CImGui.Text(@sprintf("Approach Burn delta-V: %.1f", norm(manoeuvre.approach_burn_dv)))
+    CImGui.Text(@sprintf("Capture Burn delta-V: %.1f", norm(manoeuvre.capture_burn_dv)))
     CImGui.Spacing()
 
-    if phase == PHASE_WAIT_APPROACH && !time_progressing
-        if button_with_disable("Wait for Closest Approach", ImVec2(-1, 30), timewarp_blocked)
-            @atomic :monotonic flowcalc_ipc.shared_state.target_spacemap_time = manoeuvre.closest_approach_time
-        end
-    elseif phase == PHASE_COAST && !time_progressing
+    if phase == PHASE_COAST && !time_progressing
         if button_with_disable("Wait for Capture Burn", ImVec2(-1, 30), timewarp_blocked)
             @atomic :monotonic flowcalc_ipc.shared_state.target_spacemap_time = manoeuvre.intercept_time
         end
@@ -866,7 +855,6 @@ function render_spacemap_manoeuvre_planning_panel!(
     selected_iteration = get(inputstate.gui_inputs, :spacemap_selected_iteration, 0)::Int
     ep = encounter_points[selected_idx]
     min_dv = calculate_minimum_intercept_dv(player_vel, ep.velocity) + 1.0
-    closest_approach = compute_closest_approach(player_pos, player_vel, ep, current_time)
 
     CImGui.TextColored(ImVec4(0.6, 0.8, 1.0, 1.0), "Intercept Calculated")
     CImGui.Spacing()
@@ -876,7 +864,6 @@ function render_spacemap_manoeuvre_planning_panel!(
     delta_v_slider = get!(inputstate.gui_inputs, :spacemap_delta_v, Cfloat(min_dv))::Cfloat
     delta_v_slider = max(delta_v_slider, Cfloat(min_dv))
 
-    CImGui.Text(@sprintf("Closest Approach: %.0f at T=%.3f yr", closest_approach.distance, closest_approach.time))
     CImGui.Text(@sprintf("Min Intercept delta-V: %.1f", min_dv))
     CImGui.Spacing()
 
@@ -903,8 +890,10 @@ function render_spacemap_manoeuvre_planning_panel!(
     if button_with_disable("Plan Manoeuvre", ImVec2(-1, 35), !can_plan; tooltip = button_tooltip)
         if !isnothing(preview_manoeuvre)
             modified_map = deepcopy(gamemap)
+            set_target_time!(modified_map, current_time)
             set_active_manoeuvre!(modified_map, preview_manoeuvre)
             enqueue_map_override!(flowcalc_ipc, modified_map)
+            @atomic :monotonic flowcalc_ipc.shared_state.target_spacemap_time = current_time
             @info "Manoeuvre planned" target = ep.display_name dv = total_dv
         end
     end
@@ -1031,55 +1020,49 @@ function render_spacemap_trajectory_previews!(
     (ep_idx < 1 || ep_idx > n_enc) && return nothing
     ep = encounter_points[ep_idx]
 
-    # Positions for the three-segment trajectory
-    burn1_pos = manoeuvre.main_burn_position
-    burn2_pos = manoeuvre.decel_burn_position
+    predicted_intercept_position = predict_player_position_with_manoeuvre(
+        player_pos,
+        player_vel,
+        current_time,
+        manoeuvre.intercept_time,
+        manoeuvre,
+    )
     target_pos = get_encounter_position(ep, current_time)
 
     # Line style: committed manoeuvres are thicker and more opaque
     if has_manoeuvre
-        leg_colour = ImVec4(0.4, 1.0, 0.4, 0.6)
-        closing_colour = ImVec4(1.0, 0.7, 0.2, 0.8)
+        player_path_colour = ImVec4(1.0, 0.7, 0.2, 0.8)
         target_colour = ImVec4(1.0, 0.45, 0.35, 0.8)
         line_width = 2.0
     else
-        leg_colour = ImVec4(0.4, 1.0, 0.4, 0.3)
-        closing_colour = ImVec4(1.0, 0.7, 0.2, 0.4)
+        player_path_colour = ImVec4(1.0, 0.7, 0.2, 0.4)
         target_colour = ImVec4(1.0, 0.45, 0.35, 0.4)
         line_width = 1.0
     end
 
-    # Leg 1: Current position → first burn
-    ImPlot.SetNextLineStyle(leg_colour, line_width)
+    # Remaining player trajectory from the current state to the predicted intercept point.
+    ImPlot.SetNextLineStyle(player_path_colour, line_width)
     ImPlot.PlotLine(
-        "##leg_coast_to_burn",
-        Float64[player_pos[1], burn1_pos[1]],
-        Float64[player_pos[2], burn1_pos[2]]
+        "##leg_player_path",
+        Float64[player_pos[1], predicted_intercept_position[1]],
+        Float64[player_pos[2], predicted_intercept_position[2]]
     )
 
-    # Leg 2: First burn → second burn (intercept)
-    ImPlot.SetNextLineStyle(closing_colour, line_width)
-    ImPlot.PlotLine(
-        "##leg_closing",
-        Float64[burn1_pos[1], burn2_pos[1]],
-        Float64[burn1_pos[2], burn2_pos[2]]
-    )
-
-    # Leg 3: Target current position → intercept point
+    # Target trajectory from its current position to the same intercept point.
     ImPlot.SetNextLineStyle(target_colour, line_width)
     ImPlot.PlotLine(
         "##leg_target",
-        Float64[target_pos[1], burn2_pos[1]],
-        Float64[target_pos[2], burn2_pos[2]]
+        Float64[target_pos[1], predicted_intercept_position[1]],
+        Float64[target_pos[2], predicted_intercept_position[2]]
     )
 
-    # Mark burn positions
+    # Mark the shared intercept point.
     burn_marker_colour = has_manoeuvre ? ImVec4(1.0, 0.9, 0.3, 0.9) : ImVec4(1.0, 0.9, 0.3, 0.5)
     ImPlot.SetNextMarkerStyle(ImPlot.ImPlotMarker_Asterisk, 7.0, burn_marker_colour)
     ImPlot.PlotScatter(
-        "##burn_markers",
-        Float64[burn1_pos[1], burn2_pos[1]],
-        Float64[burn1_pos[2], burn2_pos[2]]
+        "##intercept_marker",
+        Float64[predicted_intercept_position[1]],
+        Float64[predicted_intercept_position[2]]
     )
 
     return nothing

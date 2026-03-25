@@ -656,19 +656,17 @@ function get_in_game_learning_entries()::Vector{LearningEntry}
                         text = tutorial_dedent(
                             "Lets execute your planned manoeuvre! \
                             Manoeuvres are completed by performing 2 burns of your engines, to follow the planned trajectory in the space map. \
-                            The first burn is the 'main burn' where you will do most of the work to match the targets velocity and put your ship on an intercept course. \
+                            The first burn is the 'approach burn' where you will do most of the work to put your ship on an intercept course. \
                             The second burn is the 'capture burn' where you will do a smaller burn remove your intercept velocity.\n
                             The timing of these burns is critical, but the space map has tools to help you!"
                         ),
                     ),
                     TutorialStep(
-                        heading = "MAIN BURN TIMING",
+                        heading = "APPROACH BURN TIMING",
                         text = tutorial_dedent(
-                            "The 'main burn' is always performed at your closest approach to the target.\n
-                            If the target is moving away from you, the closest approach will be right now and you can execute the burn straight away!\n
-                            If the target is moving towards you, you will have to wait until until it reaches it closest point. \
-                            When you are waiting for this time, the space map will provide a 'Wait for Closest Approach' button that you can click to automatically advance time to the correct point. \
-                            Try clicking that button now, or if you are already at closest approach you can go straight to the next step!"
+                            "The 'approach burn' is now planned to start immediately.\n
+                            As soon as you commit the manoeuvre, the ship is considered to be in the approach-burn phase and the space map will stop any active time-warp for you.\n
+                            If you are still in the space map, close it and go straight to the next step to begin flying the burn."
                         ),
                         step_blocker = function(inputs::LearningInputs)
                             manoeuvre = get_active_manoeuvre(inputs.gamemap)
@@ -677,8 +675,8 @@ function get_in_game_learning_entries()::Vector{LearningEntry}
                             current_time = get_time_years(inputs.gamemap)
                             isnothing(current_time) && return "Unable to determine current time."
 
-                            current_time >= manoeuvre.closest_approach_time && return nothing
-                            return "Advance time until the main burn window is reached."
+                            current_time >= manoeuvre.approach_burn_time && return nothing
+                            return "Wait for the manoeuvre to enter its immediate approach-burn phase."
                         end,
                     ),
                     TutorialStep(
@@ -692,7 +690,7 @@ function get_in_game_learning_entries()::Vector{LearningEntry}
                         ),
                     ),
                     TutorialStep(
-                        heading = "COMPLETING THE MAIN BURN",
+                        heading = "COMPLETING THE APPROACH BURN",
                         text = tutorial_dedent(
                             "Now fire you thrusters in the right direction to follow the burn vector. \
                             When you are under thrust a green direction indicator will appear on the compass to show you the acceleration direction. \
@@ -705,16 +703,16 @@ function get_in_game_learning_entries()::Vector{LearningEntry}
                             manoeuvre = get_active_manoeuvre(inputs.gamemap)
                             isnothing(manoeuvre) && return "No active manoeuvre found."
 
-                            manoeuvre.phase in (PHASE_COAST, PHASE_DECEL_BURN, PHASE_ENCOUNTER_READY) && return nothing
-                            return "Complete the main burn by firing your engines."
+                            manoeuvre.phase in (PHASE_COAST, PHASE_CAPTURE_BURN, PHASE_ENCOUNTER_READY) && return nothing
+                            return "Complete the approach burn by firing your engines."
                         end,
                     ),
                     TutorialStep(
                         heading = "WAIT FOR INTERCEPT",
                         text = tutorial_dedent(
-                            "Now you have completed the main burn, you are on an intercept course with your target! \
+                            "Now you have completed the approach burn, you are on an intercept course with your target! \
                             Now you have to wait until you reach the target to perform the capture burn. \
-                            Just like with the wait for closest approach, the space map will provide a 'Wait for Intercept' button to help you advance time to the correct point, try clicking that now! \
+                            Just like with the wait for the approach burn, the space map will provide a 'Wait for Capture Burn' button to help you advance time to the correct point, try clicking that now! \
                             You should see the target moving directly towards you on the space map, thats your intercept trajectory at work! \n
                             Once you are at the intercept point, you will need to perform another burn to cancel out your intercept velocity and capture the target. \
                             Proceed to the next step to for that!"
@@ -733,7 +731,7 @@ function get_in_game_learning_entries()::Vector{LearningEntry}
                     TutorialStep(
                         heading = "CAPTURE BURN",
                         text = tutorial_dedent(
-                            "Completing the capture burn is pretty much the same as the main burn, but usually it will require less Delta V. \
+                            "Completing the capture burn is pretty much the same as the approach burn, but usually it will require less Delta V. \
                             Your ship will have rotated again so the burn direction is still to the right. \
                             You just need to fire your thrusters in that direction until the burn is complete!\n
                             Once you have completed the burn, you will see your tractor beam activate and pull you in to dock with the target. \

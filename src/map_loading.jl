@@ -64,6 +64,57 @@ JLD2.rconvert(::Type{SpaceMapEmpty}, nt::NamedTuple) = SpaceMapEmpty(
 
 #= ---------- ManoeuvreData ----------- =#
 
+"Normalise a loaded phase value into the current `ManoeuvrePhase` enum."
+function _loaded_manoeuvre_phase(raw_phase)::ManoeuvrePhase
+    raw_phase isa ManoeuvrePhase && return raw_phase
+    raw_phase == 0 && return FlowMap.PHASE_WAIT_APPROACH
+    raw_phase == 1 && return PHASE_APPROACH_BURN
+    raw_phase == 2 && return PHASE_COAST
+    raw_phase == 3 && return PHASE_CAPTURE_BURN
+    raw_phase == 4 && return PHASE_ENCOUNTER_READY
+    return PHASE_APPROACH_BURN
+end
+
+"Repair loaded manoeuvre burn buffers or migrate deprecated wait-phase plans."
+function _migrate_loaded_active_manoeuvre!(sm::SpaceMapState)
+    manoeuvre = sm.active_manoeuvre
+    isnothing(manoeuvre) && return nothing
+
+    if manoeuvre.phase == FlowMap.PHASE_WAIT_APPROACH
+        target_index = manoeuvre.target_encounter_index
+        if !(1 <= target_index <= length(sm.encounter_points))
+            sm.active_manoeuvre = nothing
+            return nothing
+        end
+
+        total_dv_budget = norm(manoeuvre.approach_burn_dv) + norm(manoeuvre.capture_burn_dv)
+        replanned_manoeuvre = plan_intercept_manoeuvre(
+            sm.position,
+            sm.velocity,
+            sm.encounter_points[target_index],
+            sm.time_years,
+            total_dv_budget,
+        )
+        sm.active_manoeuvre = replanned_manoeuvre
+
+        if !isnothing(replanned_manoeuvre)
+            set_target_time!(sm, sm.time_years)
+            sm.is_time_progressing = false
+        end
+        return nothing
+    end
+
+    if manoeuvre.phase == PHASE_APPROACH_BURN &&
+        norm(manoeuvre.burn_target_dv) < 1.0e-9 &&
+        norm(manoeuvre.burn_remaining_dv) < 1.0e-9
+        ship_space_approach_dv = SVector(norm(manoeuvre.approach_burn_dv), 0.0)
+        manoeuvre.burn_target_dv = ship_space_approach_dv
+        manoeuvre.burn_remaining_dv = ship_space_approach_dv
+    end
+
+    return nothing
+end
+
 """Rebuild `ManoeuvreData` from a NamedTuple (JLD2 Upgrade path).
 
 Handles three legacy formats:
@@ -71,9 +122,10 @@ Handles three legacy formats:
 2. **Legacy**: has `main_burn_dv` (ship-local) + `main_burn_direction` unit vector. Reconstructs
    space-map ΔV via `direction × magnitude`.
 3. **Current**: has `main_burn_dv`/`decel_burn_dv` as full space-map vectors (no `main_burn_direction`).
+4. **Renamed**: has `approach_burn_dv`/`capture_burn_dv` with the same semantics as current.
 """
 function JLD2.rconvert(::Type{ManoeuvreData}, nt::NamedTuple)
-    if haskey(nt, :target_delta_v) && !haskey(nt, :main_burn_dv)
+    if haskey(nt, :target_delta_v) && !haskey(nt, :main_burn_dv) && !haskey(nt, :approach_burn_dv)
         # Very old format: target_delta_v → main_burn_dv, intercept_delta_v → decel_burn_dv
         main_dv  = get(nt, :target_delta_v,    SVector(0.0, 0.0))
         decel_dv = get(nt, :intercept_delta_v, SVector(0.0, 0.0))
@@ -84,51 +136,45 @@ function JLD2.rconvert(::Type{ManoeuvreData}, nt::NamedTuple)
         main_dv   = dir_main  * norm(nt.main_burn_dv)
         decel_dv  = dir_decel * norm(nt.decel_burn_dv)
     else
-        # Current format
-        main_dv  = nt.main_burn_dv
-        decel_dv = nt.decel_burn_dv
+        # Current or renamed format: prefer new names, fall back to old ones.
+        main_dv  = get(nt, :approach_burn_dv, get(nt, :main_burn_dv, SVector(0.0, 0.0)))
+        decel_dv = get(nt, :capture_burn_dv, get(nt, :decel_burn_dv, SVector(0.0, 0.0)))
     end
 
     ManoeuvreData(
-        phase              = get(nt, :phase, PHASE_WAIT_APPROACH),
-        main_burn_dv       = main_dv,
-        decel_burn_dv      = decel_dv,
+        phase              = _loaded_manoeuvre_phase(get(nt, :phase, PHASE_APPROACH_BURN)),
+        approach_burn_dv   = main_dv,
+        capture_burn_dv    = decel_dv,
         burn_target_dv     = get(nt, :burn_target_dv, SVector(0.0, 0.0)),
         burn_remaining_dv  = get(nt, :burn_remaining_dv, SVector(0.0, 0.0)),
-        closest_approach_time = get(nt, :closest_approach_time, 0.0),
+        approach_burn_time = get(nt, :approach_burn_time, get(nt, :closest_approach_time, 0.0)),
         intercept_time     = get(nt, :intercept_time, 0.0),
         target_encounter_index = get(nt, :target_encounter_index, 0),
-        trajectory_start_pos  = get(nt, :trajectory_start_pos, SVector(0.0, 0.0)),
-        trajectory_start_time = get(nt, :trajectory_start_time, 0.0),
-        surplus_dv         = get(nt, :surplus_dv, 0.0),
-        main_burn_position  = get(nt, :main_burn_position, SVector(0.0, 0.0)),
-        decel_burn_position = get(nt, :decel_burn_position, SVector(0.0, 0.0)),
+        capture_burn_position = get(nt, :capture_burn_position, get(nt, :decel_burn_position, SVector(0.0, 0.0))),
     )
 end
 
 #= ---------- SpaceMapState ----------- =#
 
-"Rebuild `SpaceMapState` from a NamedTuple — event_queue is always fresh (rebuilt after load)."
-JLD2.rconvert(::Type{SpaceMapState}, nt::NamedTuple) = SpaceMapState(
-    seed               = get(nt, :seed, UInt32(0)),
-    velocity           = get(nt, :velocity, SVector{2,Float64}(0.0, 0.0)),
-    position           = get(nt, :position, SVector{2,Float64}(0.0, 0.0)),
-    time_years         = get(nt, :time_years, 0.0),
-    target_time_years  = get(nt, :target_time_years, 0.0),
-    last_stop_time     = get(nt, :last_stop_time, 0.0),
-    is_time_progressing = get(nt, :is_time_progressing, false),
-    active_manoeuvre    = get(nt, :active_manoeuvre, nothing),
-    encounter_points   = get(nt, :encounter_points, EncounterPoint[]),
-    neg_disappear_line_x = get(nt, :neg_disappear_line_x, -1600.0),
-    neg_spawn_line_x     = get(nt, :neg_spawn_line_x, -1500.0),
-    pos_spawn_line_x     = get(nt, :pos_spawn_line_x, 1500.0),
-    pos_disappear_line_x = get(nt, :pos_disappear_line_x, 1600.0),
-    last_line_step_x   = get(nt, :last_line_step_x, 0.0),
-    line_step_size     = get(nt, :line_step_size, 200.0),
-    viewport_half_width  = get(nt, :viewport_half_width, 1000.0),
-    viewport_half_height = get(nt, :viewport_half_height, 500.0),
-    encounter_config   = encounter_system_config,  # Old saves get current encounter rules
-)
+"Rebuild `SpaceMapState` from a NamedTuple using the current encounter config defaults."
+function JLD2.rconvert(::Type{SpaceMapState}, nt::NamedTuple)
+    sm = SpaceMapState(
+        seed               = get(nt, :seed, UInt32(0)),
+        velocity           = get(nt, :velocity, SVector{2,Float64}(0.0, 0.0)),
+        position           = get(nt, :position, SVector{2,Float64}(0.0, 0.0)),
+        time_years         = get(nt, :time_years, 0.0),
+        target_time_years  = get(nt, :target_time_years, 0.0),
+        last_stop_time     = get(nt, :last_stop_time, 0.0),
+        is_time_progressing = get(nt, :is_time_progressing, false),
+        active_manoeuvre    = get(nt, :active_manoeuvre, nothing),
+        encounter_points   = get(nt, :encounter_points, EncounterPoint[]),
+        viewport_half_width  = get(nt, :viewport_half_width, 1000.0),
+        viewport_half_height = get(nt, :viewport_half_height, 500.0),
+        encounter_config   = encounter_system_config,  # Old saves get current encounter rules
+    )
+    _migrate_loaded_active_manoeuvre!(sm)
+    return sm
+end
 
 "Rebuild `EncounterPoint` from a NamedTuple (JLD2 Upgrade path)."
 function JLD2.rconvert(::Type{EncounterPoint}, nt::NamedTuple)
@@ -154,7 +200,7 @@ JLD2.rconvert(::Type{DecompChamberCompBehav}, nt::NamedTuple) = DecompChamberCom
 
 #= ---------- EncounterSystemConfig ----------- =#
 
-"Rebuild EncounterSystemConfig from old saves that may lack newer fields (e.g. spawn_half_height)."
+"Rebuild EncounterSystemConfig from old saves that may lack newer box-offset fields."
 function JLD2.rconvert(::Type{EncounterSystemConfig}, nt::NamedTuple)
     EncounterSystemConfig(
         n_points             = get(nt, :n_points, 100),
@@ -164,10 +210,8 @@ function JLD2.rconvert(::Type{EncounterSystemConfig}, nt::NamedTuple)
         max_angle_rad        = get(nt, :max_angle_rad, π / 8),
         viewport_half_width  = get(nt, :viewport_half_width, 400.0),
         viewport_half_height = get(nt, :viewport_half_height, 200.0),
-        spawn_half_height    = get(nt, :spawn_half_height, 300.0),
-        spawn_margin         = get(nt, :spawn_margin, 100.0),
-        recycle_margin       = get(nt, :recycle_margin, 50.0),
-        line_step_size       = get(nt, :line_step_size, 50.0),
+        spawn_box_offset     = get(nt, :spawn_box_offset, 50.0),
+        disappear_box_offset = get(nt, :disappear_box_offset, 100.0),
         encounter_class_configs = get(nt, :encounter_class_configs, Dict{EncounterClass, EncounterClassConfig}()),
     )
 end
@@ -257,13 +301,6 @@ function loadmap(mappath::Union{Nothing, String})::GameMap
     if isnothing(stored_gamemap)
         @warn "All map loading attempts failed. Returning empty map."
         stored_gamemap = GameMap()
-    end
-
-    # Rebuild event queue if SpaceMapState loaded (BinaryMinHeap may not round-trip via JLD2)
-    sm = stored_gamemap.space_map
-    if sm isa SpaceMapState && !isempty(sm.encounter_points)
-        rebuild_event_queue!(sm)
-        @info "Rebuilt encounter event queue after map load" n_events=length(sm.event_queue)
     end
 
     return stored_gamemap

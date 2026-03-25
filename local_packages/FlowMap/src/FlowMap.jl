@@ -5,15 +5,15 @@ import HexComponentsAPI: placement_valid
 
 using StructEquality
 using StaticArrays
-using DataStructures: BinaryMinHeap, Deque
+using DataStructures: Deque
 
 #= ---------- Type Exports ----------- =#
 export ShipMap, GameMap, RenderPosOffsetState
 export DockingStatus, ConnectedDockStat, ApproachingDockStat, DepartingDockStat
 export AbstractSpaceMap, SpaceMapEmpty, ManoeuvreData
 export EncounterClass, ENCOUNTER_SHIP, ENCOUNTER_FUEL_CACHE, ENCOUNTER_SCRAP
-export ManoeuvrePhase, PHASE_WAIT_APPROACH, PHASE_MAIN_BURN, PHASE_COAST, PHASE_DECEL_BURN, PHASE_ENCOUNTER_READY
-export EncounterPoint, EncounterEvent
+export ManoeuvrePhase, PHASE_APPROACH_BURN, PHASE_COAST, PHASE_CAPTURE_BURN, PHASE_ENCOUNTER_READY
+export EncounterPoint
 
 #= ---------- Learning Progress Exports ----------- =#
 export TutorialStatus, TUTORIAL_WAITING, TUTORIAL_IN_PROGRESS, TUTORIAL_COMPLETED
@@ -165,60 +165,56 @@ end
     richness::Float64 = 0.0                             # Richness at spawn time (cached for UI display)
 end
 
-"Event representing when an encounter point crosses the disappear line."
-struct EncounterEvent
-    time::Float64   # Predicted crossing time (years)
-    index::Int      # Index into the encounter_points vector
-end
-"Order encounter events by time for priority queue usage."
-Base.isless(a::EncounterEvent, b::EncounterEvent) = a.time < b.time
-
-"Manoeuvre phase: WAIT_APPROACH → MAIN_BURN → COAST → DECEL_BURN → ENCOUNTER_READY"
+"Manoeuvre phase for an intercept plan. New manoeuvres use APPROACH_BURN → COAST → CAPTURE_BURN → ENCOUNTER_READY; WAIT_APPROACH is retained only for legacy save loading."
 @enum ManoeuvrePhase begin
-    PHASE_WAIT_APPROACH     # Waiting for closest approach time
-    PHASE_MAIN_BURN         # Velocity match + acceleration burn
-    PHASE_COAST             # Coasting toward intercept
-    PHASE_DECEL_BURN        # Deceleration / capture burn
-    PHASE_ENCOUNTER_READY   # Burns complete — encounter triggers automatically
+    PHASE_WAIT_APPROACH = 0     # Deprecated load-only compatibility phase
+    PHASE_APPROACH_BURN = 1     # Initial burn onto the planned approach trajectory
+    PHASE_COAST = 2             # Coasting toward intercept
+    PHASE_CAPTURE_BURN = 3      # Velocity-match / capture burn at intercept
+    PHASE_ENCOUNTER_READY = 4   # Burns complete — encounter triggers automatically
 end
 
 "Return a player-facing description of the given manoeuvre phase."
 function phase_description(phase::ManoeuvrePhase)::String
-    phase == PHASE_WAIT_APPROACH && return "Waiting for Closest Approach"
-    phase == PHASE_MAIN_BURN && return "Performing Main Burn"
+    phase == PHASE_WAIT_APPROACH && return "Waiting for Approach Burn"
+    phase == PHASE_APPROACH_BURN && return "Performing Approach Burn"
     phase == PHASE_COAST && return "Waiting for Target Intercept"
-    phase == PHASE_DECEL_BURN && return "Performing Capture Burn"
+    phase == PHASE_CAPTURE_BURN && return "Performing Capture Burn"
     phase == PHASE_ENCOUNTER_READY && return "Target Reached"
     return "Unknown manoeuvre phase"
+end
+
+"Deprecated load-only enum retained for compatibility with older saves."
+@enum InterceptStrategy::UInt8 begin
+    STRATEGY_WAIT_FOR_APPROACH = 0
+    STRATEGY_IMMEDIATE_APPROACH = 1
+    STRATEGY_DIRECT_INTERCEPT = 2
 end
 
 """
 Tracks an in-progress intercept manoeuvre via an explicit phase state machine.
 
 Reference frames:
-- `main_burn_dv`, `decel_burn_dv`:  **space-map space** — planned ΔV as full vectors.
+- `approach_burn_dv`, `capture_burn_dv`:  **space-map space** — planned ΔV as full vectors.
   Direction is embedded in the vector (no separate direction field needed).
-- `burn_target_dv`, `burn_remaining_dv`:  **ship space** — set at each phase transition
-  by rotating the relevant space-map ΔV into ship space (where ship +X aligns with burn
-  direction). Updated every tick by actual thrust.
+- `burn_target_dv`, `burn_remaining_dv`:  **ship space** — the current active burn budget,
+    where ship +X aligns with the burn direction. New manoeuvres pre-populate these fields
+    for the approach burn at planning time; the capture burn values are filled when the
+    intercept phase begins.
 """
 @kwdef mutable struct ManoeuvreData
     # ── Mutable state (updated during flight) ──
-    phase::ManoeuvrePhase = PHASE_WAIT_APPROACH
+    phase::ManoeuvrePhase = PHASE_APPROACH_BURN
     burn_target_dv::SVector{2, Float64} = SVector(0.0, 0.0)      # Ship-space: total ΔV the current burn aims to achieve
     burn_remaining_dv::SVector{2, Float64} = SVector(0.0, 0.0)    # Ship-space: ΔV still to apply in the current burn
 
     # ── Planned constants (set at planning time, immutable after construction) ──
-    const main_burn_dv::SVector{2, Float64}                                        # Space-map-space ΔV for the main burn
-    const decel_burn_dv::SVector{2, Float64}                                       # Space-map-space ΔV for the decel burn
-    const closest_approach_time::Float64 = 0.0          # Time (years) when main burn begins
-    const intercept_time::Float64 = 0.0                 # Time (years) when decel burn begins
+    const approach_burn_dv::SVector{2, Float64}                                    # Space-map-space ΔV for the first burn
+    const capture_burn_dv::SVector{2, Float64}                                     # Space-map-space ΔV for the intercept burn
+    const approach_burn_time::Float64 = 0.0              # Time (years) when the first burn begins
+    const intercept_time::Float64 = 0.0                  # Time (years) when the capture burn begins
     const target_encounter_index::Int = 0               # Index into encounter_points vector
-    const trajectory_start_pos::SVector{2, Float64} = SVector(0.0, 0.0)  # Player position at plan time
-    const trajectory_start_time::Float64 = 0.0          # Time when manoeuvre was planned
-    const surplus_dv::Float64 = 0.0                     # Surplus ΔV over minimum (for display)
-    const main_burn_position::SVector{2, Float64} = SVector(0.0, 0.0)    # Player position when first burn occurs (for rendering)
-    const decel_burn_position::SVector{2, Float64} = SVector(0.0, 0.0)   # Position where intercept/second burn occurs (for rendering)
+    const capture_burn_position::SVector{2, Float64} = SVector(0.0, 0.0)   # Position where intercept / capture burn occurs
 end
 @struct_hash_equal ManoeuvreData
 

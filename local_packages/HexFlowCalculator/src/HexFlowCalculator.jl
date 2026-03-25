@@ -742,7 +742,6 @@ function apply_mapedit_command!(
         sm = gamemap.space_map
         ep = sm.encounter_points[command.target_encounter_index]
         spawn_encounter_point!(ep, sm, sm.time_years)
-        rebuild_event_queue!(sm)
         clear_active_manoeuvre!(gamemap)
         threadsafe_console_push("Encounter triggered: $(command.ship_name_base)")
     end
@@ -1097,9 +1096,9 @@ function handle_thrusters!(gamestate::GameState, gamemap::GameMap, derivedmapsta
     if has_active_manoeuvre(gamemap)
         manoeuvre = get_active_manoeuvre(gamemap)
         phase = manoeuvre.phase
-        if phase == PHASE_MAIN_BURN || phase == PHASE_DECEL_BURN
+        if phase == PHASE_APPROACH_BURN || phase == PHASE_CAPTURE_BURN
             # Burn direction comes from the planned space-map ΔV vector
-            burn_dv = phase == PHASE_MAIN_BURN ? manoeuvre.main_burn_dv : manoeuvre.decel_burn_dv
+            burn_dv = phase == PHASE_APPROACH_BURN ? manoeuvre.approach_burn_dv : manoeuvre.capture_burn_dv
             burn_dir_mag = norm(burn_dv)
             burn_dir = burn_dir_mag > 1.0e-10 ? burn_dv / burn_dir_mag : SVector(1.0, 0.0)
             burn_angle = atan(burn_dir[2], burn_dir[1])
@@ -1250,9 +1249,9 @@ end
 """
 Advance the manoeuvre state machine one step.
 
-At each burn-phase transition, the planned space-map ΔV is rotated into ship space
-to set `burn_target_dv` and `burn_remaining_dv`.  This rotation maps space-map +X
-onto ship +X (i.e. the ship "turns" to face the burn direction).
+New manoeuvres enter `PHASE_APPROACH_BURN` with the approach burn already loaded
+into `burn_target_dv` and `burn_remaining_dv`. The only runtime burn initialisation
+that remains is the capture burn transition at intercept time.
 
 All phase transitions are centralised here so the UI is purely a display layer.
 Must be called once per tick near the start of the simulation pipeline, before
@@ -1268,27 +1267,12 @@ function update_manoeuvre_phase!(gamestate::GameState, gamemap::GameMap, ipc::Fl
     thrust_mag = norm(gamestate.thrust)
     console_push = ipc.console_push
 
-    if man.phase == PHASE_WAIT_APPROACH
-        # Guards: thrust outside a burn phase, or time warp that skips the main burn
-        cancel_if_thrust!(gamemap, gamestate; console_push) && return nothing
-        cancel_if_target_time_past!(gamemap, man.closest_approach_time; console_push) && return nothing
+    if man.phase == FlowMap.PHASE_WAIT_APPROACH
+        clear_active_manoeuvre!(gamemap)
+        console_push("Manoeuvre cancelled: encountered deprecated wait phase after load migration.")
+        return nothing
 
-        # Transition: rotate main burn ΔV into ship space when closest approach time is reached
-        if sm.time_years >= man.closest_approach_time
-            # Verify ship is at the expected time (shouldn't have jumped past it)
-            cancel_if_time_wrong!(gamemap, man.closest_approach_time; console_push) && return nothing
-
-            ship_dv = _spacemap_to_ship(man.main_burn_dv)
-            man.burn_target_dv = ship_dv
-            man.burn_remaining_dv = ship_dv
-            man.phase = PHASE_MAIN_BURN
-
-            expected_velocity = man.main_burn_dv + get_velocity(gamemap)
-            expected_encounter_position = get_encounter_position(get_encounter_points(gamemap)[man.target_encounter_index], man.intercept_time)
-            @info "Main Burn started:" expected_velocity = expected_velocity expected_encounter_position = expected_encounter_position
-        end
-
-    elseif man.phase == PHASE_MAIN_BURN
+    elseif man.phase == PHASE_APPROACH_BURN
         # Guards: time-warp during a burn invalidates ΔV integration
         cancel_if_time_progressing!(gamemap; console_push) && return nothing
 
@@ -1298,29 +1282,29 @@ function update_manoeuvre_phase!(gamestate::GameState, gamemap::GameMap, ipc::Fl
             man.phase = PHASE_COAST
 
             current_velocity = get_velocity(gamemap)
-            @info "Main Burn completed:" current_velocity = current_velocity
+            @info "Approach Burn completed:" current_velocity = current_velocity
         end
 
     elseif man.phase == PHASE_COAST
-        # Guards: thrust between burns, or time warp that skips the decel burn
+        # Guards: thrust between burns, or time warp that skips the capture burn
         cancel_if_thrust!(gamemap, gamestate; console_push) && return nothing
         cancel_if_target_time_past!(gamemap, man.intercept_time; console_push) && return nothing
 
-        # Transition: rotate decel burn ΔV into ship space when intercept time is reached
+        # Transition: rotate the capture burn ΔV into ship space when intercept time is reached
         if sm.time_years >= man.intercept_time
             cancel_if_time_wrong!(gamemap, man.intercept_time; console_push) && return nothing
 
-            ship_dv = _spacemap_to_ship(man.decel_burn_dv)
+            ship_dv = _spacemap_to_ship(man.capture_burn_dv)
             man.burn_target_dv = ship_dv
             man.burn_remaining_dv = ship_dv
-            man.phase = PHASE_DECEL_BURN
+            man.phase = PHASE_CAPTURE_BURN
 
             current_position = get_position(gamemap)
-            expected_velocity = man.decel_burn_dv + get_velocity(gamemap)
-            @info "Decel Burn started:" current_position = current_position expected_velocity = expected_velocity
+            expected_velocity = man.capture_burn_dv + get_velocity(gamemap)
+            @info "Capture Burn started:" current_position = current_position expected_velocity = expected_velocity
         end
 
-    elseif man.phase == PHASE_DECEL_BURN
+    elseif man.phase == PHASE_CAPTURE_BURN
         # Guards: time-warp during a burn invalidates ΔV integration
         cancel_if_time_progressing!(gamemap; console_push) && return nothing
 
@@ -1330,7 +1314,7 @@ function update_manoeuvre_phase!(gamestate::GameState, gamemap::GameMap, ipc::Fl
             man.phase = PHASE_ENCOUNTER_READY
 
             current_velocity = get_velocity(gamemap)
-            @info "Decel Burn completed:" current_velocity = current_velocity
+            @info "Capture Burn completed:" current_velocity = current_velocity
 
             trigger_ready_encounter!(gamemap, man, sm, ipc)
             return nothing

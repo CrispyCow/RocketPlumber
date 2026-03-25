@@ -67,7 +67,7 @@ end
 """
 Return (blocked::Bool, reason::String) for whether time-warping should be blocked.
 - Blocks if the ship is producing thrust above the manoeuvre threshold.
-- Blocks if an active manoeuvre is currently in a burn phase (main or decel).
+- Blocks if an active manoeuvre is currently in a burn phase (approach or capture).
 """
 function is_timewarp_blocked(gamemap::GameMap, gamestate::GameState)::Tuple{Bool, String}
     # Thrust-based blocker
@@ -78,7 +78,7 @@ function is_timewarp_blocked(gamemap::GameMap, gamestate::GameState)::Tuple{Bool
     # Active manoeuvre burn-phase blocker
     if has_active_manoeuvre(gamemap)
         man = get_active_manoeuvre(gamemap)
-        if man.phase == PHASE_MAIN_BURN || man.phase == PHASE_DECEL_BURN
+        if man.phase == PHASE_APPROACH_BURN || man.phase == PHASE_CAPTURE_BURN
             return (true, "Cannot time-warp during a manoeuvre burn; complete the burn or cancel the manoeuvre first.")
         end
     end

@@ -614,14 +614,12 @@ encounter_class_configs = Dict{EncounterClass, EncounterClassConfig}(
 )
 
 const encounter_system_config = EncounterSystemConfig(
-    n_points = 200,
+    n_points = 120,
     min_base_velocity = 30.0,
-    viewport_half_width = 200.0,
-    viewport_half_height = 100.0,
-    spawn_margin = 25.0,
-    recycle_margin = 10.0,
-    line_step_size = 25.0,
-    spawn_half_height = 600.0,
+    viewport_half_width = 300.0,
+    viewport_half_height = 200.0,
+    spawn_box_offset = 50.0,
+    disappear_box_offset = 100.0,
     encounter_class_configs = encounter_class_configs
 )
 

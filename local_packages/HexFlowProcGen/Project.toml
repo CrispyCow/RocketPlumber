@@ -4,7 +4,6 @@ version = "0.1.0"
 authors = ["Christos Lillis <christos.lillis@gmail.com>"]
 
 [deps]
-DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
 FlowEngine = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
 FlowMap = "86ae9052-88d6-4179-aacc-02095df7ba41"
 GeometryBasics = "5c1252a2-5f33-56bf-86c9-59e7332b4326"

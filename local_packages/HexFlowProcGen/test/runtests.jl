@@ -856,52 +856,40 @@ function make_encounter_sm(; n_points = 10,
     return sm
 end
 
+"Return the spawn-box half-extents for `sm`."
+function get_spawn_box_extents(sm::SpaceMapState)
+    config = get_encounter_config(sm)
+    return sm.viewport_half_width + config.spawn_box_offset, sm.viewport_half_height + config.spawn_box_offset
+end
+
+"Return the disappear-box half-extents for `sm`."
+function get_disappear_box_extents(sm::SpaceMapState)
+    config = get_encounter_config(sm)
+    return sm.viewport_half_width + config.disappear_box_offset, sm.viewport_half_height + config.disappear_box_offset
+end
+
+"Return true when `pos` lies on the perimeter of the axis-aligned box centred at `centre`."
+function is_on_box_edge(pos::SVector{2, Float64}, centre::SVector{2, Float64}, half_x::Float64, half_y::Float64)
+    on_left = pos[1] ≈ centre[1] - half_x && centre[2] - half_y <= pos[2] <= centre[2] + half_y
+    on_right = pos[1] ≈ centre[1] + half_x && centre[2] - half_y <= pos[2] <= centre[2] + half_y
+    on_top = pos[2] ≈ centre[2] + half_y && centre[1] - half_x <= pos[1] <= centre[1] + half_x
+    on_bottom = pos[2] ≈ centre[2] - half_y && centre[1] - half_x <= pos[1] <= centre[1] + half_x
+    return on_left || on_right || on_top || on_bottom
+end
+
 @testset "Encounter point system" begin
 
-    @testset "predict_crossing_time" begin
-        # Point moving rightward at 100 units/yr, spawned at x = -100
-        ep = EncounterPoint(index=1, base_velocity=100.0,
-                            position=SVector(-100.0, 0.0),
-                            velocity=SVector(100.0, 0.0),
-                            spawn_time=0.0)
-
-        ct = predict_crossing_time(ep, 0.0)
-        @test !isnothing(ct)
-        @test ct ≈ 1.0  # 100 units at 100/yr = 1 yr
-
-        # Already past the line
-        ct_past = predict_crossing_time(ep, -200.0)
-        @test isnothing(ct_past)
-
-        # Moving leftward — already past the right line
-        ep_left = EncounterPoint(index=2, base_velocity=100.0,
-                                  position=SVector(0.0, 0.0),
-                                  velocity=SVector(-100.0, 0.0),
-                                  spawn_time=0.0)
-        @test isnothing(predict_crossing_time(ep_left, 100.0))
-
-        # Zero x-velocity — never crosses
-        ep_vert = EncounterPoint(index=3, base_velocity=100.0,
-                                  position=SVector(0.0, 0.0),
-                                  velocity=SVector(0.0, 100.0),
-                                  spawn_time=0.0)
-        @test isnothing(predict_crossing_time(ep_vert, 100.0))
-    end
-
-    @testset "spawn_encounter_point! at neg_spawn line" begin
-        sm = make_encounter_sm()
-        config = get_encounter_config(sm)
+    @testset "spawn_encounter_point! places encounters on the spawn perimeter" begin
+        sm = make_encounter_sm(player_pos = SVector(10.0, -20.0))
         ep = sm.encounter_points[1]
         old_iter = ep.iteration
+        spawn_x, spawn_y = get_spawn_box_extents(sm)
 
-        spawn_encounter_point!(ep, sm, 5.0, sm.neg_spawn_line_x)
+        spawn_encounter_point!(ep, sm, 5.0)
 
         @test ep.iteration == old_iter + 1
         @test ep.spawn_time ≈ 5.0
-        @test ep.position[1] ≈ sm.neg_spawn_line_x
-        # Y within expected range
-        @test abs(ep.position[2]) <= sm.viewport_half_height + config.spawn_margin
-        # Velocity has a rightward component (positive X, since relative speed > 0)
+        @test is_on_box_edge(ep.position, sm.position, spawn_x, spawn_y)
         @test ep.velocity[1] > 0.0
         @test ep.encounter_class isa EncounterClass
         @test ep.fuel_tag isa HexFluids.FluidTags
@@ -909,24 +897,27 @@ end
         @test ep.richness >= 1.0
     end
 
-    @testset "spawn_encounter_point! at pos_spawn line (backfill)" begin
+    @testset "spawn_encounter_point! can choose multiple spawn edges across recycles" begin
         sm = make_encounter_sm()
-        ep = sm.encounter_points[2]
+        ep = sm.encounter_points[1]
+        spawn_x, spawn_y = get_spawn_box_extents(sm)
+        seen_edges = Set{Symbol}()
 
-        spawn_encounter_point!(ep, sm, 0.0, sm.pos_spawn_line_x)
+        for current_time in 1.0:20.0
+            spawn_encounter_point!(ep, sm, current_time)
 
-        @test ep.position[1] ≈ sm.pos_spawn_line_x
-        # Still has positive relative X velocity (ship drifts toward pos_disappear)
-        @test ep.velocity[1] > 0.0
-    end
+            if ep.position[1] ≈ sm.position[1] - spawn_x
+                push!(seen_edges, :left)
+            elseif ep.position[1] ≈ sm.position[1] + spawn_x
+                push!(seen_edges, :right)
+            elseif ep.position[2] ≈ sm.position[2] + spawn_y
+                push!(seen_edges, :top)
+            elseif ep.position[2] ≈ sm.position[2] - spawn_y
+                push!(seen_edges, :bottom)
+            end
+        end
 
-    @testset "spawn_encounter_point! default uses neg_spawn_line_x" begin
-        sm = make_encounter_sm()
-        ep = sm.encounter_points[3]
-
-        spawn_encounter_point!(ep, sm, 0.0)
-
-        @test ep.position[1] ≈ sm.neg_spawn_line_x
+        @test length(seen_edges) > 1
     end
 
     @testset "spawn_encounter_point! is deterministic for same iteration" begin
@@ -942,150 +933,121 @@ end
         @test ep1.ship_type_seed == ep2.ship_type_seed
     end
 
-    @testset "initialise_encounter_system! sets four boundary lines" begin
+    @testset "initialise_encounter_system! scatters points inside the disappear box" begin
         sm = make_encounter_sm()
-        config = get_encounter_config(sm)
+        disappear_x, disappear_y = get_disappear_box_extents(sm)
 
-        expected_neg_spawn    = -config.viewport_half_width - config.spawn_margin
-        expected_neg_disappear = expected_neg_spawn - config.recycle_margin
-        expected_pos_spawn    =  config.viewport_half_width + config.spawn_margin
-        expected_pos_disappear = expected_pos_spawn + config.recycle_margin
-
-        @test sm.neg_spawn_line_x    ≈ expected_neg_spawn
-        @test sm.neg_disappear_line_x ≈ expected_neg_disappear
-        @test sm.pos_spawn_line_x    ≈ expected_pos_spawn
-        @test sm.pos_disappear_line_x ≈ expected_pos_disappear
-
-        # All encounter points populated
         @test length(sm.encounter_points) == 10
 
-        # All positions within the outer boundaries
         for ep in sm.encounter_points
-            @test ep.position[1] >= sm.neg_disappear_line_x
-            @test ep.position[1] <= sm.pos_disappear_line_x
+            rel = ep.position - sm.position
+            @test abs(rel[1]) <= disappear_x
+            @test abs(rel[2]) <= disappear_y
         end
     end
 
-    @testset "process_encounter_events! recycles forward-crossing points" begin
-        sm = make_encounter_sm(n_points=5)
+    @testset "check_encounter_bounds! recycles only out-of-bounds points" begin
+        cases = [
+            (label = "inside", offset = SVector(0.0, 0.0), should_recycle = false),
+            (label = "right", offset = nothing, should_recycle = true),
+            (label = "left", offset = nothing, should_recycle = true),
+            (label = "top", offset = nothing, should_recycle = true),
+            (label = "bottom", offset = nothing, should_recycle = true),
+            (label = "diagonal", offset = nothing, should_recycle = true),
+            (label = "boundary", offset = nothing, should_recycle = false),
+        ]
 
-        # Manually place one point just before pos_disappear and set velocity so it crosses quickly
-        ep = sm.encounter_points[1]
-        ep.position = SVector(sm.pos_disappear_line_x - 1.0, 0.0)
-        ep.velocity = SVector(10.0, 0.0)
-        ep.spawn_time = 0.0
+        for case in cases
+            @testset "$(case.label)" begin
+                sm = make_encounter_sm(n_points = 1)
+                disappear_x, disappear_y = get_disappear_box_extents(sm)
+                ep = sm.encounter_points[1]
+                old_iter = ep.iteration
 
-        # Predict crossing and rebuild queue so this point is in it
-        crossing = predict_crossing_time(ep, sm.pos_disappear_line_x)
-        @test !isnothing(crossing)
-        rebuild_event_queue!(sm)
+                offset = if case.label == "right"
+                    SVector(disappear_x + 1.0, 0.0)
+                elseif case.label == "left"
+                    SVector(-disappear_x - 1.0, 0.0)
+                elseif case.label == "top"
+                    SVector(0.0, disappear_y + 1.0)
+                elseif case.label == "bottom"
+                    SVector(0.0, -disappear_y - 1.0)
+                elseif case.label == "diagonal"
+                    SVector(disappear_x + 1.0, disappear_y + 1.0)
+                elseif case.label == "boundary"
+                    SVector(disappear_x, 0.0)
+                else
+                    case.offset
+                end
 
-        old_iter = ep.iteration
-        process_encounter_events!(sm, crossing + 1.0)
+                ep.position = sm.position + offset
+                ep.velocity = SVector(0.0, 0.0)
+                ep.spawn_time = sm.time_years
 
-        # Point should have been respawned at neg_spawn_line_x
-        @test ep.iteration == old_iter + 1
-        @test ep.position[1] ≈ sm.neg_spawn_line_x
+                check_encounter_bounds!(sm)
+
+                expected_iter = case.should_recycle ? old_iter + 1 : old_iter
+                @test ep.iteration == expected_iter
+            end
+        end
     end
 
-    @testset "rebuild_event_queue! recycles points behind neg_disappear_line_x" begin
-        sm = make_encounter_sm(n_points=5)
-
-        # Move one point well behind neg_disappear_line_x
+    @testset "check_encounter_bounds! clears a manoeuvre when its target is recycled" begin
+        sm = make_encounter_sm(n_points = 1)
+        disappear_x, _ = get_disappear_box_extents(sm)
+        spawn_x, spawn_y = get_spawn_box_extents(sm)
         ep = sm.encounter_points[1]
-        ep.position = SVector(sm.neg_disappear_line_x - 500.0, 0.0)
-        ep.velocity = SVector(1.0, 0.0)    # still moving right, just far behind
+        old_iter = ep.iteration
+
+        sm.active_manoeuvre = ManoeuvreData(
+            approach_burn_dv = SVector(0.0, 0.0),
+            capture_burn_dv = SVector(0.0, 0.0),
+            target_encounter_index = ep.index,
+        )
+        ep.position = sm.position + SVector(disappear_x + 1.0, 0.0)
+        ep.velocity = SVector(0.0, 0.0)
         ep.spawn_time = sm.time_years
 
-        old_iter = ep.iteration
-        rebuild_event_queue!(sm)
+        check_encounter_bounds!(sm)
 
-        # Point should have been recycled to pos_spawn_line_x
+        @test sm.active_manoeuvre === nothing
         @test ep.iteration == old_iter + 1
-        @test ep.position[1] ≈ sm.pos_spawn_line_x
+        @test is_on_box_edge(ep.position, sm.position, spawn_x, spawn_y)
     end
 
-    @testset "rebuild_event_queue! recycles points past pos_disappear_line_x" begin
-        sm = make_encounter_sm(n_points=5)
+    @testset "check_encounter_bounds! preserves other manoeuvre targets" begin
+        sm = make_encounter_sm(n_points = 2)
+        disappear_x, _ = get_disappear_box_extents(sm)
+        recycled_ep = sm.encounter_points[1]
+        target_ep = sm.encounter_points[2]
 
-        # Move one point well past pos_disappear_line_x
-        ep = sm.encounter_points[2]
-        ep.position = SVector(sm.pos_disappear_line_x + 500.0, 0.0)
-        ep.velocity = SVector(1.0, 0.0)
-        ep.spawn_time = sm.time_years
+        sm.active_manoeuvre = ManoeuvreData(
+            approach_burn_dv = SVector(0.0, 0.0),
+            capture_burn_dv = SVector(0.0, 0.0),
+            target_encounter_index = target_ep.index,
+        )
+        recycled_ep.position = sm.position + SVector(disappear_x + 1.0, 0.0)
+        recycled_ep.velocity = SVector(0.0, 0.0)
+        recycled_ep.spawn_time = sm.time_years
 
-        old_iter = ep.iteration
-        rebuild_event_queue!(sm)
+        check_encounter_bounds!(sm)
 
-        # Point should have been recycled to neg_spawn_line_x
-        @test ep.iteration == old_iter + 1
-        @test ep.position[1] ≈ sm.neg_spawn_line_x
-    end
-
-    @testset "check_line_shift! shifts all four lines by the same amount" begin
-        sm = make_encounter_sm()
-        config = get_encounter_config(sm)
-
-        neg_d0 = sm.neg_disappear_line_x
-        neg_s0 = sm.neg_spawn_line_x
-        pos_s0 = sm.pos_spawn_line_x
-        pos_d0 = sm.pos_disappear_line_x
-
-        # Move player forward by more than one line_step_size
-        shift = config.line_step_size * 2
-        sm.position = SVector(sm.position[1] + shift, 0.0)
-        check_line_shift!(sm)
-
-        @test sm.neg_disappear_line_x ≈ neg_d0 + shift
-        @test sm.neg_spawn_line_x    ≈ neg_s0 + shift
-        @test sm.pos_spawn_line_x    ≈ pos_s0 + shift
-        @test sm.pos_disappear_line_x ≈ pos_d0 + shift
-    end
-
-    @testset "check_line_shift! does not shift for small movement" begin
-        sm = make_encounter_sm()
-        config = get_encounter_config(sm)
-
-        neg_s0 = sm.neg_spawn_line_x
-        sm.position = SVector(sm.position[1] + config.line_step_size * 0.1, 0.0)
-        check_line_shift!(sm)
-
-        @test sm.neg_spawn_line_x ≈ neg_s0
-    end
-
-    @testset "check_line_shift! handles negative player movement (moving backward)" begin
-        sm = make_encounter_sm()
-        config = get_encounter_config(sm)
-
-        neg_d0 = sm.neg_disappear_line_x
-        neg_s0 = sm.neg_spawn_line_x
-        pos_s0 = sm.pos_spawn_line_x
-        pos_d0 = sm.pos_disappear_line_x
-
-        shift = -(config.line_step_size * 2)
-        sm.position = SVector(sm.position[1] + shift, 0.0)
-        check_line_shift!(sm)
-
-        @test sm.neg_disappear_line_x  ≈ neg_d0 + shift
-        @test sm.neg_spawn_line_x     ≈ neg_s0 + shift
-        @test sm.pos_spawn_line_x     ≈ pos_s0 + shift
-        @test sm.pos_disappear_line_x ≈ pos_d0 + shift
+        @test sm.active_manoeuvre !== nothing
+        @test sm.active_manoeuvre.target_encounter_index == target_ep.index
     end
 
     @testset "density is maintained after player acceleration (backfill scenario)" begin
-        # Simulate the player outrunning ships: advance position significantly
-        # then confirm no points are left behind neg_disappear_line_x
         sm = make_encounter_sm(n_points = 50)
+        disappear_x, disappear_y = get_disappear_box_extents(sm)
 
-        # Move player forward enormously
         sm.position = SVector(5000.0, 0.0)
-        check_line_shift!(sm)
+        check_encounter_bounds!(sm)
 
         current_time = sm.time_years
         for ep in sm.encounter_points
-            current_x = get_encounter_position(ep, current_time)[1]
-            @test current_x >= sm.neg_disappear_line_x - 1.0  # 1-unit tolerance for float rounding
-            @test current_x <= sm.pos_disappear_line_x + 1.0
+            rel = get_encounter_position(ep, current_time) - sm.position
+            @test abs(rel[1]) <= disappear_x
+            @test abs(rel[2]) <= disappear_y
         end
     end
 

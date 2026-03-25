@@ -2,7 +2,7 @@
 
 julia_version = "1.12.1"
 manifest_format = "2.0"
-project_hash = "dcb9800c5c7101c9a6c65bd7cb256e214616a38f"
+project_hash = "e73bac11d8a3b225e61ab7d106a315bec0edff56"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "MacroTools"]
@@ -129,7 +129,7 @@ uuid = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
 version = "0.1.0"
 
 [[deps.FlowMap]]
-deps = ["DataStructures", "HexComponentsAPI", "HexFrame", "StaticArrays", "StructEquality"]
+deps = ["DataStructures", "HexComponentsAPI", "HexFluids", "HexFrame", "StaticArrays", "StructEquality", "Test"]
 path = "../FlowMap"
 uuid = "86ae9052-88d6-4179-aacc-02095df7ba41"
 version = "0.1.0"
@@ -159,13 +159,13 @@ uuid = "2f6a9512-4d00-40fa-a3ea-0a7372983a4b"
 version = "0.1.0"
 
 [[deps.HexFlowProcGen]]
-deps = ["DataStructures", "FlowEngine", "FlowMap", "GeometryBasics", "HexComponentsAPI", "HexElements", "HexFrame", "LinearAlgebra", "Random", "SquirrelNoise", "StaticArrays", "Test"]
+deps = ["FlowEngine", "FlowMap", "GeometryBasics", "HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "LinearAlgebra", "Printf", "Random", "SquirrelNoise", "StaticArrays", "Statistics", "StructEquality", "Test"]
 path = "."
 uuid = "46cebafd-6e5b-4504-9515-23fc742129ca"
 version = "0.1.0"
 
 [[deps.HexFluids]]
-deps = ["HexFrame"]
+deps = ["HexFrame", "Test"]
 path = "../HexFluids"
 uuid = "98a914a9-3572-461b-8ee2-d8d3de40252c"
 version = "0.1.0"
