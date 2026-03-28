@@ -560,14 +560,33 @@ end
 
 #= Queued Render Functions =#
 
+"Height offset applied to animating ships so their full render stack sits above stationary overlays."
+const ANIMATING_SHIP_RENDER_HEIGHT_OFFSET = Int32(1_500_000_000)
+
+"Return the per-ship render height offset: non-zero only while the ship is in a transitional docking state."
+function _ship_render_height_offset(ship::ShipMap)::Int32
+    status = get_docking_status(ship)
+    return (status isa ConnectedDockStat) ? Int32(0) : ANIMATING_SHIP_RENDER_HEIGHT_OFFSET
+end
+
+"Map a base draw height into the correct per-ship layer."
+_ship_draw_height(ship::ShipMap, base_height::Integer)::Int32 = Int32(base_height) + _ship_render_height_offset(ship)
+
+"Map a base draw height into the correct per-ship layer when only the owning ship name is available."
+function _ship_draw_height(gamemap::GameMap, ship_name::Union{Nothing, Symbol}, base_height::Integer)::Int32
+    isnothing(ship_name) && return Int32(base_height)
+    return _ship_draw_height(get_ship(gamemap, ship_name), base_height)
+end
+
 "Renders all tile components in the gamemap by delegating to `render_map_elem!` on each component. This implementation iterates each ShipMap and calls the per-ship components, keeping ship-local helper functions intact."
 function tile_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, gamestate::GameState)
     isempty(gamemap.ships) && return nothing
 
     for (ship_name, ship) in gamemap.ships
         ship_offset = get_render_offset(ship)
+        height_offset = _ship_render_height_offset(ship)
         for (coord, tilecomp) in get_all_components(ship)
-            render_map_elem!(queue, tilecomp; glmap = map, mna_state = mna_state, derivedmapstate = derivedmapstate, gameticks = gamestate.ticks, position = coord, pos_offset = ship_offset)
+            render_map_elem!(queue, tilecomp; glmap = map, mna_state = mna_state, derivedmapstate = derivedmapstate, gameticks = gamestate.ticks, position = coord, pos_offset = ship_offset, render_height_offset = height_offset)
         end
     end
     return nothing
@@ -600,6 +619,7 @@ function node_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, gam
         # Get ship offset for this node
         ship_name = find_ship_for_node(node, gamemap)
         ship_offset = get_ship_render_offset(gamemap, ship_name)
+        node_height = _ship_draw_height(gamemap, ship_name, RENDER_HEIGHT_NODE)
         
         position = glvec(node)
         # Apply position offset
@@ -612,13 +632,13 @@ function node_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, gam
         # Render pressure mask with voltage colour
         push!(queue, render_basic_sprite(
             map, :Node_pressuremask, rotation_matrix, position;
-            colour = colour, transparency = 1.0, draw_height = RENDER_HEIGHT_NODE
+            colour = colour, transparency = 1.0, draw_height = node_height
         ))
 
         # Render frame on top
         push!(queue, render_basic_sprite(
             map, :Node_frame, rotation_matrix, position;
-            draw_height = RENDER_HEIGHT_NODE + Int32(10)
+            draw_height = node_height + Int32(10)
         ))
     end
     return nothing
@@ -630,6 +650,7 @@ function pipe_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, gam
 
     for (ship_name, ship) in gamemap.ships
         ship_offset = get_render_offset(ship)
+        height_offset = _ship_render_height_offset(ship)
         for (edge, pipe_behav) in get_all_pipes(ship)
             rotation = HexFrame.Q_POS  # Default rotation, edge orientation handled by render_pipe_map!
             render_pipe_map!(
@@ -640,7 +661,8 @@ function pipe_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, gam
                 transparency = 1.0,
                 derivedmapstate = derivedmapstate,
                 gameticks = gamestate.ticks,
-                pos_offset = ship_offset
+                pos_offset = ship_offset,
+                render_height_offset = height_offset
             )
         end
     end
@@ -668,7 +690,7 @@ function ship_surface_queued_render!(
                     coord;
                     colour = ship_colour,
                     transparency = 1.0,
-                    draw_height = Int32(RENDER_HEIGHT_BACKGROUND),
+                    draw_height = _ship_draw_height(ship, RENDER_HEIGHT_BACKGROUND),
                     pos_offset = ship_offset
                 )
             )

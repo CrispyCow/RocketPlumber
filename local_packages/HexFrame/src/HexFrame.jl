@@ -14,6 +14,7 @@ export glvec, to_cartesian, to_axial, round_to_tile, next_enum_val, rotmat_2D
 export get_rotmat, is_proper, is_axis, is_grounded, to_proper, to_vertex, to_nodecoord
 export to_hexaxis, to_nodepos, get_edges, round_to_edge, get_vertexes, rotate, rotate_reverse
 export get_tiles, get_adjacent_tiles_for_node, get_adjacent_tiles_for_tile
+export nearest_hex_axis
 
 # Lookups
 export hex_rotmats
@@ -394,6 +395,26 @@ function rotate_reverse(rotation::T)::T where {T <: Enum}
     num_values = length(instances(T))
     reverse_int = (num_values - Int(rotation)) % num_values
     return T(reverse_int)
+end
+
+"""
+Return the `HexAxis` whose vertex direction is closest to the given axial direction vector.
+Falls back to `Q_POS` for zero-length vectors. Iterates `instances(HexAxis)` for deterministic
+tie-breaking when the direction lies exactly on a sector boundary.
+"""
+function nearest_hex_axis(direction::AxialCoord)::HexAxis
+    cart = to_cartesian(direction)
+    best_axis = Q_POS
+    best_dot = -Inf
+    for ax in instances(HexAxis)
+        ax_cart = to_cartesian(hex_vert_vecs[ax])
+        d = cart.x * ax_cart.x + cart.y * ax_cart.y
+        if d > best_dot
+            best_dot = d
+            best_axis = ax
+        end
+    end
+    return best_axis
 end
 
 # ===============================================================

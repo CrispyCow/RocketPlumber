@@ -205,9 +205,11 @@ function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedSt
     # R key for tool rotation
     get_inrising!(inputstate, GLFW.KEY_R, window) && (inputstate.toolrotation = next_enum_val(inputstate.toolrotation))
 
-    # ESC key — dismiss action popup > cancel time warp > close space map > clear selection > exit to inspect mode > toggle pause menu
+    # ESC key — cancel redock > dismiss action popup > cancel time warp > close space map > clear selection > exit to inspect mode > toggle pause menu
     if get_inrising!(inputstate, GLFW.KEY_ESCAPE, window)
-        if !isnothing(inputstate.action_popup)
+        if inputstate.placementmode == REDOCK
+            set_placementmode!(inputstate, INSPECT)
+        elseif !isnothing(inputstate.action_popup)
             inputstate.action_popup = nothing
             inputstate.rightclick_selectedcoord = nothing
             inputstate.rightclick_selectedship = nothing
@@ -251,7 +253,7 @@ function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedSt
     get_inrising!(inputstate, GLFW.KEY_2, window) && set_placementmode!(inputstate, MOVE)
     get_inrising!(inputstate, GLFW.KEY_3, window) && set_placementmode!(inputstate, PIPE)
 
-    # Number keys 4-7 for editor-only placement modes
+    # Number keys 4-6 for editor-only placement modes
     if inputstate.editor_mode
         get_inrising!(inputstate, GLFW.KEY_4, window) && set_placementmode!(inputstate, DELETE)
         get_inrising!(inputstate, GLFW.KEY_5, window) && set_placementmode!(inputstate, TILE)
@@ -533,6 +535,12 @@ Shows semi-transparent previews of where components will be placed/moved.
 function render_cursor_ghosts!(queue::Vector{RenderCommand}, glmap::GLObjectMap, inputstate::InputState, gamemap::GameMap, gamestate::GameState)
     if inputstate.cursor_x === nothing || inputstate.cursor_y === nothing
         return
+    end
+
+    # Redock ghost — show ship footprint and exclusion zone following the cursor
+    if inputstate.placementmode == REDOCK
+        _render_redock_ghost!(queue, glmap, inputstate)
+        return # suppress all other placement ghosts during redock
     end
 
     # Render selection circle for right-click selected tile
@@ -1264,10 +1272,9 @@ function get_ship_actions(gamemap::GameMap, ship_name::Symbol)::Tuple
         is_primary ? nothing : "Make this your primary ship? The current primary will become a docked ship."
     )
 
-    has_axis = !isnothing(get_approach_axis(status))
     redock_action = ActionInfo(
-        :redock, "Redock", !is_primary && is_connected && has_axis,
-        is_primary ? "Cannot redock the primary ship" : (!has_axis ? "No docking axis recorded" : "Pull ship closer if there is space"),
+        :redock, "Redock", !is_primary && is_connected,
+        is_primary ? "Cannot redock the primary ship" : "Choose a new docking position",
     )
 
     can_depart, depart_reason = if !is_primary && is_connected
@@ -1294,14 +1301,15 @@ function get_ship_actions(gamemap::GameMap, ship_name::Symbol)::Tuple
 end
 
 """
-Execute a ship-level docking action. Runs on the render thread, creates a
-`MapOverrideCommand` when map mutation is needed.
+Execute a ship-level docking action. Runs on the render thread.
+`:redock` enters interactive placement mode; others create commands directly.
 """
-function execute_ship_action!(
+function execute_ship_action!(;
         ship_name::Symbol,
         action_id::Symbol,
         flowcalc_ipc::FlowCalculatorIPC,
-        viewstate::ViewState
+        viewstate::ViewState,
+        inputstate::InputState
     )
     if action_id === :make_primary
         current_map = deepcopy(flowcalc_ipc.get_snapshot().gamemap)
@@ -1313,13 +1321,7 @@ function execute_ship_action!(
         flowcalc_ipc.console_push(reason)
 
     elseif action_id === :redock
-        current_map = deepcopy(flowcalc_ipc.get_snapshot().gamemap)
-        success, reason = redock_ship!(current_map, ship_name)
-        if success
-            cmd = create_map_override_command(flowcalc_ipc.command_queue, current_map)
-            try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
-        end
-        flowcalc_ipc.console_push(reason)
+        _enter_redock_mode!(inputstate, flowcalc_ipc, ship_name)
 
     elseif action_id === :undock
         current_map = deepcopy(flowcalc_ipc.get_snapshot().gamemap)
@@ -1334,5 +1336,131 @@ function execute_ship_action!(
     else
         flowcalc_ipc.console_push("Unknown ship action: $(action_id)")
     end
+    return nothing
+end
+
+#= ---------- Redock Placement Mode ----------- =#
+
+const REDOCK_GHOST_VALID   = SVector{4, Float32}(0.3, 1.0, 0.3, 0.6)
+const REDOCK_GHOST_INVALID = SVector{4, Float32}(1.0, 0.3, 0.3, 0.6)
+const REDOCK_EXCLUSION_COL = SVector{4, Float32}(1.0, 0.78, 0.2, 0.15)
+
+"Render ghost tiles for the ship being repositioned, coloured by placement validity."
+function _render_redock_ghost!(queue::Vector{RenderCommand}, glmap::GLObjectMap, inputstate::InputState)
+    rs = inputstate.redock_state
+    isnothing(rs) && return nothing
+
+    cursor_tile = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
+    delta = cursor_tile - rs.original_centre
+    valid = _check_redock_valid(rs, delta)
+    core_colour = valid ? REDOCK_GHOST_VALID : REDOCK_GHOST_INVALID
+
+    ghost_height = Int32(HexFlowRendering.RENDER_HEIGHT_OVERLAY_BASE + 500)
+
+    # Core ship tiles
+    for tile in rs.ship_tiles
+        push!(queue, render_basic_tile(
+            glmap, :ShipSurface_basic, HexFrame.Q_POS, tile + delta;
+            colour = core_colour, transparency = 0.5, draw_height = ghost_height,
+        ))
+    end
+
+    # Exclusion ring (2-tile buffer zone)
+    for tile in rs.exclusion_ring
+        push!(queue, render_basic_tile(
+            glmap, :ShipSurface_basic, HexFrame.Q_POS, tile + delta;
+            colour = REDOCK_EXCLUSION_COL, transparency = 0.5, draw_height = ghost_height,
+        ))
+    end
+
+    return nothing
+end
+
+"Enter the interactive redock placement mode, caching tile/node sets for fast per-frame validation."
+function _enter_redock_mode!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, ship_name::Symbol)
+    gamemap = flowcalc_ipc.get_snapshot().gamemap
+    ship = get_ship(gamemap, ship_name)
+    status = get_docking_status(gamemap, ship_name)
+
+    core_tiles = copy(ship.ship_tiles)
+    ring1 = expand_tileset(core_tiles)
+    ring2 = expand_tileset(ring1)
+
+    ship_elems = FlowEngine.list_elements(ship)
+    ship_nodes = Set(keys(FlowEngine.list_nodes(ship_elems)))
+
+    other_tiles = Set{TileCoord}()
+    other_nodes = Set{NodeCoord}()
+    for (name, other_ship) in gamemap.ships
+        name === ship_name && continue
+        union!(other_tiles, other_ship.ship_tiles)
+        union!(other_nodes, keys(FlowEngine.list_nodes(FlowEngine.list_elements(other_ship))))
+    end
+
+    centroid = get_surface_centroid(ship)
+    original_centre = isnothing(centroid) ? TileCoord(0, 0) : round_to_tile(centroid)
+
+    set_placementmode!(inputstate, REDOCK)
+    inputstate.redock_state = RedockModeState(
+        ship_name = ship_name,
+        ship_tiles = core_tiles,
+        exclusion_ring = setdiff(ring2, core_tiles),
+        ship_nodes = ship_nodes,
+        other_ship_tiles = other_tiles,
+        other_ship_nodes = other_nodes,
+        original_centre = original_centre,
+    )
+    flowcalc_ipc.console_push("Redock mode: click to place $(ship_name), ESC to cancel")
+    return nothing
+end
+
+"Check whether the given tile offset produces a valid placement for the redocking ship."
+function _check_redock_valid(rs::RedockModeState, delta::TileCoord)::Bool
+    # Surface exclusion: ship core + 2-ring buffer must not overlap other ships
+    for tile in rs.ship_tiles
+        (tile + delta) in rs.other_ship_tiles && return false
+    end
+    for tile in rs.exclusion_ring
+        (tile + delta) in rs.other_ship_tiles && return false
+    end
+    # Node bridge: no circuit node of this ship may coincide with another ship's nodes
+    for node in rs.ship_nodes
+        NodeCoord(node.tile + delta, node.dir) in rs.other_ship_nodes && return false
+    end
+    return true
+end
+
+"Enqueue a `RedockShipCommand` to relocate the ship after the player confirms placement."
+function _execute_redock!(rs::RedockModeState, delta::TileCoord, flowcalc_ipc::FlowCalculatorIPC)
+    cmd = create_redock_ship_command(flowcalc_ipc.command_queue, rs.ship_name, delta)
+    try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+    return nothing
+end
+
+"Handle left-click during redock mode: validate placement and enqueue the redock command."
+function _handle_redock_click!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, window::GLFW.Window)
+    rs = inputstate.redock_state
+    isnothing(rs) && return nothing
+
+    # Right-click cancels redock mode (same as ESC)
+    if get_inrising!(inputstate, GLFW.MOUSE_BUTTON_RIGHT, window)
+        set_placementmode!(inputstate, INSPECT)
+        flowcalc_ipc.console_push("Redock cancelled")
+        return nothing
+    end
+
+    !CImGui.IsMouseClicked(CImGui.lib.ImGuiMouseButton_Left) && return nothing
+    (isnothing(inputstate.cursor_x) || isnothing(inputstate.cursor_y)) && return nothing
+
+    cursor_tile = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
+    delta = cursor_tile - rs.original_centre
+
+    if !_check_redock_valid(rs, delta)
+        flowcalc_ipc.console_push("Invalid redock position, too close to another ship or nodes overlap!")
+        return nothing
+    end
+
+    _execute_redock!(rs, delta, flowcalc_ipc)
+    set_placementmode!(inputstate, INSPECT)
     return nothing
 end

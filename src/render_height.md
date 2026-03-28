@@ -21,6 +21,7 @@ These are the canonical constants defined in `HexFlowRendering.jl` and their int
 - `RENDER_HEIGHT_COMPONENT_STATIC = 2000` : Static component base art.
 - `RENDER_HEIGHT_COMPONENT_ANIM = 3000` : Animated component overlays (thrust flames, pump on-sprites, smoke). Use small offsets above this for internal layering.
 - `RENDER_HEIGHT_OVERLAY_BASE = 101000` : UI/overlays such as stalled-state overlays and other screen overlays. These should be very high to avoid accidental occlusion by components.
+- `ANIMATING_SHIP_RENDER_HEIGHT_OFFSET = 1500000000` : Lift applied to an animating ship's full render stack. This is intentionally above `RENDER_HEIGHT_OVERLAY_BASE` so the entire moving ship, including nodes and stall overlays, sits above stationary ships.
 
 If you add a new named layer, add it to `HexFlowRendering.jl` and document it here.
 
@@ -28,6 +29,7 @@ If you add a new named layer, add it to `HexFlowRendering.jl` and document it he
 
 - Component and pipe renderers should accept an optional `render_height_offset::Integer=0` (codebase commonly uses `Int32` or `Integer`) and add it to their base heights. This allows tile-level nudging (e.g., multi-tile assemblies or modals) without changing the global constants.
 - When delegating `render_base_elem!` / `render_map_elem!` or `render_pipe_base!`, forward `kwargs...` and preserve `render_height_offset` so lower-level helpers compute the final `draw_height`.
+- For ships that are being animated by docking/undocking, use the dedicated `ANIMATING_SHIP_RENDER_HEIGHT_OFFSET` rather than a small ad hoc bump. The intent is to move the whole ship render stack above every stationary layer, not just above tiles or pipes.
 - Prefer expressing final heights using the named constants, e.g.:
   - `draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)`
   - `draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_PIPE) + Int32(render_height_offset)`

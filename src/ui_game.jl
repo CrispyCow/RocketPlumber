@@ -36,6 +36,7 @@ const MODE_DESCRIPTIONS = Dict(
     INSPECT => "Left-click: interact.\nRight-click: component/ship actions.",
     MOVE => "Click a part to select, click to move.\nRight-click: component/ship actions.",
     DELETE => "Click a part to delete it.",
+    REDOCK => "Left-click: place ship. Right-click/ESC: cancel.",
 )
 mode_description(mode::PlacementModes) = get(MODE_DESCRIPTIONS, mode, "No properties available")
 

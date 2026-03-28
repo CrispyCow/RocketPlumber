@@ -142,6 +142,10 @@ gui_listbox_int!(inputstate::InputState, key::Symbol, label::String, names::Vect
 
 "Format a number with 6 significant figures, using scientific notation for extreme values."
 function format_value(val::Float64)::String
+    if !isfinite(val)
+        return string(val)
+    end
+
     abs_val = abs(val)
 
     if abs_val == 0.0

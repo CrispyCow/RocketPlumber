@@ -170,6 +170,16 @@ end
     @test gas_only_tank.liquid_state.charge ≈ 15.0
     @test gas_only_tank.gas_state.charge ≈ 1.1
 
+    gas_underflow_tank = make_pressurefed_tank(liquid_charge = 15.0, gas_charge = 0.05).tank
+    gas_underflow_mna = register_vsources!(MNA_State(), TEST_TILE, 1, 2)
+    gas_underflow_mna.vsource_currents[ElementID(TEST_TILE, 1)] = -6.0
+    gas_underflow_mna.vsource_currents[ElementID(TEST_TILE, 2)] = -6.0
+    update_flowbehav!(gas_underflow_tank; tile = TEST_TILE, mna_state = gas_underflow_mna)
+    @test gas_underflow_tank.liquid_state.charge ≈ 14.9
+    @test gas_underflow_tank.gas_state.charge == 0.0
+    @test !is_stalled(gas_underflow_tank.liquid_stallstate)
+    @test is_stalled(gas_underflow_tank.gas_stallstate)
+
     liquid_only_tank = make_pressurefed_tank(liquid_charge = 15.0, gas_charge = 1.0).tank
     liquid_only_mna = register_vsources!(MNA_State(), TEST_TILE, 1)
     liquid_only_mna.vsource_currents[ElementID(TEST_TILE, 1)] = -6.0
@@ -187,6 +197,14 @@ end
     @test vent_gas_tank.gas_state.charge == 0.0
     @test is_stalled(vent_gas_tank.liquid_stallstate)
     @test is_stalled(vent_gas_tank.gas_stallstate)
+
+    vent_gas_mna = register_vsources!(MNA_State(), TEST_TILE, 1, 2)
+    vent_gas_mna.vsource_currents[ElementID(TEST_TILE, 1)] = 6.0
+    vent_gas_mna.vsource_currents[ElementID(TEST_TILE, 2)] = -6.0
+    update_flowbehav!(vent_gas_tank; tile = TEST_TILE, mna_state = vent_gas_mna)
+    @test vent_gas_tank.liquid_state.charge == 15.0
+    @test vent_gas_tank.gas_state.charge == 0.0
+
     on_click!(vent_gas_tank)
     @test !is_stalled(vent_gas_tank.liquid_stallstate)
     @test !is_stalled(vent_gas_tank.gas_stallstate)
@@ -241,6 +259,13 @@ end
 
     comp.tank.gas_state.charge = -2.0
     @test get_component_wet_mass(comp; fluid = HexFluids.COLD_GAS) == 0.0
+
+    gas_stalled_comp = make_pressurefed_tank(liquid_charge = 20.0, gas_charge = 4.0)
+    HexFlowTankComponents.stall_gas!(gas_stalled_comp.tank)
+    gas_stalled_elements = produce_rel_elements(gas_stalled_comp)
+    @test gas_stalled_elements[1].active
+    @test !gas_stalled_elements[2].active
+    @test gas_stalled_elements[3].active
 
     @test !can_be_moved(make_pressurefed_tank(liquid_charge = 10.0, gas_charge = 0.0))[1]
     @test !can_be_moved(make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 1.0))[1]

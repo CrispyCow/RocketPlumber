@@ -20,7 +20,7 @@ export ScalingRule, NoScaling, LinearScaling, GatedLinearScaling, evaluate_scali
 export WeightedComponentSet
 export select_encounter_class, select_fuel_tag
 export generate_encounter, generate_encounter_name
-export encounter_ship!, encounter_ship_optimal_dir!, depart_ship!, redock_ship!
+export encounter_ship!, encounter_ship_optimal_dir!, depart_ship!
 export check_departure_pipe_connections
 export EncounterSystemConfig, initialise_encounter_system!
 export spawn_encounter_point!, get_encounter_position, check_encounter_bounds!
@@ -674,10 +674,9 @@ function generate_encounter(
     return shipmap
 end
 
-"Check whether `shipmap`'s surface tiles overlap any existing surfaces in `gamemap`."
-function _is_surface_overlap(gamemap::GameMap, shipmap::ShipMap)::Bool
-    all_tiles = get_all_surfaces_combined(gamemap)
-    return any(t -> t in all_tiles, get_all_surface_tiles(shipmap))
+"Check whether `shipmap`'s tiles are too close to any existing surfaces in `gamemap` (within MIN_SPACING)."
+function _is_ship_too_close(ship::ShipMap, expanded_other_tiles::Set{TileCoord})::Bool
+    return any(t -> t in expanded_other_tiles, get_all_surface_tiles(ship))
 end
 
 "Check whether two axis-aligned bounding rectangles overlap."
@@ -719,29 +718,27 @@ function _compute_docking_offsets(direction_vec, distance::Float64; duration_sec
 end
 
 """
-Offset `ship` along `dir` until it no longer overlaps any surface in `gamemap`,
-then add `MIN_SPACING` tiles of additional gap. Mutates `ship` in place.
-
-Returns the total number of tile-steps the ship was moved (including spacing).
+Offset `ship` along `dir` until it clears all existing surfaces by at least `MIN_SPACING`
+tiles in every direction. Uses tile-set expansion to enforce a true isotropic gap.
+Mutates `ship` in place. Returns the total number of tile-steps moved.
 """
 function _offset_ship_until_clear!(gamemap::GameMap, ship::ShipMap, dir::HexFrame.HexAxis)::Int
     step = HexFrame.hex_neighbour_tiles[dir]
     steps = 0
-    max_steps = 500  # safety limit
-    while _is_surface_overlap(gamemap, ship) && steps < max_steps
+    max_steps = 500
+
+    # Pre-expand other ships' tiles by MIN_SPACING once (they don't move during the loop)
+    all_other_tiles = get_all_surfaces_combined(gamemap)
+    expanded_others = expand_tileset(all_other_tiles, MIN_SPACING)
+
+    while _is_ship_too_close(ship, expanded_others) && steps < max_steps
         offset_ship!(ship, step)
         steps += 1
     end
     if steps >= max_steps
         @warn "Hit safety limit in _offset_ship_until_clear!" dir steps
-        return steps  # don't add spacing to an already-stuck ship
     end
-
-    # Add spacing gap
-    spacing_offset = TileCoord(step.q * MIN_SPACING, step.r * MIN_SPACING)
-    offset_ship!(ship, spacing_offset)
-
-    return steps + MIN_SPACING
+    return steps
 end
 
 """
@@ -776,7 +773,7 @@ function encounter_ship!(
     start_offset, target_offset, offset_step = _compute_docking_offsets(direction_vec, APPROACH_DISTANCE_TILES)
 
     # Set docking status to approaching on the new ship
-    set_docking_status!(offset_newship, ApproachingDockStat(start_offset, target_offset, offset_step, dir))
+    set_docking_status!(offset_newship, ApproachingDockStat(start_offset, target_offset, offset_step))
 
     # Add to gamemap
     add_ship!(gamemap, newship_name, offset_newship)
@@ -897,8 +894,12 @@ function check_departure_pipe_connections(gamemap::GameMap, ship_name::Symbol)::
 end
 
 
-"Attempt to depart a ship using its saved approach axis. Returns `(success, reason)`."
+"Depart a ship by computing a direction away from other ships. Returns `(success, reason)`."
 function depart_ship!(gamemap::GameMap, ship_name::Symbol; max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing)::Tuple{Bool, String}
+    if ship_name === :primary
+        return false, "Can't depart: primary ship cannot be departed."
+    end
+
     status = get_docking_status(gamemap, ship_name)
     if isnothing(status)
         return false, "Can't depart: ship $(ship_name) not found."
@@ -916,19 +917,14 @@ function depart_ship!(gamemap::GameMap, ship_name::Symbol; max_view_bounds::Unio
         return false, "Can't depart: ship $(ship_name) has unknown docking state."
     end
 
-    approach_axis = get_approach_axis(status)
-    if isnothing(approach_axis)
-        return false, "Can't depart: no saved departure axis."
-    end
-
-    # block departure if pipes still bridge to another ship
+    # Block departure if pipes still bridge to another ship
     can_depart, reason = check_departure_pipe_connections(gamemap, ship_name)
     if !can_depart
         return false, reason
     end
 
-    # Depart by backtracking along the original approach axis
-    depart_axis = approach_axis
+    # Compute departure direction from ship centroids
+    depart_axis = compute_departure_axis(gamemap, ship_name)
     DEPART_DISTANCE_TILES = 20.0
     direction_vec = HexFrame.hex_vert_vecs[depart_axis]
 
@@ -941,96 +937,10 @@ function depart_ship!(gamemap::GameMap, ship_name::Symbol; max_view_bounds::Unio
 
     far_offset, zero_offset, offset_step = _compute_docking_offsets(direction_vec, DEPART_DISTANCE_TILES)
 
-    set_docking_status!(gamemap, ship_name, DepartingDockStat(zero_offset, far_offset, offset_step, approach_axis))
-    reason = "Ship $(ship_name) departing (axis=$(depart_axis))"
-    return true, reason
+    set_docking_status!(gamemap, ship_name, DepartingDockStat(zero_offset, far_offset, offset_step))
+    return true, "Ship $(ship_name) departing (axis=$(depart_axis))"
 end
 
-
-"""
-Attempt to move a docked ship closer to the primary by walking it inward
-along the reverse of its stored approach axis until overlap, then backing
-off by `MIN_SPACING` tiles. Animates the approach using the docking status system.
-"""
-function redock_ship!(gamemap::GameMap, ship_name::Symbol)::Tuple{Bool, String}
-    if ship_name === :primary
-        return (false, "Cannot redock the primary ship.")
-    end
-    if !has_ship(gamemap, ship_name)
-        return (false, "Ship '$(ship_name)' not found.")
-    end
-
-    status = get_docking_status(gamemap, ship_name)
-    if !(status isa FlowMap.ConnectedDockStat)
-        return (false, "Ship '$(ship_name)' is not docked.")
-    end
-
-    approach_axis = get_approach_axis(status)
-    if isnothing(approach_axis)
-        return (false, "No docking axis recorded for $(ship_name).")
-    end
-
-    ship = get_ship(gamemap, ship_name)
-    if isempty(get_all_surface_tiles(ship))
-        return (false, "Ship '$(ship_name)' has no surface tiles.")
-    end
-
-    # Create temporary gamemap without this ship for clean overlap testing
-    temp_gamemap = deepcopy(gamemap)
-    remove_ship!(temp_gamemap, ship_name)
-
-    # Walk inward from current position (towards primary)
-    towards_primary = HexFrame.rotate(approach_axis, HexFrame.Q_NEG)
-    step_offset = HexFrame.hex_neighbour_tiles[towards_primary]
-    trial_ship = deepcopy(ship)
-
-    steps_taken = 0
-    max_steps = 100  # safety limit
-    while steps_taken < max_steps
-        offset_ship!(trial_ship, step_offset)
-        steps_taken += 1
-
-        if _is_surface_overlap(temp_gamemap, trial_ship)
-            # Back out the overlapping step
-            reverse_offset = TileCoord(-step_offset.q, -step_offset.r)
-            offset_ship!(trial_ship, reverse_offset)
-            steps_taken -= 1
-            break
-        end
-    end
-
-    # Back off by MIN_SPACING from closest non-overlapping position
-    reverse = TileCoord(-step_offset.q, -step_offset.r)
-    actual_backoff = min(MIN_SPACING, steps_taken)
-    for _ in 1:actual_backoff
-        offset_ship!(trial_ship, reverse)
-    end
-    net_steps = steps_taken - actual_backoff
-
-    if net_steps <= 0
-        return (true, "Ship $(ship_name) is already as close as possible.")
-    end
-
-    # Compute the total move delta from original to new position
-    move_delta = TileCoord(
-        step_offset.q * net_steps,
-        step_offset.r * net_steps,
-    )
-
-    # Apply the move to the real ship
-    offset_ship!(ship, move_delta)
-
-    # Animate: set render offset so ship appears at old position, then slides to new
-    anim_offset = HexFrame.AxialCoord(Float64(-move_delta.q), Float64(-move_delta.r))
-    target_offset = HexFrame.AxialCoord(0.0, 0.0)
-    dist = sqrt(anim_offset.q^2 + anim_offset.r^2)
-    duration_secs = clamp(dist / 3.0, 0.5, 5.0)  # scale with distance, 0.5–5 seconds
-    step_size = dist > 0.0 ? dist / (duration_secs * BASE_UPS) : 0.01
-
-    set_docking_status!(ship, ApproachingDockStat(anim_offset, target_offset, step_size, approach_axis))
-
-    return (true, "Ship $(ship_name) redocking (moved $(net_steps) tiles closer).")
-end
 
 
 # ===============================================================

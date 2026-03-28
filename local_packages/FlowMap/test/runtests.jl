@@ -797,11 +797,6 @@ end
         status = ConnectedDockStat()
         @test get_render_offset(status) === nothing
         @test update_render_offset!(status) == false
-        @test get_approach_axis(status) === nothing
-
-        # With saved axis
-        status_axis = ConnectedDockStat(Q_POS)
-        @test get_approach_axis(status_axis) == Q_POS
     end
 
     @testset "DockingStatus — ApproachingDockStat" begin
@@ -809,10 +804,9 @@ end
         target_pos = AxialCoord(0.0, 0.0)
         step = 1.0
 
-        status = ApproachingDockStat(start_pos, target_pos, step, R_NEG)
+        status = ApproachingDockStat(start_pos, target_pos, step)
 
         @test get_render_offset(status) isa AxialCoord
-        @test get_approach_axis(status) == R_NEG
 
         # Proximity-eased stepping — iterate until target reached
         reached = false
@@ -829,10 +823,9 @@ end
         target_pos = AxialCoord(10.0, 0.0)
         step = 1.0
 
-        status = DepartingDockStat(start_pos, target_pos, step, S_POS)
+        status = DepartingDockStat(start_pos, target_pos, step)
 
         @test get_render_offset(status) isa AxialCoord
-        @test get_approach_axis(status) == S_POS
 
         # Proximity-eased stepping — iterate until target reached
         reached = false
@@ -877,7 +870,7 @@ end
         add_ship!(gm, :visitor, ShipMap())
         set_docking_status!(
             gm, :visitor, ApproachingDockStat(
-                AxialCoord(3.0, 0.0), AxialCoord(0.0, 0.0), 1.0, Q_POS
+                AxialCoord(3.0, 0.0), AxialCoord(0.0, 0.0), 1.0
             )
         )
         for _ in 1:10000
@@ -885,7 +878,6 @@ end
             get_docking_status(gm, :visitor) isa ConnectedDockStat && break
         end
         @test get_docking_status(gm, :visitor) isa ConnectedDockStat
-        @test get_approach_axis(get_docking_status(gm, :visitor)) == Q_POS
     end
 
     @testset "update_docking! — Departing → removed" begin
@@ -893,7 +885,7 @@ end
         add_ship!(gm, :visitor, ShipMap())
         set_docking_status!(
             gm, :visitor, DepartingDockStat(
-                AxialCoord(0.0, 0.0), AxialCoord(4.0, 0.0), 1.0, R_NEG
+                AxialCoord(0.0, 0.0), AxialCoord(4.0, 0.0), 1.0
             )
         )
         for _ in 1:10000
@@ -916,12 +908,12 @@ end
 
         set_docking_status!(
             gm, :v1, ApproachingDockStat(
-                AxialCoord(2.0, 0.0), AxialCoord(0.0, 0.0), 1.0, nothing
+                AxialCoord(2.0, 0.0), AxialCoord(0.0, 0.0), 1.0
             )
         )
         set_docking_status!(
             gm, :v2, ApproachingDockStat(
-                AxialCoord(2.0, 0.0), AxialCoord(0.0, 0.0), 1.0, nothing
+                AxialCoord(2.0, 0.0), AxialCoord(0.0, 0.0), 1.0
             )
         )
 
@@ -945,7 +937,7 @@ end
         add_ship!(gm, :visitor, ShipMap())
         set_docking_status!(
             gm, :visitor, ApproachingDockStat(
-                AxialCoord(5.0, 0.0), AxialCoord(0.0, 0.0), 0.01, Q_POS
+                AxialCoord(5.0, 0.0), AxialCoord(0.0, 0.0), 0.01
             )
         )
 
@@ -959,16 +951,16 @@ end
         @test get_docking_status(gm, :primary) isa ConnectedDockStat
         @test isnothing(get_docking_status(gm, :nonexistent))
 
-        set_docking_status!(gm, :primary, ConnectedDockStat(Q_NEG))
-        @test get_approach_axis(get_docking_status(gm, :primary)) == Q_NEG
+        set_docking_status!(gm, :primary, ConnectedDockStat())
+        @test get_docking_status(gm, :primary) isa ConnectedDockStat
 
         @test_throws ErrorException set_docking_status!(gm, :nonexistent, ConnectedDockStat())
 
         # ShipMap-level
         ship = get_ship(gm, :primary)
         @test get_docking_status(ship) isa ConnectedDockStat
-        set_docking_status!(ship, ConnectedDockStat(R_POS))
-        @test get_approach_axis(get_docking_status(ship)) == R_POS
+        set_docking_status!(ship, ConnectedDockStat())
+        @test get_docking_status(ship) isa ConnectedDockStat
     end
 
     @testset "get_ship_render_offset" begin
@@ -1013,19 +1005,15 @@ end
     @testset "swap_primary! — axis propagation" begin
         gm = GameMap()
         add_ship!(gm, :visitor, ShipMap())
-        set_docking_status!(gm, :visitor, ConnectedDockStat(Q_POS))
 
         success, _ = swap_primary!(gm, :visitor)
         @test success
 
-        # The new primary should have no approach axis
-        @test get_approach_axis(get_docking_status(get_ship(gm, :primary))) === nothing
-
-        # The retired ship should have rotate(Q_POS, Q_NEG) = Q_NEG
+        # Both new primary and retired ship should be ConnectedDockStat
+        @test get_docking_status(get_ship(gm, :primary)) isa ConnectedDockStat
         retired_names = filter(n -> n != :primary, get_all_ship_names(gm))
         @test length(retired_names) == 1
-        retired_axis = get_approach_axis(get_docking_status(get_ship(gm, retired_names[1])))
-        @test retired_axis == Q_NEG
+        @test get_docking_status(get_ship(gm, retired_names[1])) isa ConnectedDockStat
     end
 
     @testset "swap_primary! — round-trip" begin
@@ -1236,6 +1224,44 @@ end
             lp.tutorials[:test] = TutorialState(status = TUTORIAL_IN_PROGRESS, unlocked_step = 3)
             @test lp.tutorials[:test].status == TUTORIAL_IN_PROGRESS
             @test lp.tutorials[:test].unlocked_step == 3
+        end
+    end
+
+    # ===============================================================
+    # expand_tileset
+    # ===============================================================
+
+    @testset "expand_tileset" begin
+        @testset "single tile expands to 7" begin
+            tiles = Set([TileCoord(0, 0)])
+            expanded = expand_tileset(tiles)
+            @test TileCoord(0, 0) in expanded
+            # All 6 neighbours of (0,0) should be present
+            for axis in instances(HexFrame.HexAxis)
+                @test HexFrame.hex_neighbour_tiles[axis] in expanded
+            end
+            @test length(expanded) == 7
+        end
+
+        @testset "does not modify original set" begin
+            tiles = Set([TileCoord(0, 0)])
+            expanded = expand_tileset(tiles)
+            @test length(tiles) == 1
+            @test length(expanded) == 7
+        end
+
+        @testset "multi-step expansion" begin
+            tiles = Set([TileCoord(0, 0)])
+            ring2 = expand_tileset(tiles, 2)
+            # 2-ring expansion of single tile: 1 + 6 + 12 = 19
+            @test length(ring2) == 19
+        end
+
+        @testset "zero-step returns copy" begin
+            tiles = Set([TileCoord(3, -1)])
+            result = expand_tileset(tiles, 0)
+            @test result == tiles
+            @test result !== tiles  # different object
         end
     end
 

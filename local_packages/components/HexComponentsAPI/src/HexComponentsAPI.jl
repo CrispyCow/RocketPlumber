@@ -121,9 +121,9 @@ end
 # Optional Method Defaults
 
 "Default optional method: render_map_elem! forwards to render_base_elem! The kwarg `pos_offset` may be any coordinate acceptable to `glvec()` or `nothing` to indicate no offset."
-function render_map_elem!(queue::AbstractVector, behav::T; glmap, rotation, position, pos_offset = nothing, kwargs...) where {T}
-    # Default map-level forwards only the visual offset to base render (avoid leaking unrelated kwargs)
-    return render_base_elem!(queue, behav; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset)
+function render_map_elem!(queue::AbstractVector, behav::T; glmap, rotation, position, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...) where {T}
+    # Default map-level forwards visual offset and height to base render (avoid leaking unrelated kwargs)
+    return render_base_elem!(queue, behav; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, render_height_offset = render_height_offset)
 end
 
 "Default empty fluidtag for components not otherwise specified"
@@ -295,9 +295,9 @@ end
 # Optional Method Defaults
 
 "Default optional method: render_pipe_map! forwards to render_pipe_base! The kwarg `pos_offset` may be any coordinate acceptable to `glvec()` or `nothing` to indicate no offset."
-function render_pipe_map!(queue::AbstractVector, behav::T; glmap, rotation, position, pos_offset = nothing, kwargs...) where {T <: PipeBehavior}
-    # Default map-level forwards only the visual offset to base render (avoid leaking unrelated kwargs)
-    return render_pipe_base!(queue, behav; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset)
+function render_pipe_map!(queue::AbstractVector, behav::T; glmap, rotation, position, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...) where {T <: PipeBehavior}
+    # Default map-level forwards visual offset and height to base render (avoid leaking unrelated kwargs)
+    return render_pipe_base!(queue, behav; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, render_height_offset = render_height_offset)
 end
 
 "Default empty fluidtag for pipes not otherwise specified"

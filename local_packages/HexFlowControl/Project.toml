@@ -11,3 +11,9 @@ HexElements = "2f6a9512-4d00-40fa-a3ea-0a7372983a4b"
 HexFluids = "98a914a9-3572-461b-8ee2-d8d3de40252c"
 HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

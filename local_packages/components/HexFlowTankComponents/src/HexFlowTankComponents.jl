@@ -443,12 +443,14 @@ function update_flowbehav!(tank::PressureFedTankBehavFrag; tile::TileCoord, mna_
         return nothing
     end
 
-    liquid_current = liquid_present ? get(mna_state.vsource_currents, liquid_element_id, 0.0) : 0.0
-    gas_current = gas_present ? get(mna_state.vsource_currents, gas_element_id, 0.0) : 0.0
+    # Stalled sides are sealed; ignore any stale current until update_map! drops their sources.
+    liquid_current = liquid_present && !is_stalled(tank.liquid_stallstate) ? get(mna_state.vsource_currents, liquid_element_id, 0.0) : 0.0
+    gas_current = gas_present && !is_stalled(tank.gas_stallstate) ? get(mna_state.vsource_currents, gas_element_id, 0.0) : 0.0
 
     liquid_delta = liquid_current / BASE_UPS
     gas_delta = gas_current / BASE_UPS
     prospective_liquid_charge = tank.liquid_state.charge + liquid_delta
+    prospective_gas_charge = tank.gas_state.charge + gas_delta
 
     if prospective_liquid_charge < 0.0 || prospective_liquid_charge >= tank.max_liquid_charge
         stall_liquid!(tank)
@@ -456,7 +458,14 @@ function update_flowbehav!(tank::PressureFedTankBehavFrag; tile::TileCoord, mna_
     end
 
     tank.liquid_state.charge = prospective_liquid_charge
-    tank.gas_state.charge += gas_delta
+
+    if prospective_gas_charge < 0.0
+        tank.gas_state.charge = 0.0
+        stall_gas!(tank)
+        return nothing
+    end
+
+    tank.gas_state.charge = prospective_gas_charge
     return nothing
 end
 
@@ -689,13 +698,13 @@ end
 
 function produce_rel_elements(comp::PressureFedTankCompBehav{N}) where {N}
     tank_elements = produce_rel_elements(comp.tank)
-    active = !is_stalled(comp.tank)
+    liquid_active = !is_stalled(comp.tank.liquid_stallstate)
     resistors = ntuple(
         i -> RelativeElement(
             RelativeElementConnections(HexFrame.NODE_INTERNAL, comp.liquid_nodes[i]),
             comp.series_conductance,
             HexElements.CONST_RESISTOR;
-            active = active
+            active = liquid_active
         ), N
     )
     return (tank_elements..., resistors...)

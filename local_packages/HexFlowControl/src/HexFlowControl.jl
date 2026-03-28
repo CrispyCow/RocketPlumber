@@ -4,11 +4,11 @@ using HexFrame, HexFluids, HexComponentsAPI
 using StaticArrays, GLFW, Dates
 
 # Type exports
-export PlacementModes, INSPECT, MOVE, PIPE, DELETE, TILE, SURFACE_EDIT
+export PlacementModes, INSPECT, MOVE, PIPE, DELETE, TILE, SURFACE_EDIT, REDOCK
 export SimSpeed, SIM_1X, SIM_2X, SIM_4X, SIM_MAX
 export ExitReason, EXIT_QUIT, EXIT_MENU, EXIT_SANDBOX_COMPLETED, EXIT_SANDBOX_STARTED
 export AbstractPopupTarget, ComponentPopupTarget, ShipPopupTarget
-export ActionPopupState, HintData, InputState, ViewState, GameState
+export ActionPopupState, HintData, RedockModeState, InputState, ViewState, GameState
 
 # Function exports
 export create_consolebuffer, get_viewtransform
@@ -21,15 +21,16 @@ export sim_speed_to_ups, increase_sim_speed, decrease_sim_speed, sim_speed_label
 # ===============================================================
 
 "Placement mode enum for hex tile placement"
-@enum PlacementModes INSPECT MOVE PIPE DELETE TILE SURFACE_EDIT
+@enum PlacementModes INSPECT MOVE PIPE DELETE TILE SURFACE_EDIT REDOCK
 
-"Set placement mode, clearing any active selection and action popup."
+"Set placement mode, clearing any active selection, action popup, and redock state."
 function set_placementmode!(inputstate, mode::PlacementModes)
     if inputstate.placementmode != mode
         inputstate.selectedcoord = nothing
         inputstate.rightclick_selectedcoord = nothing
         inputstate.rightclick_selectedship = nothing
         inputstate.action_popup = nothing
+        inputstate.redock_state = nothing
         inputstate.placementmode = mode
     end
     return nothing
@@ -124,6 +125,21 @@ end
     pending_confirmation::Union{Nothing, ActionInfo} = nothing  # Action awaiting confirmation
 end
 
+"""
+State for the interactive redock placement mode. Entered when the player selects
+'Redock' from a ship's right-click menu. Pre-computed tile/node sets are cached on
+entry so per-frame validity checking is cheap.
+"""
+@kwdef mutable struct RedockModeState
+    ship_name::Symbol                           # ship being redocked
+    ship_tiles::Set{TileCoord}                  # original surface tiles (green/red ghost)
+    exclusion_ring::Set{TileCoord}              # combined 2-ring expansion minus core (grey ghost)
+    ship_nodes::Set{NodeCoord}                  # circuit nodes of this ship (pipe bridge check)
+    other_ship_tiles::Set{TileCoord}            # combined surfaces of all other ships
+    other_ship_nodes::Set{NodeCoord}            # combined nodes of all other ships
+    original_centre::TileCoord                  # centre tile for computing mouse delta
+end
+
 "Input state for placement, selection, and control"
 @kwdef mutable struct InputState
     # placement
@@ -152,6 +168,7 @@ end
     is_recording::Bool = false
     screenshot_requested::Bool = false
     action_popup::Union{Nothing, ActionPopupState} = nothing
+    redock_state::Union{Nothing, RedockModeState} = nothing
     # loop status
     exit_reason::Union{Nothing, ExitReason} = nothing
     pending_sandbox_id::Union{Nothing, Symbol} = nothing

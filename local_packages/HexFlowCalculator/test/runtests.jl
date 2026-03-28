@@ -915,6 +915,80 @@ end
     @test has_active_manoeuvre(gm)
 end
 
+# ===============================================================
+# Tests — RedockShipCommand
+# ===============================================================
+
+@testset "RedockShipCommand" begin
+    cq = create_command_queue(16)
+
+    @testset "valid redock moves ship and starts animation" begin
+        gm = GameMap()
+        sec = ShipMap()
+        offset_ship!(sec, TileCoord(10, 0))
+        sec.docking_status = FlowMap.ConnectedDockStat()
+        add_ship!(gm, :asteroid, sec)
+
+        delta = TileCoord(-3, 0)
+        cmd = create_redock_ship_command(cq, :asteroid, delta)
+        logs = process_and_log!(cmd, gm)
+
+        # Ship should now be offset by delta (originally at 10,0 → 7,0)
+        new_tiles = get_all_surface_tiles(get_ship(gm, :asteroid))
+        @test TileCoord(7, 0) in new_tiles
+
+        # Should be in approaching state (animating)
+        status = FlowMap.get_docking_status(gm, :asteroid)
+        @test status isa FlowMap.ApproachingDockStat
+    end
+
+    @testset "rejects placement too close to another ship" begin
+        gm = GameMap()
+        sec = ShipMap()
+        offset_ship!(sec, TileCoord(5, 0))
+        sec.docking_status = FlowMap.ConnectedDockStat()
+        add_ship!(gm, :asteroid, sec)
+
+        # Try to move directly on top of primary ship at (0,0)
+        delta = TileCoord(-5, 0)
+        cmd = create_redock_ship_command(cq, :asteroid, delta)
+
+        # Should not mutate the map (rejected via console message)
+        original_tiles = copy(get_all_surface_tiles(get_ship(gm, :asteroid)))
+        process_and_log!(cmd, gm)
+        @test get_all_surface_tiles(get_ship(gm, :asteroid)) == original_tiles
+    end
+
+    @testset "rejects redock of nonexistent ship" begin
+        gm = GameMap()
+        delta = TileCoord(1, 0)
+        cmd = create_redock_ship_command(cq, :nonexistent, delta)
+        @test_throws Exception process_and_log!(cmd, gm)
+    end
+
+    @testset "animation completes after redock" begin
+        gm = GameMap()
+        sec = ShipMap()
+        offset_ship!(sec, TileCoord(10, 0))
+        sec.docking_status = FlowMap.ConnectedDockStat()
+        add_ship!(gm, :asteroid, sec)
+
+        delta = TileCoord(-3, 0)
+        cmd = create_redock_ship_command(cq, :asteroid, delta)
+        process_and_log!(cmd, gm)
+
+        # Animate to completion
+        for _ in 1:5000
+            FlowMap.update_docking!(gm; ship_name = :asteroid)
+            s = FlowMap.get_docking_status(gm, :asteroid)
+            s isa FlowMap.ConnectedDockStat && break
+        end
+
+        final_status = FlowMap.get_docking_status(gm, :asteroid)
+        @test final_status isa FlowMap.ConnectedDockStat
+    end
+end
+
 @testset "cancel_if_time_wrong! — time mismatch cancels" begin
     gm = GameMap()
     initialise_spacemap!(gm, UInt32(1), _test_enc_config)

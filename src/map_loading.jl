@@ -37,6 +37,15 @@ JLD2.rconvert(::Type{FlowMap.ShipMap}, nt::NamedTuple) = FlowMap.ShipMap(
     docking_status = get(nt, :docking_status, FlowMap.ConnectedDockStat())
 )
 
+#= ---------- DockingStatus (removed approach_axis field) ----------- =#
+
+"Discard legacy `approach_axis` field from old saves."
+JLD2.rconvert(::Type{FlowMap.ConnectedDockStat}, ::NamedTuple) = FlowMap.ConnectedDockStat()
+JLD2.rconvert(::Type{FlowMap.ApproachingDockStat}, nt::NamedTuple) =
+    FlowMap.ApproachingDockStat(nt.motion)
+JLD2.rconvert(::Type{FlowMap.DepartingDockStat}, nt::NamedTuple) =
+    FlowMap.DepartingDockStat(nt.motion)
+
 "Conversion for old `GameMap` saved representations that may lack `space_map` or use the legacy `learning_progress` field."
 JLD2.rconvert(::Type{FlowMap.GameMap}, nt::NamedTuple) = FlowMap.GameMap(
     ships = get(nt, :ships, Dict(:primary => FlowMap.ShipMap())),
@@ -231,6 +240,9 @@ function _build_map_typemap()::Dict{String, Any}
         "FlowEngine.ConnectedDockStat" => JLD2.Upgrade(FlowMap.ConnectedDockStat),
         "FlowEngine.ApproachingDockStat" => JLD2.Upgrade(FlowMap.ApproachingDockStat),
         "FlowEngine.DepartingDockStat" => JLD2.Upgrade(FlowMap.DepartingDockStat),
+        "FlowMap.ConnectedDockStat" => JLD2.Upgrade(FlowMap.ConnectedDockStat),
+        "FlowMap.ApproachingDockStat" => JLD2.Upgrade(FlowMap.ApproachingDockStat),
+        "FlowMap.DepartingDockStat" => JLD2.Upgrade(FlowMap.DepartingDockStat),
         "FlowEngine.RenderPosOffsetState" => JLD2.Upgrade(FlowMap.RenderPosOffsetState),
         "FlowMap.SpaceMapEmpty" => JLD2.Upgrade(FlowMap.SpaceMapEmpty),
         "FlowMap.SpaceMapState" => JLD2.Upgrade(HexFlowProcGen.SpaceMapState),

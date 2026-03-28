@@ -527,9 +527,7 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
                 status = get_docking_status(ship)
                 offset = get_render_offset(ship)
                 status_str = string(typeof(status).name.name)
-                axis = get_approach_axis(status)
-                axis_str = isnothing(axis) ? "none" : string(axis)
-                CImGui.Text("$(safe_ship_display_name(ship_name)): $(status_str) @ ($(round(offset.q, digits = 2)), $(round(offset.r, digits = 2))) axis=$(axis_str)")
+                CImGui.Text("$(safe_ship_display_name(ship_name)): $(status_str) @ ($(round(offset.q, digits = 2)), $(round(offset.r, digits = 2)))")
             end
 
             if CImGui.Button("Clear All to Connected", (button_width, button_height))
@@ -628,13 +626,13 @@ end
 
 "Execute an action, dispatching on popup target type. Closes the popup afterwards."
 function _execute_action!(inputstate, popup::ActionPopupState, action::ActionInfo, flowcalc_ipc, viewstate)
-    _execute_target_action!(popup.target, action, flowcalc_ipc, viewstate)
+    _execute_target_action!(inputstate, popup.target, action, flowcalc_ipc, viewstate)
     _close_popup!(inputstate)
     return nothing
 end
 
 "Execute a component action — delete or regular DoActionCommand."
-function _execute_target_action!(target::ComponentPopupTarget, action::ActionInfo, flowcalc_ipc, viewstate)
+function _execute_target_action!(inputstate, target::ComponentPopupTarget, action::ActionInfo, flowcalc_ipc, viewstate)
     if action.id === :delete_component
         cmd = create_delete_command(flowcalc_ipc.command_queue, target.coord)
     else
@@ -644,8 +642,9 @@ function _execute_target_action!(target::ComponentPopupTarget, action::ActionInf
 end
 
 "Execute a ship action via the ship action dispatch system."
-function _execute_target_action!(target::ShipPopupTarget, action::ActionInfo, flowcalc_ipc, viewstate)
-    return execute_ship_action!(target.ship_name, action.id, flowcalc_ipc, viewstate)
+function _execute_target_action!(inputstate, target::ShipPopupTarget, action::ActionInfo, flowcalc_ipc, viewstate)
+    return execute_ship_action!(ship_name = target.ship_name, action_id = action.id,
+        flowcalc_ipc = flowcalc_ipc, viewstate = viewstate, inputstate = inputstate)
 end
 
 "Close the action popup and clear all right-click selection state."

@@ -139,13 +139,18 @@ function user_handler!(
     handle_inputs!(inputstate, viewstate, flowcalc_ipc.shared_state, window, cimgui_io) # input handling (window sizes, cursor, keys, scroll)
 
     if !unsafe_load(cimgui_io.WantCaptureMouse) # don't handle mouse if clicking GUI
-        flowcalc_inspect_click!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
-        flowcalc_tileplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
-        flowcalc_pipeplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
-        flowcalc_moveplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
-        flowcalc_deleteplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
-        flowcalc_surfaceeditor!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
-        flowcalc_rightclick_action!(inputstate, snapshot.gamemap, window)
+        # Redock mode intercepts all mouse input
+        if inputstate.placementmode == REDOCK
+            _handle_redock_click!(inputstate, flowcalc_ipc, window)
+        else
+            flowcalc_inspect_click!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
+            flowcalc_tileplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
+            flowcalc_pipeplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
+            flowcalc_moveplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
+            flowcalc_deleteplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
+            flowcalc_surfaceeditor!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
+            flowcalc_rightclick_action!(inputstate, snapshot.gamemap, window)
+        end
     end
 
     return update_lastinstate!(inputstate, window)

@@ -59,7 +59,7 @@ println("HexFlowRendering Phase4 tests passed")
 gm2 = GameMap()
 set_surface_tile!(gm2, TileCoord(0,0))
 # Set docking status so the ship has a fractional render offset for rendering tests
-FlowMap.set_docking_status!(get_ship(gm2, :primary), FlowMap.ApproachingDockStat(HexFrame.AxialCoord(0.3, 0.0), HexFrame.AxialCoord(0.3, 0.0), 1.0, HexFrame.Q_POS))
+FlowMap.set_docking_status!(get_ship(gm2, :primary), FlowMap.ApproachingDockStat(HexFrame.AxialCoord(0.3, 0.0), HexFrame.AxialCoord(0.3, 0.0), 1.0))
 
 pm = ParticleManager()
 colour = SVector{4, Float32}(1.0f0, 1.0f0, 1.0f0, 1.0f0)

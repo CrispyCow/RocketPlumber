@@ -31,7 +31,7 @@ export delete_all_surface_tiles!
 export is_on_surface_tile, set_surface_tile!, delete_surface_tile!, get_all_surface_tiles
 export has_component_any_ship, get_component_any_ship, has_pipe_any_ship, get_pipe_any_ship, is_on_surface_tile_any_ship
 export can_place_component_at, can_place_pipe_at, can_remove_surface_at, is_node_on_ship_surface
-export get_all_surfaces_combined, find_ship_surface_edgetiles!
+export get_all_surfaces_combined, find_ship_surface_edgetiles!, expand_tileset
 export get_axial_bounds, get_cartesian_bounds, get_surface_centroid
 export find_ship_for_surface, find_ships_adjacent_to_coord, would_bridge_ships, find_valid_ship_for_placement, find_ship_with_component, find_ship_with_pipe
 export find_ship_for_node
@@ -44,7 +44,7 @@ export can_place_pipe_offship, validate_offship_pipe_deletion, reassign_pipe_own
 export is_node_on_any_ship_surface, flood_search_pipes_from_node!
 
 #= ---------- Ship Render and Docking Exports ----------- =#
-export get_ship_render_offset, get_render_offset, update_render_offset!, get_approach_axis
+export get_ship_render_offset, get_render_offset, update_render_offset!, compute_departure_axis
 export get_docking_status, set_docking_status!, update_docking!, clear_all_docking_statuses!
 
 #= ---------- Space Map and Velocity Exports ----------- =#
@@ -101,43 +101,35 @@ end
 abstract type DockingStatus end
 
 "Ship is connected/docked with no render offset. Default/resting state."
-struct ConnectedDockStat <: DockingStatus
-    approach_axis::Union{HexAxis, Nothing}
-end
+struct ConnectedDockStat <: DockingStatus end
 @struct_hash_equal ConnectedDockStat
 
-ConnectedDockStat() = ConnectedDockStat(nothing)
 get_render_offset(::ConnectedDockStat)::Union{AxialCoord, Nothing} = nothing
 update_render_offset!(::ConnectedDockStat)::Bool = false
-get_approach_axis(status::ConnectedDockStat)::Union{HexAxis, Nothing} = status.approach_axis
 
 "Ship is approaching dock. Transitions to `ConnectedDockStat` when motion completes."
 struct ApproachingDockStat <: DockingStatus
     motion::RenderPosOffsetState
-    approach_axis::Union{HexAxis, Nothing}
 end
 @struct_hash_equal ApproachingDockStat
 
-"Transparent constructor matching RenderPosOffsetState arguments"
-function ApproachingDockStat(current_offset::AxialCoord, target_offset::AxialCoord, offset_step::Float64, approach_axis::Union{HexAxis, Nothing})
-    return ApproachingDockStat(RenderPosOffsetState(current_offset, target_offset, offset_step), approach_axis)
+"Transparent constructor matching RenderPosOffsetState arguments."
+function ApproachingDockStat(current_offset::AxialCoord, target_offset::AxialCoord, offset_step::Float64)
+    return ApproachingDockStat(RenderPosOffsetState(current_offset, target_offset, offset_step))
 end
 get_render_offset(status::ApproachingDockStat)::AxialCoord = get_render_offset(status.motion)
 update_render_offset!(status::ApproachingDockStat)::Bool = update_render_offset!(status.motion)
-get_approach_axis(status::ApproachingDockStat)::Union{HexAxis, Nothing} = status.approach_axis
 
 "Ship is departing. Removed from `GameMap` when motion completes."
 struct DepartingDockStat <: DockingStatus
     motion::RenderPosOffsetState
-    approach_axis::Union{HexAxis, Nothing}
 end
 @struct_hash_equal DepartingDockStat
-function DepartingDockStat(current_offset::AxialCoord, target_offset::AxialCoord, offset_step::Float64, approach_axis::Union{HexAxis, Nothing})
-    return DepartingDockStat(RenderPosOffsetState(current_offset, target_offset, offset_step), approach_axis)
+function DepartingDockStat(current_offset::AxialCoord, target_offset::AxialCoord, offset_step::Float64)
+    return DepartingDockStat(RenderPosOffsetState(current_offset, target_offset, offset_step))
 end
 get_render_offset(status::DepartingDockStat)::AxialCoord = get_render_offset(status.motion)
 update_render_offset!(status::DepartingDockStat)::Bool = update_render_offset!(status.motion)
-get_approach_axis(status::DepartingDockStat)::Union{HexAxis, Nothing} = status.approach_axis
 
 # ===============================================================
 # Space Map Types
@@ -752,6 +744,28 @@ end
 get_surface_centroid(ship::ShipMap)::Union{AxialCoord, Nothing} = get_surface_centroid(get_all_surface_tiles(ship))
 get_surface_centroid(gamemap::GameMap, ship_name::Symbol)::Union{AxialCoord, Nothing} = get_surface_centroid(_get_ship(gamemap, ship_name))
 
+"""
+Compute a departure direction for `ship_name` based on the relative position of ship centroids.
+Returns the `HexAxis` pointing from the centroid of all other ships towards the departing ship.
+Falls back to `Q_POS` when centroids coincide or the departing ship is the only one.
+"""
+function compute_departure_axis(gamemap::GameMap, ship_name::Symbol)::HexFrame.HexAxis
+    departing_centroid = get_surface_centroid(gamemap, ship_name)
+    isnothing(departing_centroid) && return HexFrame.Q_POS
+
+    # Combined centroid of all other ships
+    other_tiles = Set{TileCoord}()
+    for (name, ship) in gamemap.ships
+        name === ship_name && continue
+        union!(other_tiles, get_all_surface_tiles(ship))
+    end
+    other_centroid = get_surface_centroid(other_tiles)
+    isnothing(other_centroid) && return HexFrame.Q_POS  # departing ship is the only one
+
+    direction = AxialCoord(departing_centroid.q - other_centroid.q, departing_centroid.r - other_centroid.r)
+    return HexFrame.nearest_hex_axis(direction)
+end
+
 
 "Count how many of a tile's 6 adjacent neighbours are present in the surface set."
 @inline function count_surfacetile_adjacencies(surface_set::Set{TileCoord}, tile::TileCoord)::Int
@@ -780,6 +794,27 @@ function find_ship_surface_edgetiles!(edgesurface::Set{TileCoord}, gamemap::Game
         union!(edgesurface, tmp)
     end
     return nothing
+end
+
+"Expand a tile set by one ring — returns a new set containing the original tiles plus all neighbours."
+function expand_tileset(tiles::Set{TileCoord})::Set{TileCoord}
+    expanded = copy(tiles)
+    sizehint!(expanded, length(tiles) * 4)
+    for tile in tiles
+        for nb in HexFrame.get_adjacent_tiles_for_tile(tile)
+            push!(expanded, nb)
+        end
+    end
+    return expanded
+end
+
+"Expand a tile set by `n` rings by applying `expand_tileset` iteratively."
+function expand_tileset(tiles::Set{TileCoord}, n::Integer)::Set{TileCoord}
+    result = copy(tiles)
+    for _ in 1:n
+        result = expand_tileset(result)
+    end
+    return result
 end
 
 # ===============================================================
@@ -1229,7 +1264,7 @@ function update_docking!(gamemap::GameMap; ship_name::Union{Symbol, Nothing} = n
     # Approaching: update motion and transition to connected when finished
     if status isa ApproachingDockStat
         if update_render_offset!(status)
-            set_docking_status!(gamemap.ships[ship_name], ConnectedDockStat(get_approach_axis(status)))
+            set_docking_status!(gamemap.ships[ship_name], ConnectedDockStat())
         end
         return nothing
     end
@@ -1256,7 +1291,8 @@ end
 """
 Swap the primary ship with another ship in the GameMap.
 The current primary is retired under a `gensym`'d name, and the target becomes `:primary`.
-Docking axes are updated so the retired primary can depart in the reverse direction.
+Both ships are reset to `ConnectedDockStat()` — departure direction will be computed
+from ship centroids at departure time via `compute_departure_axis`.
 """
 function swap_primary!(gamemap::GameMap, new_primary_name::Symbol)::Tuple{Bool, String}
     if new_primary_name == :primary
@@ -1270,13 +1306,8 @@ function swap_primary!(gamemap::GameMap, new_primary_name::Symbol)::Tuple{Bool, 
     old_primary_ship = pop!(gamemap.ships, :primary)
     new_primary_ship = pop!(gamemap.ships, new_primary_name)
 
-    # Reverse the new primary's approach axis for the retired ship's departure direction
-    new_primary_status = get_docking_status(new_primary_ship)
-    new_primary_approach = get_approach_axis(new_primary_status)
-    retired_axis = isnothing(new_primary_approach) ? nothing : rotate(new_primary_approach, HexFrame.Q_NEG)
-
-    set_docking_status!(old_primary_ship, ConnectedDockStat(retired_axis))
-    set_docking_status!(new_primary_ship, ConnectedDockStat(nothing))
+    set_docking_status!(old_primary_ship, ConnectedDockStat())
+    set_docking_status!(new_primary_ship, ConnectedDockStat())
 
     retired_name = gensym(:old_primary)
     gamemap.ships[:primary] = new_primary_ship

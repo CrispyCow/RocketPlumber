@@ -15,7 +15,7 @@ export FlowCalculatorSnapshot, FlowCalculatorSharedState, FlowCalculatorIPC, Tim
 export CommandStatus, APPLIED, REJECTED, QUEUED_FAILED
 export MapEditCommand, SetTileCommand, SetPipeBehaviorCommand, MoveCommand
 export DeleteAtCommand, ClickTileCommand, DoActionCommand, AddShipSurfaceCommand, RemoveShipSurfaceCommand
-export MapOverrideCommand, AddEncounterShipCommand
+export MapOverrideCommand, AddEncounterShipCommand, RedockShipCommand
 export CommandQueue
 
 # Function exports - Setup
@@ -27,7 +27,7 @@ export set_max_reachable_bounds!, get_max_reachable_bounds
 export create_set_tile_command, create_set_pipe_behavior_command, create_move_command
 export create_delete_command, create_click_tile_command, create_do_action_command
 export create_add_ship_surface_command, create_remove_ship_surface_command
-export create_map_override_command, create_add_encounter_ship_command
+export create_map_override_command, create_add_encounter_ship_command, create_redock_ship_command
 export try_enqueue_command!
 
 # Function exports - Main loop
@@ -247,6 +247,15 @@ end
     response_channel::Union{Nothing, Channel{CommandStatus}}
 end
 @struct_hash_equal AddEncounterShipCommand
+
+"Relocate a ship by a tile offset, with approach animation and explicit overlap validation."
+@kwdef struct RedockShipCommand <: MapEditCommand
+    id::UInt64
+    ship_name::Symbol
+    offset::TileCoord              # delta to apply via offset_ship!
+    response_channel::Union{Nothing, Channel{CommandStatus}}
+end
+@struct_hash_equal RedockShipCommand
 
 # ===============================================================
 # Thread-Safe Snapshot Storage
@@ -750,6 +759,61 @@ function apply_mapedit_command!(
 end
 
 """
+Relocate a non-primary ship by a tile offset. Validates that the new position
+does not overlap any other ship's surface (including a 2-tile exclusion gap
+enforced by the render-side check) and does not bridge circuit nodes. Sets up
+an `ApproachingDockStat` so the ship animates to its new position.
+"""
+function apply_mapedit_command!(
+        gamemap::GameMap,
+        command::RedockShipCommand,
+        threadsafe_console_push::Function
+    )
+    if command.ship_name === :primary
+        threadsafe_console_push("Cannot redock the primary ship")
+        return nothing
+    end
+
+    ship = get_ship(gamemap, command.ship_name)
+
+    if !(ship.docking_status isa ConnectedDockStat)
+        threadsafe_console_push("Ship $(command.ship_name) is not in a connected state")
+        return nothing
+    end
+
+    # Pre-compute offset tiles without modifying the ship
+    trial_tiles = Set(tile + command.offset for tile in ship.ship_tiles)
+
+    # Enforce a 2-tile gap between the relocated ship and all other ships
+    other_tiles = Set{TileCoord}()
+    for (name, other) in gamemap.ships
+        name === command.ship_name && continue
+        union!(other_tiles, other.ship_tiles)
+    end
+    exclusion_zone = expand_tileset(other_tiles, 2)
+
+    if !isempty(intersect(trial_tiles, exclusion_zone))
+        threadsafe_console_push("Redock position too close to another ship")
+        return nothing
+    end
+
+    # Validation passed, perform the move on the real map
+    offset_ship!(ship, command.offset)
+
+    # Set up approach animation: render offset starts at old position, animates to zero
+    anim_offset = AxialCoord(Float64(-command.offset.q), Float64(-command.offset.r))
+    target_offset = AxialCoord(0.0, 0.0)
+    distance = sqrt(anim_offset.q^2 + anim_offset.r^2)
+    duration_secs = clamp(distance / 3.0, 0.5, 5.0)
+    step = distance > 0.0 ? distance / (duration_secs * BASE_UPS) : 0.01
+
+    ship.docking_status = ApproachingDockStat(anim_offset, target_offset, step)
+    threadsafe_console_push("Ship $(command.ship_name) relocated")
+
+    return nothing
+end
+
+"""
 Validate and apply a map edit command using sandbox-first execution.
 Applies the command to a deep copy first; only mutates the real `gamemap` if the
 sandbox survives a full `update_map!` / `update_mna!` cycle.
@@ -966,6 +1030,21 @@ function create_add_encounter_ship_command(
         dir = dir,
         target_encounter_index = target_encounter_index,
         max_view_bounds = max_view_bounds,
+        response_channel = response_channel
+    )
+end
+
+"Create a `RedockShipCommand` to relocate a ship by a tile offset."
+function create_redock_ship_command(
+        cq::CommandQueue,
+        ship_name::Symbol,
+        offset::TileCoord;
+        response_channel::Union{Nothing, Channel} = nothing
+    )::RedockShipCommand
+    return RedockShipCommand(
+        id = cq.next_command_id(),
+        ship_name = ship_name,
+        offset = offset,
         response_channel = response_channel
     )
 end
