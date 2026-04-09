@@ -39,8 +39,8 @@
 # Artifact Verification for Production Build
 # ===============================================================
 
-# Verify that required artifacts exist before loading HexFlowRendering
-# Artifacts must be created by the build scripts (see build/create_artifacts.jl)
+# Verify that required artifacts exist before loading HexFlowRendering.
+# This entry point does not rebuild artifacts automatically.
 using Pkg
 using Pkg.Artifacts
 
@@ -56,16 +56,7 @@ function verify_required_artifacts()
             Artifacts.toml not found at: $artifacts_toml
             
             Artifacts must be created before running the application.
-            Please run one of the following:
-            
-            • Build with JuliaC:
-              julia --project=. --threads=2 build/juliac_build.jl
-            
-            • Build with PackageCompiler:
-              julia --project=. --threads=2 build/packagecompiler_build.jl
-            
-            • Create artifacts only (no build):
-              julia --project=. build/create_artifacts.jl
+            Please run one of the build scripts or the create_artifacts.jl script in the external build repository to generate the required artifacts.
             """)
     end
     
@@ -82,8 +73,7 @@ function verify_required_artifacts()
                 The Artifacts.toml file exists but is missing the '$artifact_name' artifact.
                 This likely means the artifact creation process was interrupted or failed.
                 
-                Please regenerate artifacts by running:
-                  julia --project=. build/create_artifacts.jl
+                Please run one of the build scripts or the create_artifacts.jl script in the external build repository to generate the required artifacts.
                 """)
         end
         
@@ -98,8 +88,7 @@ function verify_required_artifacts()
                         The artifact is registered in Artifacts.toml but the files are missing
                         from the Julia artifact cache. This can happen if the cache was cleared.
                         
-                        Please regenerate artifacts by running:
-                        julia --project=. build/create_artifacts.jl
+                        Please run one of the build scripts or the create_artifacts.jl script in the external build repository to regenerate the required artifacts.
                         """)
             end
         

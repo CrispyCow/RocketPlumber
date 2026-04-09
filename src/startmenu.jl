@@ -36,7 +36,10 @@ abstract type GameSession end
 "Map session for blank maps, loaded maps, and explorer mode."
 struct MapSession <: GameSession
     map_source::Union{Nothing, GameMap}
+    initial_active_tutorial_id::Union{Nothing, Symbol}
 end
+
+MapSession(map_source) = MapSession(map_source, nothing)
 
 "Sandbox tutorial session with level progression and optional parent explorer map."
 struct SandboxSession <: GameSession
@@ -65,7 +68,7 @@ end
 # ===============================================================
 
 const MENU_BOX_W = 350.0
-const MENU_BOX_H = 350.0
+const MENU_BOX_H = 420.0
 const MENU_TUTORIAL_BOX_H = 520.0
 const MENU_BUTTON_HEIGHT = 50.0
 const MENU_BUTTON_PADDING = 40.0
@@ -81,9 +84,23 @@ function render_page_initial!(state::StartMenuState, box_w::Float64, button_widt
     CImGui.Dummy((0.0, 20.0))
 
     CImGui.SetCursorPosX((box_w - button_width) / 2)
+    if CImGui.Button("Launch Teaser", (button_width, button_height))
+        @info "Launch Teaser selected"
+        state.selected_tutorial_id = :teaser
+        state.action = ACTION_LAUNCH_SANDBOX
+    end
+    if CImGui.IsItemHovered()
+        CImGui.SetTooltip("Launch a teaser map to get a taste for what's possible. Try this first if it's your first time playing.")
+    end
+    CImGui.Dummy((0.0, 10.0))
+
+    CImGui.SetCursorPosX((box_w - button_width) / 2)
     if CImGui.Button("New Game", (button_width, button_height))
         @info "New Game selected"
         state.page = PAGE_NEW_GAME
+    end
+    if CImGui.IsItemHovered()
+        CImGui.SetTooltip("Create a new game.")
     end
     CImGui.Dummy((0.0, 10.0))
 
@@ -91,6 +108,9 @@ function render_page_initial!(state::StartMenuState, box_w::Float64, button_widt
     if CImGui.Button("Load Game", (button_width, button_height))
         @info "Load Game selected"
         state.action = ACTION_LOAD_MAP
+    end
+    if CImGui.IsItemHovered()
+        CImGui.SetTooltip("Load a saved game from a save file.")
     end
     CImGui.Dummy((0.0, 10.0))
 
@@ -129,7 +149,7 @@ function render_page_new_game!(state::StartMenuState, box_w::Float64, button_wid
         state.page = PAGE_EXPLORER_SETTINGS
     end
     if CImGui.IsItemHovered()
-        CImGui.SetTooltip("Start a new exploration game where you begin in a simple ship you need to repair and navigate through space.")
+        CImGui.SetTooltip("Start a new exploration game where you begin in a simple ship you need to repair and navigate through space. RECOMMENDED STARTING POINT")
     end
     CImGui.Dummy((0.0, 10.0))
 
@@ -286,7 +306,7 @@ end
 
 "Run a map session by entering the main game loop with its map source."
 function run_session(window::GLFW.Window, session::MapSession)::GameLoopResult
-    return enter_gameloop(window; map_source = session.map_source)
+    return enter_gameloop(window; map_source = session.map_source, initial_active_tutorial_id = session.initial_active_tutorial_id)
 end
 
 "Run a sandbox tutorial session for the current level."
@@ -338,7 +358,11 @@ end
 "Create the initial session for a start-menu action."
 function _create_session_for_action(state::StartMenuState, action::StartMenuAction, window::GLFW.Window)::Union{Nothing, GameSession}
     if action == ACTION_NEW_BLANK_MAP
-        return MapSession(nothing)
+        gamemap = GameMap()
+        learning_system = LearningProgress(get_blank_map_learning_entry_ids())
+        set_learning_system!(gamemap, learning_system)
+        activate_tutorial!(learning_system, :editor_intro)
+        return MapSession(gamemap, :editor_intro)
 
     elseif action == ACTION_LOAD_MAP
         maps_path = Path(joinpath(dirname(@__FILE__), "..", "maps"))
@@ -358,13 +382,13 @@ function _create_session_for_action(state::StartMenuState, action::StartMenuActi
         gamemap = GameMap(ships = Dict(:primary => ship))
         initialise_spacemap!(gamemap, seed, encounter_system_config)
         initialise_encounter_system!(gamemap.space_map)
-        learning_system = learning_enabled ? LearningProgress() : NoLearningSystem()
+        learning_system = learning_enabled ? LearningProgress(get_explorer_learning_entry_ids()) : NoLearningSystem()
         set_learning_system!(gamemap, learning_system)
         if learning_system isa LearningProgress
             activate_tutorial!(learning_system, :welcome_explorer)
         end
 
-        return MapSession(gamemap)
+        return MapSession(gamemap, :welcome_explorer)
 
     elseif action == ACTION_LAUNCH_SANDBOX
         id = state.selected_tutorial_id

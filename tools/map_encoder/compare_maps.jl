@@ -26,12 +26,14 @@ Note: This script must be run from the project root directory with --project=. t
 """
 
 # Import required packages from the main project
-using JLD2
+using JLD2, StaticArrays, LinearAlgebra
 using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowMap
 # Import HexFlowProcGen because `src/components.jl` references it at top level
 # (e.g., `roll_pipe`, `NOZZLE_EDGE_PLACE`, `shipset_*`). This ensures the
 # `include("src/components.jl")` call succeeds when run from this script.
 using HexFlowProcGen
+using HexFlowNozzleComponents
+using FlowEngine
 
 # Import components to ensure types are available for JLD2 reconstruction  
 include(joinpath(dirname(@__FILE__), "..", "..", "src", "components.jl"))
@@ -265,30 +267,31 @@ function check_component_identity(map::GameMap)
     pipe_locations = Dict{UInt, Vector{Tuple{Symbol, EdgeCoord}}}()
     for (ship_name, ship) in map.ships
         for (edge, pipe) in ship.pipe_behaviors
-        # Skip types that are safe to share
-        pipe_type = typeof(pipe)
-        if is_safe_to_share(pipe_type)
-            continue
-        end
-        
-        obj_id = objectid(pipe)
-        if !haskey(pipe_locations, obj_id)
-            pipe_locations[obj_id] = EdgeCoord[]
-        end
-        push!(pipe_locations[obj_id], edge)
-    end
-    
-    shared_pipes = filter(p -> length(p.second) > 1, pipe_locations)
-    
-    if !isempty(shared_pipes)
-        for (obj_id, edges) in shared_pipes
-            pipe = map.pipe_behaviors[edges[1]]
+            # Skip types that are safe to share
             pipe_type = typeof(pipe)
-            edge_str = join(["EdgeCoord(...)" for _ in edges], ", ")
-            push!(messages, "  ⚠️  $(pipe_type) shared between $(length(edges)) edges")
+            if is_safe_to_share(pipe_type)
+                continue
+            end
+
+            obj_id = objectid(pipe)
+            if !haskey(pipe_locations, obj_id)
+                pipe_locations[obj_id] = Tuple{Symbol, EdgeCoord}[]
+            end
+            push!(pipe_locations[obj_id], (ship_name, edge))
         end
     end
-    
+
+    shared_pipes = filter(p -> length(p.second) > 1, pipe_locations)
+
+    if !isempty(shared_pipes)
+        for (obj_id, locs) in shared_pipes
+            (s0, e0) = locs[1]
+            pipe = map.ships[s0].pipe_behaviors[e0]
+            pipe_type = typeof(pipe)
+            push!(messages, "  ⚠️  $(pipe_type) shared between $(length(locs)) edges")
+        end
+    end
+
     is_valid = isempty(shared_components) && isempty(shared_pipes)
     
     return (is_valid, join(messages, "\n"))
@@ -555,8 +558,8 @@ function print_comparison_results(results::Dict)
     
     if !isempty(results["tile_mismatches"])
         println("\n❌ TILE MISMATCHES:")
-        for (coord, issue, orig, gen) in results["tile_mismatches"]
-            println("  $coord: $issue")
+        for (ship, coord, issue, orig, gen) in results["tile_mismatches"]
+            println("  :$ship $coord: $issue")
             println("    Original: $orig")
             println("    Generated: $gen")
         end
@@ -564,22 +567,22 @@ function print_comparison_results(results::Dict)
     
     if !isempty(results["missing_tiles"])
         println("\n❌ MISSING TILES IN GENERATED MAP:")
-        for coord in results["missing_tiles"]
-            println("  $coord")
+        for (ship, coord) in results["missing_tiles"]
+            println("  :$ship $coord")
         end
     end
     
     if !isempty(results["extra_tiles"])
         println("\n⚠️  EXTRA TILES IN GENERATED MAP:")
-        for coord in results["extra_tiles"]
-            println("  $coord")
+        for (ship, coord) in results["extra_tiles"]
+            println("  :$ship $coord")
         end
     end
     
     if !isempty(results["pipe_mismatches"])
         println("\n❌ PIPE BEHAVIOR MISMATCHES:")
-        for (edge_coord, msg, orig_type, gen_type) in results["pipe_mismatches"]
-            println("  $edge_coord: $msg")
+        for (ship, edge_coord, msg, orig_type, gen_type) in results["pipe_mismatches"]
+            println("  :$ship $edge_coord: $msg")
             println("    Original: $orig_type")
             println("    Generated: $gen_type")
         end
@@ -587,29 +590,29 @@ function print_comparison_results(results::Dict)
     
     if !isempty(results["missing_pipes"])
         println("\n❌ MISSING PIPES IN GENERATED MAP:")
-        for (edge_coord, pipe_behav) in results["missing_pipes"]
-            println("  $edge_coord: $(typeof(pipe_behav))")
+        for (ship, edge_coord, pipe_behav) in results["missing_pipes"]
+            println("  :$ship $edge_coord: $(typeof(pipe_behav))")
         end
     end
     
     if !isempty(results["extra_pipes"])
         println("\n⚠️  EXTRA PIPES IN GENERATED MAP:")
-        for (edge_coord, pipe_behav) in results["extra_pipes"]
-            println("  $edge_coord: $(typeof(pipe_behav))")
+        for (ship, edge_coord, pipe_behav) in results["extra_pipes"]
+            println("  :$ship $edge_coord: $(typeof(pipe_behav))")
         end
     end
     
     if !isempty(results["missing_surface"])
         println("\n❌ MISSING SHIP SURFACE TILES:")
-        for coord in results["missing_surface"]
-            println("  $coord")
+        for (ship, coord) in results["missing_surface"]
+            println("  :$ship $coord")
         end
     end
     
     if !isempty(results["extra_surface"])
         println("\n⚠️  EXTRA SHIP SURFACE TILES:")
-        for coord in results["extra_surface"]
-            println("  $coord")
+        for (ship, coord) in results["extra_surface"]
+            println("  :$ship $coord")
         end
     end
 end
@@ -647,7 +650,7 @@ function compare_map_files(original_map_input::String, generator_file::String)
     if !isdefined(Main, function_name)
         error("Function $function_name not found in $generator_file. Expected function name: $(function_name) in $generator_file")
     end
-    found_fn = getfield(Main, function_name)
+    found_fn = Base.invokelatest(getfield, Main, function_name)
     found_name = string(function_name)
 
     println("Executing generator function: $found_name")
@@ -684,7 +687,5 @@ end
 
 # Run main if script is executed directly
 if abspath(PROGRAM_FILE) == @__FILE__
-    main()
-end
     main()
 end

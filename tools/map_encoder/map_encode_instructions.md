@@ -1,7 +1,12 @@
 # Map Encoder Instructions for AI Agents
 
 ## Overview
-This document provides instructions for AI agents to convert encoded GameMap structures into Julia code that recreates the maps. The goal is to create maintainable, human-readable tutorial map generation functions.
+This document provides instructions for AI agents to convert encoded GameMap structures into Julia code that recreates the maps. There are two workflows depending on map complexity:
+
+- **Manual authoring** (preferred for simple maps): The agent reads the encoder's human-readable summary, then writes a clean mapgen function by hand using keyword constructors. This produces the most readable, editable output. See `src/demo_maps/mapgen_controllingcoldgas.jl` as the reference style.
+- **Auto-generation with reformatting** (for complex/procgen maps): When a map has too many uniquely-parameterised components to hand-craft, use the encoder's `.jl` output mode, then clean up the generated code with a reformatting pass.
+
+Both workflows use the same comparison tool to validate the result.
 
 ## Workflow Steps
 
@@ -37,7 +42,16 @@ Study the output to understand:
 - Pipe connections and conductances
 - Overall map structure and purpose
 
-### Step 3: Generate the Map Creation Function
+### Step 3: Choose a Workflow
+
+Based on the map complexity:
+
+- **Simple map** (≤15–20 components, 1–2 ships, components match or are close to const definitions in `src/components.jl`): Proceed with **Manual Authoring** (Step 4a)
+- **Complex map** (many unique procgen parameters, multiple ships, 30+ components): Proceed with **Auto-Generation** (Step 4b)
+
+When in doubt, try manual authoring first — it produces much better output.
+
+### Step 4a: Manual Authoring (Simple Maps)
 Create a Julia file with a function named `mapgen_<mapname>()` that returns a GameMap.
 
 #### Function Requirements:
@@ -77,6 +91,36 @@ const TriGasTank = ThevininTankCompBehav(GasTankBehavFrag, 3;
     initial_charge = 150,
     series_conductance = 5.0
 )
+
+# Pressure-fed tank (positional constructor with inner fragment):
+const PressureFedLiquidTank = PressureFedTankCompBehav(
+    PressureFedTankBehavFrag(
+        initial_liquid_charge = 150.0 / HexFluids.lookup_fluid_density(HexFluids.MONOPROP_LIQUID),
+        initial_gas_charge = 0.0,
+        max_liquid_charge = 200.0 / HexFluids.lookup_fluid_density(HexFluids.MONOPROP_LIQUID),
+        max_gas_pressure = 50.0,
+        gas_node = HexFrame.NODE_Q_POS
+    ),
+    (HexFrame.NODE_Q_NEG,),   # liquid_nodes tuple
+    5.0,                       # series_conductance
+    HexFluids.COLD_GAS,       # gas_fluid
+    HexFluids.MONOPROP_LIQUID, # liquid_fluid
+    NoRotationBehavFrag()
+)
+
+# StandardValveCompBehav takes a switch fragment type and valve size type:
+const LargeAdjValve = StandardValveCompBehav(SteppedSwitchBehavFrag, LargeValve;
+    max_conductance = 4.0, min_conductance = 0.0,
+    growth_factor = calculate_growth_factor(4.0, 0.0, 2.0 / BASE_UPS),
+    percentage_step_size = 0.05
+)
+const LargeOnOffValve = StandardValveCompBehav(BoolSwitchBehavFrag, LargeValve;
+    max_conductance = 4.0, min_conductance = 0.0,
+    growth_factor = calculate_growth_factor(4.0, 0.0, 2.0 / BASE_UPS)
+)
+
+# DecompChamber has no parameters:
+const BasicDecompChamber = DecompChamberCompBehav()
 ```
 
 #### Code Generation Guidelines:
@@ -202,6 +246,7 @@ map.components[TileCoord(2, 0)] = ComponentOnTile(deepcopy(nozzle_template), Hex
 6. **Ship Surface**:
    - The `ship_tiles` field defines where components can be placed
    - It's a `Set{TileCoord}` containing all valid placement locations
+   - **Important**: `ShipMap()` defaults to `ship_tiles = Set([TileCoord(0,0)])`. Use direct assignment (`ship.ship_tiles = Set{TileCoord}([...])`) rather than `set_surface_tile!` to avoid keeping the default `(0,0)` tile
 
 ## Save Loading Note
 
@@ -209,12 +254,49 @@ The encoder and comparison tools now load maps through `src/map_loading.jl` rath
    - Components can only be placed on coordinates in the ship surface
    - Pipe endpoints must connect to nodes adjacent to ship surface tiles
 
+## Known Limitations
+
+### Space Maps Are Not Encoded
+The `GameMap.space_map` field (which holds encounter systems, manoeuvre data, and velocity state) is **not encoded** into mapgen functions. Generated maps will use the default `SpaceMapEmpty()`. If the original map had a `SpaceMapState` with encounters and manoeuvres, that data is intentionally discarded during encoding.
+
+This is acceptable because these maps are used for tutorials where the space map state is managed separately by the tutorial/learning system.
+
+### Learning System Is Not Encoded
+The `GameMap.learning_system` field (which holds tutorial progress, step states, etc.) is **not encoded** into mapgen functions. Generated maps will use the default `NoLearningSystem()`. Tutorial maps have their learning system configuration applied externally via the learning system definitions in `src/tutorials.jl`, not stored in the map itself.
+
 7. **Documentation**:
    - Add comments explaining the purpose of complex components
    - Include a docstring describing what the tutorial teaches
    - Note any interesting patterns or learning objectives
 
-### Step 4: Test the Generated Function
+### Step 4b: Auto-Generate and Reformat (Complex Maps)
+
+For maps that are too complex to hand-craft, use the encoder's `.jl` output mode:
+
+```bash
+julia --project=. tools/map_encoder/encode_map.jl <mapname> src/demo_maps/mapgen_<mapname>.jl
+```
+
+This produces a working but unformatted mapgen function using `repr()` output for all components. The output will pass the comparison tool but is hard to read. Apply a **reformatting pass** to improve readability:
+
+#### Reformatting Checklist
+
+1. **Add a docstring**: Brief description of the map (2–4 lines)
+2. **Ship section dividers**: Add `#= ---------- Ship :name ----------- =#` between ships
+3. **Blank lines**: Separate components, pipes, and surface tile sections with blank lines
+4. **Group components by type**: Reorder components within each ship so that like types are adjacent. Add brief group headers:
+   ```julia
+   # Gas tanks (10)
+   components[TileCoord(...)] = ...
+   components[TileCoord(...)] = ...
+
+   # Switched nozzles (4)
+   components[TileCoord(...)] = ...
+   ```
+5. **Do NOT modify constructor calls**: The `repr()` output must remain byte-identical. Only add whitespace, blank lines, and comments around the existing lines.
+6. **Verify after reformatting**: Run the comparison tool to confirm nothing was accidentally broken.
+
+### Step 5: Test the Generated Function
 Use the comparison tool to validate your generated code:
 
 ```bash
@@ -225,9 +307,9 @@ julia --project=. tools/map_encoder/compare_maps.jl <mapname> <path_to_generated
 julia --project=. tools/map_encoder/compare_maps.jl <path/to/map.jld2> <path_to_generated_file.jl>
 ```
 
-Naming convention and sanitization:
-- The encoder will produce a function named `mapgen_<basename>` where the basename is sanitized by removing underscores and non-alphanumeric characters and correcting common typos (e.g., `mulit` → `multi`).
-- For example, input `mulitship_example.jld2` will generate `mapgen_multishipexample()` and the file `tutorials/mapgen_multishipexample.jl`.
+Naming convention:
+- The encoder produces a function named `mapgen_<basename>` where `<basename>` is the map file's name without the `.jld2` extension.
+- No aggressive sanitization is performed — the basename is used as-is. Ensure the map name is suitable for use as a Julia function identifier.
 
 Examples:
 ```bash
@@ -262,7 +344,7 @@ The tool will:
 - Compare the results and report differences
 - Exit with code 0 if perfect match, 1 if differences found
 
-### Step 5: Iterate if Needed
+### Step 6: Iterate if Needed
 If the comparison tool reports mismatches:
 - Review the specific differences reported
 - Adjust parameter values, component types, or coordinates
@@ -272,15 +354,15 @@ If the comparison tool reports mismatches:
 
 Based on the project structure, you'll likely encounter:
 
-**Tile-Based Components:**
-- **BasicCompBehav**: Simple components with basic elements (resistors, sources, etc.)
-- **TurboPumpCompBehav**: Propulsion pumps with voltage and turbine parameters
-- **BasicNozzleCompBehav**: Thrust nozzles with throat area parameters
-- **SwitchedNozzleCompBehav**: Nozzles with integrated flow control switches
-- **ThevininTankCompBehav**: Fluid storage tanks with charge and pressure parameters
-- **BoolSwitchCompBehav**: On/off switches with conductance parameters
-- **BigAdjustableValveCompBehav**: Adjustable flow control valves
-- **ElectricPumpCompBehav**: Electric pumps with energy storage
+**Tile-Based Components (15 in `component_list`):**
+- **ThevininTankCompBehav**: Thevenin-equivalent fluid storage tanks (gas or liquid) with charge, pressure, and conductance. Const instances: `TriGasTank`, `TriLiquidTank`
+- **PressureFedTankCompBehav**: Pressure-fed tanks with separate gas pressurant and liquid storage. Uses `PressureFedTankBehavFrag` inner fragment with positional constructor. Const instance: `PressureFedLiquidTank`
+- **BasicNozzleCompBehav**: Thrust nozzles with throat area parameters. Const instances: `TinyNozzle`, `SmallNozzle`, `MediumNozzle`
+- **SwitchedNozzleCompBehav**: Nozzles with integrated flow control switches. Const instance: `SwitchedTinyNozzle`
+- **DecompChamberCompBehav**: Decomposition chamber nozzle (no constructor parameters). Const instance: `BasicDecompChamber`
+- **TurboPumpCompBehav**: Gas-driven turbopumps with voltage, turbine, and inertia parameters. Const instance: `TurboPump`
+- **ElectricPumpCompBehav**: Electric pumps (turbopump or transfer pump variants) with energy storage. Const instances: `ElecTurboPump`, `ElecTransferPump`
+- **StandardValveCompBehav**: Parameterised valves. Takes a switch fragment type (`SteppedSwitchBehavFrag` for adjustable, `BoolSwitchBehavFrag` for on/off) and a valve size type (`LargeValve` or `TinyValve`). Const instances: `LargeAdjValve`, `TinyAdjValve`, `LargeOnOffValve`, `TinyOnOffValve`
 - **ScrapTilePipeCompBehav**: Tile-based pipe connectors (can be placed on tiles)
 - **BigTilePipeCompBehav**: Tile-based high-flow pipe connectors
 
@@ -289,6 +371,8 @@ Based on the project structure, you'll likely encounter:
 - **BigPipeBehav**: High conductance pipe (10.0 S default) with fluid-aware rendering
 
 Edge-based pipes are placed on edges between hex tiles, while tile-based components occupy tile positions.
+
+**Note:** `BoolSwitchCompBehav` and `BigAdjustableValveCompBehav` from earlier versions of this document no longer exist. They have been replaced by `StandardValveCompBehav` with appropriate fragment/size type parameters.
 
 ## File Organization
 Save your generated function as:

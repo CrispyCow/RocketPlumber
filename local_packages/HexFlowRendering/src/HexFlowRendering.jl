@@ -1020,7 +1020,7 @@ function thrust_dust_particle_effect!(
         manager::ParticleManager,
         gamestate::GameState,
         gamemap::GameMap;
-        num_particles_per_tile::Int = 2,
+        num_particles_per_tile::Int = 1,
         colour::SVector{4, Float32} = SVector{4, Float32}(0.5f0, 0.5f0, 0.5f0, 1.0f0)
     )
     PARTICLE_LIFETIME_TICKS = Int(1.5 * BASE_UPS)  # 1.5 seconds at BASE_UPS

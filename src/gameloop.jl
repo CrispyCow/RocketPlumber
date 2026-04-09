@@ -218,23 +218,36 @@ end
 end
 
 "Build the runtime learning state from the loaded map's learning-system type."
-function build_learning_runtime_state(gamemap::GameMap, entries::Vector{LearningEntry} = get_learning_entries())::Union{Nothing, LearningSystemState}
+function build_learning_runtime_state(gamemap::GameMap; initial_active_tutorial_id::Union{Nothing, Symbol} = nothing)::Union{Nothing, LearningSystemState}
     learning_system = get_learning_system(gamemap)
     learning_system isa NoLearningSystem && return nothing
 
-    effective_entries = learning_system isa SandboxLearningState ? get_sandbox_learning_entries() : entries
-    # Lower numbers indicate higher priority for both display and trigger evaluation.
+    all_entries = get_learning_entries()
+    effective_entries = if learning_system isa SandboxLearningState
+        get_sandbox_learning_entries()
+    else
+        filter(e -> haskey(learning_system.tutorials, e.id), all_entries)
+    end
     sorted_entries = sort(effective_entries; by = entry -> entry.priority)
+
+    hint_id = if learning_system isa SandboxLearningState
+        learning_system.tutorial_id
+    else
+        initial_active_tutorial_id
+    end
 
     return LearningSystemState(
         map_learning = learning_system,
         entries = sorted_entries,
-        active_hint_id = learning_system isa SandboxLearningState ? learning_system.tutorial_id : nothing,
+        active_hint_id = hint_id,
     )
 end
 
 "Enter the main game loop with a map loaded from a file path (String), a pre-generated GameMap, or an empty map (nothing)."
-function enter_gameloop(window::GLFW.Window; map_source::Union{Nothing, String, GameMap, ShipMap} = nothing)::GameLoopResult
+function enter_gameloop(window::GLFW.Window;
+        map_source::Union{Nothing, String, GameMap, ShipMap} = nothing,
+        initial_active_tutorial_id::Union{Nothing, Symbol} = nothing,
+    )::GameLoopResult
     #= Loop Setup =#
     ui_loadingscreen_render(window, "Instantiating game state")
     attach_glfw_callbacks!(window)
@@ -245,7 +258,7 @@ function enter_gameloop(window::GLFW.Window; map_source::Union{Nothing, String, 
 
     ui_loadingscreen_render(window, "Loading map")
     loaded_gamemap::GameMap = loadmap_from_source(map_source)
-    learning_state = build_learning_runtime_state(loaded_gamemap)
+    learning_state = build_learning_runtime_state(loaded_gamemap; initial_active_tutorial_id)
     initial_snapshot::FlowCalculatorSnapshot = FlowCalculatorSnapshot(
         gamemap = loaded_gamemap,
         timestamp = time()
@@ -282,6 +295,7 @@ function enter_gameloop(window::GLFW.Window; map_source::Union{Nothing, String, 
         if !isnothing(learning_state)
             learning_inputs = LearningInputs(
                 gamemap = g_snapshot.gamemap,
+                derivedmapstate = g_snapshot.derived,
                 gamestate = g_snapshot.gamestate,
                 inputstate = g_inputstate,
                 flowcalc_shared_state = g_flowcalc_ipc.shared_state,

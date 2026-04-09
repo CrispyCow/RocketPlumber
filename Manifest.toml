@@ -464,7 +464,7 @@ uuid = "c4f7b3e2-9a5d-4c8e-b1f2-3e8d9a5c7f1b"
 version = "0.1.0"
 
 [[deps.HexFlowLearningSystem]]
-deps = ["FlowMap", "HexFlowCalculator", "HexFlowControl"]
+deps = ["FlowEngine", "FlowMap", "HexFlowCalculator", "HexFlowControl"]
 path = "local_packages/HexFlowLearningSystem"
 uuid = "565e34eb-39a4-4998-8996-68e8c8e9dd3e"
 version = "0.1.0"
@@ -482,7 +482,7 @@ uuid = "994b1c28-7126-425a-9af0-3768b98dec97"
 version = "0.1.0"
 
 [[deps.HexFlowProcGen]]
-deps = ["DataStructures", "FlowEngine", "FlowMap", "GeometryBasics", "HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "LinearAlgebra", "Printf", "Random", "SquirrelNoise", "StaticArrays", "Statistics", "StructEquality", "Test"]
+deps = ["FlowEngine", "FlowMap", "GeometryBasics", "HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "LinearAlgebra", "Printf", "Random", "SquirrelNoise", "StaticArrays", "Statistics", "StructEquality", "Test"]
 path = "local_packages/HexFlowProcGen"
 uuid = "46cebafd-6e5b-4504-9515-23fc742129ca"
 version = "0.1.0"

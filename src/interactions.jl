@@ -1253,7 +1253,7 @@ function flowcalc_rightclick_action!(inputstate::InputState, gamemap::GameMap, w
         target = ShipPopupTarget(ship_name),
         world_position = cursor_cart,
         actions = actions,
-        window_title = "Ship Actions: $(display_name)",
+        window_title = "Ship: $(display_name)",
     )
     return nothing
 end

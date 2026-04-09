@@ -1,5 +1,6 @@
 using Test
 using FlowMap
+using FlowEngine
 using HexComponentsAPI
 using HexFlowCalculator
 using HexFlowControl
@@ -34,12 +35,14 @@ end
 
 function make_test_inputs(;
         gamemap::GameMap = GameMap(),
+        derivedmapstate::DerivedMapState = DerivedMapState(),
         gamestate::GameState = GameState(),
         inputstate::InputState = make_test_inputstate(),
         flowcalc_shared_state::FlowCalculatorSharedState = FlowCalculatorSharedState(),
     )
     return LearningInputs(
         gamemap = gamemap,
+        derivedmapstate = derivedmapstate,
         gamestate = gamestate,
         inputstate = inputstate,
         flowcalc_shared_state = flowcalc_shared_state,

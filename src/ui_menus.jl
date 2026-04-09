@@ -87,7 +87,7 @@ function ui_pause_menu_render!(inputstate::InputState, snapshot::FlowCalculatorS
     end
 
     # Exit to menu button
-    exit_label = is_sandbox ? "Return to Game" : "Exit to Menu"
+    exit_label = is_sandbox ? "Leave Tutorial" : "Exit to Menu"
     if CImGui.Button(exit_label, (button_width, button_height))
         inputstate.exit_reason = EXIT_MENU
     end
@@ -158,8 +158,8 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             enqueue_map_override!(flowcalc_ipc, GameMap())
         end
 
-        # Initialise Space Map
-        if CImGui.TreeNode("Initialise Space Map")
+        # Modify Space Map
+        if CImGui.TreeNode("Modify Space Map")
             spacemap_seed = gui_input_u32!(inputstate, :spacemap_init_seed, "Seed", UInt32(42))
             init_vel_x = gui_input_double!(inputstate, :spacemap_init_vel_x, "Velocity X", 10.0)
             init_vel_y = gui_input_double!(inputstate, :spacemap_init_vel_y, "Velocity Y", 0.0)
@@ -173,6 +173,15 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
                 enqueue_map_override!(flowcalc_ipc, modified_map)
                 @info "Initialised space map with seed=$spacemap_seed, velocity=($init_vel_x, $init_vel_y)"
             end
+
+            has_space_map = !(snapshot.gamemap.space_map isa SpaceMapEmpty)
+            if button_with_disable("Delete Space Map", ImVec2(button_width, button_height), !has_space_map; tooltip = "Loaded map has no space map.")
+                modified_map = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
+                modified_map.space_map = SpaceMapEmpty()
+                enqueue_map_override!(flowcalc_ipc, modified_map)
+                @info "Deleted space map"
+            end
+
             CImGui.TreePop()
         end
 
@@ -365,7 +374,6 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             all_component_sets = ShipComponentSet[
                 shipset_starter,
                 shipset_simple_cold_gas,
-                shipset_electric_monoprop,
                 shipset_turbine_monoprop,
                 compset_gas_cache,
                 compset_liquid_cache,

@@ -367,10 +367,10 @@ function produce_rel_elements(tank::PressureFedTankBehavFrag)::NTuple{2, Relativ
 
     # gas_pressure based from gas charge and headspace
     gas_tank_pressure = compute_gas_pressure(tank)
-    # liquid pressure is up to 5% of max gas pressure scalling by fill, to provide some driver for tanks to balance
-    liquid_pressure = 0.05*(tank.liquid_state.charge/tank.max_liquid_charge * tank.max_gas_pressure)
-    # liquid tank gets the higher of the two pressures, so its normaly gas driven unless there is no gas
-    liquid_tank_pressure = max(liquid_pressure, gas_tank_pressure)
+    # liquid pressure is up to 1% of max gas pressure scaling by fill, to provide some driver for tanks to balance
+    liquid_pressure = 0.01*(tank.liquid_state.charge/tank.max_liquid_charge * tank.max_gas_pressure)
+    # liquid tank gets the sum of the pressures. Gas usually dominates but liquid provides some pressure if gas is empty, and forces equalisation
+    liquid_tank_pressure = liquid_pressure + gas_tank_pressure
 
     liquid_vsource = RelativeElement(
         RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.GROUND),

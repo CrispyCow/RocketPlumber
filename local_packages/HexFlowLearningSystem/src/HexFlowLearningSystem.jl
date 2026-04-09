@@ -1,6 +1,7 @@
 module HexFlowLearningSystem
 
 using FlowMap
+using FlowEngine
 using HexFlowCalculator
 using HexFlowControl
 import FlowMap: is_sandbox_learning
@@ -28,6 +29,7 @@ export find_learning_entry, get_learning_def
 "Bundles all data available to trigger predicates and step blockers."
 @kwdef struct LearningInputs
     gamemap::GameMap
+    derivedmapstate::DerivedMapState
     gamestate::GameState
     inputstate::InputState
     flowcalc_shared_state::FlowCalculatorSharedState

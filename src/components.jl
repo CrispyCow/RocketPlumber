@@ -212,7 +212,7 @@ function roll_component(::Val{:TurboPump_comp}, point, seed)
     )
 end
 
-function roll_component(::Val{:ElecTurboPump_comp}, point, seed)
+function roll_component(::Val{:ElecTurboPump_comp}, point, seed) # removed from procedural generation, but left in the game for potential future use
     energy = pick_from_range(200000.0, 500000.0, point, seed)
     max_c = pick_from_range(0.5, 2.0, point, seed)
     return ElectricPumpCompBehav(
@@ -414,16 +414,6 @@ shipset_simple_cold_gas = ShipComponentSet(
     ]
 )
 
-shipset_electric_monoprop = ShipComponentSet(
-    "Electric Monoprop",
-    [
-        CompSpawnOptions(:TriLiquidTank_comp, [(1, 100.0), (2, 200.0), (3, 200.0)], CLUSTERED_PLACE),
-        CompSpawnOptions(:ElecTurboPump_comp, [(1, 100.0), (2, 100.0)], RANDOM_PLACE),
-        CompSpawnOptions(:BasicDecompChamber_comp, [(1, 100.0), (2, 20.0)], RANDOM_PLACE),
-        CompSpawnOptions(:SmallNozzle_comp, [(1, 100.0), (2, 10.0)], NOZZLE_EDGE_PLACE),
-    ]
-)
-
 shipset_turbine_monoprop = ShipComponentSet(
     "Turbine Monoprop",
     [
@@ -505,9 +495,6 @@ compset_scrap_medium_nozzle = ShipComponentSet("Scrap Medium Nozzle", [
 compset_scrap_switched_nozzle = ShipComponentSet("Scrap Switched Nozzle", [
     CompSpawnOptions(:SwitchedTinyNozzle_comp, [(1, 1.0)], NOZZLE_EDGE_PLACE),
 ])
-compset_scrap_elec_pump = ShipComponentSet("Scrap Electric Pump", [
-    CompSpawnOptions(:ElecTurboPump_comp, [(1, 1.0)], RANDOM_PLACE),
-])
 compset_scrap_transfer_pump = ShipComponentSet("Scrap Transfer Pump", [
     CompSpawnOptions(:ElecTransferPump_comp, [(1, 1.0)], RANDOM_PLACE),
 ])
@@ -540,8 +527,7 @@ _ship_coldgas_pool = WeightedComponentSet[
 
 _ship_monoprop_pool = WeightedComponentSet[
     WeightedComponentSet(shipset_pressure_fed_monoprop, NoScaling(1.0)),
-    WeightedComponentSet(shipset_electric_monoprop, GatedLinearScaling(0.5, 0.0, 3.0)),
-    WeightedComponentSet(shipset_turbine_monoprop, GatedLinearScaling(0.5, 0.1, 5.0)),
+    WeightedComponentSet(shipset_turbine_monoprop, GatedLinearScaling(1.0, 0.2, 4.0)),
     WeightedComponentSet(compset_extra_liquid_tanks, GatedLinearScaling(0.3, 0.0, 2.0)),
 ]
 
@@ -558,7 +544,6 @@ _scrap_pool = WeightedComponentSet[
     WeightedComponentSet(compset_scrap_small_nozzle, GatedLinearScaling(0.8, 0.0, 0.5)),
     WeightedComponentSet(compset_scrap_medium_nozzle, GatedLinearScaling(0.4, 0.0, 2.0)),
     WeightedComponentSet(compset_scrap_switched_nozzle, NoScaling(0.8)),
-    WeightedComponentSet(compset_scrap_elec_pump, GatedLinearScaling(0.6, 0.0, 0.5)),
     WeightedComponentSet(compset_scrap_transfer_pump, GatedLinearScaling(0.6, 0.0, 0.3)),
     WeightedComponentSet(compset_scrap_turbo_pump, GatedLinearScaling(0.3, 0.0, 2.0)),
     WeightedComponentSet(compset_scrap_large_adj_valve, GatedLinearScaling(0.5, 0.0, 0.5)),
@@ -625,19 +610,53 @@ const encounter_system_config = EncounterSystemConfig(
 
 #= ---------- Starter Ship ----------- =#
 
-"Generate the player's starting ship for explorer mode."
-function generate_starter_ship(seed::UInt32)::ShipMap
-    shipmap = ShipMap()
-    stacked_random_tile_walk!(get_all_surface_tiles(shipmap), TileCoord(0, 0), 2, 6, seed)
+const STARTER_SHIP_REROLL_SALT::Int32 = Int32(0x53544152)
 
-    gamemap = GameMap(shipmap)
-    success, message = place_shipset!(gamemap, shipset_starter, seed)
-    if !success
-        @warn "Starter ship generation incomplete: $message"
+"Starter ships must include at least one nozzle and one cold-gas tank so the player can immediately fly."
+function starter_ship_is_playable(shipmap::ShipMap)::Bool
+    has_nozzle = false
+    has_gas_tank = false
+
+    for (_, component_on_tile) in get_all_components(shipmap)
+        component = component_on_tile.component
+
+        if component isa SwitchedNozzleCompBehav
+            has_nozzle = true
+        end
+
+        if get_component_wet_mass(component; fluid = HexFluids.COLD_GAS) > 0.0
+            has_gas_tank = true
+        end
+
+        if has_nozzle && has_gas_tank
+            return true
+        end
     end
 
-    place_pipeset!(gamemap, standard_pipeoptions, seed)
-    return shipmap
+    return false
+end
+
+"Generate the player's starting ship for explorer mode."
+function generate_starter_ship(seed::UInt32)::ShipMap
+    current_seed = seed
+
+    while true
+        shipmap = ShipMap()
+        stacked_random_tile_walk!(get_all_surface_tiles(shipmap), TileCoord(0, 0), 2, 6, current_seed)
+
+        gamemap = GameMap(shipmap)
+        success, message = place_shipset!(gamemap, shipset_starter, current_seed)
+        if !success
+            @warn "Starter ship generation incomplete: $message"
+        end
+
+        place_pipeset!(gamemap, standard_pipeoptions, current_seed)
+        if starter_ship_is_playable(shipmap)
+            return shipmap
+        end
+
+        current_seed = get_noise((STARTER_SHIP_REROLL_SALT,), current_seed)
+    end
 end
 
 

@@ -324,9 +324,15 @@ end
     step_blocker::Union{Nothing, String} = nothing
 end
 
-"Persistent learning progress, saved with the map. Tutorials absent from `tutorials` are implicitly TUTORIAL_WAITING."
+"Persistent learning progress, saved with the map. Only tutorials with an entry in `tutorials` are considered active."
 @kwdef mutable struct LearningProgress <: AbstractLearningSystem
     tutorials::Dict{Symbol, TutorialState} = Dict{Symbol, TutorialState}()
+end
+
+"Construct a `LearningProgress` pre-populated with `TUTORIAL_WAITING` entries for each ID."
+function LearningProgress(active_ids::Vector{Symbol})
+    tutorials = Dict{Symbol, TutorialState}(id => TutorialState() for id in active_ids)
+    return LearningProgress(tutorials = tutorials)
 end
 
 "Single sandbox tutorial state stored directly on a sandbox map."
