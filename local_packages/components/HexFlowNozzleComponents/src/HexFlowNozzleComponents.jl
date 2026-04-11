@@ -104,12 +104,10 @@ function get_thrust(nozzle::NozzleBehavFrag; tile::TileCoord, rotation::HexAxis,
         return SVector{2, Float64}(0.0, 0.0)
     end
 
-    nozzle_area_gain = 1.0
-
     # Thrust components: momentum thrust = mass flow rate × exhaust velocity
     momentum_component = density * nozzle_flow * exhaust_velocity
     # Pressure thrust = nozzle throat area × pressure at nozzle input
-    pressure_component = nozzle_throat_area * nozzle_input_pressure * nozzle_area_gain
+    pressure_component = nozzle_throat_area * nozzle_input_pressure
     # Total thrust magnitude is the sum of the momentum and pressure components
     thrust_magnitude = momentum_component + pressure_component
 
@@ -210,7 +208,7 @@ function collect_effect_particles!(
     rotation_matrix = hex_rotmats[rotation]
     base_vector = SVector{2, Float64}(1.0, 0.0)  # Unit vector in Q_POS direction (right)
     thrust_direction = rotation_matrix * base_vector
-    exhaust_direction = SVector{2, Float64}(-thrust_direction[1], thrust_direction[2]) # Particles move opposite to thrust (negate Y to fix inversion)
+    exhaust_direction = SVector{2, Float64}(-thrust_direction[1], thrust_direction[2]) # Particles move opposite to thrust (negate X for screen-space convention)
     perpendicular_direction = SVector{2, Float64}(-exhaust_direction[2], exhaust_direction[1]) # Perpendicular direction for randomness (rotated 90 degrees)
 
     # Get fluid color

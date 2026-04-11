@@ -8,8 +8,6 @@ using HexFlowPipeComponents
 using HexFlowBasicPipes
 using HexComponentsAPI
 
-const BIGPRIME::Int32 = Int32(357239)
-
 # ===============================================================
 # Component Instantiations
 # ===============================================================

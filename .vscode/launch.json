@@ -3,11 +3,12 @@
     "configurations": [
         {
             "type": "julia",
-            "name": "Launch HexFlow REPL (JULIA_NUM_THREADS=3)",
+            "name": "Launch HexFlow REPL (2 default + 1 interactive, 1+1 GC)",
             "request": "launch",
             "program": "${workspaceFolder}/src/repl_launch.jl",
             "env": {
-                "JULIA_NUM_THREADS": "3"
+                "JULIA_NUM_THREADS": "2,1",
+                "JULIA_NUM_GC_THREADS": "1,1"
             },
             "cwd": "${workspaceFolder}"
         }

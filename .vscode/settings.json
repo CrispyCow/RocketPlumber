@@ -6,18 +6,22 @@
         }
     ],
 
-    // Ensure the integrated terminal (and VS Code-launched tasks) default to 3 Julia threads
+    // Ensure the integrated terminal (and VS Code-launched tasks) default to 2 worker threads,
+    // 1 interactive main thread, and 1 mark + 1 concurrent sweep GC thread.
     "terminal.integrated.env.windows": {
-        "JULIA_NUM_THREADS": "3"
+        "JULIA_NUM_THREADS": "2,1",
+        "JULIA_NUM_GC_THREADS": "1,1"
     },
     "terminal.integrated.env.linux": {
-        "JULIA_NUM_THREADS": "3"
+        "JULIA_NUM_THREADS": "2,1",
+        "JULIA_NUM_GC_THREADS": "1,1"
     },
     "terminal.integrated.env.osx": {
-        "JULIA_NUM_THREADS": "3"
+        "JULIA_NUM_THREADS": "2,1",
+        "JULIA_NUM_GC_THREADS": "1,1"
     },
     "chat.tools.terminal.autoApprove": {
-        "/^julia --threads=3 --project=\\. src/julia_main\\.jl$/": {
+        "/^julia --threads=2,1 --gcthreads=1,1 --project=\\. src/julia_main\\.jl$/": {
             "approve": true,
             "matchCommandLine": true
         },

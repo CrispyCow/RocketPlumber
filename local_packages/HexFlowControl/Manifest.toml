@@ -1,8 +1,8 @@
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.12.0"
+julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "5130f0bcfd2c2f61ba52a9d03932b131b4fc8cad"
+project_hash = "bc3df21175b39b4572008d29267aa23f61211d7f"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "MacroTools"]
@@ -177,13 +177,12 @@ uuid = "2f6a9512-4d00-40fa-a3ea-0a7372983a4b"
 version = "0.1.0"
 
 [[deps.HexFlowControl]]
-deps = ["Dates", "GLFW", "HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "StaticArrays"]
+deps = ["Dates", "GLFW", "HexComponentsAPI", "HexFrame", "StaticArrays"]
 path = "."
 uuid = "c4f7b3e2-9a5d-4c8e-b1f2-3e8d9a5c7f1b"
 version = "0.1.0"
 
 [[deps.HexFluids]]
-deps = ["HexFrame"]
 path = "../HexFluids"
 uuid = "98a914a9-3572-461b-8ee2-d8d3de40252c"
 version = "0.1.0"
@@ -489,7 +488,7 @@ version = "1.3.1+2"
 [[deps.libblastrampoline_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "8e850b90-86db-534c-a0d3-1478176c7d93"
-version = "5.13.1+1"
+version = "5.15.0+0"
 
 [[deps.libdecor_jll]]
 deps = ["Artifacts", "Dbus_jll", "JLLWrappers", "Libdl", "Libglvnd_jll", "Pango_jll", "Wayland_jll", "xkbcommon_jll"]

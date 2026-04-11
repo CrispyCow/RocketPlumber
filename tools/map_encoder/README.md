@@ -105,7 +105,7 @@ The `map_encode_instructions.md` file provides comprehensive guidance for AI age
 julia --project=. tools/map_encoder/encode_map.jl autotest1
 
 # Multi-ship maps
-For multi-ship JLD2 files the tool will emit per-ship entries. To generate a `mapgen_*.jl` file write to `src/demo_maps/` with a `.jl` extension (example below). The encoder will use the map basename to name the function, so provide a reasonable basename (e.g., `mulitship_example` → `mapgen_mulitship_example`).
+For multi-ship JLD2 files the tool will emit per-ship entries. To generate a `mapgen_*.jl` file write to `src/demo_maps/` with a `.jl` extension (example below). The encoder will use the map basename to name the function, so provide a reasonable basename (e.g., `multiship_example` → `mapgen_multiship_example`).
 
 # 2. (AI agent creates mapgen_autotest1.jl from the output and instructions)
 
@@ -141,13 +141,13 @@ The tools are designed to:
 - Run from project root with `--project=.` to access all dependencies
 - Use existing component constructors and patterns
 - Maintain compatibility with current codebase structure
-- Support the existing JLD2 → Code migration workflow
+- Support the existing JLD2 → Code workflow through the shared loader
 
 ## Error Handling
 
 **Common Issues:**
 
-1. **Map file not found** - Verify map exists in `maps/` folder
+1. **Map file not found** - Verify the `.jld2` path is correct
 2. **Function name mismatch** - Ensure function is named `mapgen_<mapname>`
 3. **Component constructor errors** - Check `src/components.jl` for correct syntax
 4. **Precision mismatches** - Use exact floating-point values from encoded output

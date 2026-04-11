@@ -681,7 +681,6 @@ function ui_propertybox_render!(
             for (label, pipe_type) in PIPE_TYPES
                 if CImGui.Button(label)
                     inputstate.pendingpipebehavior = pipe_type()
-                    println("Set pending pipe to $(nameof(pipe_type))")
                 end
                 CImGui.SameLine()
             end
@@ -776,7 +775,7 @@ function render_spacemap_active_manoeuvre_panel!(
     )
     manoeuvre = get_active_manoeuvre(gamemap)
     time_progressing = is_time_progressing(gamemap)
-    timewarp_blocked = is_timewarp_blocked(gamemap, gamestate)
+    timewarp_blocked = is_timewarp_blocked(gamemap, gamestate, flowcalc_ipc)
 
     phase = manoeuvre.phase
 
@@ -941,10 +940,10 @@ function render_spacemap_left_panel!(
     CImGui.PopFont()
     CImGui.Spacing()
 
-    timewarp_blocked = is_timewarp_blocked(gamemap, gamestate)
+    timewarp_blocked = is_timewarp_blocked(gamemap, gamestate, flowcalc_ipc)
 
-    # Advance time buttons — always shown, disabled while warping or blocked
-    advance_disabled = time_progressing || first(timewarp_blocked)
+    # Advance time buttons — always shown, disabled while warping, blocked, or paused
+    advance_disabled = time_progressing ? (true, "Time warp in progress") : timewarp_blocked
     CImGui.Text("Advance Time:")
     if CImGui.BeginTable("##advance_time", 3, CImGui.ImGuiTableFlags_SizingStretchSame)
         for (label, dt) in (("0.1 yr", 0.1), ("1 yr", 1.0), ("10 yr", 10.0))

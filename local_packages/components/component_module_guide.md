@@ -79,8 +79,6 @@ end # module
 
 ## Code Conventions
 
-## Code Conventions
-
 ### Section Dividers
 
 Use consistent dividers to organize code:

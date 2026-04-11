@@ -227,7 +227,10 @@ end
     @test elements[2].connections == RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.GROUND)
     @test elements[3].type === CONST_RESISTOR
     @test elements[3].connections == RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.NODE_Q_NEG)
-    @test elements[1].value ≈ elements[2].value
+    expected_gas_pressure = compute_gas_pressure(comp.tank)
+    expected_liquid_pressure = 0.01 * (comp.tank.liquid_state.charge / comp.tank.max_liquid_charge * comp.tank.max_gas_pressure)
+    @test elements[1].value ≈ (expected_gas_pressure + expected_liquid_pressure)
+    @test elements[2].value ≈ expected_gas_pressure
     @test all(elem.active for elem in elements)
 
     stall!(comp.tank)

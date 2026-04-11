@@ -12,16 +12,13 @@ Usage:
     julia --project=. tools/map_encoder/encode_map.jl <map_path> [output_file]
 
 Arguments:
-    map_path    - Path to the map file (.jld2). Can be:
-                  - Relative path from current directory (e.g., src/demo_maps/basicplumbing.jld2)
-                  - Absolute path (e.g., C:/path/to/map.jld2)
-                  - Just a name (e.g., autotest1) - will look in maps/ folder for backwards compatibility
+    map_path    - Path to the map file (.jld2). Can be relative to the current directory
+                  or absolute (e.g., src/demo_maps/basicplumbing.jld2 or C:/path/to/map.jld2)
     output_file - Optional: Output file path. If not provided, prints to stdout only
 
 Examples:
-    julia --project=. tools/map_encoder/encode_map.jl autotest1
     julia --project=. tools/map_encoder/encode_map.jl src/demo_maps/basicplumbing.jld2
-    julia --project=. tools/map_encoder/encode_map.jl ../maps/autotest1.jld2 encoded_autotest1.txt
+    julia --project=. tools/map_encoder/encode_map.jl C:/maps/autotest1.jld2 encoded_autotest1.txt
 
 Note: This script must be run from the project root directory with --project=. to access dependencies.
 """
@@ -38,27 +35,14 @@ using HexFlowProcGen, HexFlowNozzleComponents
 include(joinpath(dirname(@__FILE__), "..", "..", "src", "components.jl"))
 include(joinpath(dirname(@__FILE__), "..", "..", "src", "map_loading.jl"))
 
-# Helper function to resolve map path from various input formats
+# Helper function to resolve a .jld2 map path
 function resolve_map_path(input::String)
-    # If input already has .jld2 extension, treat as path
-    if endswith(input, ".jld2")
-        # Check if it exists as-is (absolute or relative to cwd)
-        if isfile(input)
-            return input
-        else
-            error("Map file not found: $input")
-        end
-    else
-        # No extension - assume it's a map name in the maps/ folder (backwards compatibility)
-        map_path = joinpath("maps", "$input.jld2")
-        if !isfile(map_path)
-            error("Map file not found: $map_path")
-        end
-        return map_path
-    end
+    endswith(input, ".jld2") || error("Map input must be a path to a .jld2 file: $input")
+    isfile(input) || error("Map file not found: $input")
+    return input
 end
 
-"Load a map through the app's canonical save-upgrade path."
+"Load a map through the app's canonical save-loading path."
 function load_game_map(map_input::Union{Nothing, String})
     return isnothing(map_input) ? loadmap(nothing) : loadmap(resolve_map_path(map_input))
 end
@@ -69,7 +53,7 @@ end
 Encode a GameMap from JLD2 format into human-readable text format.
 
 # Arguments
-- `map_input`: Path to map file (.jld2) or map name (for maps/ folder)
+- `map_input`: Path to a map file (.jld2)
 - `output_file`: Optional output file path. If nothing, prints to stdout only.
 
 # Returns

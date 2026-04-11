@@ -5,13 +5,13 @@
     <em style="color:#666">Built in Julia • Rendered with OpenGL</em>
   </p>
   <p>
-    <img src="readme_assets/simple_plumbing.gif" alt="Simple plumbing demo" />
+    <img src="readme_assets/plumbing.gif" alt="Simple plumbing demo" />
   </p>
   <p>
-    <img src="readme_assets/pipe_network.gif" alt="Pipe network demo" />
+    <img src="readme_assets/manoeuvre.gif" alt="Manoeuvre to intercept demo" />
   </p>
   <p>
-    <img src="readme_assets/battleship.gif" alt="Battleship demo" />
+    <img src="readme_assets/encounter.gif" alt="Ship encounter demo" />
   </p>
 </div>
 
@@ -38,11 +38,13 @@
 ---
 ## About The Project
 
-**Welcome to Rocket Plumber!** This is a tech demo for a space ship and rocket engine plumbing simulation I am hoping to use as the basis for a game. Currently I have the fluid mechanics implemented, along with a few of the components needed to build basic engines and get your ship moving. There is also a demo loop to teach you the basics and show off what you can currently do.
+**Welcome to Rocket Plumber!** This a space ship and rocket engine plumbing simulation game, in the very early stages of development. Currently I have the fluid mechanics implemented, along with a few of the components needed to build basic engines and get your ship moving. The gameplay is less developed, but some core parts of the game-loop are there in the game's "Explorer Mode", where you fire your engines to perform manoeuvres in space and encounter randomly generated ships. You must salvage parts and fuel from these ships to keep yourself moving, and the further and faster you go the better rocket parts you will find! There is also a learning system with both in-game and sandbox tutorials to make the game more accessable. 
 
-**Note:** this is NOT a full game. There isn't really a gameplay loop or goal yet. I started this project more to experiment with an idea I had for how you could implement a fluid system for a game. The setting (plumbing up rocket engines on a space ship) was just an interesting way to exercise this system. Eventually I had haphazardly put enough pieces together that I felt I had proven out that simulation, and if I was going to keep working on this, I needed to stop and actually figure out what the gameplay would be. Before doing that I decided to clean up and release the simulation as a demo so even if that effort dies out I will still have produced and released something I think is interesting.
+**Note:** the game is VERY far from being done and polished. There are currently no victory or loss conditions (unless you run out of fuel), and there are no threats or goals driving you to explore and improve. There is only the bare-minimum amount of engine and fuel types. The UI is also still a work in progress, with a lot of internal debug info still being displayed. These are all things I want to work on in the future, but hopefully what's already here is enough to be interesting and give you an idea of where this game could go!
 
-The core of the simulation is a detailed fluid flow model, based on a circuit analogy for fluid flow in closed pipes. This means under the hood pumps are voltage sources, pipes are resistors, and the whole plumbing network is solved as if it's an electrical circuit. The algorithm I used for that is called Modified Nodal Analysis, which is just a formalism of some of the methods of DC circuit analysis you might have learnt in Circuits 101.
+I started this project more just to experiment with an idea I had for how you could implement a fluid system for a game. The setting (plumbing up rocket engines on a space ship) was just an interesting way to exercise this system. I am making these public releases to motivate me to clean things up, and to help direct the game towards something as fun and interesting as possible!
+
+The core of the simulation is a detailed fluid flow model, based on a circuit analogy for incompressible fluid flow in closed pipes. This means under the hood pumps are voltage sources, pipes are resistors, and the whole plumbing network is solved as if it's an electrical circuit. The algorithm I used for that is called Modified Nodal Analysis, which is just a formalism of some of the methods of DC circuit analysis you might have learnt in Circuits 101.
 
 The whole demo was written in Julia, as it's a language I enjoy programming in. It has good linear algebra support, which was handy for the actual circuit simulation as the algorithm I used boils down to constructing and solving a big matrix. It's high level enough I can get things done quickly, but there's room to dig in and optimise for the parts of the code that need to run fast. The demo is displayed with a simple 2D sprite-based renderer built on OpenGL (through the `ModernGL.jl` bindings), with the UI built with `CImGui.jl`.
 
@@ -76,8 +78,11 @@ julia --project=. -e 'using Pkg; Pkg.instantiate()'
 From here you are ready to run! Start the demo with this command:
 
 ```bash
-julia --project=. --threads=3 src/repl_launch.jl
+julia --project=. --threads=2,1 --gcthreads=1,1 src/repl_launch.jl
 ```
+
+For source-based development this `src/repl_launch.jl` script is the right entry point. The production/packagecompiler entry point is `src/julia_main.jl`, which expects the production rendering artifacts to already have been built.
+On Julia 1.12 this starts 2 default worker threads plus 1 interactive main thread, which keeps the FlowCalculator off the main OpenGL loop without reserving an unnecessary third default worker.
 
 #### Using the REPL and Revise
 
@@ -88,7 +93,7 @@ You might notice Julia seems to take a while to start up, and that the demo seem
 To start the REPL in the project's environment run:
 
 ```bash
-julia --project=. --threads=3
+julia --project=. --threads=2,1 --gcthreads=1,1
 ```
 
 Then to run the launch script just include it:
@@ -101,26 +106,31 @@ Now when you exit the demo, your Julia REPL session should remain open!
 
 On its own this isn't that useful as you would need to restart the Julia session if you make changes to the code, but thankfully this project includes the [Revise.jl](https://timholy.github.io/Revise.jl/stable/) package. This package watches for changes in your source files and re-compiles modified functions as required, without requiring a restart of the Julia session. Now you can leave your REPL session open, make changes to the code, run the `repl_launch` script, and your changes should take effect automatically (with some [limitations](https://timholy.github.io/Revise.jl/stable/limitations/)).
 
-I actually don't use the REPL much directly from the command line. I'd recommend working in VS Code with the Julia extension, where you can run scripts in the REPL just by pressing the 'run' button. This repository already includes the appropriate `.vscode` settings to ensure the REPL launches with the right number of threads!
+I actually don't use the REPL much directly from the command line. I'd recommend working in VS Code with the Julia extension, where you can run scripts in the REPL just by pressing the 'run' button. This repository already includes the appropriate `.vscode` settings to ensure the REPL launches with 3 Julia threads and 1 GC thread by default.
 
 ---
 ## Future Plans
 
-As mentioned, I plan to continue development based on this demo and try and produce a full game.
+As mentioned, I plan to continue development to try and produce a full game.
 
-For the simulation I already have a list of ideas I want to add:
-
-- A bunch more fuel types and engines including bi-propellants, ion drives, and nuclear thermal engines. I'd also like to make the options for engine cycles more flexible
-- An electricity system, building upon the basic energy stores with multiple generation methods. These will allow electric pumps to be recharged, and open whole new possibilities.
-
-But I am going to hold off on adding more features until I have figured out where they will fit in an actual gameplay loop. The game concept is much more in flux. I have some ideas like:
-
-- I want to require manoeuvres to be performed where both bulk delta-V from large engines, and small precise thrust from small engines are valuable, to allow a larger variety of engines to remain useful.
+A few or the core gameplay ideas that I have been following are that:
+- I want to require manoeuvres to be performed where bulk delta-V from large engines, and precise thrust from small engines are valuable, to allow a larger variety of engines to remain useful.
 - I want ship parts to be scavenged or bought rather than crafted, as I feel like inventory and crafting systems are a bit overdone. I like the idea that you might have to build your ship around what you get rather than exactly what you want (think what weapons you end up with on a run of FTL)
 
-Beyond this I am still unsure what the final game will look like (and even these are not set in stone) so stay tuned! If you have any thoughts or ideas feel free to pass them on!
+And building on from this some of the next gameplay features I have been thinking about are:
+- Stores where you can buy, sell, and trade parts and fuel. This will let me do things like add valuable items to scrap ships, and give you a bit more of a reason to visit them.
+- Functional ships you can encounter that might not just let you "borrow" all their fuel.
+- Asteroids that you can extract fuel and valuable resources from, but that will require some sort of processing
+- And finally some sort of 'Adversary' which will be pursuing you, forcing continous movement and turning spacemap time into a resource that has to be considered when you plan manoeuvres.
 
-Development is likely to move pretty slowly as this is a hobby project. To get it to this point has already taken over a year of on-off development, and the amount of energy I have to write code for fun is inconsistent as it depends on the amount of code I have to write at work. I intend to continue posting the updates to this repo, even if they are infrequent. I won't share every commit, but I plan to push out changes in large releases as it makes sense.
+For the simulation I already have a list of ideas I want to add:
+- A bunch more fuel types including hypergolics, bi-propellants, and maybe even nuclear thermal engines.
+- A fluid temperature system which will drive the engine cycles, forcing you to have things like off-stoichimetric preburners for turbopumps to avoid melting turbines, and maybe even make expander or staged combustion cycles possible.
+- An electricity system, building upon the basic energy stores with multiple generation methods. These will allow electric pumps to be recharged, and open whole new possibilities.
+
+Beyond this I am still unsure what the final game will look like (and none of this is set in stone) so stay tuned! If you have any thoughts or ideas feel free to pass them on!
+
+Development is likely to move pretty slowly as this is a hobby project. To get it to this point has already taken nearly 2 years of on-off development, and the amount of energy I have to write code for fun is inconsistent as it depends on what I am up to at work. I intend to continue posting the updates to this repo, even if they are infrequent. I won't share every commit, but I plan to push out changes in large releases as it makes sense.
 
 ---
 ## Navigating the Codebase
@@ -140,11 +150,11 @@ If you are looking for the code that's actually 'running' there are 2 main loops
 
 The calculator loop is responsible for performing the heavy simulation updates. You'll find it in the package `HexFlowCalculator` in `/local_packages`. It owns the authoritative versions of the game map, and will use that map to construct a modified nodal analysis matrix of the plumbing/circuit, based on the circuit elements returned by the components in the game map. This loop also solves the MNA, working out the output voltage/pressures and currents/flows. The actual method implementation of the MNA and the necessary steps to prepare the elements live in the `FlowEngine` package.
 
-The calculator loop is the only place where modifications to the map occur. User-facing code produces map edit commands and pushes them to a channel where they can be consumed by the calculator loop which validates them and applies them.
+The calculator loop is where most modifications to the map occur. User-facing code produces map edit commands and pushes them to a channel where they can be consumed by the calculator loop which validates them and applies them. There are also a small number of internal simulation paths, such as encounter spawning, that mutate the authoritative map directly from within this thread.
 
-After each iteration the calculator publishes a snapshot of the map, and the output state of the MNA via a deep copy. This can be accessed in a thread-safe way by the game loop. This is not an optimised approach to this, but it's simple and so far has not been a bottleneck at all.
+After each iteration the calculator publishes a deep-copied snapshot containing the map, derived simulation state, the output state of the MNA, and a small amount of game-state metadata. This can be accessed in a thread-safe way by the game loop. This is not an optimised approach to this, but it's simple and so far has not been a bottleneck at all.
 
-The calculator loop currently targets a fixed rate of 60 UPS, but this could slip without affecting the frame rate of the game/render loop.
+The calculator loop defaults to a target rate of 60 UPS, but this can be changed at runtime through the simulation speed controls. As before, this could slip without affecting the frame rate of the game/render loop.
 
 #### Game/Render Loop
 
@@ -154,7 +164,7 @@ The rendering is performed in stages to ensure correct render heights. First the
 
 User inputs are also handled in this loop. These can affect rendering-only things like the viewport directly, but any desired map edits are converted into edit commands to be handled by the calculator loop.
 
-This loop currently targets running in vsync and thus will match the frame rate of your monitor. As previously mentioned, frame rate doesn't impact simulation speed as the calculator loop runs independently at 60 UPS.
+This loop currently targets running in vsync and thus will match the frame rate of your monitor. As previously mentioned, frame rate doesn't impact simulation speed as the calculator loop runs independently at its current UPS target.
 
 ### Reference Frames/Coordinate Systems
 
@@ -164,11 +174,11 @@ A floating point number can be used to represent an arbitrary point in this coor
 
 A number of other map elements have coordinate systems defined for them. The corners of the hexagonal tiles (used as the pressure nodes) are stored as a `VertexCoord` which combines a `TileCoord` and a direction. This is not a unique representation so the concept of a 'proper' vertex was introduced, where the only allowable directions are `Q_POS` and `Q_NEG` (left and right). There is only one 'proper' representation for a given vertex.
 
-The edges between hexagonal tiles (used for the pipes) are stored as an `EdgeCoord` which consists of the 2 `NodeCoord`s it spans. This is a similarly non-unique representation, so a 'proper' edge is defined as consisting of proper vertexes, and ordered so the vertexes span from left to right. There is only one 'proper' representation for a given edge.
+The edges between hexagonal tiles (used for the pipes) are stored as an `EdgeCoord` which consists of the 2 `VertexCoord`s it spans. This is a similarly non-unique representation, so a 'proper' edge is defined as consisting of proper vertexes, and ordered so the vertexes span from left to right. There is only one 'proper' representation for a given edge.
 
 These coordinate system types are all defined in `local_packages/HexFrame`. This was one of the earliest parts of the code I wrote, so there is a lot in here that is suboptimal.
 
-A set of types is also used to describe the nodes to which circuit elements can connect on which the flow physics are based. For the purposes of the circuit analysis the node can exist either on vertexes of a hexagon/tile, on a special 'internal' node for each tile, or be a connection to the global 'ground' node. These options are enumerated in a `NodePos` which exists relative to a specific tile. A `NodeCoord` on the other hand is absolute, and is defined by a `NodePos` and the `TileCoord` it is relative to. Again to avoid non-uniqueness problems a 'proper' node coordinate is defined as one where its `NodePos` is either `Q_POS`, `Q_NEG` (left and right), or the special internal or ground node.
+A set of types is also used to describe the nodes to which circuit elements can connect on which the flow physics are based. For the purposes of the circuit analysis the node can exist either on vertexes of a hexagon/tile, on a special 'internal' node for each tile, or be a connection to the global 'ground' node. These options are enumerated in a `NodePos` which exists relative to a specific tile. A `NodeCoord` on the other hand is absolute, and is defined by a `NodePos` and the `TileCoord` it is relative to. Again to avoid non-uniqueness problems a 'proper' node coordinate is defined as one where its `NodePos` is either `NODE_Q_POS`, `NODE_Q_NEG` (left and right), or the special internal or ground node.
 
 The circuit elements themselves are defined by their type and value, and then their connections. For elements intended to be relative to a tile (like those a component produces as it is unaware of its location on the map) they are typed as a `RelativeElement` and use 2 `NodePos`s to define a set of `RelativeElementConnections`. For elements whose position is absolute (like those used in the MNA) they are typed as an `AbsoluteElement` and use 2 `NodeCoord`s to define a set of `AbsoluteElementConnections`.
 
@@ -198,7 +208,7 @@ The component system makes extensive use of keyword arguments, and specifically 
 
 Rendering for this demo is done with OpenGL in a GLFW context, but a set of wrapper types has been defined and utility functions have been defined in `local_packages/RenderEngine`. The logic in `RenderEngine` is designed to be non-specific to this demo, as a matter of good practice. If there is interest this could potentially be broken out into its own package, so other people could use it.
 
-Wrapper types were created for all the IDs of OpenGL objects that are normally just a `GLuint` so they can be brought into Julia's type system for type safety and dispatch. Sufficient `convert` methods are provided so no additional verbosity is needed when interacting with `ModernGL` bindings. A multiple-dispatch driven function `wglUniform` is provided for uniform binding that dispatches to an appropriate `glUniform3f` call based on the argument type.
+Wrapper types were created for all the IDs of OpenGL objects that are normally just a `GLuint` so they can be brought into Julia's type system for type safety and dispatch. Sufficient `convert` methods are provided so no additional verbosity is needed when interacting with `ModernGL` bindings. A multiple-dispatch driven function `wglUniform` is provided for uniform binding that dispatches to the appropriate OpenGL uniform call based on the argument type.
 
 A set of helper functions are provided to create, bind, and manage OpenGL objects using the defined types. Programs can be created by providing shader source. Both static and dynamically updated VAOs can be created, based with attribute layout inferred from a format struct including the type and the number of elements. Textures and UBOs are also supported.
 

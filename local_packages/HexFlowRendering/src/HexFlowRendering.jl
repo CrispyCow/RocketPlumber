@@ -1,11 +1,11 @@
 module HexFlowRendering
 
-#= Dependancies =#
+#= Dependencies =#
 # Packages
 using ModernGL, TimerOutputs, Artifacts
 using StaticArrays, StructArrays, CSyntax.CRef, Accessors
 using ColorSchemes, ColorTypes
-using FileIO, ImageIO, ImageMagick
+using PNGFiles
 # Custom Packages
 using RenderEngine, HexFlowTelemetry 
 using HexFrame, HexFluids, HexComponentsAPI, FlowEngine, FlowMap, HexFlowControl
@@ -97,6 +97,11 @@ function grab_shader(name::String)
     return read(joinpath(SHADER_DIR[], name), String)
 end
 
+"Load the main texture-atlas PNG with the direct PNG-only runtime path."
+function load_texatlas1_png(texture_atlas_dir::AbstractString = TEXTURE_ATLAS_DIR[])
+    return PNGFiles.load(joinpath(texture_atlas_dir, "TileTextureAtlas1.png"))
+end
+
 #= Shared OpenGL Objects =#
 
 "Initializes the view transformation uniform buffer object."
@@ -114,7 +119,7 @@ end
 "Initializes the main texture atlas and loads sprite metadata."
 function texatlas1_gltex_init(map::GLObjectMap)
     texname = :TileTextureAtlas1
-    texdata = load(joinpath(TEXTURE_ATLAS_DIR[], "$texname.png"))
+    texdata = load_texatlas1_png(TEXTURE_ATLAS_DIR[])
     setup_gltex!(map, texname, texdata)
     return setup_glsprite!(map, texname, TEXTURE_ATLAS_DIR[])
 end
@@ -477,7 +482,7 @@ function render_pipe(glmap::GLObjectMap, pipe::EdgeCoord, derivedmapstate::Deriv
     v1_tag = get(derivedmapstate.nodeactualfluids, to_nodecoord(pipe.v1), HexFluids.NONE)
     v2_tag = get(derivedmapstate.nodeactualfluids, to_nodecoord(pipe.v2), HexFluids.NONE)
     tag = prioritise_fluidtag(v1_tag, v2_tag)
-    colour = get_fluid_colour(tag, DEFAULT_PIPE_COLOUR)
+    colour = get_fluid_colour(tag; default = DEFAULT_PIPE_COLOUR)
 
     rotation_matrix = get_rotmat(pipe)'
     position = glvec(pipe)
@@ -969,7 +974,7 @@ function cull_particles_to_buffer!(
         end
 
         # Filter ship surface (only for background particles when gamemap provided)
-        # NOTE: this step as a whole is somewhat expensive, could be ommited if we get cpu bound
+        # NOTE: this step as a whole is somewhat expensive, could be omitted if we get cpu bound
         if gamemap !== nothing
             @timeit render_loop_timer "filter_surface" begin
                 # Iterate per-ship and test particles in each ship's local coordinate frame.

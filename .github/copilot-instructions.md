@@ -103,16 +103,16 @@ Organised in dependency layers (each layer depends only on those above it):
 **Core Logic:**
 - `HexComponentsAPI` — abstract interfaces for `ComponentBehavior` and `PipeBehavior`, `ComponentOnTile` wrapper, `TunableProps`, `ActionInfo`
 - `FlowMap` — data model (`GameMap`, `ShipMap`), ship management, docking system, space map, encounter/manoeuvre types, placement validation, bounds/geometry
-- `FlowEngine` — MNA (Modified Nodal Analysis) circuit solver, `DerivedMapState`, `MNA_State`, graph pruning, fluid tag propagation. Re-exports `FlowMap`
+- `FlowEngine` — MNA (Modified Nodal Analysis) circuit solver, `DerivedMapState`, `MNA_State`, graph pruning, fluid tag propagation. Depends on `FlowMap` (does not re-export it)
 
 **Application State:**
-- `HexFlowControl` — `GameState`, `InputState`, `ViewState`, `PlacementModes` enum, view transform matrix, input edge-detection helpers, closure-based console buffer
+- `HexFlowControl` — `GameState`, `InputState`, `ViewState`, `PlacementModes` enum, `SimSpeed` enum, `ExitReason` enum, view transform matrix, input edge-detection helpers, closure-based console buffer
 
 **Simulation:**
 - `HexFlowCalculator` — background-thread simulation loop, command system (`MapEditCommand` subtypes), `FlowCalculatorSnapshot`, `FlowCalculatorIPC`, `update_map!`/`update_mna!` orchestration, manoeuvre phase state machine
 
 **Procedural Generation:**
-- `HexFlowProcGen` — ship surface generation (random tile walks), component/pipe placement strategies, encounter point system (spawn/recycle/event queue), manoeuvre planning (closest-approach, intercept delta-v), ship generation configs
+- `HexFlowProcGen` — ship surface generation (random tile walks), component/pipe placement strategies, encounter point system (spawn/recycle via bounds-check), `SpaceMapState`, manoeuvre planning (closest-approach, intercept delta-v), ship generation configs
 
 **Learning/Tutorial System:**
 - `HexFlowLearningSystem` — tutorial types (`SandboxTutorialDef`, `InGameTutorialDef`, `TutorialStep`, `LearningEntry`), trigger/step-blocker predicates, `LearningSystemState` (render-thread runtime), persistent `LearningProgress` (on `GameMap`)
@@ -123,11 +123,11 @@ Organised in dependency layers (each layer depends only on those above it):
 - `HexFlowTelemetry` — diagnostic `TimerOutput` instances and tick-gated printing
 
 **Component Implementation Packages** (under `local_packages/components/`):
-- `HexFlowBasicComponents` — reusable fragments (`PlainSpriteBehavFrag`, `BasicElemBehavFrag`, `StallBehavFrag`, `BinaryStateBehavFrag`, `FloatStateBehavFrag`, `FluidTagBehavFrag`, `HorizontalFlipOnlyBehavFrag`) and `BasicCompBehav`
-- `HexFlowTankComponents` — gas/liquid tanks with Thevenin equivalent circuits, charge tracking, stall protection
+- `HexFlowBasicComponents` — reusable fragments (`PlainSpriteBehavFrag`, `BasicElemBehavFrag`, `StallBehavFrag`, `BinaryStateBehavFrag`, `FloatStateBehavFrag`, `FluidTagBehavFrag`, `HorizontalFlipOnlyBehavFrag`, `NoRotationBehavFrag`) and `BasicCompBehav`
+- `HexFlowTankComponents` — gas/liquid tanks (Thevenin equivalent) and pressure-fed tanks (separate gas headspace), charge tracking, stall protection
 - `HexFlowNozzleComponents` — nozzles, switched nozzles, decomp chambers with thrust calculation and particle exhaust
 - `HexFlowPumpComponents` — turbopumps (gas-driven) and electric pumps (battery-powered) with energy management
-- `HexFlowSwitchComponents` — binary switches, bool switches, and adjustable valves with exponential open/close dynamics
+- `HexFlowSwitchComponents` — bool switches, stepped adjustable valves, and on/off valves in two sizes (`LargeValve`, `TinyValve`)
 - `HexFlowPipeComponents` — tile-based pipe components (`ScrapTilePipeCompBehav`, `BigTilePipeCompBehav`)
 - `HexFlowBasicPipes` — edge-based pipe behaviours (`ScrapPipeBehav`, `BigPipeBehav`)
 
@@ -141,7 +141,7 @@ Organised in dependency layers (each layer depends only on those above it):
 - `repl_launch.jl` — development entry point (Revise, loading screens, hot-reload)
 - `julia_main.jl` — production entry point (no Revise, artifact verification, `@main` for JuliaC)
 - `gameloop.jl` — main game loop: GL init, snapshot management, rendering pipeline, FlowCalculator IPC, learning system tick
-- `map_loading.jl` — JLD2 serialisation, `rconvert` upgrade paths for legacy save formats
+- `map_loading.jl` — JLD2 serialisation and reconstruction hooks for current save formats
 - `interactions.jl` — all input handling: keyboard/mouse polling, cursor transforms, click detection, placement ghost rendering, docking beam rendering, FlowCalculator command enqueueing
 - `components.jl` — concrete component/pipe instances, procedural generation `roll_component`/`roll_pipe` specialisations, ship generation configs and weights
 - `tutorials.jl` — `LearningEntry` definitions for sandbox and in-game tutorials, demo map includes
@@ -149,7 +149,8 @@ Organised in dependency layers (each layer depends only on those above it):
 - `ui_game.jl` — in-game ImGui windows: inspector (dispatched on coord type), velocity tracker, toolbar, property box, space map overlay with encounter planning
 - `ui_menus.jl` — pause menu, developer utilities (proc gen tools, docking viewer)
 - `ui_learning.jl` — Learning Helper overlay and Tutorial Detail pane UI
-- `startmenu.jl` — main menu loop (New Map, Load Map, Tutorials, Quit), explorer session orchestration
+- `recording.jl` — in-game screen recording (FFmpeg H.264) and PNG screenshots, `RecordingState`, frame capture via `glReadPixels`
+- `startmenu.jl` — main menu loop (Launch Teaser, New Game, Load Game, Tutorials, Quit), session state machine (`MapSession`/`SandboxSession` with level progression)
 - `initial_window_setup.jl` — GLFW window creation, OpenGL context, CImGui/ImPlot setup, scroll/FPS callbacks
 - `demo_maps/mapgen_*.jl` — map generator functions for tutorial levels (8 currently in use)
 
@@ -169,7 +170,7 @@ Note: `get_all_components(gamemap; ship_name=:primary)` only returns components 
 
 ### Coordinate System (HexFrame)
 
-Four coordinate systems for flat-top hexagonal grids:
+Six coordinate types for flat-top hexagonal grids:
 - **`CartesianCoord`** — screen/world space (1.0 = hex centre to vertex)
 - **`TileCoord`** — integer axial, identifies a hex tile
 - **`AxialCoord`** — continuous axial for sub-tile precision
@@ -191,8 +192,8 @@ Five element types (`ElementTypes` enum): `CONST_RESISTOR`, `CONST_VOLTAGE`, `CO
 
 ### Space Map and Encounters
 
-- `SpaceMapEmpty` (velocity only, tutorials) or `SpaceMapState` (full simulation with encounters and manoeuvres)
-- `ManoeuvreData`: 4 active phases (`PHASE_APPROACH_BURN` through `PHASE_ENCOUNTER_READY`), with a deprecated `PHASE_WAIT_APPROACH` value retained only for legacy save loading
+- `SpaceMapEmpty` (velocity only, tutorials; defined in `FlowMap`) or `SpaceMapState` (full simulation with encounters; defined in `HexFlowProcGen`)
+- `ManoeuvreData`: 4 active phases (`PHASE_APPROACH_BURN`, `PHASE_COAST`, `PHASE_CAPTURE_BURN`, `PHASE_ENCOUNTER_READY`)
 
 ### Docking System
 
@@ -222,7 +223,7 @@ Each tick in the background thread runs in this order:
 ### Command System
 
 The render thread **never directly mutates `GameMap`**. All changes flow through typed `MapEditCommand` subtypes:
-`SetTileCommand`, `SetPipeBehaviorCommand`, `MoveCommand{T}`, `DeleteAtCommand{T}`, `ClickTileCommand`, `DoActionCommand`, `AddShipSurfaceCommand`, `RemoveShipSurfaceCommand`, `MapOverrideCommand`.
+`SetTileCommand`, `SetPipeBehaviorCommand`, `MoveCommand{T}`, `DeleteAtCommand{T}`, `ClickTileCommand`, `DoActionCommand`, `AddShipSurfaceCommand`, `RemoveShipSurfaceCommand`, `MapOverrideCommand`, `AddEncounterShipCommand`, `RedockShipCommand`.
 
 Commands are enqueued via `try_enqueue_command!`. Processing uses sandbox validation (deep-copy trial run) before applying to the real map.
 
@@ -243,7 +244,7 @@ After each tick, the background thread deep-copies all state into a `FlowCalcula
 | `GasSpriteRenderProgram` | Animated blocky pixel-noise gas effect |
 | `ParticleRenderProgram` | Points to billboarded quads via geometry shader |
 
-**Render helper functions** (return `RenderCommand`): `render_basic_tile`, `render_basic_pipe`, `render_basic_sprite`, `render_liquid_tile`, `render_gas_tile`, `render_liquid_sprite`, `render_gas_sprite`, `render_beam!`, `render_pipe`, `setup_basesprite_uniforms`.
+**Render helper functions**: `render_basic_tile`, `render_basic_pipe`, `render_basic_sprite`, `render_liquid_tile`, `render_gas_tile`, `render_liquid_sprite`, `render_gas_sprite`, `render_beam!`, `render_pipe`, `setup_basesprite_uniforms`. Most return `RenderCommand`; `render_pipe` returns `Vector{RenderCommand}` and `render_beam!` pushes to a queue.
 
 **Render height constants** (ascending Z-order, defined in `HexFlowRendering`, not exported -- use `HexFlowRendering.RENDER_HEIGHT_*`):
 
@@ -289,11 +290,11 @@ Components use a **fragment composition** pattern. Complex behaviours are built 
 
 ### Existing Components
 
-Concrete instances defined in `src/components.jl` (`component_list` has 11 entries):
-- **Tanks**: `TriGasTank`, `TriLiquidTank` (both `ThevininTankCompBehav`)
+Concrete instances defined in `src/components.jl` (`component_list` has 15 entries):
+- **Tanks**: `TriGasTank`, `TriLiquidTank` (both `ThevininTankCompBehav`), `PressureFedLiquidTank` (`PressureFedTankCompBehav`)
 - **Nozzles**: `TinyNozzle`, `SmallNozzle`, `MediumNozzle`, `SwitchedTinyNozzle`, `BasicDecompChamber`
 - **Pumps**: `TurboPump`, `ElecTurboPump`, `ElecTransferPump`
-- **Valves**: `BigAdjustableValve`
+- **Valves**: `LargeAdjValve`, `TinyAdjValve` (stepped), `LargeOnOffValve`, `TinyOnOffValve` (bool) — all `StandardValveCompBehav{S,V}`
 - **Pipes (edge)**: `ScrapPipe` (2.0 S), `BigPipe` (10.0 S)
 
 ---
@@ -303,7 +304,7 @@ Concrete instances defined in `src/components.jl` (`component_list` has 11 entri
 ### Development (recommended)
 
 ```shell
-julia --project=. --threads=2 src/repl_launch.jl
+julia --project=. --threads=2,1 --gcthreads=1,1 src/repl_launch.jl
 ```
 
 Uses Revise for hot-reloading. The FlowCalculator runs on a background thread -- **at least 2 threads are required**. Running the launch script after making changes is the primary way to surface compile-time and runtime errors, unless told otherwise.
@@ -311,7 +312,7 @@ Uses Revise for hot-reloading. The FlowCalculator runs on a background thread --
 ### Production
 
 ```shell
-julia --project=. --threads=2 src/julia_main.jl
+julia --project=. --threads=2,1 --gcthreads=1,1 src/julia_main.jl
 ```
 
 No Revise. Verifies required artifacts before loading. Defines `@main` for JuliaC compilation.
@@ -360,7 +361,7 @@ Packages with tests: `FlowMap`, `FlowEngine`, `HexFlowCalculator`, `HexFlowProcG
 
 ### Modifying Public APIs
 - When modifying exported struct fields or function signatures, search for the symbol across the entire repo -- packages re-export and `using` each other extensively
-- JLD2 serialisation may need legacy format handling (see `rconvert` registrations in `src/map_loading.jl`)
+- JLD2 serialisation may need reconstruction hooks in `src/map_loading.jl` when load-time control is required
 
 ### Circuit/Electrical Changes
 - Preserve pruning/ground-search ordering in `FlowEngine`: `prune` then `ground_search` then `clear_dangling_dependants`
@@ -368,5 +369,5 @@ Packages with tests: `FlowMap`, `FlowEngine`, `HexFlowCalculator`, `HexFlowProcG
 - Adding new `ElementTypes` requires updating MNA matrix stamping (`MNA_getA`, `MNA_getZ`) and `abs_element_get_current`
 
 ### Modifying GameMap/Save-Related Structs
-- Adding fields to `GameMap` or types stored within it (e.g., `TutorialState`) requires a JLD2 `rconvert` upgrade path in `src/map_loading.jl` for loading older saves
-- Struct defaults alone are not sufficient -- older saves won't have the field at all
+- Adding fields to `GameMap` or types stored within it (e.g., `TutorialState`) requires a JLD2 `rconvert` reconstruction hook in `src/map_loading.jl` if you need older saves to keep loading
+- Struct defaults alone are not sufficient when loading files that predate the new field

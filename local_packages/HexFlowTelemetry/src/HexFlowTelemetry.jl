@@ -48,14 +48,14 @@ end
 
 # Pre-configured diagnostic instances for each timer
 const render_loop_diagnostic_config::DiagnosticConfig = DiagnosticConfig(
-    false,                               # disabled
+    true,                               # enabled
     render_loop_timer,                   # timer
     1000,                                # interval (frames)
     "RENDER LOOP (Main Thread)"         # name
 )
 
 const flowcalc_loop_diagnostic_config::DiagnosticConfig = DiagnosticConfig(
-    false,                               # disabled
+    true,                               # enabled
     flowcalc_loop_timer,                 # timer
     500,                                 # interval (ticks)
     "FLOW CALCULATOR LOOP (Background Thread)"  # name
@@ -101,6 +101,8 @@ end
 
 "Print garbage collector statistics. Thread-safe - call from render loop only."
 function print_gc_statistics()
+    global gc_frame_counter
+    
     if !gc_telemetry_enabled
         return nothing
     end

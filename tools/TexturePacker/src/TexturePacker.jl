@@ -225,12 +225,7 @@ function rect_pack(names::Vector{Symbol}, sizes::Dict{Symbol, Tuple{Int,Int}}, i
             atlas_width += width_step
             continue
         end
-        if failed
-            atlas_width += width_step
-            continue
-        else
-            return packed, atlas_width
-        end
+        return packed, atlas_width
     end
 end
 
@@ -280,7 +275,7 @@ function pack_textures(; source_dir::AbstractString, out_dir::AbstractString,
     atlas_w, atlas_h = widths(atlas_rect)
     @info "packed sprites" num_sprites=length(packed_images_dict) method=pack_method atlas_size=string(atlas_w, "x", atlas_h)
 
-    # --- NEW: compute UV transforms (uv_scale, uv_offset) for each packed sprite ---
+    # Compute UV transforms (uv_scale, uv_offset) for each packed sprite
     # Mapping: given sprite-local UV (u,v) in [0,1] (origin at top-left to match image)
     # atlas UV = uv_offset + uv_scale .* (u,v)
     uv_transforms = Dict{Symbol, Any}()

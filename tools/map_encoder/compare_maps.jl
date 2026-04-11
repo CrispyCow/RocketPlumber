@@ -12,14 +12,11 @@ Usage:
     julia --project=. tools/map_encoder/compare_maps.jl <original_map_path> <generator_function_file>
 
 Arguments:
-    original_map_path     - Path to original map file (.jld2). Can be:
-                            - Relative path from current directory (e.g., src/demo_maps/basicplumbing.jld2)
-                            - Absolute path (e.g., C:/path/to/map.jld2)
-                            - Just a name (e.g., autotest1) - will look in maps/ folder for backwards compatibility
+    original_map_path     - Path to original map file (.jld2). Can be relative to the
+                            current directory or absolute.
     generator_function_file - Path to .jl file containing the mapgen_<name>() function
 
 Examples:
-    julia --project=. tools/map_encoder/compare_maps.jl autotest1 tutorials/mapgen_autotest1.jl
     julia --project=. tools/map_encoder/compare_maps.jl src/demo_maps/basicplumbing.jld2 tutorials/mapgen_basicplumbing.jl
 
 Note: This script must be run from the project root directory with --project=. to access dependencies.
@@ -39,27 +36,14 @@ using FlowEngine
 include(joinpath(dirname(@__FILE__), "..", "..", "src", "components.jl"))
 include(joinpath(dirname(@__FILE__), "..", "..", "src", "map_loading.jl"))
 
-# Helper function to resolve map path from various input formats
+# Helper function to resolve a .jld2 map path
 function resolve_map_path(input::String)
-    # If input already has .jld2 extension, treat as path
-    if endswith(input, ".jld2")
-        # Check if it exists as-is (absolute or relative to cwd)
-        if isfile(input)
-            return input
-        else
-            error("Map file not found: $input")
-        end
-    else
-        # No extension - assume it's a map name in the maps/ folder (backwards compatibility)
-        map_path = joinpath("maps", "$input.jld2")
-        if !isfile(map_path)
-            error("Map file not found: $map_path")
-        end
-        return map_path
-    end
+    endswith(input, ".jld2") || error("Map input must be a path to a .jld2 file: $input")
+    isfile(input) || error("Map file not found: $input")
+    return input
 end
 
-"Load a map through the app's canonical save-upgrade path."
+"Load a map through the app's canonical save-loading path."
 function load_game_map(map_input::Union{Nothing, String})
     return isnothing(map_input) ? loadmap(nothing) : loadmap(resolve_map_path(map_input))
 end

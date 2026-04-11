@@ -91,9 +91,6 @@ const hex_vert_vecs = Dict(
     S_NEG => AxialCoord(1 / 3, 1 / 3)
 )
 
-"Reverse of hex_vert_vecs."
-const rev_hex_vert_vecs = Dict(value => key for (key, value) in hex_vert_vecs)
-
 "Creates a 2D rotation matrix, θ in degrees."
 function rotmat_2D(θ::Real)
     θ_float = convert(Float32, θ)
@@ -144,7 +141,7 @@ struct EdgeCoord <: AbstractDerivedCoordSystem
 end
 @struct_hash_equal EdgeCoord
 
-"Dict of vectors to neighbour hexes, will move to the tile counter-clockwise from the key axis."
+"Dict of offset vectors to neighbour hexes, keyed by the axis direction pointing towards the neighbour."
 const hex_neighbour_tiles = Dict(
     Q_POS => TileCoord(1, -1),
     R_NEG => TileCoord(0, -1),
@@ -230,7 +227,7 @@ function to_proper(vertex::VertexCoord)::VertexCoord
         return vertex
     end
 
-    # otherwise use precomputed adjacenecies
+    # otherwise use precomputed adjacencies
     tile::TileCoord = TileCoord(0, 0)
     dir::HexAxis = Q_POS
     if vertex.dir == R_NEG

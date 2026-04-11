@@ -7,6 +7,14 @@ using RenderEngine
 using StaticArrays
 using HexComponentsAPI
 
+@testset "Texture atlas PNG loading" begin
+    texture_atlas_dir = joinpath(dirname(dirname(pkgdir(HexFlowRendering))), "tools", "TexturePacker", "outputs")
+    atlas_image = HexFlowRendering.load_texatlas1_png(texture_atlas_dir)
+
+    @test ndims(atlas_image) == 2
+    @test !isempty(atlas_image)
+end
+
 # Test combined surface retrieval
 gm = GameMap()
 set_surface_tile!(gm, TileCoord(0, 0))

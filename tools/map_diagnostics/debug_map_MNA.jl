@@ -55,8 +55,8 @@ using HexFlowPipeComponents, HexFlowBasicPipes
 # components.jl defines concrete component instances and
 # encounter_system_config (referenced by map_loading.jl's SpaceMapState rconvert).
 #
-# map_loading.jl defines loadmap(), _build_map_typemap(), and all
-# JLD2.rconvert registrations for legacy map formats.
+# map_loading.jl defines loadmap(), _build_map_typemap(), and the
+# JLD2 reconstruction hooks used by current save loading.
 # ===============================================================
 
 const _src_dir = normpath(joinpath(@__DIR__, "..", "..", "src"))

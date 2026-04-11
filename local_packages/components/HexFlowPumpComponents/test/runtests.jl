@@ -46,6 +46,11 @@ function make_derived_state(tile::TileCoord = TEST_TILE; rotation::HexAxis = TES
     return DerivedMapState(nodeactualfluids = nodeactualfluids)
 end
 
+const TURBOPUMP_STATIC_FRICTION_BIAS = 200.0
+
+"Compute the turbopump's per-tick friction power using the same static bias as the implementation."
+turbopump_friction_power(comp::TurboPumpCompBehav, rpm::Float64)::Float64 = comp.rotor.friction_coefficient * (rpm + TURBOPUMP_STATIC_FRICTION_BIAS)
+
 "Construct a representative variable-conductance turbopump for tests."
 function make_turbopump(
         ;
@@ -200,7 +205,7 @@ end
     friction_only = make_turbopump(current_rpm = 1200.0, rotor_inertia = 6000.0, friction_coefficient = 0.1)
     update_flowbehav!(friction_only; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = MNA_State(), derivedmapstate = make_derived_state())
     applied_inertia = friction_only.rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
-    friction_power = friction_only.rotor.friction_coefficient * (1200.0 + 100.0)
+    friction_power = turbopump_friction_power(friction_only, 1200.0)
     friction_expected = 1200.0 - friction_power / (applied_inertia * BASE_UPS)
     @test get_current_rpm(friction_only.rotor) ≈ friction_expected
 
@@ -216,7 +221,7 @@ end
     exhaust_velocity = HexFluids.lookup_fluid_exhaust_velocity(HexFluids.COLD_GAS)::Float64
     turbine_power = density * turbine_current * exhaust_velocity^2 * HexFlowPumpComponents.TURBOPUMP_TURBINE_POWER_SCALING
     spinup_applied_inertia = spun_up.rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
-    spinup_friction = spun_up.rotor.friction_coefficient * 100.0
+    spinup_friction = turbopump_friction_power(spun_up, 0.0)
     spinup_expected = (spun_up.cycle_efficiency * turbine_power - spinup_friction) / (spinup_applied_inertia * BASE_UPS)
     @test get_current_rpm(spun_up.rotor) ≈ spinup_expected
 
@@ -228,7 +233,7 @@ end
     load_applied_inertia = loaded.rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
     pump_voltage = loaded.max_pump_voltage * 0.5  # rpm_fraction = 0.5
     pump_power = pump_voltage * 5.0
-    load_friction = loaded.rotor.friction_coefficient * (1500.0 + 100.0)
+    load_friction = turbopump_friction_power(loaded, 1500.0)
     load_expected = 1500.0 + (-pump_power - load_friction) / (load_applied_inertia * BASE_UPS)
     @test get_current_rpm(loaded.rotor) ≈ load_expected
 
@@ -238,7 +243,7 @@ end
     reversed_mna.vsource_currents[ElementID(TEST_TILE, 1)] = 0.5
     update_flowbehav!(reversed; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = reversed_mna, derivedmapstate = make_derived_state())
     reversed_applied_inertia = reversed.rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
-    reversed_friction = reversed.rotor.friction_coefficient * (1200.0 + 100.0)
+    reversed_friction = turbopump_friction_power(reversed, 1200.0)
     reversed_expected = 1200.0 - reversed_friction / (reversed_applied_inertia * BASE_UPS)
     @test is_stalled(reversed.stall_state)
     @test get_current_rpm(reversed.rotor) ≈ reversed_expected

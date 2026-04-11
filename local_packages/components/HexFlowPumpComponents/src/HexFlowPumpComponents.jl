@@ -286,7 +286,7 @@ function update_flowbehav!(comp::TurboPumpCompBehav; mna_state::MNA_State, tile:
     s_pos_voltage = get(mna_state.node_voltages, s_pos_node, 0.0)
     turbine_g = effective_turbine_conductance(comp)
     turbine_current = max(s_pos_voltage * turbine_g, 0.0)
-    # Look up the fluid at the nozzle's input node
+    # Look up the fluid at the turbine's input node
     fluid = get(derivedmapstate.nodeactualfluids, s_pos_node, HexFluids.NONE)
     density = something(lookup_fluid_density(fluid), 0.0)
     exhaust_velocity = something(lookup_fluid_exhaust_velocity(fluid), 0.0)

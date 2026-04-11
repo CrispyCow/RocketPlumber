@@ -1,6 +1,6 @@
 module HexFlowControl
 
-using HexFrame, HexFluids, HexComponentsAPI
+using HexFrame, HexComponentsAPI
 using StaticArrays, GLFW, Dates
 
 # Type exports

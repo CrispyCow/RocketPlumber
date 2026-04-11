@@ -157,9 +157,8 @@ end
     richness::Float64 = 0.0                             # Richness at spawn time (cached for UI display)
 end
 
-"Manoeuvre phase for an intercept plan. New manoeuvres use APPROACH_BURN → COAST → CAPTURE_BURN → ENCOUNTER_READY; WAIT_APPROACH is retained only for legacy save loading."
+"Manoeuvre phase for an intercept plan. New manoeuvres use APPROACH_BURN → COAST → CAPTURE_BURN → ENCOUNTER_READY."
 @enum ManoeuvrePhase begin
-    PHASE_WAIT_APPROACH = 0     # Deprecated load-only compatibility phase
     PHASE_APPROACH_BURN = 1     # Initial burn onto the planned approach trajectory
     PHASE_COAST = 2             # Coasting toward intercept
     PHASE_CAPTURE_BURN = 3      # Velocity-match / capture burn at intercept
@@ -168,19 +167,11 @@ end
 
 "Return a player-facing description of the given manoeuvre phase."
 function phase_description(phase::ManoeuvrePhase)::String
-    phase == PHASE_WAIT_APPROACH && return "Waiting for Approach Burn"
     phase == PHASE_APPROACH_BURN && return "Performing Approach Burn"
     phase == PHASE_COAST && return "Waiting for Target Intercept"
     phase == PHASE_CAPTURE_BURN && return "Performing Capture Burn"
     phase == PHASE_ENCOUNTER_READY && return "Target Reached"
     return "Unknown manoeuvre phase"
-end
-
-"Deprecated load-only enum retained for compatibility with older saves."
-@enum InterceptStrategy::UInt8 begin
-    STRATEGY_WAIT_FOR_APPROACH = 0
-    STRATEGY_IMMEDIATE_APPROACH = 1
-    STRATEGY_DIRECT_INTERCEPT = 2
 end
 
 """
@@ -198,14 +189,14 @@ Reference frames:
     # ── Mutable state (updated during flight) ──
     phase::ManoeuvrePhase = PHASE_APPROACH_BURN
     burn_target_dv::SVector{2, Float64} = SVector(0.0, 0.0)      # Ship-space: total ΔV the current burn aims to achieve
-    burn_remaining_dv::SVector{2, Float64} = SVector(0.0, 0.0)    # Ship-space: ΔV still to apply in the current burn
+    burn_remaining_dv::SVector{2, Float64} = SVector(0.0, 0.0)   # Ship-space: ΔV still to apply in the current burn
 
     # ── Planned constants (set at planning time, immutable after construction) ──
-    const approach_burn_dv::SVector{2, Float64}                                    # Space-map-space ΔV for the first burn
-    const capture_burn_dv::SVector{2, Float64}                                     # Space-map-space ΔV for the intercept burn
-    const approach_burn_time::Float64 = 0.0              # Time (years) when the first burn begins
-    const intercept_time::Float64 = 0.0                  # Time (years) when the capture burn begins
-    const target_encounter_index::Int = 0               # Index into encounter_points vector
+    const approach_burn_dv::SVector{2, Float64}                            # Space-map-space ΔV for the first burn
+    const capture_burn_dv::SVector{2, Float64}                             # Space-map-space ΔV for the intercept burn
+    const approach_burn_time::Float64 = 0.0                                # Time (years) when the first burn begins
+    const intercept_time::Float64 = 0.0                                    # Time (years) when the capture burn begins
+    const target_encounter_index::Int = 0                                  # Index into encounter_points vector
     const capture_burn_position::SVector{2, Float64} = SVector(0.0, 0.0)   # Position where intercept / capture burn occurs
 end
 @struct_hash_equal ManoeuvreData
@@ -213,7 +204,7 @@ end
 "Abstract base for all space map representations."
 abstract type AbstractSpaceMap end
 
-"Minimal space map placeholder that only stores ship velocity. Used for tutorials and old saves."
+"Minimal space map placeholder that only stores ship velocity. Used for tutorials and maps without encounter state."
 @kwdef mutable struct SpaceMapEmpty <: AbstractSpaceMap
     velocity::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
 end

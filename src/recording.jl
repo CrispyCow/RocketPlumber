@@ -7,7 +7,7 @@
 # screenshots written through Julia's image stack.
 
 using Dates: Dates
-using FileIO, ImageIO, ColorTypes
+using PNGFiles, ColorTypes
 
 # ===============================================================
 # Recording State
@@ -132,6 +132,12 @@ function ffmpeg_log_text(rec::RecordingState)
     return String(copy(rec.ffmpeg_log_tail))
 end
 
+"Save a screenshot image using the direct PNG-only runtime path."
+function save_png_screenshot(output_path::AbstractString, screenshot_image)
+    PNGFiles.save(output_path, screenshot_image)
+    return nothing
+end
+
 "Capture the current framebuffer and save it as a PNG screenshot."
 function save_screenshot!(rec::RecordingState, fb_width::Int32, fb_height::Int32, console_push::Function)
     output_dir = capture_output_dir()
@@ -144,7 +150,7 @@ function save_screenshot!(rec::RecordingState, fb_width::Int32, fb_height::Int32
     try
         capture_framebuffer!(rec.screenshot_buffer, fb_width, fb_height)
         screenshot_image = framebuffer_rgba_to_image(rec.screenshot_buffer, fb_width, fb_height)
-        save(output_path, screenshot_image)
+        save_png_screenshot(output_path, screenshot_image)
         console_push("Screenshot saved: $(output_path)")
         @info "Screenshot saved: $(output_path)"
     catch e

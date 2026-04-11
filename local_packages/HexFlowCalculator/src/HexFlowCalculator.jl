@@ -872,7 +872,7 @@ function process_command!(
 
         # rethrow if requested
         if throw_errors
-            println("Rethrowing sandbox error as requested: $sandbox_error")
+            @warn "Rethrowing sandbox error" exception = sandbox_error
             rethrow(sandbox_error)
         end
     end
@@ -1346,12 +1346,7 @@ function update_manoeuvre_phase!(gamestate::GameState, gamemap::GameMap, ipc::Fl
     thrust_mag = norm(gamestate.thrust)
     console_push = ipc.console_push
 
-    if man.phase == FlowMap.PHASE_WAIT_APPROACH
-        clear_active_manoeuvre!(gamemap)
-        console_push("Manoeuvre cancelled: encountered deprecated wait phase after load migration.")
-        return nothing
-
-    elseif man.phase == PHASE_APPROACH_BURN
+    if man.phase == PHASE_APPROACH_BURN
         # Guards: time-warp during a burn invalidates ΔV integration
         cancel_if_time_progressing!(gamemap; console_push) && return nothing
 

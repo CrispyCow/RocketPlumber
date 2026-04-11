@@ -63,13 +63,12 @@ function mapgen_flowdemo()
 
     # Gas tanks - Create separate instances for each tank (stateful components)
     # Using deepcopy pattern for multiple identical tanks
-    # Tanks are slightly depleted from initial state
     tank_template = ThevininTankCompBehav(
         GasTankBehavFrag, 3;
         fluid = HexFluids.COLD_GAS,
         max_charge = 200,
         max_voltage = 50,
-        initial_charge = 200.0,  # Slightly depleted from full charge
+        initial_charge = 200.0,
         series_conductance = 5.0
     )
 

@@ -12,7 +12,7 @@ layout(std140) uniform ViewBlock {mat3 view_transform;};
 // transform the texcoords from sprite space to that sprites section of the texture atlas space
 uniform vec2  uv_offset;
 uniform vec2  uv_scale;
-// scales and offsets sprite quad to account for sprite size, and offset cropping of transaprent pixels
+// scales and offsets sprite quad to account for sprite size, and offset cropping of transparent pixels
 uniform vec2  sprite_scale;
 uniform vec2  sprite_offset;
 // sprite rotation applied before scaling and offsetting (for animation effects)

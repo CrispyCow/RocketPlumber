@@ -5,9 +5,11 @@
 "Checks Julia thread count and moves IO to separate thread"
 function configure_threads()
     # Check threads (at least 2 required so FlowCalculator can run in background)
-    @info "Julia threads available: $(Threads.nthreads())"
-    if Threads.nthreads() < 2
-        @warn "Only $(Threads.nthreads()) thread(s) available. Consider starting Julia with --threads=auto or --threads=2 for proper FlowCalculator operation"
+    default_threads = Threads.nthreads(:default)
+    interactive_threads = Threads.nthreads(:interactive)
+    @info "Julia threads available: default=$(default_threads), interactive=$(interactive_threads)"
+    if default_threads < 2
+        @warn "Only $(default_threads) default thread(s) available. Consider starting Julia with --threads=2,1 --gcthreads=1,1 for proper FlowCalculator operation"
     end
     Base.Experimental.make_io_thread() # Move scheduler to different thread so it's not blocked by OpenGL loops
     return nothing
@@ -207,7 +209,7 @@ let
         if elapsed > update_period && state.frame_count > 0
             measured_fps = state.frame_count / elapsed
             state.smoothed_fps = state.smoothed_fps * 0.5 + measured_fps * 0.5  # Exponential moving average
-            GLFW.SetWindowTitle(window, @sprintf("opengl @ fps: %.2f %s", state.smoothed_fps, suffix))
+            GLFW.SetWindowTitle(window, @sprintf("Rocket Plumber @ fps: %.1f %s", state.smoothed_fps, suffix))
 
             state.previous = current
             state.frame_count = 0

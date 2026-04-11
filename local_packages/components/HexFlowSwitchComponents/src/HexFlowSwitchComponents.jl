@@ -52,9 +52,6 @@ struct SwitchBehavFrag
     state::SwitchState
 end
 
-# Temporary alias for backward compatibility with old JLD2 files
-const SwitchBehaviorFrag = SwitchBehavFrag
-
 "Calculate exponential growth_factor (k) from linear change_rate."
 function calculate_growth_factor(max_conductance::Float64, min_conductance::Float64, change_rate::Float64)::Float64
     conductance_range = max_conductance - min_conductance
@@ -287,13 +284,6 @@ function get_target_percentage(switch::SwitchBehavFrag)::Float64
         switch.growth_factor
     )
 end
-
-"Abstract type for component behaviors that delegate to a SwitchBehavFrag"
-abstract type AbstractSwitchBehavior <: ComponentBehavior end
-produce_rel_elements(behav::T) where {T <: AbstractSwitchBehavior} = produce_rel_elements(behav.switch)
-get_tunables(behav::T) where {T <: AbstractSwitchBehavior} = get_tunables(behav.switch)
-set_tunables(behav::T, tunables::NTuple{N, Real}) where {N, T <: AbstractSwitchBehavior} = @set behav.switch = set_tunables(behav.switch, tunables)
-update_flowbehav!(behav::T; kwargs...) where {T <: AbstractSwitchBehavior} = update_flowbehav!(behav.switch; kwargs...)
 
 "Abstract type for switch behaviour fragments that can be composed into a valve."
 abstract type AbstractSwitchBehavFrag end
@@ -580,8 +570,7 @@ produce_rel_elements(comp::StandardValveCompBehav) = produce_rel_elements(comp.s
 update_flowbehav!(comp::StandardValveCompBehav; kwargs...) = update_flowbehav!(comp.switch; kwargs...)
 get_fluidtags(::StandardValveCompBehav) = NodeFluidTags()
 
-get_tunables(comp::StandardValveCompBehav{SteppedSwitchBehavFrag}) = get_tunables(comp.switch)
-get_tunables(comp::StandardValveCompBehav{BoolSwitchBehavFrag})    = get_tunables(comp.switch)
+get_tunables(comp::StandardValveCompBehav) = get_tunables(comp.switch)
 
 function set_tunables(comp::StandardValveCompBehav{SteppedSwitchBehavFrag, V}, tunables::NTuple{4, Real}) where V
     return StandardValveCompBehav{SteppedSwitchBehavFrag, V}(set_tunables(comp.switch, tunables))

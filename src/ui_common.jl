@@ -68,8 +68,9 @@ end
 Return (blocked::Bool, reason::String) for whether time-warping should be blocked.
 - Blocks if the ship is producing thrust above the manoeuvre threshold.
 - Blocks if an active manoeuvre is currently in a burn phase (approach or capture).
+- Blocks if the game is currently paused.
 """
-function is_timewarp_blocked(gamemap::GameMap, gamestate::GameState)::Tuple{Bool, String}
+function is_timewarp_blocked(gamemap::GameMap, gamestate::GameState, flowcalc_ipc::FlowCalculatorIPC)::Tuple{Bool, String}
     # Thrust-based blocker
     if norm(gamestate.thrust) > MANOEUVRE_THRUST_THRESHOLD
         return (true, "Cannot time-warp while engines are firing.")
@@ -81,6 +82,12 @@ function is_timewarp_blocked(gamemap::GameMap, gamestate::GameState)::Tuple{Bool
         if man.phase == PHASE_APPROACH_BURN || man.phase == PHASE_CAPTURE_BURN
             return (true, "Cannot time-warp during a manoeuvre burn; complete the burn or cancel the manoeuvre first.")
         end
+    end
+
+    # Paused blocker
+    is_paused = @atomic flowcalc_ipc.shared_state.is_paused
+    if is_paused
+        return (true, "Cannot time-warp while the game is paused.")
     end
 
     return (false, "")

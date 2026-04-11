@@ -120,13 +120,6 @@ is_sandbox_learning(::AbstractLearningSystem)::Bool = false
 is_sandbox_learning(::SandboxLearningState)::Bool = true
 is_sandbox_learning(state::LearningSystemState)::Bool = is_sandbox_learning(state.map_learning)
 
-"Get the persistent learning progress when available."
-get_learning_progress(progress::LearningProgress)::LearningProgress = progress
-get_learning_progress(::AbstractLearningSystem)::Nothing = nothing
-
-"Get the sandbox tutorial state stored on a sandbox map."
-get_sandbox_tutorial_state(learning_system::SandboxLearningState)::TutorialState = learning_system.tutorial_state
-
 "Get the per-entry tutorial state for the active map learning system."
 function get_current_tutorial_state(learning_system::LearningProgress, id::Symbol)::TutorialState
     return get(learning_system.tutorials, id, TutorialState())

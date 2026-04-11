@@ -184,7 +184,7 @@ Packages with tests: `FlowMap`, `FlowEngine`, `HexFlowCalculator`, `HexFlowProcG
 
 ### Step 5: Integration Testing
 Test the changes by running the development script and iteratively solve any errors that result:
-- Execute: `julia --project=. --threads=2 src/repl_launch.jl`
+- Execute: `julia --project=. --threads=2,1 --gcthreads=1,1 src/repl_launch.jl`
 - Note: The game can take a very long time to fully load
 - I will have to interact with it to test the new features
 - **Do not consider testing done until you see the script exits on its own without errors**

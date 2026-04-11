@@ -36,7 +36,6 @@ function poll_keys!(viewstate::ViewState, window::GLFW.Window)
     get_instate(GLFW.KEY_Q, window) && (viewstate.view_zoom *= zoom_factor_out)
     get_instate(GLFW.KEY_E, window) && (viewstate.view_zoom *= zoom_factor_in)
 
-    # === NEW: Apply zoom and pan limits ===
     apply_view_limits!(viewstate)
 
     return nothing

@@ -201,7 +201,6 @@ function cleanup!(flowcalc_ipc::FlowCalculatorIPC, globjmap::GLObjectMap, window
     @info "Cleaning up OpenGL resources"
     teardown_glmap(globjmap)
     return nothing
-    # CImGui teardown handled by start menu now
 end
 
 # (Map loading/saving and JLD2 serialisation are in map_loading.jl)

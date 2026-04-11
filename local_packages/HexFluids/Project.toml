@@ -4,5 +4,9 @@ authors = ["Christos Lillis <christos.lillis@gmail.com>"]
 version = "0.1.0"
 
 [deps]
-HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"
+
+[extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

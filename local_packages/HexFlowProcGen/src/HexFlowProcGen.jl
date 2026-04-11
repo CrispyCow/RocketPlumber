@@ -1,6 +1,6 @@
 module HexFlowProcGen
 
-using Random, LinearAlgebra, GeometryBasics, StaticArrays, Printf
+using Random, LinearAlgebra, StaticArrays, Printf
 using HexFrame, FlowMap, SquirrelNoise, HexComponentsAPI, FlowEngine, HexFluids
 using StructEquality: @struct_hash_equal
 

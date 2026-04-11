@@ -312,14 +312,13 @@ function PressureFedTankBehavFrag(;
         max_gas_pressure::Real,
         gas_node::NodePos,
         liquid_stallstate::Union{Nothing, StallBehavFrag} = nothing,
-        gas_stallstate::StallBehavFrag = StallBehavFrag(),
-        stallstate::Union{Nothing, StallBehavFrag} = nothing
+    gas_stallstate::StallBehavFrag = StallBehavFrag()
     )
     max_liquid_charge_f = float(max_liquid_charge)
     max_gas_pressure_f = float(max_gas_pressure)
     initial_liquid_charge_f = float(initial_liquid_charge)
     initial_gas_charge_f = float(initial_gas_charge)
-    liquid_stallstate_f = something(liquid_stallstate, stallstate, StallBehavFrag())
+    liquid_stallstate_f = something(liquid_stallstate, StallBehavFrag())
 
     max_liquid_charge_f > 0.0 || throw(ArgumentError("max_liquid_charge must be positive"))
     max_gas_pressure_f > 0.0 || throw(ArgumentError("max_gas_pressure must be positive"))

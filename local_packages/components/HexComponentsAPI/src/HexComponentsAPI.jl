@@ -320,4 +320,4 @@ set_tunables(behav::T, tunables::NTuple{N, Real}) where {N, T <: PipeBehavior} =
 "Default get_tile_pipe_equivalent returns nothing, indicating no tile equivalent"
 get_tile_pipe_equivalent(behav::T) where {T <: PipeBehavior} = nothing
 
-end # module HexComponents
+end # module HexComponentsAPI

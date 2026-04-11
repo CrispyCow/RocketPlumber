@@ -690,7 +690,7 @@ function MNA_getA(mna_state::MNA_State)
     =#
     pure_B = let
         B = zeros(num_nodes, num_vsource)
-        for (vsource_index, (id, element)) in enumerate(vsources)
+        for (id, element) in vsources
             vsource_index = vsource_lookup[id]
 
             # v1 contributes +1
@@ -873,7 +873,7 @@ function MNA_getZ(mna_state::MNA_State)
     end
 
     # Combine to form z
-    return Z = vcat(I, E)
+    return vcat(I, E)
 end
 
 function MNA_solve(mna_state::MNA_State)
@@ -891,11 +891,7 @@ function MNA_solve(mna_state::MNA_State)
     try
         X = A \ Z
     catch e
-        println("Solve Exception: ", e)
-        println("\n\n A Matrix:")
-        display(A)
-        println("\n\n Z Matrix:")
-        display(Z)
+        @warn "MNA solve failed, returning zero solution" exception = e
         X .= 0.0 # solve failed, just return zeroes
     end
 

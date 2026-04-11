@@ -189,11 +189,8 @@ map.components[TileCoord(1, 1)] = ComponentOnTile(deepcopy(nozzle_template), Hex
 map.components[TileCoord(1, -2)] = ComponentOnTile(deepcopy(nozzle_template), HexFrame.R_POS)
 map.components[TileCoord(2, 0)] = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_POS)
 ```
-map.components[TileCoord(1, -2)] = ComponentOnTile(deepcopy(nozzle_template), HexFrame.R_POS)
-map.components[TileCoord(2, 0)] = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_POS)
-     ```
-     
-     **Which approach to use:**
+
+**Which approach to use:**
      - **Inline creation**: Best for 1-2 components with simple constructors 
      - **Separate variables**: Good for 2 components with descriptive names (e.g., `left_tank`, `right_tank`)
      - **deepcopy**: Best for 3+ identical components to avoid repeating long parameter lists
@@ -250,7 +247,7 @@ map.components[TileCoord(2, 0)] = ComponentOnTile(deepcopy(nozzle_template), Hex
 
 ## Save Loading Note
 
-The encoder and comparison tools now load maps through `src/map_loading.jl` rather than reading raw JLD2 structures directly. That means any save-upgrade logic added there, including component migrations such as `TurboPumpCompBehav`, is part of the supported map-encoding workflow.
+The encoder and comparison tools load maps through `src/map_loading.jl` rather than reading raw JLD2 structures directly. That means any reconstruction hooks kept there are part of the supported map-encoding workflow.
    - Components can only be placed on coordinates in the ship surface
    - Pipe endpoints must connect to nodes adjacent to ship surface tiles
 
@@ -274,7 +271,7 @@ The `GameMap.learning_system` field (which holds tutorial progress, step states,
 For maps that are too complex to hand-craft, use the encoder's `.jl` output mode:
 
 ```bash
-julia --project=. tools/map_encoder/encode_map.jl <mapname> src/demo_maps/mapgen_<mapname>.jl
+julia --project=. tools/map_encoder/encode_map.jl <path/to/map.jld2> src/demo_maps/mapgen_<mapname>.jl
 ```
 
 This produces a working but unformatted mapgen function using `repr()` output for all components. The output will pass the comparison tool but is hard to read. Apply a **reformatting pass** to improve readability:
@@ -300,10 +297,7 @@ This produces a working but unformatted mapgen function using `repr()` output fo
 Use the comparison tool to validate your generated code:
 
 ```bash
-# Option 1: Use a map name (looks in maps/ folder)
-julia --project=. tools/map_encoder/compare_maps.jl <mapname> <path_to_generated_file.jl>
-
-# Option 2: Use a relative or absolute path to the .jld2 file
+# Use a relative or absolute path to the .jld2 file
 julia --project=. tools/map_encoder/compare_maps.jl <path/to/map.jld2> <path_to_generated_file.jl>
 ```
 
@@ -313,17 +307,14 @@ Naming convention:
 
 Examples:
 ```bash
-# Map name (backwards compatible)
-julia --project=. tools/map_encoder/compare_maps.jl autotest1 tutorials/mapgen_autotest1.jl
-
 # Relative path
 julia --project=. tools/map_encoder/compare_maps.jl src/demo_maps/basicplumbing.jld2 tutorials/mapgen_basicplumbing.jl
 
 # Multi-ship example (encoder will generate a `mapgen_<basename>` function - ensure basename is suitable)
-julia --project=. tools/map_encoder/encode_map.jl mulitship_example src/demo_maps/mapgen_mulitship_example.jl
-julia --project=. tools/map_encoder/compare_maps.jl mulitship_example src/demo_maps/mapgen_mulitship_example.jl
+julia --project=. tools/map_encoder/encode_map.jl src/demo_maps/multiship_example.jld2 src/demo_maps/mapgen_multiship_example.jl
+julia --project=. tools/map_encoder/compare_maps.jl src/demo_maps/multiship_example.jld2 src/demo_maps/mapgen_multiship_example.jl
 
-Note: The tool no longer attempts aggressive sanitization. Provide a suitable basename for the generated function (e.g., `mulitship_example` → `mapgen_mulitship_example`).
+Note: The tool no longer attempts aggressive sanitization. Provide a suitable basename for the generated function (e.g., `multiship_example` → `mapgen_multiship_example`).
 ```
 
 The comparison tool performs multiple validation checks:

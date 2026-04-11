@@ -32,7 +32,7 @@
     For interactive development with hot-reloading, use repl_launch.jl instead.
     
     To run directly (testing before compilation):
-        julia --project=. --threads=2 src/julia_main.jl
+        julia --project=. --threads=2,1 --gcthreads=1,1 src/julia_main.jl
 =#
 
 # ===============================================================

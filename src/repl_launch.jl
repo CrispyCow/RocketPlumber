@@ -31,7 +31,7 @@
     For creating compiled executables, use julia_main.jl instead.
     
     To run from shell:
-        julia --project=. --threads=2 src/repl_launch.jl
+        julia --project=. --threads=2,1 --gcthreads=1,1 src/repl_launch.jl
     
     To run from REPL (recommended for development):
         julia> include("src/repl_launch.jl")

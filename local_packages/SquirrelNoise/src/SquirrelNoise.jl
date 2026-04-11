@@ -38,7 +38,6 @@ const SQ5_BIT_NOISE3::UInt32 = UInt32(0x6C736F4B)
 const SQ5_BIT_NOISE4::UInt32 = UInt32(0xB79F3ABB)
 const SQ5_BIT_NOISE5::UInt32 = UInt32(0x1b56c4f5)
 
-const PRIME_NUMBER::Int32 = Int32(198491317)
 const PRIME1::Int32 = Int32(198491317)
 const PRIME2::Int32 = Int32(6542989)
 const PRIME3::Int32 = Int32(357239)
@@ -70,7 +69,7 @@ Get1dNoiseUint(index::Int32, seed::UInt32=0x00000000) = noise_function(index, se
 
 "Get2dNoiseUint(indexX::Int32, indexY::Int32, seed::UInt32=0) -> UInt32 (direct port)."
 function Get2dNoiseUint(indexX::Int32, indexY::Int32, seed::UInt32=0x00000000)
-	return noise_function(Int32(indexX + PRIME_NUMBER * indexY), seed)
+	return noise_function(Int32(indexX + PRIME1 * indexY), seed)
 end
 
 "Get3dNoiseUint(indexX::Int32, indexY::Int32, indexZ::Int32, seed::UInt32=0) -> UInt32 (direct port)."
@@ -233,7 +232,7 @@ Fast-paths for indexable containers; fallback to iteration for sets/dicts.
 function pick_element_helper(collection::T, frac::Float64) where {T}
 	n = length(collection)
 	if n == 0
-		throw(ArgumentError("Cant pick element, collection is empty"))
+		throw(ArgumentError("Can't pick element, collection is empty"))
 	end
 
 	# Clamp frac to [0,1]
@@ -279,7 +278,7 @@ Returns an element from `collection` selected based on the noise value at `point
 function pick_element_from_noise(collection::T, point::NTuple{N,Any}, seed::UInt32=0x00000000) where {T,N}
 	n = length(collection)
 	if n == 0
-		throw(ArgumentError("Cant pick element, collection is empty"))
+		throw(ArgumentError("Can't pick element, collection is empty"))
 	end
 	noise = Float64(get_noise_zero_to_one(point, seed))
 	return pick_element_helper(collection, noise)
@@ -291,7 +290,7 @@ but derives the fractional pick from `rng` instead of a point/seed."
 function pick_element_from_rng(collection::T, rng::Random.AbstractRNG) where {T}
 	n = length(collection)
 	if n == 0
-		throw(ArgumentError("Cant pick element, collection is empty"))
+		throw(ArgumentError("Can't pick element, collection is empty"))
 	end
 
 	frac = rand(rng)
@@ -299,7 +298,7 @@ function pick_element_from_rng(collection::T, rng::Random.AbstractRNG) where {T}
 end
 
 # -------------------------------------------------
-# SquirrelNoise based implimentation of AbstractRNG
+# SquirrelNoise based implementation of AbstractRNG
 # -------------------------------------------------
 
 import Random

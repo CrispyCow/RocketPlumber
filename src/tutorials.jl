@@ -238,7 +238,7 @@ function get_entry_basic_controls()::LearningEntry
                             ),
                             step_blocker = function(inputs::LearningInputs)
                                 has_left_facing_nozzle = has_component_on_tile_matching(inputs.gamemap, function(component_on_tile)
-                                    return is_nozzle = component_on_tile.component isa BasicNozzleCompBehav && component_on_tile.rotation == HexFrame.Q_POS
+                                    return component_on_tile.component isa BasicNozzleCompBehav && component_on_tile.rotation == HexFrame.Q_POS
                                 end)
 
                                 has_left_facing_nozzle && return nothing
@@ -1121,6 +1121,30 @@ function get_entry_turbo_pump_intro()::LearningEntry
     )
 end
 
+function get_entry_screenshots_and_recordings()::LearningEntry
+    return LearningEntry(
+        id = :screenshots_and_recordings,
+        trigger = inputs -> true,
+        priority = 1300,
+        definition = InGameTutorialDef(
+            title = "Screenshots and Recordings",
+            description = "Learn how to capture screenshots and recordings in the game.",
+            steps = [
+                TutorialStep(
+                    heading = "CAPTURING SCREENSHOTS AND CLIPS",
+                    text = tutorial_dedent(
+                        "Rocket Plumber includes a built-in screenshot and recording feature! \
+                        It's a great way to share your gameplay moments or capture any bugs you run into.\n
+                         - Press F12 to capture a screenshot.\n
+                         - Press SHIFT + F12 to start recording a clip, and F12 again to stop.\n
+                        "
+                    ),
+                ),
+            ],
+        ),
+    )
+end
+
 function get_entry_editor_intro()::LearningEntry
     return LearningEntry(
         id = :editor_intro,
@@ -1142,7 +1166,7 @@ function get_entry_editor_intro()::LearningEntry
                         Let's see how to use editor mode and then you can experiment with building your own ship from scratch!"
                     ),
                     step_blocker = function(inputs::LearningInputs)
-                        inputstate = inputs.inputstate.editor_mode && return nothing
+                        inputs.inputstate.editor_mode && return nothing
                         return "Press the grave key (`/~ key next to the 1 on your keyboard) to enter editor mode."
                     end,
                 ),
@@ -1167,7 +1191,7 @@ function get_entry_editor_intro()::LearningEntry
                         To toggle the developer utilities menu, press the \\ key!"
                     ),
                     step_blocker = function(inputs::LearningInputs)
-                        inputstate = inputs.inputstate.dev_utils_menu_active && return nothing
+                        inputs.inputstate.dev_utils_menu_active && return nothing
                         return "Press the \\ key to open the developer utilities menu."
                     end,
                 ),
@@ -1216,6 +1240,7 @@ function get_learning_entries()::Vector{LearningEntry}
         get_entry_fluid_transfer(),
         get_entry_pressure_fed_intro(),
         get_entry_turbo_pump_intro(),
+        get_entry_screenshots_and_recordings(),
         get_entry_editor_intro(),
     ]
 end
@@ -1235,6 +1260,7 @@ function get_explorer_learning_entry_ids()::Vector{Symbol}
         :fluid_transfer,
         :pressure_fed_intro,
         :turbo_pump_intro,
+        :screenshots_and_recordings,
     ]
 end
 
