@@ -308,7 +308,7 @@ function update_flowbehav!(comp::TurboPumpCompBehav; mna_state::MNA_State, tile:
 end
 
 "Renders static turbopump elements: fluid mask, rotor, and static parts."
-function render_base_elem!(queue::Vector{RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     fluidmask_colour = DEFAULT_EMPTY_FLUID_COLOUR
 
     # Fluid mask.
@@ -324,7 +324,7 @@ function render_base_elem!(queue::Vector{RenderCommand}, comp::TurboPumpCompBeha
 end
 
 "Renders turbopump with animations when active: spinning rotor, vibration, and smoke effects."
-function render_map_elem!(queue::Vector{RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
+function render_map_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     # Get turbine fluid colour
     turbine_input_node = map_element(HexFrame.NODE_S_POS, position, rotation)
     fluid = get(derivedmapstate.nodeactualfluids, turbine_input_node, HexFluids.NONE)
@@ -543,7 +543,7 @@ rotor_sprite(::ElectricPumpCompBehav{ElectricTransferPump}) = :ElectroTransferPu
 
 "Renders static elements of an electric pump: charge bar, fluid mask, and background."
 function render_static!(
-        queue::Vector{RenderCommand}, comp::ElectricPumpCompBehav;
+        queue::Vector{<:RenderCommand}, comp::ElectricPumpCompBehav;
         glmap::GLObjectMap, rotation::HexAxis, position::TileCoord,
         fluid::FluidTags = HexFluids.NONE, gameticks::Int64 = 0,
         charge_bar_colour::ColourType = let c = get(ColorSchemes.summer, 0.0)
@@ -575,7 +575,7 @@ function render_static!(
 end
 
 "Renders static electric pump elements without animation."
-function render_base_elem!(queue::Vector{RenderCommand}, comp::ElectricPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{<:RenderCommand}, comp::ElectricPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     # Render non-animated elements
     render_static!(queue, comp; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, scale = scale, transparency = transparency, colour = colour, render_height_offset = render_height_offset)
 
@@ -591,7 +591,7 @@ function render_base_elem!(queue::Vector{RenderCommand}, comp::ElectricPumpCompB
 end
 
 "Renders electric pump with animations when running: vibration and rotating rotor."
-function render_map_elem!(queue::Vector{RenderCommand}, comp::ElectricPumpCompBehav; glmap::GLObjectMap, mna_state::MNA_State, derivedmapstate::DerivedMapState, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
+function render_map_elem!(queue::Vector{<:RenderCommand}, comp::ElectricPumpCompBehav; glmap::GLObjectMap, mna_state::MNA_StateSnapshot, derivedmapstate::DerivedMapState, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     # Get fluid at pump input node
     pump_input_node = map_element(HexFrame.NODE_Q_NEG, position, rotation)
     fluid = get(derivedmapstate.nodeactualfluids, pump_input_node, HexFluids.NONE)

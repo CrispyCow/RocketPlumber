@@ -10,7 +10,7 @@ export HexAxis, NodePos
 export CartesianBounds, AxialBounds
 
 # Functions
-export glvec, to_cartesian, to_axial, round_to_tile, next_enum_val, rotmat_2D
+export glvec, to_cartesian, to_axial, round_to_tile, round_to_tile_cartesian, next_enum_val, rotmat_2D
 export get_rotmat, is_proper, is_axis, is_grounded, to_proper, to_vertex, to_nodecoord
 export to_hexaxis, to_nodepos, get_edges, round_to_edge, get_vertexes, rotate, rotate_reverse
 export get_tiles, get_adjacent_tiles_for_node, get_adjacent_tiles_for_tile
@@ -183,7 +183,33 @@ function round_to_tile(qr::AbstractAxialCoordSystem)::TileCoord
 
     return qr_grid .+ offset
 end
-round_to_tile(xy::AbstractCartesianCoordSystem)::TileCoord = round_to_tile(to_axial(xy))
+
+"""
+Rounds Cartesian (x, y) coordinates directly to the containing hex tile.
+Uses plain Float64 arithmetic without FieldVector intermediates for allocation-free use in hot loops.
+Equivalent to `round_to_tile(CartesianCoord(x, y))`.
+"""
+@inline function round_to_tile_cartesian(x::Float64, y::Float64)::TileCoord
+    # to_axial: pixel_to_hex_mat * [x, y]
+    q_axial = (2.0 / 3.0) * x
+    r_axial = (-1.0 / 3.0) * x + (-sqrt(3.0) / 3.0) * y
+
+    # round_to_tile logic (inlined)
+    q_grid = round(Int16, q_axial)
+    r_grid = round(Int16, r_axial)
+    q_rem = q_axial - Float64(q_grid)
+    r_rem = r_axial - Float64(r_grid)
+
+    if abs(q_rem) >= abs(r_rem)
+        q_offset = round(Int16, q_rem + 0.5 * r_rem)
+        return TileCoord(q_grid + q_offset, r_grid)
+    else
+        r_offset = round(Int16, r_rem + 0.5 * q_rem)
+        return TileCoord(q_grid, r_grid + r_offset)
+    end
+end
+
+round_to_tile(xy::AbstractCartesianCoordSystem)::TileCoord = round_to_tile_cartesian(Float64(xy.x), Float64(xy.y))
 
 "Gets the axial coordinates of a vertex."
 function to_axial(vercoord::VertexCoord)::AxialCoord
@@ -538,19 +564,19 @@ function to_proper(node::NodeCoord)
 end
 
 """
-Returns the 3 tiles adjacent to a node and their corresponding HexAxis directions.
-Returns tuples of (tile, direction) where direction is the HexAxis on that tile that points to the node.
-For internal nodes, returns only the containing tile with NODE_INTERNAL as direction.
+Returns the tiles adjacent to a node and their corresponding HexAxis directions, as a tuple.
+For edge nodes (NODE_Q_POS/NODE_Q_NEG): 3-tuple of `(TileCoord, HexAxis)`.
+For internal nodes: 1-tuple of `(TileCoord, NodePos)`.
+For grounded nodes: empty tuple.
 """
-function get_adjacent_tiles_for_node(node::NodeCoord)::Vector{Tuple{TileCoord, Union{HexAxis, NodePos}}}
-    # Internal nodes belong to only one tile
+function get_adjacent_tiles_for_node(node::NodeCoord)
     if node.dir === NODE_INTERNAL
-        return [(node.tile, NODE_INTERNAL)]
+        return ((node.tile, NODE_INTERNAL),)
     end
 
     # Ground nodes don't belong to any tile
     if is_grounded(node)
-        return Tuple{TileCoord, Union{HexAxis, NodePos}}[]
+        return ()
     end
 
     proper_node = to_proper(node)
@@ -558,17 +584,17 @@ function get_adjacent_tiles_for_node(node::NodeCoord)::Vector{Tuple{TileCoord, U
     tiles = get_tiles(vertex)
 
     if proper_node.dir === NODE_Q_POS
-        return [
+        return (
             (tiles[1], R_POS),  # tile at (1, -1) uses R_POS to point to this node
             (tiles[2], Q_POS),  # base tile uses Q_POS
-            (tiles[3], S_POS),   # tile at (1, 0) uses S_POS
-        ]
+            (tiles[3], S_POS),  # tile at (1, 0) uses S_POS
+        )
     elseif proper_node.dir === NODE_Q_NEG
-        return [
+        return (
             (tiles[1], Q_NEG),  # base tile uses Q_NEG
             (tiles[2], S_NEG),  # tile at (-1, 0) uses S_NEG
-            (tiles[3], R_NEG),   # tile at (-1, 1) uses R_NEG
-        ]
+            (tiles[3], R_NEG),  # tile at (-1, 1) uses R_NEG
+        )
     else
         error("to_proper returned improper node in get_adjacent_tiles_for_node")
     end

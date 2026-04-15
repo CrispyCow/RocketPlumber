@@ -143,7 +143,7 @@ function update_flowbehav!(nozzle::NozzleBehavFrag; rotation::HexAxis, tile::Til
     return nothing
 end
 
-render_map_elem!(queue::Vector{RenderCommand}, nozzle::NozzleBehavFrag; kwargs...) = render_map_elem!(queue, nozzle.stallstate; kwargs...)
+render_map_elem!(queue::Vector{<:RenderCommand}, nozzle::NozzleBehavFrag; kwargs...) = render_map_elem!(queue, nozzle.stallstate; kwargs...)
 
 function placement_valid(nozzle::NozzleBehavFrag, coord::TileCoord, gamemap::GameMap; rotation::HexAxis, ship_name::Symbol = :primary, kwargs...)
     # Nozzles must hang off ship edges - their input node must be on surface, but the nozzle tile itself must not be
@@ -166,7 +166,7 @@ function collect_effect_particles!(
         tile::TileCoord,
         rotation::HexAxis,
         derivedmapstate::DerivedMapState,
-        mna_state::MNA_State,
+        mna_state::MNA_StateSnapshot,
         gameticks::Int64,
         pos_offset = nothing,
         kwargs...
@@ -293,12 +293,12 @@ on_click!(comp::BasicNozzleCompBehav; kwargs...) = on_click!(comp.nozzle; kwargs
 get_actions(comp::BasicNozzleCompBehav; kwargs...) = get_actions(comp.nozzle; kwargs...)
 do_action!(comp::BasicNozzleCompBehav, action_id::Symbol; kwargs...) = do_action!(comp.nozzle, action_id; kwargs...)
 update_flowbehav!(comp::BasicNozzleCompBehav; kwargs...) = update_flowbehav!(comp.nozzle; kwargs...)
-render_base_elem!(queue::Vector{RenderCommand}, behav::BasicNozzleCompBehav; kwargs...) = render_base_elem!(queue, behav.sprite; kwargs...)
+render_base_elem!(queue::Vector{<:RenderCommand}, behav::BasicNozzleCompBehav; kwargs...) = render_base_elem!(queue, behav.sprite; kwargs...)
 collect_effect_particles!(manager, comp::BasicNozzleCompBehav; kwargs...) = collect_effect_particles!(manager, comp.nozzle; kwargs...)
 placement_valid(comp::BasicNozzleCompBehav, coord::TileCoord, gamemap::GameMap; kwargs...) = placement_valid(comp.nozzle, coord, gamemap; kwargs...)
 
 
-function render_map_elem!(queue::Vector{RenderCommand}, behav::BasicNozzleCompBehav; kwargs...)
+function render_map_elem!(queue::Vector{<:RenderCommand}, behav::BasicNozzleCompBehav; kwargs...)
     render_base_elem!(queue, behav.sprite; kwargs...) # Render base sprite
     render_map_elem!(queue, behav.nozzle; kwargs...) # Delegate to nozzle for stall overlay
     return nothing
@@ -422,7 +422,7 @@ function placement_valid(comp::SwitchedNozzleCompBehav, coord::TileCoord, gamema
 end
 
 # Render valve sprite just under the main background sprite
-function render_base_elem!(queue::Vector{RenderCommand}, comp::SwitchedNozzleCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{<:RenderCommand}, comp::SwitchedNozzleCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     bkg_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
     push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_bkg, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = bkg_height, pos_offset = pos_offset))
 
@@ -431,7 +431,7 @@ function render_base_elem!(queue::Vector{RenderCommand}, comp::SwitchedNozzleCom
     return nothing
 end
 
-function render_map_elem!(queue::Vector{RenderCommand}, comp::SwitchedNozzleCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
+function render_map_elem!(queue::Vector{<:RenderCommand}, comp::SwitchedNozzleCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     # Get the connected external node for fluid lookup
     connected_node_pos = comp.switch.switch.connection.v1 # External node from switch connection
     connected_node = map_element(connected_node_pos, position, rotation)
@@ -498,7 +498,7 @@ get_tunables(::DecompChamberCompBehav)::Tuple{} = ()
 
 set_tunables(comp::DecompChamberCompBehav, ::Tuple{})::DecompChamberCompBehav = comp
 
-function render_base_elem!(queue::Vector{RenderCommand}, comp::DecompChamberCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{<:RenderCommand}, comp::DecompChamberCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     # Render gas fluidmask in black as background
     gas_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset)
     push!(queue, render_basic_tile(glmap, :DecompChamber1_gas_fluidmask, rotation, position; colour = DEFAULT_EMPTY_FLUID_COLOUR, scale = scale, transparency = transparency, draw_height = gas_height, pos_offset = pos_offset))
@@ -510,7 +510,7 @@ function render_base_elem!(queue::Vector{RenderCommand}, comp::DecompChamberComp
     return nothing
 end
 
-function render_map_elem!(queue::Vector{RenderCommand}, comp::DecompChamberCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
+function render_map_elem!(queue::Vector{<:RenderCommand}, comp::DecompChamberCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
     # Detect current flow through the voltage source element
     voltage_element_current = get(mna_state.vsource_currents, ElementID(position, decomp_voltage_element_index), 0.0)
     non_trivial_current = abs(voltage_element_current) > 0.02

@@ -97,7 +97,7 @@ function display_component_values!(tunables_tuple::NTuple{N, TunableProps}) wher
 end
 
 "Display circuit element details in the property inspector."
-function display_element_details!(elements::Vector{AbsoluteElement}, derivedmapstate::DerivedMapState, mna_state::MNA_State)
+function display_element_details!(elements::Vector{AbsoluteElement}, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot)
     if isempty(elements)
         CImGui.Text("No elements")
         return nothing
@@ -125,10 +125,10 @@ function display_element_details!(elements::Vector{AbsoluteElement}, derivedmaps
 end
 
 "Inspect nothing: placeholder text."
-inspect_ui!(::Nothing, ::GameMap, ::DerivedMapState, ::MNA_State) = CImGui.Text("Nothing.")
+inspect_ui!(::Nothing, ::GameMap, ::DerivedMapState, ::MNA_StateSnapshot) = CImGui.Text("Nothing.")
 
 "Inspect a tile coordinate, displaying component values and element details."
-function inspect_ui!(tile::TileCoord, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State)
+function inspect_ui!(tile::TileCoord, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot)
     CImGui.Text("Hex Tile at $(coord_description(tile))")
     internalnode = NodeCoord(tile, HexFrame.NODE_INTERNAL)
     if haskey(mna_state.node_voltages, internalnode)
@@ -164,7 +164,7 @@ function inspect_ui!(tile::TileCoord, gamemap::GameMap, derivedmapstate::Derived
 end
 
 "Inspect a vertex coordinate, displaying node voltage and fluid tag."
-function inspect_ui!(vert::VertexCoord, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State)
+function inspect_ui!(vert::VertexCoord, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot)
     CImGui.Text(coord_description(vert))
     node = to_nodecoord(vert)
 
@@ -200,7 +200,7 @@ function inspect_ui!(vert::VertexCoord, gamemap::GameMap, derivedmapstate::Deriv
 end
 
 "Inspect an edge coordinate, displaying pipe information."
-function inspect_ui!(edge::EdgeCoord, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State)
+function inspect_ui!(edge::EdgeCoord, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot)
     CImGui.Text("Pipe Between:")
     CImGui.Text("$(coord_description(edge.v1)) and $(coord_description(edge.v2))")
 
@@ -649,7 +649,7 @@ Renders the property box on the right side of the window.
 Must be called within ui_renderwrap.
 """
 function ui_propertybox_render!(
-        inputstate::InputState, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State,
+        inputstate::InputState, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot,
         winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}}, flowcalc_ipc::FlowCalculatorIPC
     )
     pendcomp = inputstate.pendingcomponent

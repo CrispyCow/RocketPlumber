@@ -439,14 +439,14 @@ function run_simulation_tick!(gamemap::GameMap, derived::DerivedMapState,
         println("    After pruning ($prune_iters iters): $(length(derived.prunedelements)) elements    $(length(derived.prunednodes)) nodes")
 
         if !isempty(derived.prunednodes)
-            derived.nodeprimefluidtags = fluidtag_nodes(derived, gamemap)
+            fluidtag_nodes!(derived, gamemap)
             build_node_connection_map!(derived)
             connect_fluidtags!(derived)
-            mna.node_to_index, mna.index_to_node = MNA_indexnodes(derived)
+            MNA_indexnodes!(mna, derived)
             MNA_splitelements!(mna, derived)
 
-            println("    Attempting MNA_getA (LU decomposition)...")
-            mna.mat_A = MNA_getA(mna)
+            println("    Attempting MNA_getA (KLU factorisation)...")
+            mna.a_cache.mat_A_lu = MNA_getA(mna)
             println("  [✓] update_map! passed")
         else
             empty!(mna.node_voltages)
@@ -465,7 +465,7 @@ function run_simulation_tick!(gamemap::GameMap, derived::DerivedMapState,
         println("  Step 3: update_mna!")
         try
             mna.mat_Z = MNA_getZ(mna)
-            mna.node_voltages, mna.vsource_currents = MNA_solve(mna)
+            MNA_solve!(mna)
             println("  [✓] update_mna! passed")
         catch e
             println("  [✗] update_mna! FAILED: $e")

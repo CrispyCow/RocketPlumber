@@ -9,7 +9,9 @@ using LinearAlgebra
 "Uses RenderEngine to initialise OpenGL objects needed for the game loop"
 function init_opengl_objects()
     glmap::GLObjectMap = GLObjectMap()
-    renderqueue::Vector{RenderCommand} = Vector{RenderCommand}()
+    renderqueue = Vector{SpriteRenderCommand}()
+    sizehint!(renderqueue, 512)
+    scratch_renderqueue = Vector{SpriteRenderCommand}(undef, 512)  # pre-allocated sort scratch tied to the render queue
 
     viewtransform_glubo_init(glmap)
     basesprite_glprog_init(glmap)
@@ -18,7 +20,7 @@ function init_opengl_objects()
     gassprite_glprog_init(glmap)
     particle_glprog_init(glmap)
 
-    return glmap, renderqueue
+    return glmap, renderqueue, scratch_renderqueue
 end
 
 """
@@ -26,7 +28,8 @@ Renders frame by pushing render commands to the renderqueue and executing them.
 Handles both background and foreground particle systems with proper layering.
 """
 function custom_rendering!(
-        renderqueue::Vector{RenderCommand},
+        renderqueue::Vector{SpriteRenderCommand},
+        scratch_renderqueue::Vector{SpriteRenderCommand},
         glmap::GLObjectMap,
         snapshot::FlowCalculatorSnapshot,
         shared_state::FlowCalculatorSharedState,
@@ -62,7 +65,7 @@ function custom_rendering!(
             @timeit render_loop_timer "Nodes" node_queued_render!(renderqueue, glmap, snapshot.gamemap, snapshot.derived, snapshot.mna)
         end
 
-        @timeit render_loop_timer "Execute Render Queue" glrender(glmap, renderqueue)
+        @timeit render_loop_timer "Execute Render Queue" glrender(glmap, renderqueue, scratch_renderqueue)
     end
 
     # Render foreground particles LAST (on top of tiles)
@@ -86,13 +89,13 @@ end
 function setup_flowcalc_ipc(initial_snapshot::FlowCalculatorSnapshot)::FlowCalculatorIPC
     shared_state = FlowCalculatorSharedState()
     command_queue = create_command_queue(32)
-    set_snapshot, get_snapshot = create_snapshot_storage(deepcopy(initial_snapshot))
+    publish_snapshot, get_snapshot = create_snapshot_storage(initial_snapshot)
     console_push, console_see = create_threadsafe_consolebuffer(50)
 
     return FlowCalculatorIPC(
         shared_state,
         command_queue,
-        set_snapshot,
+        publish_snapshot,
         get_snapshot,
         console_push,
         console_see,
@@ -267,7 +270,7 @@ function enter_gameloop(window::GLFW.Window;
     g_flowcalc_ipc = setup_flowcalc_ipc(initial_snapshot)
 
     ui_loadingscreen_render(window, "Initialising OpenGL Objects")
-    g_globjmap, g_renderqueue = init_opengl_objects()
+    g_globjmap, g_renderqueue, g_scratch_renderqueue = init_opengl_objects()
 
     # Initialize particle systems
     g_viewstate.background_particles = ParticleManager(0.03f0)  # Small size for dust
@@ -304,7 +307,7 @@ function enter_gameloop(window::GLFW.Window;
 
         # RENDERING Start
         glClear(GL_COLOR_BUFFER_BIT)
-        custom_rendering!(g_renderqueue, g_globjmap, g_snapshot, g_flowcalc_ipc.shared_state, g_inputstate, g_viewstate)
+        custom_rendering!(g_renderqueue, g_scratch_renderqueue, g_globjmap, g_snapshot, g_flowcalc_ipc.shared_state, g_inputstate, g_viewstate)
         @timeit render_loop_timer "UI Rendering" ui_rendering!(
             g_inputstate, g_flowcalc_ipc, g_snapshot, g_viewstate, window;
             learning_state = learning_state

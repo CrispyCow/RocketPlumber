@@ -4,15 +4,17 @@ using HexFrame, HexElements, HexFluids, HexComponentsAPI
 using FlowMap
 import FlowMap: find_ship_surface_edgetiles!
 
-using SparseArrays, LinearAlgebra, SmallCollections, StructEquality
+using SparseArrays, LinearAlgebra, KLU, SmallCollections, StructEquality
 
 # Type Exports
-export DerivedMapState, MNA_State
+export DerivedMapState, MNA_State, MNA_StateSnapshot, AMatrixCache
 # Function Exports
 export add_pipes_abs_element!, abs_element_get_current, update_components!
-export list_elements, list_nodes, prune, ground_search, clear_dangling_dependants
-export fluidtag_nodes, get_node_fluid_tags, build_node_connection_map!, connect_fluidtags!
-export MNA_indexnodes, MNA_splitelements!, MNA_getA, MNA_getZ, MNA_solve
+export list_elements, list_elements!, list_nodes, list_nodes!, prune, ground_search, clear_dangling_dependants
+export fluidtag_nodes!, get_node_fluid_tags, build_node_connection_map!, connect_fluidtags!
+export MNA_indexnodes!, MNA_splitelements!, MNA_getA, MNA_getZ, MNA_getZ!, MNA_solve!
+export MNA_updateA!, MNA_buildA_sparse
+export MNA_stamp_A_ijv!, MNA_construct_A_sparse!, compute_A_hashes
 # DerivedMapState ship surface edge access
 export get_all_ship_edge_coords, count_edge_tiles
 
@@ -41,6 +43,46 @@ const ConnectionVect = SmallVector{12, NodeCoord}
 end
 @struct_hash_equal DerivedMapState
 
+"""
+Pre-allocated buffers and cached state for zero-allocation A matrix construction.
+
+The A matrix is built each tick by stamping circuit elements into IJV vectors (I = row indices,
+J = column indices, V = values), then converting to CSC sparse format via `SparseArrays.sparse!`
+with fully pre-allocated work buffers. The `combine = +` argument handles multiple contributions
+to the same matrix position (e.g., resistors sharing a node sum their conductances).
+
+Structure and value change detection uses hashes computed from the IJV vectors:
+- `structure_hash`: XOR of hash((I[k], J[k])) — detects topology changes (new/removed non-zeros)
+- `value_hash`: hash of V vector — detects conductance/gain magnitude changes
+"""
+@kwdef mutable struct AMatrixCache
+    # IJV stamp vectors (refilled each tick via empty! + push!)
+    ijv_I::Vector{Int} = sizehint!(Int[], 256)
+    ijv_J::Vector{Int} = sizehint!(Int[], 256)
+    ijv_V::Vector{Float64} = sizehint!(Float64[], 256)
+    # sparse! intermediate CSR buffers (pre-allocated, grown to high-water mark)
+    klasttouch::Vector{Int} = Vector{Int}(undef, 1)      # length ≥ n
+    csrrowptr::Vector{Int} = Vector{Int}(undef, 2)        # length ≥ m+1
+    csrcolval::Vector{Int} = Vector{Int}(undef, 1)        # length ≥ max IJV entries
+    csrnzval::Vector{Float64} = Vector{Float64}(undef, 1) # length ≥ max IJV entries
+    # sparse! output CSC buffers — these ARE the sparse matrix's storage
+    csccolptr::Vector{Int} = Vector{Int}(undef, 2)        # length = n+1
+    cscrowval::Vector{Int} = Vector{Int}(undef, 1)        # length = nnz
+    cscnzval::Vector{Float64} = Vector{Float64}(undef, 1) # length = nnz
+    # The sparse A matrix (wraps the csc* vectors above — NOT independently allocated)
+    mat_A_sparse::SparseMatrixCSC{Float64, Int64} = spzeros(1, 1)
+    # KLU factorisation — circuit-simulation specialist from SuiteSparse.
+    # WARNING: deepcopy of KLUFactorization shares C pointers (_symbolic, _numeric) and will
+    # double-free on GC. The render thread never accesses this field, but it IS included in
+    # the FlowCalculatorSnapshot deepcopy. A future IPC optimisation pass must either exclude
+    # a_cache from the snapshot entirely, or use a custom shallow copy that skips mat_A_lu.
+    mat_A_lu::KLU.KLUFactorization{Float64, Int64} = klu(sparse([1], [1], [1.0]))
+    # Two-tier cache hashes
+    structure_hash::UInt64 = UInt64(0) # hash of IJV positions (I, J) — topology
+    value_hash::UInt64 = UInt64(0)     # hash of IJV magnitudes (V) — conductances/gains
+end
+@struct_hash_equal AMatrixCache
+
 
 "Holds intermediates and outputs for the Modified Nodal Analysis"
 @kwdef mutable struct MNA_State
@@ -52,14 +94,29 @@ end
     csources::Dict{ElementID, AbsoluteElement} = Dict{ElementID, AbsoluteElement}()
     vsources::Dict{ElementID, AbsoluteElement} = Dict{ElementID, AbsoluteElement}()
     vsource_lookup::Dict{ElementID, Int64} = Dict{ElementID, Int64}()
-    mat_A::SparseArrays.UMFPACK.UmfpackLU{Float64, Int64} = lu(sparse(I, 1, 1))
+    # A matrix construction cache (IJV + sparse! buffers + LU factorisation)
+    a_cache::AMatrixCache = AMatrixCache()
     mat_Z::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
+    mat_X::Matrix{Float64} = Matrix{Float64}(undef, 0, 0) # pre-allocated solve buffer for ldiv!
     # outputs
     node_voltages::Dict{NodeCoord, Float64} = Dict{NodeCoord, Float64}()
     vsource_currents::Dict{ElementID, Float64} = Dict{ElementID, Float64}()
     node_voltages_scaled::Dict{NodeCoord, Float64} = Dict{NodeCoord, Float64}()
 end
 @struct_hash_equal MNA_State
+
+"Read-only subset of MNA_State for snapshot publishing. Excludes A-matrix cache, solve buffers, and index mappings."
+@kwdef mutable struct MNA_StateSnapshot
+    # Element lookups (included for logical completeness even if not all currently read on render thread)
+    resistors::Dict{ElementID, AbsoluteElement} = Dict{ElementID, AbsoluteElement}()
+    csources::Dict{ElementID, AbsoluteElement} = Dict{ElementID, AbsoluteElement}()
+    vsources::Dict{ElementID, AbsoluteElement} = Dict{ElementID, AbsoluteElement}()
+    vsource_lookup::Dict{ElementID, Int64} = Dict{ElementID, Int64}()
+    # Outputs
+    node_voltages::Dict{NodeCoord, Float64} = Dict{NodeCoord, Float64}()
+    vsource_currents::Dict{ElementID, Float64} = Dict{ElementID, Float64}()
+    node_voltages_scaled::Dict{NodeCoord, Float64} = Dict{NodeCoord, Float64}()
+end
 
 # DerivedMapState ship surface edge access
 "Get all ship surface edge tile coordinates (tiles on the boundary of the ship)"
@@ -125,55 +182,73 @@ function update_components!(gamemap::GameMap, mna_state::MNA_State, derivedmapst
     return nothing
 end
 
-"List all electrical elements for a single ship (returns AbsoluteElement vector)."
+"Push mapped absolute elements from a ComponentOnTile directly into the output vector, bypassing ntuple allocation."
+function push_mapped_elements!(out::Vector{AbsoluteElement}, tilecomp::ComponentOnTile, tile::TileCoord)
+    rel_elements = produce_rel_elements(tilecomp.component)
+    rot = tilecomp.rotation
+    i = 1
+    for rel in rel_elements
+        abs_elem = map_element(rel, tile, i, rot)
+        abs_elem.active && push!(out, abs_elem)
+        i += 1
+    end
+    return nothing
+end
+
+"Push the single pipe resistor element directly into the output vector."
+function push_pipe_element!(out::Vector{AbsoluteElement}, pipe_behav::PipeBehavior, edge::EdgeCoord)
+    connections = AbsoluteElementConnections(to_nodecoord(edge.v1), to_nodecoord(edge.v2))
+    conductance = get_conductance(pipe_behav)
+    push!(out, AbsoluteElement(connections, conductance, CONST_RESISTOR, ElementID(edge)))
+    return nothing
+end
+
+"Collect all electrical elements for a single ship into `out` (appends, caller should empty! first)."
+function list_elements!(out::Vector{AbsoluteElement}, ship::ShipMap)
+    for (coord, data) in ship.components
+        push_mapped_elements!(out, data, coord)
+    end
+    for (edge, pipe_behav) in ship.pipe_behaviors
+        push_pipe_element!(out, pipe_behav, edge)
+    end
+    return nothing
+end
+
+"Collect all electrical elements in the GameMap into `out` (empties first, then fills)."
+function list_elements!(out::Vector{AbsoluteElement}, gamemap::GameMap)
+    empty!(out)
+    sizehint!(out, 16)
+
+    for (_, ship) in gamemap.ships
+        list_elements!(out, ship)
+    end
+
+    return nothing
+end
+
+"List all electrical elements for a single ship (allocating convenience wrapper)."
 function list_elements(ship::ShipMap)
+    elements_present = Vector{AbsoluteElement}()
     tiles = ship.components
     pipe_behaviors = ship.pipe_behaviors
-
-    size = length(tiles) + length(pipe_behaviors)
-    elements_present = Vector{AbsoluteElement}()
-    sizehint!(elements_present, size * 2)
-
-    for (coord, data) in tiles # collects elements from each tile on the ship
-        produced = produce_abs_elements(data, coord)
-        if length(produced) > 0
-            push!(elements_present, produced...)
-        end
-    end
-
-    for (edge, pipe_behav) in pipe_behaviors # collects elements from pipes on the ship
-        produced = produce_abs_elements(pipe_behav, edge)
-        if length(produced) > 0
-            push!(elements_present, produced...)
-        end
-    end
-
-    # remove any inactive elements (produced by stalled components)
-    filter!(e -> getfield(e, :active), elements_present)
+    sizehint!(elements_present, (length(tiles) + length(pipe_behaviors)) * 2)
+    list_elements!(elements_present, ship)
     return elements_present
 end
 
-"List all electrical elements in the GameMap (aggregates across all ships)"
+"List all electrical elements in the GameMap (allocating convenience wrapper)."
 function list_elements(gamemap::GameMap)
     all_elements = Vector{AbsoluteElement}()
-    sizehint!(all_elements, 16)
-
-    for (_, ship) in gamemap.ships
-        append!(all_elements, list_elements(ship))
-    end
-
-    # remove any inactive elements (produced by stalled components)
-    filter!(e -> getfield(e, :active), all_elements)
+    list_elements!(all_elements, gamemap)
     return all_elements
 end
 
-"List all nodes connected to an element"
-function list_nodes(elements::Vector{AbsoluteElement})
-    node_count = Dict{NodeCoord, UInt16}()
+"Populate `node_count` with connection counts per non-ground node (empties first)."
+function list_nodes!(node_count::Dict{NodeCoord, UInt16}, elements::Vector{AbsoluteElement})
+    empty!(node_count)
     sizehint!(node_count, length(elements))
 
     for element in elements
-        # adds the nodes connected to each element if they aren't grounded
         node1 = element.connections.v1
         if !is_grounded(node1)
             add_or_increment!(node_count, node1)
@@ -184,6 +259,13 @@ function list_nodes(elements::Vector{AbsoluteElement})
         end
     end
 
+    return nothing
+end
+
+"List all nodes connected to an element (allocating convenience wrapper)."
+function list_nodes(elements::Vector{AbsoluteElement})
+    node_count = Dict{NodeCoord, UInt16}()
+    list_nodes!(node_count, elements)
     return node_count
 end
 
@@ -256,31 +338,41 @@ function build_node_connection_map!(derivedmapstate::DerivedMapState)
     return nothing
 end
 
-"Set derivedmapstate.actualfluids based by propagating the concrete fluids from primefluidtags through the nodeconnections"
+"Set derivedmapstate.actualfluids by propagating concrete fluids from primefluidtags through nodeconnections"
 function connect_fluidtags!(derivedmapstate::DerivedMapState)
     nodeconnections = derivedmapstate.nodeconnections
-    derivedmapstate.nodeactualfluids = copy(derivedmapstate.nodeprimefluidtags)
     actualfluids = derivedmapstate.nodeactualfluids
 
-    concrete_fluidnodes::Set{NodeCoord} = Set(
-        node for (node, tag) in derivedmapstate.nodeprimefluidtags if is_gas(tag) || is_liquid(tag)
-    )
-    to_visit = Set{NodeCoord}() # set of nodes to visit, reused each loop
-    visited = Set{NodeCoord}() # set of nodes that have been visited, reused each loop
+    # Copy prime tags into actual fluids in-place
+    empty!(actualfluids)
+    for (k, v) in derivedmapstate.nodeprimefluidtags
+        actualfluids[k] = v
+    end
 
-    # Traverse from all tags with a concrete fluid type and check for collisions.
-    # Once all concrete tagged nodes have been traversed or visited, the algorithm will end.
-    # This will visit all nodes connected to a concrete fluid tag, and update their fluid tags.
-    while !isempty(concrete_fluidnodes)
-        # grab a node with concrete fluid tag
-        start_node = pop!(concrete_fluidnodes)
+    # Build worklist of concrete fluid sources
+    to_start = NodeCoord[]
+    for (node, tag) in derivedmapstate.nodeprimefluidtags
+        if is_gas(tag) || is_liquid(tag)
+            push!(to_start, node)
+        end
+    end
+
+    to_visit = NodeCoord[]
+    visited = Set{NodeCoord}()
+
+    # Traverse from all concrete sources and propagate their fluid type through connected nodes
+    while !isempty(to_start)
+        start_node = pop!(to_start)
+        start_node in visited && continue
         start_fluidtag = derivedmapstate.nodeprimefluidtags[start_node]
         push!(to_visit, start_node)
 
         # traverse the graph of nodes, starting from the start node
-        # uses some random combination of BFS and DFS as sets are unordered
-        while true
+        # uses some random combination of BFS and DFS
+        while !isempty(to_visit)
             current_node = pop!(to_visit)
+            current_node in visited && continue
+
             connections = get(nodeconnections, current_node, ConnectionVect())
             for node in connections
                 # add unvisited connected nodes to visit set
@@ -288,12 +380,10 @@ function connect_fluidtags!(derivedmapstate::DerivedMapState)
                     push!(to_visit, node)
                 end
             end
+
             tag = prioritise_fluidtag(actualfluids[current_node], start_fluidtag)
             actualfluids[current_node] = tag
-            delete!(concrete_fluidnodes, current_node) # node reached so can be removed from concrete set
             push!(visited, current_node)
-
-            isempty(to_visit) && break # exit if to_visit is empty
         end
     end
     return nothing
@@ -426,17 +516,19 @@ function clear_dangling_dependants(elements::Vector{AbsoluteElement})::Vector{Ab
 
     final_elements::Vector{AbsoluteElement} = Vector{AbsoluteElement}()
     sizehint!(final_elements, length(elements))
-    last_hash::UInt64 = 0
 
-    # Check dependent elements repeatedly until no change is made.
-    # This is required as depending on element order it is possible for an element to pass its dependent check,
-    # but then have the element it depended on pruned later on.
-    while last_hash != hash(final_elements)
-        last_hash = hash(final_elements)
+    # Check dependent elements repeatedly until no change is made (fixed-point).
+    # We iterate over the original `elements` each pass, skipping any whose ID was
+    # already removed from element_IDs in a prior pass.
+    changed = true
+    while changed
+        changed = false
         empty!(final_elements)
 
         for element in elements
-            # element added by default
+            # skip elements already removed in a prior pass
+            element.id in element_IDs || continue
+
             push!(final_elements, element)
 
             # elements with no dependent can always stay
@@ -447,7 +539,8 @@ function clear_dangling_dependants(elements::Vector{AbsoluteElement})::Vector{Ab
             # dependent element must have its dependency present
             if !(element.dependent_id in element_IDs)
                 pop!(final_elements)
-                delete!(element_IDs, element.dependent_id)
+                delete!(element_IDs, element.id) # remove our own ID so dependants of us are also cleared
+                changed = true
             end
         end
     end
@@ -456,7 +549,7 @@ function clear_dangling_dependants(elements::Vector{AbsoluteElement})::Vector{Ab
 end
 
 "Returns the current through an absolute element, or nothing if element was pruned"
-function abs_element_get_current(element::AbsoluteElement, derivedmapstate::DerivedMapState, mna_state::MNA_State)
+function abs_element_get_current(element::AbsoluteElement, derivedmapstate::DerivedMapState, mna_state::Union{MNA_State, MNA_StateSnapshot})
     if !(element in derivedmapstate.prunedelements)
         return nothing
     end
@@ -517,11 +610,24 @@ function get_node_fluid_tags(node::NodeCoord, ship::ShipMap)
     proper_node = to_proper(node)
     adjacent_tiles_info = get_adjacent_tiles_for_node(proper_node)
 
-    tags = map(adjacent_tiles_info) do (tile, hex_axis)
-        get_tile_fluid_tag(ship, tile, to_hexaxis(hex_axis))
-    end
+    # Inline 3 lookups to avoid map() allocation. Safe because edge nodes always have 3 adjacent tiles
+    # (grounded nodes are excluded by list_nodes!, internal nodes by the early return above).
+    tag1 = get_tile_fluid_tag(ship, adjacent_tiles_info[1][1], to_hexaxis(adjacent_tiles_info[1][2]))
+    tag2 = get_tile_fluid_tag(ship, adjacent_tiles_info[2][1], to_hexaxis(adjacent_tiles_info[2][2]))
+    tag3 = get_tile_fluid_tag(ship, adjacent_tiles_info[3][1], to_hexaxis(adjacent_tiles_info[3][2]))
 
-    return (tags[1], tags[2], tags[3])
+    return (tag1, tag2, tag3)
+end
+
+"Search all ships for a fluid tag at a tile/axis pair, returning the first non-NONE tag found."
+function _find_fluid_tag_multi(gamemap::GameMap, tile::TileCoord, hex_axis::HexAxis)
+    for (_, ship) in gamemap.ships
+        candidate = get_tile_fluid_tag(ship, tile, hex_axis)
+        if candidate !== HexFluids.NONE
+            return candidate
+        end
+    end
+    return HexFluids.NONE
 end
 
 "Get the fluid tags from tiles adjacent to a node, checking all ships (aggregates ship lookups)."
@@ -539,44 +645,38 @@ function get_node_fluid_tags(node::NodeCoord, gamemap::GameMap)
     proper_node = to_proper(node)
     adjacent_tiles_info = get_adjacent_tiles_for_node(proper_node)
 
-    tags = Vector{HexFluids.FluidTags}(undef, 3)
-    for (i, (tile, hex_axis)) in enumerate(adjacent_tiles_info)
-        # For each adjacent tile, check all ships until a non-NONE tag is found
-        found = HexFluids.NONE
-        for (_, ship) in gamemap.ships
-            candidate = get_tile_fluid_tag(ship, tile, to_hexaxis(hex_axis))
-            if candidate !== HexFluids.NONE
-                found = candidate
-                break
-            end
-        end
-        tags[i] = found
-    end
+    # Inline 3 lookups, same invariant as the ShipMap version
+    tag1 = _find_fluid_tag_multi(gamemap, adjacent_tiles_info[1][1], adjacent_tiles_info[1][2])
+    tag2 = _find_fluid_tag_multi(gamemap, adjacent_tiles_info[2][1], adjacent_tiles_info[2][2])
+    tag3 = _find_fluid_tag_multi(gamemap, adjacent_tiles_info[3][1], adjacent_tiles_info[3][2])
 
-    return (tags[1], tags[2], tags[3])
+    return (tag1, tag2, tag3)
 end
 
-"Assigns the highest priority fluid tag to each node in the map, from the tags of connected tiles"
-function fluidtag_nodes(derivedmapstate::DerivedMapState, gamemap::GameMap)::Dict{NodeCoord, FluidTags}
-    node_prime_fluidtags = Dict{NodeCoord, FluidTags}()
+"Assign the highest priority fluid tag to each pruned node, reusing the existing nodeprimefluidtags dict."
+function fluidtag_nodes!(derivedmapstate::DerivedMapState, gamemap::GameMap)
+    node_prime_fluidtags = derivedmapstate.nodeprimefluidtags
+    empty!(node_prime_fluidtags)
     for (node, _) in derivedmapstate.prunednodes
         tags = get_node_fluid_tags(node, gamemap)
         primetag = prioritise_fluidtag(tags...)
         node_prime_fluidtags[node] = primetag
     end
-
-    return node_prime_fluidtags
+    return nothing
 end
 
-"Assigns nodes indexes to use in the MNA matrices. Returns 2 Dicts for lookups in either direction"
-function MNA_indexnodes(derivedmapstate::DerivedMapState)
+"Populate `mna_state` node index lookups from pruned nodes (empties and refills existing dicts)."
+function MNA_indexnodes!(mna_state::MNA_State, derivedmapstate::DerivedMapState)
     nodes = derivedmapstate.prunednodes
 
     num_nodes = length(nodes)
-    node_to_index = Dict{NodeCoord, Int64}()
-    index_to_node = Dict{Int64, NodeCoord}()
+    node_to_index = mna_state.node_to_index
+    index_to_node = mna_state.index_to_node
+    empty!(node_to_index)
+    empty!(index_to_node)
     sizehint!(node_to_index, num_nodes)
     sizehint!(index_to_node, num_nodes)
+
     i = 1
     for (node, _) in nodes
         node_to_index[node] = i
@@ -584,7 +684,7 @@ function MNA_indexnodes(derivedmapstate::DerivedMapState)
         i += 1
     end
 
-    return (node_to_index, index_to_node)
+    return nothing
 end
 
 "Checks if element is a resistor (CONST_RESISTOR type)"
@@ -622,21 +722,32 @@ function MNA_splitelements!(mna_state::MNA_State, derivedmapstate::DerivedMapSta
     return nothing
 end
 
+#= ---------- IJV-Based A Matrix Construction ----------- =#
+
 """
-Gets the A matrix to be used in MNA. Returns it in an LU decomposed form.
-Uses matrix names and algorithms from https://qucs.sourceforge.net/tech/node14.html
+Stamp all circuit element contributions into the A matrix's IJV vectors.
+
+Clears the IJV vectors and re-stamps all elements from the current MNA state. The resulting
+I, J, V vectors represent the full A = [G B; C D] matrix in coordinate (COO) format, ready
+for conversion to CSC via `sparse!`. Uses matrix names and algorithms from
+https://qucs.sourceforge.net/tech/node14.html
+
+Duplicate (i,j) entries are expected and intentional — `sparse!` combines them via `+`.
+For example, multiple resistors connected to the same node each stamp their conductance
+at the diagonal, and the addition happens during CSC construction.
 """
-function MNA_getA(mna_state::MNA_State)
-    resistors = mna_state.resistors
-    vsources = mna_state.vsources
-    csources = mna_state.csources
+function MNA_stamp_A_ijv!(mna_state::MNA_State)
+    cache = mna_state.a_cache
+    I = cache.ijv_I; J = cache.ijv_J; V = cache.ijv_V
+    empty!(I); empty!(J); empty!(V)
+
     node_to_index = mna_state.node_to_index
     vsource_lookup = mna_state.vsource_lookup
+    num_nodes = length(node_to_index)
 
-    num_vsource = length(vsources) # M number of independent voltage sources
-    num_nodes = length(node_to_index) # N number of nodes
+    # Inline stamp helper — pushes one (row, col, value) triple to the IJV vectors
+    stamp!(i, j, v) = (push!(I, i); push!(J, j); push!(V, v))
 
-    # A MATRIX
     #=
     The G matrix is an N×N matrix formed in two steps.
 
@@ -653,30 +764,24 @@ function MNA_getA(mna_state::MNA_State)
     appropriate location on the diagonal. If it is ungrounded it will contribute to four entries 
     in the matrix - two diagonal entries (corresponding to the two nodes) and two off-diagonal entries.
     =#
-    G = let
-        G = zeros(num_nodes, num_nodes)
-        for element in values(resistors)
-            conductance = element.value
-            v1_index = node_to_index[element.connections.v1]
+    for element in values(mna_state.resistors)
+        conductance = element.value
+        v1_index = node_to_index[element.connections.v1]
 
-            # v1 will always show up on the diagonal
-            G[v1_index, v1_index] += conductance
+        # v1 will always show up on the diagonal
+        stamp!(v1_index, v1_index, conductance)
 
-            # v2 contributes to diagonal and off-diagonal if not grounded
-            if !is_grounded(element.connections.v2)
-                v2_index = node_to_index[element.connections.v2]
-                G[v2_index, v2_index] += conductance
-                G[v1_index, v2_index] -= conductance
-                G[v2_index, v1_index] -= conductance
-            end
+        # v2 contributes to diagonal and off-diagonal if not grounded
+        if !is_grounded(element.connections.v2)
+            v2_index = node_to_index[element.connections.v2]
+            stamp!(v2_index, v2_index, conductance)
+            stamp!(v1_index, v2_index, -conductance)
+            stamp!(v2_index, v1_index, -conductance)
         end
-
-        # return sparse G from let scope
-        sparse(G)
     end
 
     #=
-    The pure B matrix (not considering dependent sources) is an N$ \times$M 
+    The pure B matrix (not considering dependent sources) is an N×M 
     matrix with only 0, 1, and -1 elements. Each location in the matrix corresponds 
     to a particular voltage source (first dimension) or a node (second dimension). 
     If the positive terminal of the ith voltage source is connected to node k, then 
@@ -688,24 +793,18 @@ function MNA_getA(mna_state::MNA_State)
     (a 1 and a -1 in the same column). If it is grounded, it will only have one 
     element in the matrix.
     =#
-    pure_B = let
-        B = zeros(num_nodes, num_vsource)
-        for (id, element) in vsources
-            vsource_index = vsource_lookup[id]
+    for (id, element) in mna_state.vsources
+        vs_col = num_nodes + vsource_lookup[id] # B columns offset past G
 
-            # v1 contributes +1
-            v1_index = node_to_index[element.connections.v1]
-            B[v1_index, vsource_index] = 1.0
+        # v1 contributes +1
+        v1_index = node_to_index[element.connections.v1]
+        stamp!(v1_index, vs_col, 1.0)
 
-            # v2 contributes -1 if not grounded
-            if !is_grounded(element.connections.v2)
-                v2_index = node_to_index[element.connections.v2]
-                B[v2_index, vsource_index] = -1.0
-            end
+        # v2 contributes -1 if not grounded
+        if !is_grounded(element.connections.v2)
+            v2_index = node_to_index[element.connections.v2]
+            stamp!(v2_index, vs_col, -1.0)
         end
-
-        # return pure B from let scope (is not yet made sparse, will be made sparse an B and C)
-        B
     end
 
     #=
@@ -720,37 +819,29 @@ function MNA_getA(mna_state::MNA_State)
     value of +gain to the node connected to the positive terminal of the voltage source,
     and a value of -gain to the node connected to the negative terminal of the voltage source.
     =#
-    B = let
-        B = copy(pure_B)
+    for (_id, element) in mna_state.csources
+        if element.type == C_DEP_CURRENT
+            dep_element_id = element.dependent_id
 
-        for (id, element) in csources
-            if element.type == C_DEP_CURRENT
-                dep_element_id = element.dependent_id
+            if !haskey(vsource_lookup, dep_element_id)
+                error("Dependent current source depends on a source that is not in the MNA vsource lookup")
+            end
 
-                if !haskey(vsource_lookup, dep_element_id)
-                    error("Dependent current source depends on a source that is not in the MNA vsource lookup")
-                    # TODO: this should be handled by pruning, but currently is not
-                end
+            dep_col = num_nodes + vsource_lookup[dep_element_id]
 
-                dep_element_index = vsource_lookup[dep_element_id]
+            pos_dep_node = element.connections.v1
+            neg_dep_node = element.connections.v2
 
-                pos_dep_node = element.connections.v1
-                neg_dep_node = element.connections.v2
+            # set vsource positive node to +gain (never grounded, can assume not pruned)
+            pos_node_index = node_to_index[pos_dep_node]
+            stamp!(pos_node_index, dep_col, element.value)
 
-                # set vsource positive node to +gain (never grounded, can assume not pruned)
-                pos_node_index = node_to_index[pos_dep_node]
-                B[pos_node_index, dep_element_index] += element.value
-
-                # set the vsource negative node to -gain if it is not grounded
-                if !is_grounded(neg_dep_node)
-                    neg_node_index = node_to_index[neg_dep_node]
-                    B[neg_node_index, dep_element_index] += -(element.value)
-                end
+            # set the vsource negative node to -gain if it is not grounded
+            if !is_grounded(neg_dep_node)
+                neg_node_index = node_to_index[neg_dep_node]
+                stamp!(neg_node_index, dep_col, -(element.value))
             end
         end
-
-        # return sparse B from let scope
-        sparse(B)
     end
 
     #=
@@ -762,53 +853,169 @@ function MNA_getA(mna_state::MNA_State)
     dependent element's negative terminal node, and a -gain in the column corresponding to the dependent
     element's positive terminal node.
     =#
-    C = let
-        C = copy(transpose(pure_B)) # C is based on the transposed pure B matrix
+    # Pure C entries (transpose of pure B): +1/−1 mirroring the B block with rows and columns swapped.
+    for (id, element) in mna_state.vsources
+        vs_row = num_nodes + vsource_lookup[id] # C rows offset past G
+        v1_index = node_to_index[element.connections.v1]
+        stamp!(vs_row, v1_index, 1.0)
+        if !is_grounded(element.connections.v2)
+            v2_index = node_to_index[element.connections.v2]
+            stamp!(vs_row, v2_index, -1.0)
+        end
+    end
 
-        for (id, element) in vsources
-            if element.type == V_DEP_VOLTAGE
-                dep_element_id = element.dependent_id # get the element this VCVS depends on
+    # VCVS contributions to C block
+    for (id, element) in mna_state.vsources
+        if element.type == V_DEP_VOLTAGE
+            dep_element_id = element.dependent_id # get the element this VCVS depends on
 
-                # VCVS can depend on any element type
-                if haskey(resistors, dep_element_id)
-                    dep_element = resistors[dep_element_id]
-                elseif haskey(csources, dep_element_id)
-                    dep_element = csources[dep_element_id]
-                elseif haskey(vsources, dep_element_id)
-                    dep_element = vsources[dep_element_id]
-                else
-                    error("VCVS depends on element that is not in the MNA")
-                end
+            # VCVS can depend on any element type
+            if haskey(mna_state.resistors, dep_element_id)
+                dep_element = mna_state.resistors[dep_element_id]
+            elseif haskey(mna_state.csources, dep_element_id)
+                dep_element = mna_state.csources[dep_element_id]
+            elseif haskey(mna_state.vsources, dep_element_id)
+                dep_element = mna_state.vsources[dep_element_id]
+            else
+                error("VCVS depends on element that is not in the MNA")
+            end
 
-                vsource_index = vsource_lookup[id]
+            vs_row = num_nodes + vsource_lookup[id]
 
-                # set positive node v1 to -gain (never grounded, can assume not pruned)
-                pos_dep_node = dep_element.connections.v1
-                pos_node_index = node_to_index[pos_dep_node]
-                C[vsource_index, pos_node_index] += -(element.value)
+            # set positive node v1 to -gain (never grounded, can assume not pruned)
+            pos_dep_node = dep_element.connections.v1
+            pos_node_index = node_to_index[pos_dep_node]
+            stamp!(vs_row, pos_node_index, -(element.value))
 
-                # set the negative node v2 to +gain if it is not grounded
-                neg_dep_node = dep_element.connections.v2
-                if !is_grounded(neg_dep_node)
-                    neg_node_index = node_to_index[neg_dep_node]
-                    C[vsource_index, neg_node_index] += element.value
-                end
+            # set the negative node v2 to +gain if it is not grounded
+            neg_dep_node = dep_element.connections.v2
+            if !is_grounded(neg_dep_node)
+                neg_node_index = node_to_index[neg_dep_node]
+                stamp!(vs_row, neg_node_index, element.value)
             end
         end
-
-        # return sparse C from let scope
-        sparse(C)
     end
 
     #=
     The D matrix is an M×M matrix that is composed entirely of zeros. It can be non-zero if dependent
     sources are considered, however no implemented sources currently modify the D matrix.
     =#
-    D = spzeros(num_vsource, num_vsource)
+    # D block: nothing to stamp (all zeros)
 
-    A = hvcat((2, 2), G, B, C, D) # A matrix build from submatrices
+    return nothing
+end
 
-    return lu(A) # return LU decomposed A matrix
+"""
+Construct the sparse A matrix from the IJV vectors using `SparseArrays.sparse!`.
+
+Uses fully pre-allocated work buffers from `AMatrixCache` to achieve zero allocations
+when the matrix dimensions and nnz are stable. Work buffers are grown to their high-water
+mark and never shrunk.
+
+Must be called after `MNA_stamp_A_ijv!` has populated the IJV vectors.
+"""
+function MNA_construct_A_sparse!(mna_state::MNA_State)
+    cache = mna_state.a_cache
+    num_nodes = length(mna_state.node_to_index)
+    num_vsources = length(mna_state.vsources)
+    n = num_nodes + num_vsources  # A is n×n
+
+    num_entries = length(cache.ijv_I)
+
+    # Grow work buffers to high-water mark (amortised, rare after first few ticks)
+    (length(cache.klasttouch) < n) && resize!(cache.klasttouch, n)
+    (length(cache.csrrowptr) < n + 1) && resize!(cache.csrrowptr, n + 1)
+    (length(cache.csrcolval) < num_entries) && resize!(cache.csrcolval, num_entries)
+    (length(cache.csrnzval) < num_entries) && resize!(cache.csrnzval, num_entries)
+    (length(cache.csccolptr) < n + 1) && resize!(cache.csccolptr, n + 1)
+    # cscrowval/cscnzval sized to nnz (after combine) ≤ num_entries. sparse! will resize!
+    # them to exact nnz — if nnz is stable across ticks, resize! is a no-op (zero-alloc).
+
+    cache.mat_A_sparse = SparseArrays.sparse!(
+        cache.ijv_I, cache.ijv_J, cache.ijv_V, n, n, +,
+        cache.klasttouch,
+        cache.csrrowptr, cache.csrcolval, cache.csrnzval,
+        cache.csccolptr, cache.cscrowval, cache.cscnzval
+    )
+
+    return nothing
+end
+
+"""
+Compute structure and value hashes from the IJV vectors.
+
+Structure hash: XOR-combined hash of (I[k], J[k]) pairs. Detects topology changes (which matrix
+positions have non-zero entries). Uses XOR for Dict iteration order independence.
+
+Value hash: standard `hash()` over the V vector. Detects magnitude changes in conductances, gains,
+and connectivity values.
+
+Returns `(structure_hash, value_hash)`.
+"""
+function compute_A_hashes(cache::AMatrixCache)::Tuple{UInt64, UInt64}
+    I = cache.ijv_I; J = cache.ijv_J; V = cache.ijv_V
+
+    sh = UInt64(0)
+    for k in eachindex(I, J)
+        sh ⊻= hash((I[k], J[k]))
+    end
+    sh = hash(length(I), sh) # include entry count for extra safety
+
+    vh = hash(V)
+
+    return (sh, vh)
+end
+
+"""
+Build the raw sparse A matrix from the current MNA state (without LU decomposition).
+Convenience wrapper used by tests — stamps IJV and constructs sparse.
+"""
+function MNA_buildA_sparse(mna_state::MNA_State)::SparseMatrixCSC{Float64, Int64}
+    MNA_stamp_A_ijv!(mna_state)
+    MNA_construct_A_sparse!(mna_state)
+    return mna_state.a_cache.mat_A_sparse
+end
+
+"Gets the A matrix in KLU-factorised form. Used by tests and diagnostics."
+function MNA_getA(mna_state::MNA_State)
+    return klu(MNA_buildA_sparse(mna_state))
+end
+
+"""
+Update the A matrix and its KLU factorisation using the unified IJV → sparse! pipeline.
+
+Each call stamps all elements into IJV vectors (zero-allocation), then applies three-tier caching:
+
+1. **Structure changed** (different non-zero positions): full sparse construction + `klu()`
+   factorisation — needs new symbolic analysis. This is the cold path.
+2. **Values changed** (same positions, different magnitudes): sparse construction (zero-alloc) +
+   `klu!()` in-place numeric refactorisation — reuses symbolic analysis, near-zero allocation.
+3. **Nothing changed**: skip entirely — previous KLU factorisation is still valid.
+"""
+function MNA_updateA!(mna_state::MNA_State)
+    # Stamp elements into IJV (zero-alloc after warmup)
+    MNA_stamp_A_ijv!(mna_state)
+
+    cache = mna_state.a_cache
+    new_structure_hash, new_value_hash = compute_A_hashes(cache)
+
+    if new_structure_hash != cache.structure_hash
+        # Cold path: topology changed — full sparse rebuild + new KLU factorisation
+        MNA_construct_A_sparse!(mna_state)
+        cache.mat_A_lu = klu(cache.mat_A_sparse)
+        cache.structure_hash = new_structure_hash
+        cache.value_hash = new_value_hash
+
+    elseif new_value_hash != cache.value_hash
+        # Warm path: values changed — rebuild sparse (zero-alloc) + in-place numeric refactor
+        MNA_construct_A_sparse!(mna_state)
+        klu!(cache.mat_A_lu, nonzeros(cache.mat_A_sparse))
+        cache.value_hash = new_value_hash
+
+    end
+    # else: nothing changed — skip entirely
+
+    return nothing
 end
 
 
@@ -876,23 +1083,75 @@ function MNA_getZ(mna_state::MNA_State)
     return vcat(I, E)
 end
 
-function MNA_solve(mna_state::MNA_State)
+"""
+In-place version of `MNA_getZ`. Stamps current and voltage source values directly into the
+existing `mat_Z` vector, resizing only when the circuit dimension changes.
+
+The Z vector is [I; E] where:
+- I (rows 1:N): net current injected at each node from independent current sources
+- E (rows N+1:N+M): independent voltage source set-points (zero for dependent sources)
+"""
+function MNA_getZ!(mna_state::MNA_State)
+    num_nodes = length(mna_state.node_to_index)
+    num_vsources = length(mna_state.vsources)
+    required_length = num_nodes + num_vsources
+
+    # Resize Z if circuit dimension changed (rare, only on topology change)
+    if length(mna_state.mat_Z) != required_length
+        mna_state.mat_Z = zeros(required_length, 1)
+    else
+        fill!(mna_state.mat_Z, 0.0)
+    end
+
     Z = mna_state.mat_Z
-    A = mna_state.mat_A
+    node_to_index = mna_state.node_to_index
+    vsource_lookup = mna_state.vsource_lookup
+
+    # I block (rows 1:N): sum of independent current sources at each node
+    for element in values(mna_state.csources)
+        element.type == CONST_CURRENT || continue
+        current = element.value
+        v1_index = node_to_index[element.connections.v1]
+        Z[v1_index] += current
+        if !is_grounded(element.connections.v2)
+            v2_index = node_to_index[element.connections.v2]
+            Z[v2_index] -= current
+        end
+    end
+
+    # E block (rows N+1:N+M): voltage source set-points
+    for (id, element) in mna_state.vsources
+        vsource_index = num_nodes + vsource_lookup[id]
+        Z[vsource_index] = is_dependant(element.type) ? 0.0 : element.value
+    end
+
+    return nothing
+end
+
+"Solve the MNA system in-place using `ldiv!`. Fills `mna_state` output dicts."
+function MNA_solve!(mna_state::MNA_State)
+    Z = mna_state.mat_Z
+    A = mna_state.a_cache.mat_A_lu
     vsources = mna_state.vsources
     vsource_lookup = mna_state.vsource_lookup
     index_to_node = mna_state.index_to_node
 
-    num_vsource = length(vsources) # M number of independent voltage sources
-    num_nodes = length(index_to_node) # N number of nodes
+    num_vsource = length(vsources)
+    num_nodes = length(index_to_node)
 
-    # X MATRIX (solution)
-    X = similar(Z)
+    # Resize solve buffer if dimensions changed (topology change)
+    X = mna_state.mat_X
+    if size(X) != size(Z)
+        mna_state.mat_X = similar(Z)
+        X = mna_state.mat_X
+    end
+
+    #= The X matrix is the solution =#
     try
-        X = A \ Z
+        ldiv!(X, A, Z)
     catch e
         @warn "MNA solve failed, returning zero solution" exception = e
-        X .= 0.0 # solve failed, just return zeroes
+        X .= 0.0
     end
 
     #=
@@ -900,7 +1159,8 @@ function MNA_solve(mna_state::MNA_State)
     at the equivalent node in the circuit (there is no entry for ground - node 0).
     =#
     V = @view X[1:num_nodes, 1]
-    node_voltages = Dict{NodeCoord, Float64}()
+    node_voltages = mna_state.node_voltages
+    empty!(node_voltages)
     sizehint!(node_voltages, num_nodes)
     for (index, node) in index_to_node
         node_voltages[node] = V[index]
@@ -910,13 +1170,14 @@ function MNA_solve(mna_state::MNA_State)
     The J matrix is an M×1 matrix, with one entry for the current through each voltage source
     =#
     J = @view X[(num_nodes + 1):end, 1]
-    vsource_currents = Dict{ElementID, Float64}()
+    vsource_currents = mna_state.vsource_currents
+    empty!(vsource_currents)
     sizehint!(vsource_currents, num_vsource)
     for (id, index) in vsource_lookup
         vsource_currents[id] = J[index]
     end
 
-    return (node_voltages, vsource_currents)
+    return nothing
 end
 
 end # module FlowEngine

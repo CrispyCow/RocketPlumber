@@ -64,7 +64,7 @@ struct PlainSpriteBehavFrag
 end
 
 "Renders the pre-selected atlas sprite at the component position"
-function render_base_elem!(queue::Vector{RenderCommand}, behav::PlainSpriteBehavFrag; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{<:RenderCommand}, behav::PlainSpriteBehavFrag; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     base_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
     push!(queue, render_basic_tile(glmap, behav.sprite, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = base_height, pos_offset = pos_offset))
     return nothing
@@ -163,7 +163,7 @@ unstall!(frag::StallBehavFrag) = setfalse!(frag.stall_state)
 is_stalled(frag::StallBehavFrag)::Bool = getstate(frag.stall_state)
 
 "Renders a stall overlay icon when the component is stalled"
-function render_map_elem!(queue::Vector{RenderCommand}, behav::StallBehavFrag; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
+function render_map_elem!(queue::Vector{<:RenderCommand}, behav::StallBehavFrag; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     if is_stalled(behav)
         overlay_height = Int32(HexFlowRendering.RENDER_HEIGHT_OVERLAY_BASE) + Int32(render_height_offset)
         push!(queue, render_basic_tile(glmap, :test_stalled, HexFrame.Q_POS, position; draw_height = overlay_height, pos_offset = pos_offset))
@@ -213,7 +213,7 @@ function set_tunables(behav::BasicCompBehav{N}, tunables::NTuple{N, T})::BasicCo
     return @set behav.elems = set_tunables(behav.elems, tunables)
 end
 
-function render_base_elem!(queue::Vector{RenderCommand}, behav::BasicCompBehav{N}; kwargs...) where {N}
+function render_base_elem!(queue::Vector{<:RenderCommand}, behav::BasicCompBehav{N}; kwargs...) where {N}
     return render_base_elem!(queue, behav.sprite; kwargs...) # Delegate to the sprite fragment
 end
 

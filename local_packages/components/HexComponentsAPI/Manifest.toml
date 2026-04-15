@@ -1,14 +1,14 @@
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.12.1"
+julia_version = "1.12.6"
 manifest_format = "2.0"
 project_hash = "c1a36ae381abfa59a40ab7dfbf34cd7d0efd9e93"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "MacroTools"]
-git-tree-sha1 = "856ecd7cebb68e5fc87abecd2326ad59f0f911f3"
+git-tree-sha1 = "2eeb2c9bef11013efc6f8f97f32ee59b146b09fb"
 uuid = "7d9f7c33-5ae7-4f3b-8dc6-eff91059b697"
-version = "0.1.43"
+version = "0.1.44"
 
     [deps.Accessors.extensions]
     AxisKeysExt = "AxisKeys"
@@ -81,7 +81,7 @@ uuid = "ade2ca70-3891-5945-98fb-dc099432e06a"
 version = "1.11.0"
 
 [[deps.HexComponentsAPI]]
-deps = ["Accessors", "HexElements", "HexFrame", "StaticArrays"]
+deps = ["Accessors", "HexElements", "HexFluids", "HexFrame", "StaticArrays"]
 path = "."
 uuid = "a2289db6-e3a5-4e05-9c21-8734dce2bbd4"
 version = "0.1.0"
@@ -93,7 +93,6 @@ uuid = "2f6a9512-4d00-40fa-a3ea-0a7372983a4b"
 version = "0.1.0"
 
 [[deps.HexFluids]]
-deps = ["HexFrame"]
 path = "../../HexFluids"
 uuid = "98a914a9-3572-461b-8ee2-d8d3de40252c"
 version = "0.1.0"
@@ -160,9 +159,9 @@ version = "1.3.3"
 
 [[deps.Preferences]]
 deps = ["TOML"]
-git-tree-sha1 = "522f093a29b31a93e34eaea17ba055d850edea28"
+git-tree-sha1 = "8b770b60760d4451834fe79dd483e318eee709c4"
 uuid = "21216c6a-2e73-6563-6e65-726566657250"
-version = "1.5.1"
+version = "1.5.2"
 
 [[deps.Printf]]
 deps = ["Unicode"]
@@ -184,9 +183,9 @@ version = "1.11.0"
 
 [[deps.StaticArrays]]
 deps = ["LinearAlgebra", "PrecompileTools", "Random", "StaticArraysCore"]
-git-tree-sha1 = "eee1b9ad8b29ef0d936e3ec9838c7ec089620308"
+git-tree-sha1 = "246a8bb2e6667f832eea063c3a56aef96429a3db"
 uuid = "90137ffa-7385-5640-81b9-e52037218182"
-version = "1.9.16"
+version = "1.9.18"
 
     [deps.StaticArrays.extensions]
     StaticArraysChainRulesCoreExt = "ChainRulesCore"

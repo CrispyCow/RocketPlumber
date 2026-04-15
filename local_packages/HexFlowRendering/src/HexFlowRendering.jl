@@ -10,6 +10,7 @@ using PNGFiles
 using RenderEngine, HexFlowTelemetry 
 using HexFrame, HexFluids, HexComponentsAPI, FlowEngine, FlowMap, HexFlowControl
 import RenderEngine.uniforms_type
+import RenderEngine.get_vao_symbol
 
 #= Exports =#
 # Type exports
@@ -18,6 +19,7 @@ export BaseSpriteRenderProgram, BaseSpriteUniforms
 export LiquidSpriteRenderProgram, LiquidSpriteUniforms
 export GasSpriteRenderProgram, GasSpriteUniforms
 export ParticleRenderProgram, ParticleUniforms
+export SpriteRenderCommand
 export Particle, ParticleGroup, ParticleManager
 
 # Function exports
@@ -109,10 +111,14 @@ function viewtransform_glubo_init(map::GLObjectMap)
     return setup_glubo!(map, :ViewTransform_UBO, 48, 1, "ViewBlock")
 end
 
-"Sets the view transformation matrix in the UBO."
+"Sets the view transformation matrix in the UBO, packed for std140 layout (3 columns of vec4)."
 function set_view_ubo(map::GLObjectMap, viewT::SMatrix{3, 3, Float32})
-    packed_view = vec(vcat(viewT, SMatrix{1, 3, Float32}(0, 0, 0)))  # std140 padding
-
+    # std140 pads each column of a mat3 to vec4 (4 floats with trailing zero)
+    packed_view = SVector{12, Float32}(
+        viewT[1,1], viewT[2,1], viewT[3,1], 0f0,
+        viewT[1,2], viewT[2,2], viewT[3,2], 0f0,
+        viewT[1,3], viewT[2,3], viewT[3,3], 0f0,
+    )
     return set_ubo(map, :ViewTransform_UBO, packed_view)
 end
 
@@ -133,14 +139,15 @@ struct BaseSpriteRenderProgram <: AbstractRenderProgram end
     uv_scale::SVector{2, GLfloat}
     sprite_scale::SVector{2, GLfloat}  # Precomputed: (cropped_size_px .* (1/hex_size_pixels)) * user_scale
     sprite_offset::SVector{2, GLfloat}  # Precomputed translation in hex units to re-center the cropped sprite
-    sprite_rotate::SMatrix{2, 2, GLfloat}  # Sprite rotation applied before scaling and offsetting (for animation)
-    object_rotation::SMatrix{2, 2, GLfloat}
+    sprite_rotate::SMatrix{2, 2, GLfloat, 4}  # Sprite rotation applied before scaling and offsetting (for animation)
+    object_rotation::SMatrix{2, 2, GLfloat, 4}
     object_translation::SVector{2, GLfloat}
     texunit::GLint
     colour_multiply::SVector{4, GLfloat}
     x_uncliped::GLfloat
 end
 uniforms_type(::Type{BaseSpriteRenderProgram}) = BaseSpriteUniforms
+get_vao_symbol(::BaseSpriteRenderProgram) = :UnitQuad_VAO
 
 "Helper function to initialize sprite-based rendering programs with shared VAO setup."
 function basesprite_init_helper(map::GLObjectMap, prog::AbstractRenderProgram, vertname::String, fragname::String)
@@ -189,8 +196,8 @@ struct LiquidSpriteRenderProgram <: AbstractRenderProgram end
     uv_scale::SVector{2, GLfloat}
     sprite_scale::SVector{2, GLfloat}
     sprite_offset::SVector{2, GLfloat}
-    sprite_rotate::SMatrix{2, 2, GLfloat}
-    object_rotation::SMatrix{2, 2, GLfloat}
+    sprite_rotate::SMatrix{2, 2, GLfloat, 4}
+    object_rotation::SMatrix{2, 2, GLfloat, 4}
     object_translation::SVector{2, GLfloat}
     texunit::GLint
     colour_multiply::SVector{4, GLfloat}
@@ -198,6 +205,7 @@ struct LiquidSpriteRenderProgram <: AbstractRenderProgram end
     gameticks::GLfloat
 end
 uniforms_type(::Type{LiquidSpriteRenderProgram}) = LiquidSpriteUniforms
+get_vao_symbol(::LiquidSpriteRenderProgram) = :UnitQuad_VAO
 
 "Gas sprite rendering program with animated gas shader effects."
 struct GasSpriteRenderProgram <: AbstractRenderProgram end
@@ -207,8 +215,8 @@ struct GasSpriteRenderProgram <: AbstractRenderProgram end
     uv_scale::SVector{2, GLfloat}
     sprite_scale::SVector{2, GLfloat}
     sprite_offset::SVector{2, GLfloat}
-    sprite_rotate::SMatrix{2, 2, GLfloat}
-    object_rotation::SMatrix{2, 2, GLfloat}
+    sprite_rotate::SMatrix{2, 2, GLfloat, 4}
+    object_rotation::SMatrix{2, 2, GLfloat, 4}
     object_translation::SVector{2, GLfloat}
     texunit::GLint
     colour_multiply::SVector{4, GLfloat}
@@ -216,6 +224,14 @@ struct GasSpriteRenderProgram <: AbstractRenderProgram end
     gameticks::GLfloat
 end
 uniforms_type(::Type{GasSpriteRenderProgram}) = GasSpriteUniforms
+get_vao_symbol(::GasSpriteRenderProgram) = :UnitQuad_VAO
+
+"Concrete union of all queued sprite render commands. Enables isbits inline vector storage."
+const SpriteRenderCommand = Union{
+    RenderCommand{BaseSpriteRenderProgram, BaseSpriteUniforms},
+    RenderCommand{LiquidSpriteRenderProgram, LiquidSpriteUniforms},
+    RenderCommand{GasSpriteRenderProgram, GasSpriteUniforms},
+}
 
 "Initializes the liquid sprite rendering program."
 function liquidsprite_glprog_init(map::GLObjectMap)
@@ -344,7 +360,7 @@ function render_basic_sprite(
     end
     base_uniforms = setup_basesprite_uniforms(glmap, sprite, rotation_matrix, posvec; kwargs...)
 
-    return RenderCommand(base_uniforms, :UnitQuad_VAO, draw_height)
+    return RenderCommand(base_uniforms, draw_height)
 end
 
 "Returns a RenderCommand for a basic tile sprite at the given position and rotation."
@@ -405,7 +421,7 @@ function render_liquid_sprite(
         x_uncliped = base.x_uncliped,
         gameticks = GLfloat(gameticks)
     )
-    return RenderCommand(u, :UnitQuad_VAO, draw_height)
+    return RenderCommand(u, draw_height)
 end
 
 "Returns a RenderCommand for a sprite with animated gas effect."
@@ -437,7 +453,7 @@ function render_gas_sprite(
         x_uncliped = base.x_uncliped,
         gameticks = GLfloat(gameticks)
     )
-    return RenderCommand(u, :UnitQuad_VAO, draw_height)
+    return RenderCommand(u, draw_height)
 end
 
 "Returns a RenderCommand for a basic tile sprite with animated liquid effect."
@@ -516,7 +532,7 @@ end
 
 "Render a dotted beam between two coordinates using repeated sprites with animated noise."
 function render_beam!(
-        queue::Vector{RenderCommand},
+        queue::Vector{<:RenderCommand},
         glmap::GLObjectMap,
         gameticks::Int64,
         start_coord,
@@ -584,7 +600,7 @@ function _ship_draw_height(gamemap::GameMap, ship_name::Union{Nothing, Symbol}, 
 end
 
 "Renders all tile components in the gamemap by delegating to `render_map_elem!` on each component. This implementation iterates each ShipMap and calls the per-ship components, keeping ship-local helper functions intact."
-function tile_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, gamestate::GameState)
+function tile_queued_render!(queue::Vector{<:RenderCommand}, map::GLObjectMap, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot, gamestate::GameState)
     isempty(gamemap.ships) && return nothing
 
     for (ship_name, ship) in gamemap.ships
@@ -598,7 +614,7 @@ function tile_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, gam
 end
 
 "Renders all node vertices with colours based on MNA voltage/pressure values."
-function node_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State)
+function node_queued_render!(queue::Vector{<:RenderCommand}, map::GLObjectMap, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot)
     nodes = list_nodes(derivedmapstate.allelements)
     isempty(nodes) && return nothing
 
@@ -650,7 +666,7 @@ function node_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, gam
 end
 
 "Renders all pipe behaviors in the gamemap by delegating to `render_pipe_map!` on each pipe. Iterates each ShipMap." 
-function pipe_queued_render!(queue::Vector{RenderCommand}, map::GLObjectMap, gamemap::GameMap, derivedmapstate::DerivedMapState, gamestate::GameState)
+function pipe_queued_render!(queue::Vector{<:RenderCommand}, map::GLObjectMap, gamemap::GameMap, derivedmapstate::DerivedMapState, gamestate::GameState)
     isempty(gamemap.ships) && return nothing
 
     for (ship_name, ship) in gamemap.ships
@@ -677,7 +693,7 @@ end
 
 "Render ship surface background tiles with per-ship colour tint and position offset"
 function ship_surface_queued_render!(
-        queue::Vector{RenderCommand}, map::GLObjectMap, gamemap::GameMap;
+        queue::Vector{<:RenderCommand}, map::GLObjectMap, gamemap::GameMap;
         selected_ship::Union{Nothing, Symbol} = nothing
     )
     isempty(gamemap.ships) && return nothing
@@ -709,6 +725,7 @@ end
 # ===============================================================
 
 const PARTICLE_VAO_MAX_COUNT = 10000
+const MAX_CATCHUP_TICKS::Int = 8 # Maximum back-fill ticks after a GC pause or sim speed burst
 
 """
 Immutable particle with position, velocity, and lifetime.
@@ -764,8 +781,8 @@ function ParticleManager(size::Float32 = 5.0f0)
     return ParticleManager(
         Dict{SVector{4, Float32}, ParticleGroup}(),
         size,
-        0,
-        0,
+        -1, # last_update_tick: -1 sentinel = uninitialised
+        -1, # last_spawn_tick: -1 sentinel = uninitialised
         cull_buffer
     )
 end
@@ -832,6 +849,12 @@ function spawn_particles!(
     return nothing
 end
 
+"Advance a single particle position through Float64 precision and back to Float32. Zero-allocation per element."
+@inline function _advance_pos(pos::SVector{2, Float32}, vel::SVector{2, Float64}, dt::Int)
+    new_pos = SVector{2, Float64}(pos) + vel * dt
+    return SVector{2, Float32}(new_pos)
+end
+
 """
 Update particle physics for a single group. Applies the ship's real acceleration
 (from `gamestate.acceleration_ship_frame`, per-second units) scaled by `get_particle_accel_scale()`
@@ -844,10 +867,27 @@ function update_particle_physics!(group::ParticleGroup, gamestate; base_ups::Flo
         current_tick = gamestate.ticks
         particles = group.particles
 
-        # Remove expired particles
+        # Remove expired particles (manual loop avoids StructArray filter! overhead inside @timeit)
         @timeit render_loop_timer "filter_expired" begin
-            filter!(p -> p.vanishing_time > current_tick, group.particles)
-            particles = group.particles
+            # Type assertions needed: particles is StructArray{Particle} (abstract C,I params)
+            pos_col = particles.position::Vector{SVector{2, Float32}}
+            vel_col = particles.velocity::Vector{SVector{2, Float64}}
+            ct_col  = particles.creation_time::Vector{Int64}
+            vt_col  = particles.vanishing_time::Vector{Int64}
+
+            write_idx = 0
+            for i in eachindex(vt_col)
+                if @inbounds(vt_col[i]) > current_tick
+                    write_idx += 1
+                    if write_idx != i
+                        @inbounds pos_col[write_idx] = pos_col[i]
+                        @inbounds vel_col[write_idx] = vel_col[i]
+                        @inbounds ct_col[write_idx]  = ct_col[i]
+                        @inbounds vt_col[write_idx]  = vt_col[i]
+                    end
+                end
+            end
+            resize!(particles, write_idx)
         end
 
         length(particles) == 0 && return nothing # exit early if no particles remain
@@ -861,10 +901,8 @@ function update_particle_physics!(group::ParticleGroup, gamestate; base_ups::Flo
             # apply for every tick that has elapsed since last update
             particles.velocity .+= Ref(accel_per_tick * delta_ticks)
 
-            # Update positions: Float32 <- (Float64 + velocity*dt) for precision
-            positions_f64 = SVector{2, Float64}.(particles.position)
-            positions_f64 .+= particles.velocity * delta_ticks
-            particles.position .= SVector{2, Float32}.(positions_f64)
+            # Update positions via fused broadcast: Float32 -> Float64 arithmetic -> Float32, zero-allocation
+            particles.position .= _advance_pos.(particles.position, particles.velocity, delta_ticks)
         end
     end
 
@@ -875,12 +913,14 @@ end
 function update_particle_physics!(manager::ParticleManager, gamestate; kwargs...)
     current_tick = gamestate.ticks
 
-    # Only update if tick has incremented
-    if current_tick == manager.last_update_tick
+    # First-frame initialisation: skip physics (no particles exist yet)
+    if manager.last_update_tick < 0
+        manager.last_update_tick = current_tick
         return nothing
     end
 
-    # compute how many ticks have elapsed since last update
+    current_tick == manager.last_update_tick && return nothing
+
     delta_ticks = current_tick - manager.last_update_tick
     manager.last_update_tick = current_tick
 
@@ -949,52 +989,59 @@ function cull_particles_to_buffer!(
         gamemap::Union{GameMap, Nothing}
     )
     @timeit render_loop_timer "cull_particles" begin
-        # Interpolate positions based on timestamp into buffer (optimized, no allocation)
-        @timeit render_loop_timer "interpolate" begin
-            positions = group.particles.position
-            velocities = group.particles.velocity
-            particle_count = length(positions)
+        # Type assertions needed: ParticleGroup.particles is StructArray{Particle} (abstract C,I params),
+        # so column access returns ::Any without assertions, causing per-element dynamic dispatch.
+        positions = group.particles.position::Vector{SVector{2, Float32}}
+        velocities = group.particles.velocity::Vector{SVector{2, Float64}}
+        particle_count = length(positions)
 
+        # Interpolate positions into buffer (map! closure is zero-alloc with type-asserted arrays)
+        @timeit render_loop_timer "interpolate" begin
             time_since_last_tick = time() - timestamp
             passed_time_fraction = clamp(time_since_last_tick / (1.0 / ups), 0.0, 1.0)
 
             resize!(manager.cull_buffer, particle_count)
             map!(manager.cull_buffer, positions, velocities) do pos, vel
-                pos + SVector{2, Float32}(vel * passed_time_fraction)
+                SVector{2, Float32}(
+                    pos[1] + Float32(vel[1] * passed_time_fraction),
+                    pos[2] + Float32(vel[2] * passed_time_fraction)
+                )
             end
         end
 
-        # Filter viewport bounds (always)
+        # Viewport filter (manual write-pointer avoids closure allocation inside @timeit)
         @timeit render_loop_timer "filter_viewport" begin
-            min_x, min_y = bottom_left
-            max_x, max_y = top_right
-            filter!(manager.cull_buffer) do pos
-                min_x <= pos[1] <= max_x && min_y <= pos[2] <= max_y
+            min_x, min_y = bottom_left[1], bottom_left[2]
+            max_x, max_y = top_right[1], top_right[2]
+            write_idx = 0
+            for i in eachindex(manager.cull_buffer)
+                pos = @inbounds manager.cull_buffer[i]
+                if min_x <= pos[1] <= max_x && min_y <= pos[2] <= max_y
+                    write_idx += 1
+                    @inbounds manager.cull_buffer[write_idx] = pos
+                end
             end
+            resize!(manager.cull_buffer, write_idx)
         end
 
-        # Filter ship surface (only for background particles when gamemap provided)
-        # NOTE: this step as a whole is somewhat expensive, could be omitted if we get cpu bound
+        # Surface filter (manual write-pointer + inlined rounding avoids all closure and FieldVector allocations)
         if gamemap !== nothing
             @timeit render_loop_timer "filter_surface" begin
-                # Iterate per-ship and test particles in each ship's local coordinate frame.
-                # This allows fractional render offsets (non-integer) without rounding ship tiles.
                 for (ship_name, ship) in gamemap.ships
                     ship_offset_vec = glvec(get_render_offset(ship))
+                    ox, oy = Float64(ship_offset_vec[1]), Float64(ship_offset_vec[2])
                     surface_tiles = ship.ship_tiles
 
-                    filter!(manager.cull_buffer) do pos
-                        # Reverse-offset particle to ship-local coordinates
-                        unoffset_pos = pos .- ship_offset_vec
-
-                        # NOTE: the fact we have to convert to Float64 is an area for possible optimisation
-                        # Convert Float32 position to CartesianCoord (Float64) for round_to_tile
-                        cart_pos = HexFrame.CartesianCoord(Float64(unoffset_pos[1]), Float64(unoffset_pos[2]))
-                        tile = HexFrame.round_to_tile(cart_pos)
-
-                        # Keep particle if NOT behind this ship's surface
-                        return !(tile in surface_tiles)
+                    write_idx = 0
+                    for i in eachindex(manager.cull_buffer)
+                        pos = @inbounds manager.cull_buffer[i]
+                        tile = round_to_tile_cartesian(Float64(pos[1]) - ox, Float64(pos[2]) - oy)
+                        if !(tile in surface_tiles)
+                            write_idx += 1
+                            @inbounds manager.cull_buffer[write_idx] = pos
+                        end
                     end
+                    resize!(manager.cull_buffer, write_idx)
                 end
             end
         end
@@ -1018,8 +1065,8 @@ end
 
 """
 Thrust dust particle effect - spawns particles from ship surface edge tiles with random velocities.
-Gated to spawn only once per game tick. Uses batch spawning for efficiency.
-Respects per-ship render position offsets.
+Gated to spawn only once per game tick, with catch-up spawning for missed ticks (GC pauses, sim speed > 1x).
+Catch-up particles are pre-advanced along their velocity to avoid clumping at the spawn point.
 """
 function thrust_dust_particle_effect!(
         manager::ParticleManager,
@@ -1034,38 +1081,66 @@ function thrust_dust_particle_effect!(
     @timeit render_loop_timer "spawn_effect" begin
         current_tick = gamestate.ticks
 
-        if current_tick == manager.last_spawn_tick  # Only spawn once per tick
-            return nothing
+        # First-frame initialisation -- no catch-up on first call
+        if manager.last_spawn_tick < 0
+            manager.last_spawn_tick = current_tick - 1 # allows first-frame spawn with 0 missed ticks
         end
+
+        current_tick == manager.last_spawn_tick && return nothing
+
+        missed_ticks = clamp(current_tick - manager.last_spawn_tick - 1, 0, MAX_CATCHUP_TICKS)
         manager.last_spawn_tick = current_tick
 
+        ticks_to_spawn = 1 + missed_ticks # current tick + back-fill
+
         @timeit render_loop_timer "generate_particles" begin
-            # Iterate per-ship to apply correct render offsets
             for (ship_name, ship) in gamemap.ships
                 ship_offset = get_render_offset(ship)
                 offset_vec = glvec(ship_offset)
-                
-                # Get edge tiles for this ship
+
                 edge_tiles = Set{TileCoord}()
                 find_ship_surface_edgetiles!(edge_tiles, ship)
-                
-                total_particles = length(edge_tiles) * num_particles_per_tile
-                total_particles == 0 && continue
-                positions = Vector{SVector{2, Float32}}(undef, total_particles)
-                velocities = Vector{SVector{2, Float64}}(undef, total_particles)
 
-                idx = 1
-                for tile_coord in edge_tiles
-                    tile_pos = glvec(tile_coord) .+ offset_vec
+                total_particles_per_tick = length(edge_tiles) * num_particles_per_tile
+                total_particles_per_tick == 0 && continue
 
-                    for _ in 1:num_particles_per_tile
-                        positions[idx] = tile_pos
-                        velocities[idx] = SVector{2, Float64}((rand() - 0.5) * PARTICLE_VELOCITY_RANGE, (rand() - 0.5) * PARTICLE_VELOCITY_RANGE)
-                        idx += 1
-                    end
+                # Retrieve the target group for pre-advancement tracking
+                group = get!(manager.groups, colour) do
+                    create_particle_group(colour, manager.size)
                 end
 
-                spawn_particles!(manager, positions, velocities, gamestate.ticks, gamestate.ticks + PARTICLE_LIFETIME_TICKS; colour = colour)
+                # Pre-allocate once and reuse across all tick_offset iterations
+                positions = Vector{SVector{2, Float32}}(undef, total_particles_per_tick)
+                velocities = Vector{SVector{2, Float64}}(undef, total_particles_per_tick)
+
+                for tick_offset in 0:(ticks_to_spawn - 1)
+                    spawn_tick = current_tick - tick_offset
+
+                    idx = 1
+                    for tile_coord in edge_tiles
+                        tile_pos = glvec(tile_coord) .+ offset_vec
+                        for _ in 1:num_particles_per_tile
+                            positions[idx] = tile_pos
+                            velocities[idx] = SVector{2, Float64}(
+                                (rand() - 0.5) * PARTICLE_VELOCITY_RANGE,
+                                (rand() - 0.5) * PARTICLE_VELOCITY_RANGE)
+                            idx += 1
+                        end
+                    end
+
+                    prev_len = length(group.particles)
+                    spawn_particles!(manager, positions, velocities,
+                        spawn_tick, spawn_tick + PARTICLE_LIFETIME_TICKS; colour = colour)
+
+                    # Pre-advance catch-up particles to correct trail position (skip current tick)
+                    if tick_offset > 0
+                        pos_col = group.particles.position::Vector{SVector{2, Float32}}
+                        vel_col = group.particles.velocity::Vector{SVector{2, Float64}}
+                        @inbounds for i in (prev_len + 1):length(group.particles)
+                            pos_col[i] = _advance_pos(pos_col[i], vel_col[i], tick_offset)
+                        end
+                    end
+                end
             end
         end
     end
@@ -1155,33 +1230,80 @@ function render_particles!(
     return nothing
 end
 
+"Pre-advance positions of newly spawned catch-up particles to simulate aging by `age_ticks` ticks."
+function _pre_advance_catchup_particles!(manager::ParticleManager, prev_counts::Dict{SVector{4, Float32}, Int}, age_ticks::Int)
+    for (colour, group) in manager.groups
+        prev_len = get(prev_counts, colour, 0)
+        curr_len = length(group.particles)
+        curr_len <= prev_len && continue
+
+        # New particles are at indices (prev_len+1):curr_len
+        positions = group.particles.position::Vector{SVector{2, Float32}}
+        velocities = group.particles.velocity::Vector{SVector{2, Float64}}
+        @inbounds for i in (prev_len + 1):curr_len
+            positions[i] = _advance_pos(positions[i], velocities[i], age_ticks)
+        end
+    end
+    return nothing
+end
+
 """
-This function iterates through all tiles in the gamemap and delegates particle
-spawning to each component's collect_effect_particles! implementation.
-Passes per-ship render position offset to particle spawning.
+Spawn foreground (nozzle exhaust) particles for all components, gated to once per game tick.
+When ticks have been missed (GC pauses, sim speed > 1x), spawns back-dated batches with
+pre-advanced positions to fill gaps in exhaust trails.
 """
 function tile_particle_spawn!(
-        manager::ParticleManager,
-        glmap::GLObjectMap,
-        gamemap::GameMap,
-        derivedmapstate::DerivedMapState,
-        mna_state::MNA_State,
-        gamestate::GameState
+        manager::ParticleManager, glmap::GLObjectMap, gamemap::GameMap,
+        derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot, gamestate::GameState
     )
-    # Iterate components per ship so collect_effect_particles! is invoked for every ship's components
+    current_tick = gamestate.ticks
+
+    # First-frame initialisation -- no catch-up on first call
+    if manager.last_spawn_tick < 0
+        manager.last_spawn_tick = current_tick - 1 # allows first-frame spawn with 0 missed ticks
+    end
+
+    current_tick == manager.last_spawn_tick && return nothing
+
+    missed_ticks = clamp(current_tick - manager.last_spawn_tick - 1, 0, MAX_CATCHUP_TICKS)
+    manager.last_spawn_tick = current_tick
+
+    # Reusable Dict for snapshotting group lengths during catch-up -- avoids per-component allocation
+    prev_counts = Dict{SVector{4, Float32}, Int}()
+    sizehint!(prev_counts, length(manager.groups))
+
     for (ship_name, ship) in gamemap.ships
         ship_offset = get_render_offset(ship)
-        for (coord, tilecomp) in get_all_components(ship)
+        components = get_all_components(ship)
+
+        # Pass 1: Spawn current tick's particles for all components
+        for (coord, tilecomp) in components
             collect_effect_particles!(
                 manager, tilecomp;
-                glmap = glmap,
-                mna_state = mna_state,
-                derivedmapstate = derivedmapstate,
-                gameticks = gamestate.ticks,
-                position = coord,
-                tile = coord,
-                pos_offset = ship_offset
+                glmap = glmap, mna_state = mna_state, derivedmapstate = derivedmapstate,
+                gameticks = current_tick, position = coord, tile = coord, pos_offset = ship_offset
             )
+        end
+
+        # Pass 2: Back-fill missed ticks with pre-advanced particles (one snapshot per tick)
+        for t in 1:missed_ticks
+            backdate_tick = current_tick - t
+
+            # Snapshot group lengths once for all components this tick
+            empty!(prev_counts)
+            for (colour, group) in manager.groups
+                prev_counts[colour] = length(group.particles)
+            end
+
+            for (coord, tilecomp) in components
+                collect_effect_particles!(
+                    manager, tilecomp;
+                    glmap = glmap, mna_state = mna_state, derivedmapstate = derivedmapstate,
+                    gameticks = backdate_tick, position = coord, tile = coord, pos_offset = ship_offset
+                )
+            end
+
+            _pre_advance_catchup_particles!(manager, prev_counts, t)
         end
     end
     return nothing

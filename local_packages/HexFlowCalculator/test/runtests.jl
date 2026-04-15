@@ -6,6 +6,7 @@ using HexFrame: Q_POS
 using HexComponentsAPI
 using HexFlowControl
 using FlowEngine
+using HexElements
 using HexFlowProcGen
 using HexFluids
 using StaticArrays
@@ -143,7 +144,7 @@ function make_test_ipc(; shared_state::FlowCalculatorSharedState = FlowCalculato
     return FlowCalculatorIPC(
         shared_state = shared_state,
         command_queue = create_command_queue(),
-        set_snapshot = (_snapshot) -> nothing,
+        publish_snapshot = (args...) -> nothing,
         get_snapshot = () -> FlowCalculatorSnapshot(),
         console_push = silent_console,
         console_see = () -> String[],
@@ -577,26 +578,64 @@ end
 # Tests — Snapshot Storage
 # ===============================================================
 
-@testset "create_snapshot_storage" begin
+@testset "create_snapshot_storage — triple buffer" begin
     snap = FlowCalculatorSnapshot(timestamp = 1.0)
-    set_snap, get_snap = create_snapshot_storage(snap)
+    publish_snap, get_snap = create_snapshot_storage(snap)
 
-    # Get returns initial snapshot
+    # Get returns seeded snapshot
     result = get_snap()
     @test result.timestamp == 1.0
     @test result.gamemap isa GameMap
     @test result.gamestate isa GameState
+    @test result.mna isa MNA_StateSnapshot
 
-    # Set overwrites
-    snap2 = FlowCalculatorSnapshot(timestamp = 42.0)
-    set_snap(snap2)
+    # Publish overwrites via raw state objects
+    publish_snap(GameMap(), DerivedMapState(), MNA_State(), GameState(), 42.0)
     result2 = get_snap()
     @test result2.timestamp == 42.0
 
-    # Multiple sets — last write wins
-    set_snap(FlowCalculatorSnapshot(timestamp = 100.0))
-    set_snap(FlowCalculatorSnapshot(timestamp = 200.0))
+    # Multiple publishes — last write wins
+    publish_snap(GameMap(), DerivedMapState(), MNA_State(), GameState(), 100.0)
+    publish_snap(GameMap(), DerivedMapState(), MNA_State(), GameState(), 200.0)
     @test get_snap().timestamp == 200.0
+end
+
+@testset "snapshot! methods" begin
+    # DerivedMapState refill
+    src_derived = DerivedMapState()
+    push!(src_derived.allelements, AbsoluteElement(
+        connections = AbsoluteElementConnections(NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_POS), NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_NEG)),
+        value = 1.0,
+        type = HexElements.CONST_RESISTOR,
+        id = ElementID(TileCoord(0, 0), 1),
+    ))
+    src_derived.nodeactualfluids[NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_POS)] = HexFluids.COLD_GAS
+
+    dest_derived = DerivedMapState()
+    HexFlowCalculator.snapshot!(dest_derived, src_derived)
+    @test length(dest_derived.allelements) == 1
+    @test length(dest_derived.nodeactualfluids) == 1
+
+    # Refill again with empty — should clear
+    HexFlowCalculator.snapshot!(dest_derived, DerivedMapState())
+    @test isempty(dest_derived.allelements)
+    @test isempty(dest_derived.nodeactualfluids)
+
+    # MNA_StateSnapshot refill from MNA_State
+    src_mna = MNA_State()
+    src_mna.node_voltages[NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_POS)] = 5.0
+    src_mna.vsource_currents[ElementID(TileCoord(0, 0), 1)] = 0.1
+
+    dest_mna = MNA_StateSnapshot()
+    HexFlowCalculator.snapshot!(dest_mna, src_mna)
+    @test dest_mna.node_voltages[NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_POS)] == 5.0
+    @test dest_mna.vsource_currents[ElementID(TileCoord(0, 0), 1)] == 0.1
+
+    # GameState refill
+    src_gs = GameState(ticks = 42)
+    dest_gs = GameState()
+    HexFlowCalculator.snapshot!(dest_gs, src_gs)
+    @test dest_gs.ticks == 42
 end
 
 # ===============================================================
@@ -763,27 +802,31 @@ end
 end
 
 # ===============================================================
-# Tests — scale_voltage_dict
+# Tests — scale_voltage_dict!
 # ===============================================================
 
-@testset "scale_voltage_dict — empty" begin
-    @test isempty(scale_voltage_dict(Dict{NodeCoord, Float64}()))
+@testset "scale_voltage_dict! — empty" begin
+    out = Dict{NodeCoord, Float64}()
+    scale_voltage_dict!(out, Dict{NodeCoord, Float64}())
+    @test isempty(out)
 end
 
-@testset "scale_voltage_dict — single entry" begin
+@testset "scale_voltage_dict! — single entry" begin
     nc = NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_POS)
-    result = scale_voltage_dict(Dict(nc => 10.0))
-    @test haskey(result, nc)
-    @test result[nc] <= 1.0 + 1.0e-10  # scaled to at most 1.0
-    @test result[nc] > 0.0
+    out = Dict{NodeCoord, Float64}()
+    scale_voltage_dict!(out, Dict(nc => 10.0))
+    @test haskey(out, nc)
+    @test out[nc] <= 1.0 + 1.0e-10  # scaled to at most 1.0
+    @test out[nc] > 0.0
 end
 
-@testset "scale_voltage_dict — relative ordering preserved" begin
+@testset "scale_voltage_dict! — relative ordering preserved" begin
     nc1 = NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_POS)
     nc2 = NodeCoord(TileCoord(1, 0), HexFrame.NODE_Q_POS)
 
-    result = scale_voltage_dict(Dict(nc1 => 100.0, nc2 => 50.0))
-    @test result[nc1] > result[nc2]  # higher voltage → higher scaled value
+    out = Dict{NodeCoord, Float64}()
+    scale_voltage_dict!(out, Dict(nc1 => 100.0, nc2 => 50.0))
+    @test out[nc1] > out[nc2]  # higher voltage → higher scaled value
 end
 
 # ===============================================================

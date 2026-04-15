@@ -48,7 +48,7 @@ produce_rel_elements(behav::ScrapTilePipeCompBehav) = produce_rel_elements(behav
 get_tunables(behav::ScrapTilePipeCompBehav) = get_tunables(behav.elems)
 set_tunables(behav::ScrapTilePipeCompBehav, tunables::NTuple{1, Real}) = ScrapTilePipeCompBehav(Float64(tunables[1]))
 
-function render_base_elem!(queue::Vector{RenderCommand}, behav::ScrapTilePipeCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{<:RenderCommand}, behav::ScrapTilePipeCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     base_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
     push!(queue, render_basic_tile(glmap, :ScrapPipes_Tile, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = base_height, pos_offset = pos_offset))
     return nothing
@@ -74,7 +74,7 @@ produce_rel_elements(behav::BigTilePipeCompBehav) = produce_rel_elements(behav.e
 get_tunables(behav::BigTilePipeCompBehav) = get_tunables(behav.elems)
 set_tunables(behav::BigTilePipeCompBehav, tunables::NTuple{1, Real}) = BigTilePipeCompBehav(Float64(tunables[1]))
 
-function render_base_elem!(queue::Vector{RenderCommand}, behav::BigTilePipeCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{<:RenderCommand}, behav::BigTilePipeCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     base_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
     push!(queue, render_basic_tile(glmap, :BigPipes_Tile, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = base_height, pos_offset = pos_offset))
 
@@ -85,7 +85,7 @@ function render_base_elem!(queue::Vector{RenderCommand}, behav::BigTilePipeCompB
     return nothing
 end
 
-function render_map_elem!(queue::Vector{RenderCommand}, behav::BigTilePipeCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, gameticks::Int64 = 0, kwargs...)
+function render_map_elem!(queue::Vector{<:RenderCommand}, behav::BigTilePipeCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, gameticks::Int64 = 0, kwargs...)
     base_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
     push!(queue, render_basic_tile(glmap, :BigPipes_Tile, rotation, position; scale = scale, transparency = transparency, draw_height = base_height, pos_offset = pos_offset))
 

@@ -9,7 +9,7 @@ using HexFlowTelemetry
 export GLshadID, GLprogID, GLvaoID, GLvboID, GLtexID, GLuboID, GLspriteData
 export create_renderprog, create_tex, upload_tex, VboAttribFormat, create_static_vao, create_dynamic_vao
 export create_ubo, bind_ubo, set_ubo, update_dynamic_vao!
-export AbstractRenderProgram, AbstractRenderUniforms, RenderCommand, uniforms_type
+export AbstractRenderProgram, AbstractRenderUniforms, RenderCommand, uniforms_type, get_vao_symbol
 export GLObjectMap, getid_glprog, getid_gltex, getid_glubo, getid_glvao, getdata_glsprite
 export getdata_glprog, getdata_gltex, getdata_glubo, getdata_glvao, set_gluniform
 export getdata_dynamic_glvao, getid_dynamic_glvao, set_dynamic_vao_draw_count!
@@ -441,23 +441,23 @@ abstract type AbstractRenderUniforms{P <: AbstractRenderProgram} end
 
 """
 A RenderCommand includes all information required to queue a render.
-Includes a program (AbstractRenderProgram), a VAO name Symbol, uniforms struct, and draw height.
-The inner constructor infers the program type from the uniform struct automatically.
+Includes a program (AbstractRenderProgram), uniforms struct, and draw height.
+The VAO is resolved at render time via the `get_vao_symbol` trait, keeping the struct isbits
+for inline storage in union vectors.
 """
 struct RenderCommand{P <: AbstractRenderProgram, U <: AbstractRenderUniforms{P}}
     program::P
     uniforms::U
-    VAO::Symbol
     draw_height::Int32
 
     # Preferred constructor: infer program type from uniforms
-    function RenderCommand(uniforms::U, VAO::Symbol, draw_height::Int32) where {P, U <: AbstractRenderUniforms{P}}
-        return new{P, U}(P(), uniforms, VAO, draw_height)
+    function RenderCommand(uniforms::U, draw_height::Int32) where {P, U <: AbstractRenderUniforms{P}}
+        return new{P, U}(P(), uniforms, draw_height)
     end
 
     # Explicit program constructor for compatibility (e.g., with Accessors.@set)
-    function RenderCommand(program::P, uniforms::U, VAO::Symbol, draw_height::Int32) where {P <: AbstractRenderProgram, U <: AbstractRenderUniforms{P}}
-        return new{P, U}(program, uniforms, VAO, draw_height)
+    function RenderCommand(program::P, uniforms::U, draw_height::Int32) where {P <: AbstractRenderProgram, U <: AbstractRenderUniforms{P}}
+        return new{P, U}(program, uniforms, draw_height)
     end
 end
 
@@ -465,11 +465,11 @@ end
 Convenience constructor accepting Int64 draw heights.
 Validates that the value fits within Int32 range to prevent silent clipping.
 """
-function RenderCommand(uniforms::U, VAO::Symbol, draw_height::Int64) where {P, U <: AbstractRenderUniforms{P}}
+function RenderCommand(uniforms::U, draw_height::Int64) where {P, U <: AbstractRenderUniforms{P}}
     if draw_height < typemin(Int32) || draw_height > typemax(Int32)
         throw(ArgumentError("draw_height $draw_height out of Int32 range; cannot create RenderCommand"))
     end
-    return RenderCommand(uniforms, VAO, Int32(draw_height))
+    return RenderCommand(uniforms, Int32(draw_height))
 end
 
 """
@@ -478,6 +478,11 @@ Must be defined for all concrete render programs.
 """
 function uniforms_type(::Type{P}) where {P <: AbstractRenderProgram}
     throw(ArgumentError("No uniforms registered for $(P). Define uniforms_type(::Type{$(P)}) = YourUniforms"))
+end
+
+"Returns the Symbol key of the VAO to bind when rendering commands for this program."
+function get_vao_symbol(::P) where {P <: AbstractRenderProgram}
+    throw(ArgumentError("No VAO registered for $(P). Define get_vao_symbol(::$(P)) = :YourVAO"))
 end
 
 # ===============================================================
@@ -947,38 +952,42 @@ end
 # ===============================================================
 
 """
-Renders a single render command. Does not unbind its program or VAO.
+Renders a single render command by binding its program and VAO, uploading all uniform
+values, and issuing the draw call. Does not unbind its program or VAO afterwards.
 
-NOTE: This code will be less performant with unstable types and runtime symbol field access.
-There are optimization opportunities with @generated functions or compile-time Val-indexed approaches.
-Left simple for now, if performance issues arise in the render loop this has room for optimization.
+Uses `@generated` to unroll the uniform-upload loop at compile time. For each concrete
+`RenderCommand{P, U}`, the compiler emits one `set_gluniform` call per field of `U` with
+a literal `Symbol` name so the `getfield` calls remain type-stable.
 """
-function glrender(map::GLObjectMap, command::RenderCommand{P, U}) where {P, U}
-    prog = command.program
-    vao = command.VAO
-    uniforms = command.uniforms
+@generated function glrender(map::GLObjectMap, command::RenderCommand{P, U}) where {P, U}
+    # getfield with a literal Symbol is type-stable — the compiler knows the return type.
+    uniform_calls = [
+        :(set_gluniform(map, prog, $(QuoteNode(fname)), getfield(uniforms, $(QuoteNode(fname)))))
+        for fname in fieldnames(U)
+    ]
 
-    glUseProgram(getid_glprog(map, prog))
-    glBindVertexArray(getid_glvao(map, prog, vao))
+    return quote
+        prog = command.program
+        uniforms = command.uniforms
+        vao_sym = get_vao_symbol(prog)  # devirtualised for concrete P — zero alloc
 
-    for name in fieldnames(U)
-        value = getfield(uniforms, name)
-        set_gluniform(map, prog, name, value)
+        glUseProgram(getdata_glprog(map, prog).id)
+        glBindVertexArray(getdata_glvao(map, prog, vao_sym).id)
+
+        $(uniform_calls...)
+
+        return glDrawElements(GL_TRIANGLES, getdata_glvao(map, prog, vao_sym).draw_count, GL_UNSIGNED_INT, C_NULL)
     end
-
-    draw_count = getdata_glvao(map, prog, vao).draw_count
-    return glDrawElements(GL_TRIANGLES, draw_count, GL_UNSIGNED_INT, C_NULL)
 end
 
-"Renders the full render command queue. Includes a sorting step by draw height, then program and VAO"
-function glrender(map::GLObjectMap, commands::AbstractVector{RenderCommand})
-    # Sort by draw_height first (ascending), then by program type and VAO to provide stable grouping
+"Renders the full render command queue. Includes a sorting step by draw height, then program type."
+function glrender(map::GLObjectMap, renderqueue::AbstractVector{<:RenderCommand}, scratch_renderqueue::AbstractVector)
     @timeit render_loop_timer "Sort Queue" begin
-        sort!(commands; by = c -> (c.draw_height, objectid(typeof(c.program)), objectid(c.VAO)))
+        sort!(renderqueue; by = c -> (c.draw_height, objectid(typeof(c.program))), scratch = scratch_renderqueue)
     end
 
     @timeit render_loop_timer "Draw Calls" begin
-        for command in commands
+        for command in renderqueue
             glrender(map, command)
         end
     end

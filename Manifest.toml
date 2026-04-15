@@ -314,7 +314,7 @@ uuid = "53c48c17-4a7d-5ca2-90c5-79b7896eea93"
 version = "0.8.5"
 
 [[deps.FlowEngine]]
-deps = ["FlowMap", "HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "LinearAlgebra", "SmallCollections", "SparseArrays", "StructEquality", "Test"]
+deps = ["FlowMap", "HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "KLU", "LinearAlgebra", "SmallCollections", "SparseArrays", "StructEquality", "Test"]
 path = "local_packages/FlowEngine"
 uuid = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
 version = "0.1.0"
@@ -591,6 +591,12 @@ version = "0.10.12"
 deps = ["StyledStrings"]
 uuid = "ac6e5ff7-fb65-4e79-a425-ec3bc9c03011"
 version = "1.12.0"
+
+[[deps.KLU]]
+deps = ["LinearAlgebra", "SparseArrays", "SuiteSparse_jll"]
+git-tree-sha1 = "07649c499349dad9f08dde4243a4c597064663e9"
+uuid = "ef3ab10e-7fda-4108-b977-705223b18434"
+version = "0.6.0"
 
 [[deps.LAME_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]

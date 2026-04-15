@@ -34,7 +34,7 @@ export try_enqueue_command!
 export flowcalculator_loop!
 
 # Function exports - Map updates
-export update_map!, update_mna!, handle_thrusters!, scale_voltage_dict
+export update_map!, update_mna!, handle_thrusters!, scale_voltage_dict!
 
 # Constant exports - Manoeuvre thresholds
 export MANOEUVRE_THRUST_THRESHOLD, MANOEUVRE_COMPLETION_THRESHOLD
@@ -43,13 +43,13 @@ export MANOEUVRE_THRUST_THRESHOLD, MANOEUVRE_COMPLETION_THRESHOLD
 # Data Structures
 # ===============================================================
 
-"Snapshot of complete game state for rendering. Deep-copied to ensure thread safety."
-@kwdef struct FlowCalculatorSnapshot
+"Snapshot of complete game state for rendering. Triple-buffered and filled in-place to reduce allocations."
+@kwdef mutable struct FlowCalculatorSnapshot
     gamemap::GameMap = GameMap()
     derived::DerivedMapState = DerivedMapState()
-    mna::MNA_State = MNA_State()
+    mna::MNA_StateSnapshot = MNA_StateSnapshot()
     gamestate::GameState = GameState()
-    timestamp::Float64
+    timestamp::Float64 = 0.0
 end
 
 "Shared control state between render and logic threads. All fields must be accessed atomically."
@@ -146,7 +146,7 @@ end
 @kwdef struct FlowCalculatorIPC
     shared_state::FlowCalculatorSharedState
     command_queue::CommandQueue
-    set_snapshot::Function
+    publish_snapshot::Function
     get_snapshot::Function
     console_push::Function
     console_see::Function
@@ -258,32 +258,146 @@ end
 @struct_hash_equal RedockShipCommand
 
 # ===============================================================
-# Thread-Safe Snapshot Storage
+# Snapshot Refill Methods
+# ===============================================================
+
+"Refill `dest` with data from `src`, reusing existing container allocations."
+function snapshot!(dest::DerivedMapState, src::DerivedMapState)
+    # Sets: empty and refill
+    empty!(dest.ship_surface_edge)
+    union!(dest.ship_surface_edge, src.ship_surface_edge)
+
+    # Vectors: resize and copy
+    resize!(dest.allelements, length(src.allelements))
+    copyto!(dest.allelements, src.allelements)
+
+    resize!(dest.prunedelements, length(src.prunedelements))
+    copyto!(dest.prunedelements, src.prunedelements)
+
+    # Dic: empty and merge
+    empty!(dest.allnodes)
+    merge!(dest.allnodes, src.allnodes)
+
+    empty!(dest.prunednodes)
+    merge!(dest.prunednodes, src.prunednodes)
+
+    empty!(dest.nodeconnections)
+    merge!(dest.nodeconnections, src.nodeconnections)
+
+    empty!(dest.nodeprimefluidtags)
+    merge!(dest.nodeprimefluidtags, src.nodeprimefluidtags)
+
+    empty!(dest.nodeactualfluids)
+    merge!(dest.nodeactualfluids, src.nodeactualfluids)
+
+    return nothing
+end
+
+"Refill snapshot `dest` with the render-relevant subset of `src`."
+function snapshot!(dest::MNA_StateSnapshot, src::MNA_State)
+    empty!(dest.resistors)
+    merge!(dest.resistors, src.resistors)
+
+    empty!(dest.csources)
+    merge!(dest.csources, src.csources)
+
+    empty!(dest.vsources)
+    merge!(dest.vsources, src.vsources)
+
+    empty!(dest.vsource_lookup)
+    merge!(dest.vsource_lookup, src.vsource_lookup)
+
+    empty!(dest.node_voltages)
+    merge!(dest.node_voltages, src.node_voltages)
+
+    empty!(dest.vsource_currents)
+    merge!(dest.vsource_currents, src.vsource_currents)
+
+    empty!(dest.node_voltages_scaled)
+    merge!(dest.node_voltages_scaled, src.node_voltages_scaled)
+
+    return nothing
+end
+
+"Refill snapshot `dest` with values from `src`."
+function snapshot!(dest::GameState, src::GameState)
+    dest.thrust = src.thrust
+    dest.acceleration_ship_frame = src.acceleration_ship_frame
+    dest.acceleration_space_map_frame = src.acceleration_space_map_frame
+    dest.ticks = src.ticks
+    return nothing
+end
+
+# ===============================================================
+# Triple-Buffered Snapshot Storage
 # ===============================================================
 
 """
-Thread-safe snapshot storage using closure pattern.
-Returns `(set_function, get_function)` for snapshot access.
+Create triple-buffered snapshot storage for thread-safe IPC.
+
+Returns `(publish_snapshot!, get_snapshot)` closures. The publish closure fills
+the writer buffer in-place and swaps it into the ready slot. The get closure swaps
+the ready slot into the reader slot and returns it. The lock is held only during
+the index swaps (two integer writes), never during data copying.
+
+Three buffers are needed (not two) because at >1x sim speed the background thread
+may complete multiple ticks per render frame. With only two buffers, the second tick
+would overwrite the buffer the render thread is still reading. Triple buffering
+guarantees the writer, ready, and reader slots are always distinct, so neither thread
+ever touches the other's active buffer.
 """
 function create_snapshot_storage(initial_snapshot::FlowCalculatorSnapshot)
-    local snapshot_ref = Ref{FlowCalculatorSnapshot}(initial_snapshot)
-    local snapshot_lock = ReentrantLock()
+    # All three buffers seeded so the render thread has valid data before the first BG tick
+    buffers = (
+        deepcopy(initial_snapshot),
+        deepcopy(initial_snapshot),
+        deepcopy(initial_snapshot),
+    )
+    writer_idx = Threads.Atomic{Int}(1)
+    ready_idx  = Threads.Atomic{Int}(2)
+    reader_idx = Threads.Atomic{Int}(3)
+    has_new_data = Threads.Atomic{Int}(0)  # 1 when writer has published but reader hasn't consumed
+    snapshot_lock = ReentrantLock()
 
-    "Set the latest snapshot (producer side)."
-    function set_flowcalc_snapshot(new_snapshot::FlowCalculatorSnapshot)
-        return lock(snapshot_lock) do
-            snapshot_ref[] = new_snapshot
+    "Fill the writer buffer from live state and swap it into the ready slot."
+    function publish_flowcalc_snapshot!(gamemap::GameMap, derived::DerivedMapState, mna_state::MNA_State, gamestate::GameState, timestamp::Float64)
+        buf = buffers[writer_idx[]]
+
+        # GameMap: deepcopy (contains mutable component leaf state)
+        buf.gamemap = deepcopy(gamemap)
+        # DerivedMapState: in-place refill (all containers hold immutable values)
+        snapshot!(buf.derived, derived)
+        # MNA_State → MNA_StateSnapshot: in-place refill of the render-relevant subset
+        snapshot!(buf.mna, mna_state)
+        # GameState: field copy (4 isbits fields)
+        snapshot!(buf.gamestate, gamestate)
+        buf.timestamp = timestamp
+
+        # Swap writer and ready under lock, signal new data available
+        Base.@lock snapshot_lock begin
+            old_ready = ready_idx[]
+            ready_idx[] = writer_idx[]
+            writer_idx[] = old_ready
+            has_new_data[] = 1
         end
+        return nothing
     end
 
-    "Get the latest snapshot (consumer side)."
+    "Swap the ready buffer into the reader slot and return it. Only swaps when new data is available."
     function get_flowcalc_snapshot()::FlowCalculatorSnapshot
-        return lock(snapshot_lock) do
-            return snapshot_ref[]
+        Base.@lock snapshot_lock begin
+            if has_new_data[] == 1
+                old_ready = ready_idx[]
+                ready_idx[] = reader_idx[]
+                reader_idx[] = old_ready
+                has_new_data[] = 0
+            end
         end
+
+        return buffers[reader_idx[]]
     end
 
-    return set_flowcalc_snapshot, get_flowcalc_snapshot
+    return publish_flowcalc_snapshot!, get_flowcalc_snapshot
 end
 
 # ===============================================================
@@ -1079,12 +1193,11 @@ Rebuild derived map state and MNA matrix from the current `gamemap`.
 Called every tick (fast enough for now; may need revisiting if it becomes a bottleneck).
 """
 function update_map!(gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, current_tick::Int64)
-    # (updating map every tick as it is quite quick. This might need to be revisited if it becomes a bottleneck)
     @timeit flowcalc_loop_timer "Map Updates" begin
         # Derive basic map state
         @timeit flowcalc_loop_timer "find ship edge" find_ship_surface_edgetiles!(derivedmapstate, gamemap)
-        @timeit flowcalc_loop_timer "list elements" derivedmapstate.allelements = list_elements(gamemap)
-        @timeit flowcalc_loop_timer "list nodes" derivedmapstate.allnodes = list_nodes(derivedmapstate.allelements) # diagnostic only
+        @timeit flowcalc_loop_timer "list elements" list_elements!(derivedmapstate.allelements, gamemap)
+        @timeit flowcalc_loop_timer "list nodes" list_nodes!(derivedmapstate.allnodes, derivedmapstate.allelements) # diagnostic only
 
         # Iteratively prune until clear_dangling_dependants reaches a fixed point
         # This is a simple but inefficient approach, should consider optimising if it becomes a bottleneck
@@ -1097,22 +1210,28 @@ function update_map!(gamemap::GameMap, derivedmapstate::DerivedMapState, mna_sta
             last_hash = hash(derivedmapstate.prunedelements)
             @timeit flowcalc_loop_timer "dangling dependants" derivedmapstate.prunedelements = clear_dangling_dependants(derivedmapstate.prunedelements)
         end
-        @timeit flowcalc_loop_timer "list pruned nodes" derivedmapstate.prunednodes = list_nodes(derivedmapstate.prunedelements)
+        @timeit flowcalc_loop_timer "list pruned nodes" list_nodes!(derivedmapstate.prunednodes, derivedmapstate.prunedelements)
 
         # derive MNA, if there are any nodes. MNA on empty arrays crashes
         if !isempty(derivedmapstate.prunednodes)
-            derivedmapstate.nodeprimefluidtags = fluidtag_nodes(derivedmapstate, gamemap)
-            build_node_connection_map!(derivedmapstate)
-            connect_fluidtags!(derivedmapstate)
-            @timeit flowcalc_loop_timer "MNA index nodes" mna_state.node_to_index, mna_state.index_to_node = MNA_indexnodes(derivedmapstate)
+            @timeit flowcalc_loop_timer "fluid tag nodes" fluidtag_nodes!(derivedmapstate, gamemap)
+            @timeit flowcalc_loop_timer "node connections" build_node_connection_map!(derivedmapstate)
+            @timeit flowcalc_loop_timer "connect fluidtags" connect_fluidtags!(derivedmapstate)
+            @timeit flowcalc_loop_timer "MNA index nodes" MNA_indexnodes!(mna_state, derivedmapstate)
             @timeit flowcalc_loop_timer "MNA split elements" MNA_splitelements!(mna_state, derivedmapstate)
-            @timeit flowcalc_loop_timer "MNA get A" mna_state.mat_A = MNA_getA(mna_state)
+
+            # In-place A matrix construction + conditional LU refactorisation.
+            # Structure changes (topology) trigger a full rebuild; value-only changes use
+            # zero-alloc stamping into the existing sparse matrix + lu! refactorisation.
+            @timeit flowcalc_loop_timer "MNA update A" MNA_updateA!(mna_state)
         else
             # Clear stale outputs so they don't continue to be rendered
             empty!(mna_state.node_voltages)
             empty!(mna_state.vsource_currents)
             empty!(mna_state.node_voltages_scaled)
             empty!(derivedmapstate.nodeactualfluids)
+            mna_state.a_cache.structure_hash = UInt64(0) # reset structure cache
+            mna_state.a_cache.value_hash = UInt64(0)     # reset value cache
         end
     end
     return nothing
@@ -1121,20 +1240,24 @@ end
 # TODO: This closure hides mutable state (max_voltage_ever) with no way to reset on map reload.
 # Consider replacing with a proper struct + reset! method in a future cleanup pass.
 let max_voltage_ever::Float64 = -Inf
-    "Normalise node voltages to [0, 1] for colour rendering. Tracks the historical maximum."
-    global function scale_voltage_dict(dict::Dict{NodeCoord, Float64})::Dict{NodeCoord, Float64}
-        # Skip if input Dict is empty
+    "Normalise node voltages to [0, 1] for colour rendering. Tracks the historical maximum. Mutates `out` in-place."
+    global function scale_voltage_dict!(out::Dict{NodeCoord, Float64}, dict::Dict{NodeCoord, Float64})
         if isempty(dict)
-            return Dict{NodeCoord, Float64}()
+            empty!(out)
+            return nothing
         end
 
         # Get the maximum value
         max_voltage_current = maximum(values(dict))
-        max_voltage_ever = maximum([max_voltage_current, max_voltage_ever])
+        max_voltage_ever = max(max_voltage_current, max_voltage_ever)
 
-        # Scale the values so that the largest is 1
-        scaled_dict = Dict(key => value / max_voltage_ever for (key, value) in dict)
-        return scaled_dict
+        # Scale so that the largest value is 1
+        empty!(out)
+        sizehint!(out, length(dict))
+        for (key, value) in dict
+            out[key] = value / max_voltage_ever
+        end
+        return nothing
     end
 end
 
@@ -1142,9 +1265,9 @@ end
 function update_mna!(derivedmapstate::DerivedMapState, mna_state::MNA_State, current_tick::Int64)
     if !isempty(derivedmapstate.prunednodes)
         @timeit flowcalc_loop_timer "MNA Solve" begin
-            @timeit flowcalc_loop_timer "get Z" mna_state.mat_Z = MNA_getZ(mna_state)
-            @timeit flowcalc_loop_timer "MNA solve" mna_state.node_voltages, mna_state.vsource_currents = MNA_solve(mna_state)
-            @timeit flowcalc_loop_timer "MNA scale" mna_state.node_voltages_scaled = scale_voltage_dict(mna_state.node_voltages)
+            @timeit flowcalc_loop_timer "get Z" MNA_getZ!(mna_state)
+            @timeit flowcalc_loop_timer "MNA solve" MNA_solve!(mna_state)
+            @timeit flowcalc_loop_timer "MNA scale" scale_voltage_dict!(mna_state.node_voltages_scaled, mna_state.node_voltages)
         end
     end
     return nothing
@@ -1419,17 +1542,11 @@ end
 # FlowCalculator Main Loop
 # ===============================================================
 
-"Deep-copy all game state and publish a new snapshot."
-function _publish_snapshot!(set_snapshot::Function, gamemap, derivedmapstate, mna_state, gamestate, timestamp)
+"Time the snapshot publish and delegate to the triple-buffer closure."
+function _publish_snapshot!(publish_fn::Function, gamemap::GameMap, derived::DerivedMapState,
+        mna_state::MNA_State, gamestate::GameState, timestamp::Float64)
     @timeit flowcalc_loop_timer "Snapshot Publishing" begin
-        snapshot = FlowCalculatorSnapshot(
-            gamemap = deepcopy(gamemap),
-            derived = deepcopy(derivedmapstate),
-            mna = deepcopy(mna_state),
-            gamestate = deepcopy(gamestate),
-            timestamp = timestamp
-        )
-        set_snapshot(snapshot)
+        publish_fn(gamemap, derived, mna_state, gamestate, timestamp)
     end
     return nothing
 end
@@ -1499,7 +1616,7 @@ function flowcalculator_loop!(
     # Unpack IPC elements
     shared_state = ipc.shared_state
     command_queue = ipc.command_queue
-    set_snapshot = ipc.set_snapshot
+    publish_snapshot = ipc.publish_snapshot
     threadsafe_console_push = ipc.console_push
 
     @info "FlowCalculator loop started on thread $(Threads.threadid())"
@@ -1507,13 +1624,12 @@ function flowcalculator_loop!(
 
     # Timing state and UPS tracking
     timing = TimingState()
-    diagnostic_interval = 10.0  # seconds
     update_count = 0
 
     # Unpack initial state from snapshot
     gamemap = initial_snapshot.gamemap
     derivedmapstate = initial_snapshot.derived
-    mna_state = initial_snapshot.mna
+    mna_state = MNA_State()  # fresh full state; first update_map!/update_mna! populates it
     gamestate = initial_snapshot.gamestate
 
     # Initialise the shared target spacemap time from the loaded map
@@ -1570,14 +1686,14 @@ function flowcalculator_loop!(
                     target_time = @atomic shared_state.target_spacemap_time
                     step_space_map_time!(gamemap.space_map, target_time)
 
-                    _publish_snapshot!(set_snapshot, gamemap, derivedmapstate, mna_state, gamestate, timing.current_time)
+                    _publish_snapshot!(publish_snapshot, gamemap, derivedmapstate, mna_state, gamestate, timing.current_time)
 
                 elseif commands_processed
                     # Paused with pending commands: rebuild derived state without advancing time
                     update_map!(gamemap, derivedmapstate, mna_state, gamestate.ticks)
                     update_mna!(derivedmapstate, mna_state, gamestate.ticks)
 
-                    _publish_snapshot!(set_snapshot, gamemap, derivedmapstate, mna_state, gamestate, timing.current_time)
+                    _publish_snapshot!(publish_snapshot, gamemap, derivedmapstate, mna_state, gamestate, timing.current_time)
                 end
             end
 

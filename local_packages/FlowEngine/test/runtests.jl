@@ -542,11 +542,11 @@ end
         mna = MNA_State()
         derived.prunedelements = elements
         derived.prunednodes = list_nodes(elements)
-        mna.node_to_index, mna.index_to_node = MNA_indexnodes(derived)
+        MNA_indexnodes!(mna, derived)
         MNA_splitelements!(mna, derived)
-        mna.mat_A = MNA_getA(mna)
+        MNA_updateA!(mna)
         mna.mat_Z = MNA_getZ(mna)
-        mna.node_voltages, mna.vsource_currents = MNA_solve(mna)
+        MNA_solve!(mna)
         return (mna, derived)
     end
 
@@ -621,11 +621,11 @@ end
         mna = MNA_State()
         derived.prunedelements = elements
         derived.prunednodes = list_nodes(elements)
-        mna.node_to_index, mna.index_to_node = MNA_indexnodes(derived)
+        MNA_indexnodes!(mna, derived)
         MNA_splitelements!(mna, derived)
-        mna.mat_A = MNA_getA(mna)
+        MNA_updateA!(mna)
         mna.mat_Z = MNA_getZ(mna)
-        mna.node_voltages, mna.vsource_currents = MNA_solve(mna)
+        MNA_solve!(mna)
         return (mna, derived)
     end
 
@@ -685,6 +685,183 @@ end
 
 
 # ===============================================================
+# Phase 8.5: In-Place A Matrix and Z Vector Tests
+# ===============================================================
+
+@testset "in-place A matrix construction" begin
+    gnd = NodeCoord(TileCoord(0, 0), HexFrame.GROUND)
+    n_a = nc(0, 0, HexFrame.NODE_Q_POS)
+    n_b = nc(1, 0, HexFrame.NODE_Q_POS)
+    n_c = nc(2, 0, HexFrame.NODE_Q_POS)
+
+    "Build an MNA state suitable for in-place A matrix tests"
+    function build_mna(elements::Vector{AbsoluteElement})
+        derived = DerivedMapState()
+        mna = MNA_State()
+        derived.prunedelements = elements
+        derived.prunednodes = list_nodes(elements)
+        MNA_indexnodes!(mna, derived)
+        MNA_splitelements!(mna, derived)
+        return mna
+    end
+
+    base_elements = [
+        make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+        make_element(TileCoord(0,0), 2, n_a, n_b, 2.0, CONST_RESISTOR),
+        make_element(TileCoord(1,0), 1, n_b, gnd, 1.0, CONST_CURRENT),
+    ]
+
+    @testset "MNA_buildA_sparse matches MNA_getA numerically" begin
+        mna = build_mna(base_elements)
+        A_sparse = MNA_buildA_sparse(mna)
+        A_lu = MNA_getA(mna)
+        # Solve same Z with both to verify equivalence
+        mna.mat_Z = MNA_getZ(mna)
+        x_sparse = A_sparse \ vec(mna.mat_Z)
+        x_lu = A_lu \ vec(mna.mat_Z)
+        @test x_sparse ≈ x_lu
+    end
+
+    @testset "MNA_updateA! produces correct LU factorisation" begin
+        mna = build_mna(base_elements)
+        # First call triggers cold path (rebuild)
+        MNA_updateA!(mna)
+        mna.mat_Z = MNA_getZ(mna)
+        x_update = mna.a_cache.mat_A_lu \ vec(mna.mat_Z)
+        # Compare to fresh MNA_getA
+        mna2 = build_mna(base_elements)
+        mna2.a_cache.mat_A_lu = MNA_getA(mna2)
+        mna2.mat_Z = MNA_getZ(mna2)
+        x_fresh = mna2.a_cache.mat_A_lu \ vec(mna2.mat_Z)
+        @test x_update ≈ x_fresh
+    end
+
+    @testset "MNA_updateA! skips LU when values unchanged" begin
+        mna = build_mna(base_elements)
+        MNA_updateA!(mna) # cold path
+        old_hash = mna.a_cache.value_hash
+        MNA_updateA!(mna) # hot path — same values
+        @test mna.a_cache.value_hash == old_hash # hash unchanged means LU was skipped
+    end
+
+    @testset "MNA_updateA! detects value changes" begin
+        mna = build_mna(base_elements)
+        MNA_updateA!(mna)
+        old_hash = mna.a_cache.value_hash
+
+        # Change a resistor value (simulates valve conductance changing)
+        resistor_id = ElementID(TileCoord(0, 0), UInt8(2))
+        resistor = mna.resistors[resistor_id]
+        mna.resistors[resistor_id] = AbsoluteElement(
+            connections = resistor.connections,
+            value = 3.0,
+            type = resistor.type,
+            id = resistor.id,
+            dependent_id = resistor.dependent_id,
+            active = resistor.active,
+        )
+        MNA_updateA!(mna)
+        @test mna.a_cache.value_hash != old_hash # value changed → LU was redone
+    end
+
+    @testset "MNA_updateA! detects topology changes" begin
+        mna = build_mna(base_elements)
+        MNA_updateA!(mna)
+        old_structure_hash = mna.a_cache.structure_hash
+
+        # Add an extra element → topology changes
+        extended_elements = [
+            base_elements...,
+            make_element(TileCoord(2,0), 1, n_b, n_c, 4.0, CONST_RESISTOR),
+        ]
+        derived = DerivedMapState()
+        derived.prunedelements = extended_elements
+        derived.prunednodes = list_nodes(extended_elements)
+        MNA_indexnodes!(mna, derived)
+        MNA_splitelements!(mna, derived)
+        MNA_updateA!(mna)
+        @test mna.a_cache.structure_hash != old_structure_hash
+    end
+
+    @testset "MNA_stamp_A_ijv! produces correct IJV entries" begin
+        mna = build_mna(base_elements)
+        MNA_stamp_A_ijv!(mna)
+        cache = mna.a_cache
+        # IJV vectors should be non-empty and consistent lengths
+        @test length(cache.ijv_I) > 0
+        @test length(cache.ijv_I) == length(cache.ijv_J) == length(cache.ijv_V)
+        # Build sparse from IJV and compare to the reference build path
+        MNA_construct_A_sparse!(mna)
+        A_ijv = Matrix(cache.mat_A_sparse)
+        # Compare against a fresh solve via MNA_getA
+        mna2 = build_mna(base_elements)
+        A_ref = Matrix(MNA_buildA_sparse(mna2))
+        @test A_ijv ≈ A_ref
+    end
+
+    @testset "compute_A_hashes detects structure vs value changes" begin
+        mna = build_mna(base_elements)
+        MNA_stamp_A_ijv!(mna)
+        sh1, vh1 = compute_A_hashes(mna.a_cache)
+
+        # Same elements → same hashes
+        MNA_stamp_A_ijv!(mna)
+        sh2, vh2 = compute_A_hashes(mna.a_cache)
+        @test sh1 == sh2
+        @test vh1 == vh2
+
+        # Change a value → value hash changes, structure hash unchanged
+        resistor_id = ElementID(TileCoord(0, 0), UInt8(2))
+        resistor = mna.resistors[resistor_id]
+        mna.resistors[resistor_id] = AbsoluteElement(
+            connections = resistor.connections,
+            value = 9.0,
+            type = resistor.type,
+            id = resistor.id,
+            dependent_id = resistor.dependent_id,
+            active = resistor.active,
+        )
+        MNA_stamp_A_ijv!(mna)
+        sh3, vh3 = compute_A_hashes(mna.a_cache)
+        @test sh3 == sh1  # structure unchanged
+        @test vh3 != vh1  # value changed
+    end
+end
+
+@testset "in-place Z vector" begin
+    gnd = NodeCoord(TileCoord(0, 0), HexFrame.GROUND)
+    n_a = nc(0, 0, HexFrame.NODE_Q_POS)
+    n_b = nc(1, 0, HexFrame.NODE_Q_POS)
+
+    elements = [
+        make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+        make_element(TileCoord(0,0), 2, n_a, n_b, 2.0, CONST_RESISTOR),
+        make_element(TileCoord(1,0), 1, n_b, gnd, 1.0, CONST_CURRENT),
+    ]
+
+    derived = DerivedMapState()
+    mna = MNA_State()
+    derived.prunedelements = elements
+    derived.prunednodes = list_nodes(elements)
+    MNA_indexnodes!(mna, derived)
+    MNA_splitelements!(mna, derived)
+
+    @testset "MNA_getZ! matches MNA_getZ" begin
+        z_alloc = MNA_getZ(mna)
+        MNA_getZ!(mna)
+        @test mna.mat_Z ≈ z_alloc
+    end
+
+    @testset "MNA_getZ! reuses buffer on repeated calls" begin
+        MNA_getZ!(mna)
+        buffer_ptr = pointer(mna.mat_Z)
+        MNA_getZ!(mna)
+        @test pointer(mna.mat_Z) == buffer_ptr # same array, no reallocation
+    end
+end
+
+
+# ===============================================================
 # Phase 9: Known Failure Cases (singularity-inducing topologies)
 # ===============================================================
 
@@ -713,11 +890,11 @@ end
         if isempty(derived.prunednodes)
             return (mna, derived)
         end
-        mna.node_to_index, mna.index_to_node = MNA_indexnodes(derived)
+        MNA_indexnodes!(mna, derived)
         MNA_splitelements!(mna, derived)
-        mna.mat_A = MNA_getA(mna)
+        MNA_updateA!(mna)
         mna.mat_Z = MNA_getZ(mna)
-        mna.node_voltages, mna.vsource_currents = MNA_solve(mna)
+        MNA_solve!(mna)
         return (mna, derived)
     end
 

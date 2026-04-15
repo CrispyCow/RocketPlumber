@@ -1,6 +1,6 @@
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.12.1"
+julia_version = "1.12.6"
 manifest_format = "2.0"
 project_hash = "f4c8b8323e7d5354d0074c219e7c475088d4d46b"
 
@@ -41,7 +41,7 @@ uuid = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
 version = "1.11.0"
 
 [[deps.SquirrelNoise]]
-deps = ["Test"]
+deps = ["Random", "Test"]
 path = "."
 uuid = "2e7baeb9-be7b-428c-bdac-8e70268c90fc"
 version = "0.1.0"

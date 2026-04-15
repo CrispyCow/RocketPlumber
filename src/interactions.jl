@@ -531,7 +531,7 @@ const GHOST_PIPE_COLOUR_INVALID = ColourType(0.6, 0.15, 0.15, 1.0)
 Render cursor ghosts for tile/pipe placement and move operations.
 Shows semi-transparent previews of where components will be placed/moved.
 """
-function render_cursor_ghosts!(queue::Vector{RenderCommand}, glmap::GLObjectMap, inputstate::InputState, gamemap::GameMap, gamestate::GameState)
+function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMap, inputstate::InputState, gamemap::GameMap, gamestate::GameState)
     if inputstate.cursor_x === nothing || inputstate.cursor_y === nothing
         return
     end
@@ -832,7 +832,7 @@ end
 # ===============================================================
 
 "Render tractor beams between the primary ship and other docked ships."
-function render_docking_beams!(queue::Vector{RenderCommand}, glmap::GLObjectMap, gamemap::GameMap, gameticks::Int64)
+function render_docking_beams!(queue::Vector{<:RenderCommand}, glmap::GLObjectMap, gamemap::GameMap, gameticks::Int64)
     primary_centroid = get_surface_centroid(gamemap, :primary)
     primary_centroid === nothing && return nothing
     primary_offset = get_render_offset(get_ship(gamemap, :primary))
@@ -1345,7 +1345,7 @@ const REDOCK_GHOST_INVALID = SVector{4, Float32}(1.0, 0.3, 0.3, 0.6)
 const REDOCK_EXCLUSION_COL = SVector{4, Float32}(1.0, 0.78, 0.2, 0.15)
 
 "Render ghost tiles for the ship being repositioned, coloured by placement validity."
-function _render_redock_ghost!(queue::Vector{RenderCommand}, glmap::GLObjectMap, inputstate::InputState)
+function _render_redock_ghost!(queue::Vector{<:RenderCommand}, glmap::GLObjectMap, inputstate::InputState)
     rs = inputstate.redock_state
     isnothing(rs) && return nothing
 
