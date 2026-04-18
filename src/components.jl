@@ -420,7 +420,7 @@ shipset_turbine_monoprop = ShipComponentSet(
         CompSpawnOptions(:TinyAdjValve_comp, [(0, 200.0), (1, 200.0)], RANDOM_PLACE),
         CompSpawnOptions(:TurboPump_comp, [(1, 100.0),], RANDOM_PLACE),
         CompSpawnOptions(:BasicDecompChamber_comp, [(1, 100.0), (2, 20.0)], RANDOM_PLACE),
-        CompSpawnOptions(:SmallNozzle_comp, [(1, 100.0), (2, 10.0)], NOZZLE_EDGE_PLACE),
+        CompSpawnOptions(:SmallNozzle_comp, [(2, 100.0), (3, 10.0)], NOZZLE_EDGE_PLACE),
     ]
 )
 
@@ -538,9 +538,9 @@ _cache_monoprop_pool = WeightedComponentSet[
 ]
 
 _scrap_pool = WeightedComponentSet[
-    WeightedComponentSet(compset_scrap_tiny_nozzle, NoScaling(1.0)),
-    WeightedComponentSet(compset_scrap_small_nozzle, GatedLinearScaling(0.8, 0.0, 0.5)),
-    WeightedComponentSet(compset_scrap_medium_nozzle, GatedLinearScaling(0.4, 0.0, 2.0)),
+    WeightedComponentSet(compset_scrap_tiny_nozzle, NoScaling(2.0)),
+    WeightedComponentSet(compset_scrap_small_nozzle, GatedLinearScaling(2.6, 0.0, 0.5)),
+    WeightedComponentSet(compset_scrap_medium_nozzle, GatedLinearScaling(0.8, 0.0, 2.0)),
     WeightedComponentSet(compset_scrap_switched_nozzle, NoScaling(0.8)),
     WeightedComponentSet(compset_scrap_transfer_pump, GatedLinearScaling(0.6, 0.0, 0.3)),
     WeightedComponentSet(compset_scrap_turbo_pump, GatedLinearScaling(0.3, 0.0, 2.0)),

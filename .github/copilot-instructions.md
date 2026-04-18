@@ -15,7 +15,7 @@ Use **Australian English** spellings throughout (e.g., "colour", "behaviour", "m
 ### Documentation
 
 - **Docstrings over inline comments** for function/type documentation
-  - Single-line: `"Description here"` (single quotes to save vertical space)
+  - Single-line: `"Description here"` (double quotes for single-line docstrings; keep them short)
   - Multi-line: `"""Description here"""`
 - **Overly verbose docstrings**: docstrings should convey the function's purpose, not repeat its name/signature or describe step-by-step workings. Only include detailed notes when there is genuine complexity or a non-obvious quirk worth flagging
 - **Base function extensions** (`Base.convert`, `Base.promote_rule`, `Base.:+`, etc.): always include docstrings explaining the behaviour -- the implementation alone can be confusing
@@ -115,7 +115,8 @@ Organised in dependency layers (each layer depends only on those above it):
 - `HexFlowProcGen` — ship surface generation (random tile walks), component/pipe placement strategies, encounter point system (spawn/recycle via bounds-check), `SpaceMapState`, manoeuvre planning (closest-approach, intercept delta-v), ship generation configs
 
 **Learning/Tutorial System:**
-- `HexFlowLearningSystem` — tutorial types (`SandboxTutorialDef`, `InGameTutorialDef`, `TutorialStep`, `LearningEntry`), trigger/step-blocker predicates, `LearningSystemState` (render-thread runtime), persistent `LearningProgress` (on `GameMap`)
+- `HexFlowLearningSystem` — tutorial types (`SandboxTutorialDef`, `SandboxTutorialLevel`, `InGameTutorialDef`, `TutorialStep`, `LearningEntry`, `LearningInputs`), trigger/step-blocker predicates, `LearningSystemState` (render-thread runtime), tutorial flow helpers for the persistent learning state stored on `GameMap`
+- `FlowMap` — persistent learning state (`TutorialState`, `LearningProgress`, `SandboxLearningState`) stored on `GameMap`, plus save/load reconstruction hooks
 
 **Rendering:**
 - `RenderEngine` — low-level OpenGL abstraction (`GLObjectMap`, `RenderCommand`, typed shader programs, VAOs, textures, UBOs, sprites)
@@ -136,6 +137,8 @@ Organised in dependency layers (each layer depends only on those above it):
 - `tools/map_encoder/` — JLD2 map to human-readable text converter and AI-generated map validator
 - `tools/EncounterBalance/` — encounter balancing and analysis tools
 - `tools/map_diagnostics/` — map debugging and MNA diagnostic utilities
+- `tools/local_package_updater.jl` — helper for updating local package dependencies
+- `tools/review_instructions.md` — review checklist and supporting notes for instruction/documentation audits
 
 ### Top-Level Source Files (`src/`)
 - `repl_launch.jl` — development entry point (Revise, loading screens, hot-reload)
@@ -188,7 +191,7 @@ Five element types (`ElementTypes` enum): `CONST_RESISTOR`, `CONST_VOLTAGE`, `CO
 
 ### Fluid System (HexFluids)
 
-`FluidTags` enum with bitmask encoding. Concrete: `COLD_GAS`, `MONOPROP_LIQUID`, `MONOPROP_GAS`. Behaviour (wildcard): `ANY_GAS`, `ANY_LIQUID`. Resolution via `prioritise_fluidtag()`.
+`FluidTags` enum with bitmask encoding. Concrete: `COLD_GAS`, `MONOPROP_LIQUID`, `MONOPROP_GAS`. Behaviour (wildcard): `ANY_GAS`, `ANY_LIQUID`. Sentinel: `NONE`. Per-node tag bundles use `NodeFluidTags`. Resolution via `prioritise_fluidtag()`.
 
 ### Space Map and Encounters
 

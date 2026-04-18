@@ -38,7 +38,7 @@
 ---
 ## About The Project
 
-**Welcome to Rocket Plumber!** This a space ship and rocket engine plumbing simulation game, in the very early stages of development. Currently I have the fluid mechanics implemented, along with a few of the components needed to build basic engines and get your ship moving. The gameplay is less developed, but some core parts of the game-loop are there in the game's "Explorer Mode", where you fire your engines to perform manoeuvres in space and encounter randomly generated ships. You must salvage parts and fuel from these ships to keep yourself moving, and the further and faster you go the better rocket parts you will find! There is also a learning system with both in-game and sandbox tutorials to make the game more accessable. 
+**Welcome to Rocket Plumber!** This is a spaceship and rocket engine plumbing simulation game, in the very early stages of development. Currently I have the fluid mechanics implemented, along with a few of the components needed to build basic engines and get your ship moving. The gameplay is less developed, but some core parts of the game-loop are there in the game's "Explorer Mode", where you fire your engines to perform manoeuvres in space and encounter randomly generated ships. You must salvage parts and fuel from these ships to keep yourself moving, and the further and faster you go the better rocket parts you will find! There is also a learning system with both in-game and sandbox tutorials to make the game more accessible. 
 
 **Note:** the game is VERY far from being done and polished. There are currently no victory or loss conditions (unless you run out of fuel), and there are no threats or goals driving you to explore and improve. There is only the bare-minimum amount of engine and fuel types. The UI is also still a work in progress, with a lot of internal debug info still being displayed. These are all things I want to work on in the future, but hopefully what's already here is enough to be interesting and give you an idea of where this game could go!
 
@@ -54,7 +54,7 @@ If you are looking for a full game I'd wait a bit, but if any of this sounds int
 ## Getting Started
 ### Self-Contained Executables (The easy way!)
 
-If you are just interested in playing around, **I have built some stand-alone 'app' executables that can just be downloaded and run**. You will find those in the release assets on the right-hand side of the repository. Just download the one for your operating system!
+If you are just interested in playing around, **I have built some stand-alone 'app' executables that can just be downloaded and run**. You will find those in the release assets on the right-hand side of the repository. Just download the one for your operating system, there are Windows and Linux builds! The game runs fine in macOS on x86 Macs too and I have made builds for it in the past, but Apple's malware prevention makes it pretty much impossible to run it on a different computer so until I can sort out certificates if you are on Mac you will have to run from source.
 
 **A bit of technical detail on the app executables you don't actually need:**
 
@@ -86,7 +86,7 @@ On Julia 1.12 this starts 2 default worker threads plus 1 interactive main threa
 
 #### Using the REPL and Revise
 
-If you are serious about making changes to the code I would recommend using the REPL for your development. The best source for this is [the Julia manual section on it](https://docs.julialang.org/en/v1/stdlib/REPL/), but I'll give a TLDR:
+If you are serious about making changes to the code I would recommend using the REPL for your development. The best source for this is [the Julia manual section on it](https://docs.julialang.org/en/v1/stdlib/REPL/), but I'll give a TL;DR:
 
 You might notice Julia seems to take a while to start up, and that the demo seems to take a while to load. This is primarily because of the way Julia works. The first time it sees a function, it JIT compiles, but for subsequent calls it uses a cache of the compiled code to speed things up. To leverage this for your development, you want to keep the Julia session running as long as you can, to minimise how often you have to recompile things. This is what the REPL does, it lets you evaluate sections of code interactively while keeping the session open!
 
@@ -106,14 +106,14 @@ Now when you exit the demo, your Julia REPL session should remain open!
 
 On its own this isn't that useful as you would need to restart the Julia session if you make changes to the code, but thankfully this project includes the [Revise.jl](https://timholy.github.io/Revise.jl/stable/) package. This package watches for changes in your source files and re-compiles modified functions as required, without requiring a restart of the Julia session. Now you can leave your REPL session open, make changes to the code, run the `repl_launch` script, and your changes should take effect automatically (with some [limitations](https://timholy.github.io/Revise.jl/stable/limitations/)).
 
-I actually don't use the REPL much directly from the command line. I'd recommend working in VS Code with the Julia extension, where you can run scripts in the REPL just by pressing the 'run' button. This repository already includes the appropriate `.vscode` settings to ensure the REPL launches with 3 Julia threads and 1 GC thread by default.
+I actually don't use the REPL much directly from the command line. I'd recommend working in VS Code with the Julia extension, where you can run scripts in the REPL just by pressing the 'run' button. This repository already includes the appropriate `.vscode` settings to ensure the REPL launches with the correct threading by default.
 
 ---
 ## Future Plans
 
 As mentioned, I plan to continue development to try and produce a full game.
 
-A few or the core gameplay ideas that I have been following are that:
+A few of the core gameplay ideas that I have been following are that:
 - I want to require manoeuvres to be performed where bulk delta-V from large engines, and precise thrust from small engines are valuable, to allow a larger variety of engines to remain useful.
 - I want ship parts to be scavenged or bought rather than crafted, as I feel like inventory and crafting systems are a bit overdone. I like the idea that you might have to build your ship around what you get rather than exactly what you want (think what weapons you end up with on a run of FTL)
 
@@ -121,11 +121,11 @@ And building on from this some of the next gameplay features I have been thinkin
 - Stores where you can buy, sell, and trade parts and fuel. This will let me do things like add valuable items to scrap ships, and give you a bit more of a reason to visit them.
 - Functional ships you can encounter that might not just let you "borrow" all their fuel.
 - Asteroids that you can extract fuel and valuable resources from, but that will require some sort of processing
-- And finally some sort of 'Adversary' which will be pursuing you, forcing continous movement and turning spacemap time into a resource that has to be considered when you plan manoeuvres.
+- And finally some sort of 'Adversary' which will be pursuing you, forcing continuous movement and turning spacemap time into a resource that has to be considered when you plan manoeuvres.
 
 For the simulation I already have a list of ideas I want to add:
 - A bunch more fuel types including hypergolics, bi-propellants, and maybe even nuclear thermal engines.
-- A fluid temperature system which will drive the engine cycles, forcing you to have things like off-stoichimetric preburners for turbopumps to avoid melting turbines, and maybe even make expander or staged combustion cycles possible.
+- A fluid temperature system which will drive the engine cycles, forcing you to have things like off-stoichiometric preburners for turbopumps to avoid melting turbines, and maybe even make expander or staged combustion cycles possible.
 - An electricity system, building upon the basic energy stores with multiple generation methods. These will allow electric pumps to be recharged, and open whole new possibilities.
 
 Beyond this I am still unsure what the final game will look like (and none of this is set in stone) so stay tuned! If you have any thoughts or ideas feel free to pass them on!
@@ -152,7 +152,7 @@ The calculator loop is responsible for performing the heavy simulation updates. 
 
 The calculator loop is where most modifications to the map occur. User-facing code produces map edit commands and pushes them to a channel where they can be consumed by the calculator loop which validates them and applies them. There are also a small number of internal simulation paths, such as encounter spawning, that mutate the authoritative map directly from within this thread.
 
-After each iteration the calculator publishes a deep-copied snapshot containing the map, derived simulation state, the output state of the MNA, and a small amount of game-state metadata. This can be accessed in a thread-safe way by the game loop. This is not an optimised approach to this, but it's simple and so far has not been a bottleneck at all.
+After each iteration the calculator publishes to a triple-buffer a snapshot containing the map, derived simulation state, the output state of the MNA, and a small amount of game-state metadata. This can be accessed in a thread-safe way by the game loop. This is not an optimised approach to this, but it's simple and so far has not been a bottleneck at all.
 
 The calculator loop defaults to a target rate of 60 UPS, but this can be changed at runtime through the simulation speed controls. As before, this could slip without affecting the frame rate of the game/render loop.
 
@@ -229,4 +229,4 @@ This code is NOT open source. Copyright is retained but a narrow personal-use ex
 
 I chose this approach so that I could still try and sell a game based on this in the future if things go well. Releasing the code publicly in this limited way meets my goal of letting people read and play with it. I am not really expecting contributions, or direct forks/derivatives.
 
-If there is interest in broader use, I am open to changing this especially for local packages that could be released as separate fully open-source packages. In particular, the RenderEngine, due to its relatively project‑agnostic nature, could be useful to others working with OpenGL in Julia. Let me know if there is a desire for this!
+If there is interest in broader use, I am open to changing this especially for local packages that could be released as separate fully open-source packages. In particular, the RenderEngine and TexturePacker, due to their relatively project‑agnostic nature, could be useful to others working with OpenGL in Julia. Let me know if there is a desire for this!

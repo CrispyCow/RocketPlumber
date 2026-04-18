@@ -350,8 +350,7 @@ function poll_scrollwheel_zoom!(
         inputstate::InputState, viewstate::ViewState,
         cimgui_io::Union{Nothing, Ptr{CImGui.lib.ImGuiIO}} = nothing
     )
-    isdefined(Main, :take_scrollstate!) || return nothing
-    _, yoff = Main.take_scrollstate!()
+    _, yoff = take_scrollstate!()
     yoff == 0.0 && return nothing
 
     # Don't zoom when mouse is over an ImGui window
