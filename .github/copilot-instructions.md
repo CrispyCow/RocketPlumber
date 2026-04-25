@@ -96,14 +96,14 @@ Organised in dependency layers (each layer depends only on those above it):
 
 **Foundation** (no game-package dependencies):
 - `HexFrame` — hex-grid coordinate types, conversions, adjacency queries, rotation algebra
-- `HexFluids` — fluid tag types (`FluidTags` enum) with bitmask classification and priority resolution
+- `HexFluids` — fluid type system (`FluidType`/`FluidConstraint` enums), fluid declaration types (`FluidSource`, `FluidTypeRule`, `FluidConstraintRule`), relative/absolute wrappers
 - `HexElements` — circuit element types (`RelativeElement`, `AbsoluteElement`), element-type enum, coordinate mapping
 - `SquirrelNoise` — deterministic noise functions (SquirrelNoise5 hash), counter-mode `SquirrelRNG`
 
 **Core Logic:**
 - `HexComponentsAPI` — abstract interfaces for `ComponentBehavior` and `PipeBehavior`, `ComponentOnTile` wrapper, `TunableProps`, `ActionInfo`
 - `FlowMap` — data model (`GameMap`, `ShipMap`), ship management, docking system, space map, encounter/manoeuvre types, placement validation, bounds/geometry
-- `FlowEngine` — MNA (Modified Nodal Analysis) circuit solver, `DerivedMapState`, `MNA_State`, graph pruning, fluid tag propagation. Depends on `FlowMap` (does not re-export it)
+- `FlowEngine` — MNA (Modified Nodal Analysis) circuit solver, `DerivedMapState`, `MNA_State`, graph pruning, fluid type propagation, region temperature computation. Depends on `FlowMap` (does not re-export it)
 
 **Application State:**
 - `HexFlowControl` — `GameState`, `InputState`, `ViewState`, `PlacementModes` enum, `SimSpeed` enum, `ExitReason` enum, view transform matrix, input edge-detection helpers, closure-based console buffer
@@ -124,7 +124,7 @@ Organised in dependency layers (each layer depends only on those above it):
 - `HexFlowTelemetry` — diagnostic `TimerOutput` instances and tick-gated printing
 
 **Component Implementation Packages** (under `local_packages/components/`):
-- `HexFlowBasicComponents` — reusable fragments (`PlainSpriteBehavFrag`, `BasicElemBehavFrag`, `StallBehavFrag`, `BinaryStateBehavFrag`, `FloatStateBehavFrag`, `FluidTagBehavFrag`, `HorizontalFlipOnlyBehavFrag`, `NoRotationBehavFrag`) and `BasicCompBehav`
+- `HexFlowBasicComponents` — reusable fragments (`PlainSpriteBehavFrag`, `BasicElemBehavFrag`, `StallBehavFrag`, `BinaryStateBehavFrag`, `FloatStateBehavFrag`, `HorizontalFlipOnlyBehavFrag`, `NoRotationBehavFrag`) and `BasicCompBehav`
 - `HexFlowTankComponents` — gas/liquid tanks (Thevenin equivalent) and pressure-fed tanks (separate gas headspace), charge tracking, stall protection
 - `HexFlowNozzleComponents` — nozzles, switched nozzles, decomp chambers with thrust calculation and particle exhaust
 - `HexFlowPumpComponents` — turbopumps (gas-driven) and electric pumps (battery-powered) with energy management
@@ -191,7 +191,24 @@ Five element types (`ElementTypes` enum): `CONST_RESISTOR`, `CONST_VOLTAGE`, `CO
 
 ### Fluid System (HexFluids)
 
-`FluidTags` enum with bitmask encoding. Concrete: `COLD_GAS`, `MONOPROP_LIQUID`, `MONOPROP_GAS`. Behaviour (wildcard): `ANY_GAS`, `ANY_LIQUID`. Sentinel: `NONE`. Per-node tag bundles use `NodeFluidTags`. Resolution via `prioritise_fluidtag()`.
+**Type enums** (both `UInt32` with bitmask encoding — upper 16 bits encode phase):
+- `FluidType`: `COLD_GAS`, `MONOPROP_LIQUID`, `MONOPROP_GAS` (concrete fluids)
+- `FluidConstraint`: `IS_GAS`, `IS_LIQUID` (phase-only constraints)
+- Phase queries: `is_gas(ft)`, `is_liquid(ft)` work on both enums and on `nothing`
+- `nothing` replaces the old `NONE` sentinel throughout (e.g., `EncounterPoint.fuel_tag::Union{FluidType, Nothing}`)
+
+**Fluid declarations** — components declare fluid presence and constraints via three isbits types:
+- `FluidSource(fluid_type, temperature)` — concrete fluid with source temperature
+- `FluidTypeRule(fluid_type)` — concrete fluid type constraint (no source)
+- `FluidConstraintRule(constraint)` — gas/liquid phase constraint
+- `FluidDeclaration = Union{FluidSource, FluidTypeRule, FluidConstraintRule}` (isbits union)
+- `RelativeFluidDeclaration` / `AbsoluteFluidDeclaration` — coordinate-wrapped versions (also isbits unions)
+
+**Propagation and temperature:**
+- `propagate_fluid_types!(derivedmapstate)` — BFS from source nodes, resolves per-node fluid types
+- `compute_region_temperatures!(derivedmapstate, mna_state)` — flow-weighted average temperature per connected region
+- Temperature stored in `node_temperatures` and `region_temperatures` on `DerivedMapState`
+- Exhaust velocity: `v_e(T) = v_e_ref × √(T / T_ref)`
 
 ### Space Map and Encounters
 
@@ -217,7 +234,7 @@ Each tick in the background thread runs in this order:
 1. `update_docking!` -- advance docking animations
 2. `update_manoeuvre_phase!` -- manoeuvre state machine transitions
 3. `update_components!` -- tick all component behaviours
-4. `update_map!` -- rebuild circuit graph (enumerate, prune, fluid propagation, MNA setup)
+4. `update_map!` -- rebuild circuit graph (enumerate, prune, fluid type propagation, region temperatures, MNA setup)
 5. `update_mna!` -- solve circuit (node voltages, source currents)
 6. `handle_thrusters!` -- sum thrust vectors, integrate velocity
 7. `step_space_map_time!` -- advance encounter system
@@ -283,13 +300,13 @@ Components use a **fragment composition** pattern. Complex behaviours are built 
 - `set_tunables(behav, tunables)` -- return new instance with updated values (immutable update via `@set`)
 - `render_base_elem!(queue, behav; glmap, rotation, position, pos_offset, render_height_offset, kwargs...)` -- push render commands
 
-**Optional methods** (with sensible defaults): `render_map_elem!`, `get_fluidtags`, `update_flowbehav!`, `on_click!`, `get_thrust`, `collect_effect_particles!`, `map_rotation`, `can_be_moved`, `placement_valid`, `get_component_dry_mass`, `get_component_wet_mass`, `get_component_mass`, `get_actions`, `do_action!`.
+**Optional methods** (with sensible defaults): `render_map_elem!`, `produce_rel_fluid_declarations`, `update_flowbehav!`, `on_click!`, `get_thrust`, `get_component_temperature`, `collect_effect_particles!`, `map_rotation`, `can_be_moved`, `placement_valid`, `get_component_dry_mass`, `get_component_wet_mass`, `get_component_mass`, `get_actions`, `do_action!`.
 
 ### PipeBehavior Interface (edge-placed)
 
 **Mandatory methods:** `get_conductance`, `get_pipe_tunables`, `set_pipe_tunables`, `render_pipe_base!`
 
-**Optional methods:** `render_pipe_map!`, `get_pipe_fluidtags`, `can_pipe_be_moved`, `produce_abs_elements`, `get_tile_pipe_equivalent`.
+**Optional methods:** `render_pipe_map!`, `produce_rel_fluid_declarations`, `can_pipe_be_moved`, `produce_abs_elements`, `get_tile_pipe_equivalent`.
 
 ### Existing Components
 

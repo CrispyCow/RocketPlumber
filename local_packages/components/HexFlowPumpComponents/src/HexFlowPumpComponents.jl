@@ -17,7 +17,7 @@ using HexFlowBasicComponents, HexFlowSwitchComponents
 # ComponentBehavior Mandatories
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional
-import HexComponentsAPI: get_fluidtags, on_click!, update_flowbehav!, render_map_elem!, get_actions, do_action!
+import HexComponentsAPI: on_click!, update_flowbehav!, render_map_elem!, get_actions, do_action!, produce_rel_fluid_declarations
 # Behavior Fragment Dependencies
 import HexFlowBasicComponents: stall!, unstall!, is_stalled
 import HexFlowSwitchComponents: set_target_conductance_to_min!, set_target_conductance_to_max!
@@ -132,6 +132,7 @@ end
 
 const TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE::Float64 = 1.0e-3
 const TURBOPUMP_TURBINE_POWER_SCALING::Float64 = 1.0e-4
+const TURBOPUMP_TURBINE_TEMPERATURE_POWER_SCALING::Float64 = 0.45
 const TURBOPUMP_RENDER_MAX_ROTATION_SPEED::Float64 = 900.0
 const TURBOPUMP_SMOKE_CURRENT_THRESHOLD::Float64 = 0.02
 
@@ -246,11 +247,11 @@ function set_tunables(comp::TurboPumpCompBehav, tunables::NTuple{8, T})::TurboPu
     return comp
 end
 
-function get_fluidtags(::TurboPumpCompBehav)
-    return NodeFluidTags(
-        NODE_Q_POS = HexFluids.ANY_LIQUID,
-        NODE_Q_NEG = HexFluids.ANY_LIQUID,
-        NODE_S_POS = HexFluids.ANY_GAS
+function produce_rel_fluid_declarations(::TurboPumpCompBehav)
+    return (
+        RelativeFluidDeclaration(HexFrame.NODE_Q_POS, HexFluids.FluidConstraintRule(HexFluids.IS_LIQUID)),
+        RelativeFluidDeclaration(HexFrame.NODE_Q_NEG, HexFluids.FluidConstraintRule(HexFluids.IS_LIQUID)),
+        RelativeFluidDeclaration(HexFrame.NODE_S_POS, HexFluids.FluidConstraintRule(HexFluids.IS_GAS)),
     )
 end
 
@@ -287,11 +288,12 @@ function update_flowbehav!(comp::TurboPumpCompBehav; mna_state::MNA_State, tile:
     turbine_g = effective_turbine_conductance(comp)
     turbine_current = max(s_pos_voltage * turbine_g, 0.0)
     # Look up the fluid at the turbine's input node
-    fluid = get(derivedmapstate.nodeactualfluids, s_pos_node, HexFluids.NONE)
-    density = something(lookup_fluid_density(fluid), 0.0)
-    exhaust_velocity = something(lookup_fluid_exhaust_velocity(fluid), 0.0)
+    fluid = get(derivedmapstate.nodeactualfluids, s_pos_node, nothing)
+    density = fluid !== nothing ? something(lookup_fluid_density(fluid), 0.0) : 0.0
+    fluid_temperature_k = get(derivedmapstate.node_temperatures, s_pos_node, THERMAL_AMBIENT_TEMPERATURE_K)
+    temperature_change_k = max(fluid_temperature_k - THERMAL_AMBIENT_TEMPERATURE_K, 0.0)
     # compute turbine power
-    turbine_power = density * turbine_current * exhaust_velocity^2 * TURBOPUMP_TURBINE_POWER_SCALING
+    turbine_power = density * turbine_current * temperature_change_k * TURBOPUMP_TURBINE_TEMPERATURE_POWER_SCALING
 
     # Pump load — voltage × current for the pump voltage source
     pump_current = max(-Float64(source_current), 0.0)
@@ -327,12 +329,8 @@ end
 function render_map_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     # Get turbine fluid colour
     turbine_input_node = map_element(HexFrame.NODE_S_POS, position, rotation)
-    fluid = get(derivedmapstate.nodeactualfluids, turbine_input_node, HexFluids.NONE)
-    fluidmask_colour = if fluid == HexFluids.NONE
-        DEFAULT_EMPTY_FLUID_COLOUR
-    else
-        get_fluid_colour(fluid)
-    end
+    fluid = get(derivedmapstate.nodeactualfluids, turbine_input_node, nothing)
+    fluidmask_colour = fluid !== nothing ? get_fluid_colour(fluid) : DEFAULT_EMPTY_FLUID_COLOUR
 
     # get turbine state from MNA solution
     source_current = get(mna_state.vsource_currents, ElementID(position, pump_element_index), 0.0)
@@ -457,10 +455,10 @@ function set_tunables(comp::ElectricPumpCompBehav, tunables::NTuple{5, T})::Elec
     return comp
 end
 
-function get_fluidtags(::ElectricPumpCompBehav)
-    return NodeFluidTags(
-        NODE_Q_POS = HexFluids.ANY_LIQUID,
-        NODE_Q_NEG = HexFluids.ANY_LIQUID,
+function produce_rel_fluid_declarations(::ElectricPumpCompBehav)
+    return (
+        RelativeFluidDeclaration(HexFrame.NODE_Q_POS, HexFluids.FluidConstraintRule(HexFluids.IS_LIQUID)),
+        RelativeFluidDeclaration(HexFrame.NODE_Q_NEG, HexFluids.FluidConstraintRule(HexFluids.IS_LIQUID)),
     )
 end
 
@@ -545,7 +543,7 @@ rotor_sprite(::ElectricPumpCompBehav{ElectricTransferPump}) = :ElectroTransferPu
 function render_static!(
         queue::Vector{<:RenderCommand}, comp::ElectricPumpCompBehav;
         glmap::GLObjectMap, rotation::HexAxis, position::TileCoord,
-        fluid::FluidTags = HexFluids.NONE, gameticks::Int64 = 0,
+        fluid::Union{FluidType, Nothing} = nothing, gameticks::Int64 = 0,
         charge_bar_colour::ColourType = let c = get(ColorSchemes.summer, 0.0)
             ColourType(c.r, c.g, c.b, 1.0)
         end,
@@ -560,11 +558,14 @@ function render_static!(
 
     # Render fluid mask if it exists
     if !isnothing(fluidmask_sprite(comp))
-        fluidmask_colour = get_fluid_colour(fluid)
-        if fluid == HexFluids.NONE
-            push!(queue, render_basic_tile(glmap, fluidmask_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = fluidmask_colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
+        if fluid === nothing
+            push!(queue, render_basic_tile(glmap, fluidmask_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = DEFAULT_EMPTY_FLUID_COLOUR, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
         elseif is_liquid(fluid)
+            fluidmask_colour = get_fluid_colour(fluid)
             push!(queue, render_liquid_tile(glmap, fluidmask_sprite(comp), rotation, position, gameticks; colour = fluidmask_colour, scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
+        else
+            fluidmask_colour = get_fluid_colour(fluid)
+            push!(queue, render_basic_tile(glmap, fluidmask_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = fluidmask_colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
         end
     end
 
@@ -594,7 +595,7 @@ end
 function render_map_elem!(queue::Vector{<:RenderCommand}, comp::ElectricPumpCompBehav; glmap::GLObjectMap, mna_state::MNA_StateSnapshot, derivedmapstate::DerivedMapState, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     # Get fluid at pump input node
     pump_input_node = map_element(HexFrame.NODE_Q_NEG, position, rotation)
-    fluid = get(derivedmapstate.nodeactualfluids, pump_input_node, HexFluids.NONE)
+    fluid = get(derivedmapstate.nodeactualfluids, pump_input_node, nothing)
 
     # Determine if pump is on
     pump_current = get(mna_state.vsource_currents, ElementID(position, pump_element_index), 0.0)

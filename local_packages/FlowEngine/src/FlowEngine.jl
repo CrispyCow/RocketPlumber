@@ -8,10 +8,13 @@ using SparseArrays, LinearAlgebra, KLU, SmallCollections, StructEquality
 
 # Type Exports
 export DerivedMapState, MNA_State, MNA_StateSnapshot, AMatrixCache
+export RelativeFluidDeclaration, AbsoluteFluidDeclaration, RelFluidDecl, AbsFluidDecl
 # Function Exports
-export add_pipes_abs_element!, abs_element_get_current, update_components!
+export add_pipes_abs_element!, abs_element_get_current, update_components!, index_grounded_source_elements!
 export list_elements, list_elements!, list_nodes, list_nodes!, prune, ground_search, clear_dangling_dependants
-export fluidtag_nodes!, get_node_fluid_tags, build_node_connection_map!, connect_fluidtags!
+export list_fluid_declarations!, push_mapped_declarations!, map_declaration
+export index_fluid_declarations!, propagate_fluid_types!, compute_region_temperatures!
+export prioritise_declarations, build_node_connection_map!
 export MNA_indexnodes!, MNA_splitelements!, MNA_getA, MNA_getZ, MNA_getZ!, MNA_solve!
 export MNA_updateA!, MNA_buildA_sparse
 export MNA_stamp_A_ijv!, MNA_construct_A_sparse!, compute_A_hashes
@@ -30,16 +33,61 @@ const V_DEP_VOLTAGE = HexElements.V_DEP_VOLTAGE
 
 const ConnectionVect = SmallVector{12, NodeCoord}
 
+# ===============================================================
+# Fluid Declaration Wrapper Types
+# ===============================================================
+
+"A fluid declaration at a tile-local node position (parametric over declaration type)"
+struct RelativeFluidDeclaration{T <: FluidDeclaration}
+    node_pos::NodePos
+    declaration::T
+end
+
+"A fluid declaration at a map-global node coordinate (parametric over declaration type)"
+struct AbsoluteFluidDeclaration{T <: FluidDeclaration}
+    node_coord::NodeCoord
+    declaration::T
+end
+
+"isbitsunion alias for relative declarations (Vector storage without boxing)"
+const RelFluidDecl = Union{
+    RelativeFluidDeclaration{FluidSource},
+    RelativeFluidDeclaration{FluidTypeRule},
+    RelativeFluidDeclaration{FluidConstraintRule},
+}
+
+"isbitsunion alias for absolute declarations (Vector storage without boxing)"
+const AbsFluidDecl = Union{
+    AbsoluteFluidDeclaration{FluidSource},
+    AbsoluteFluidDeclaration{FluidTypeRule},
+    AbsoluteFluidDeclaration{FluidConstraintRule},
+}
+
+"Map a relative fluid declaration to absolute using tile position and rotation"
+function map_declaration(decl::RelativeFluidDeclaration, tile::TileCoord, rotation::HexAxis)
+    node_coord = map_element(decl.node_pos, tile, rotation)
+    return AbsoluteFluidDeclaration(node_coord, decl.declaration)
+end
+
 "Holds characteristics which can be deterministically derived from the GameMap"
 @kwdef mutable struct DerivedMapState
     ship_surface_edge::Set{TileCoord} = Set{TileCoord}()
     allelements::Vector{AbsoluteElement} = Vector{AbsoluteElement}()
     allnodes::Dict{NodeCoord, UInt16} = Dict{NodeCoord, UInt16}()
     prunedelements::Vector{AbsoluteElement} = Vector{AbsoluteElement}()
+    grounded_source_element_index::Dict{NodeCoord, Int} = Dict{NodeCoord, Int}()
     prunednodes::Dict{NodeCoord, UInt16} = Dict{NodeCoord, UInt16}()
     nodeconnections::Dict{NodeCoord, ConnectionVect} = Dict{NodeCoord, ConnectionVect}()
-    nodeprimefluidtags::Dict{NodeCoord, FluidTags} = Dict{NodeCoord, FluidTags}()
-    nodeactualfluids::Dict{NodeCoord, FluidTags} = Dict{NodeCoord, FluidTags}()
+    # Fluid declarations (collected from components)
+    all_fluid_declarations::Vector{AbsFluidDecl} = Vector{AbsFluidDecl}()
+    node_declarations::Dict{NodeCoord, FluidDeclaration} = Dict{NodeCoord, FluidDeclaration}()
+    source_nodes::Set{NodeCoord} = Set{NodeCoord}()
+    # Propagated fluid state
+    nodeactualfluids::Dict{NodeCoord, FluidType} = Dict{NodeCoord, FluidType}()
+    # Temperature and regions
+    node_to_region::Dict{NodeCoord, Int} = Dict{NodeCoord, Int}()
+    region_temperatures::Dict{Int, Float64} = Dict{Int, Float64}()
+    node_temperatures::Dict{NodeCoord, Float64} = Dict{NodeCoord, Float64}()
 end
 @struct_hash_equal DerivedMapState
 
@@ -72,10 +120,7 @@ Structure and value change detection uses hashes computed from the IJV vectors:
     # The sparse A matrix (wraps the csc* vectors above — NOT independently allocated)
     mat_A_sparse::SparseMatrixCSC{Float64, Int64} = spzeros(1, 1)
     # KLU factorisation — circuit-simulation specialist from SuiteSparse.
-    # WARNING: deepcopy of KLUFactorization shares C pointers (_symbolic, _numeric) and will
-    # double-free on GC. The render thread never accesses this field, but it IS included in
-    # the FlowCalculatorSnapshot deepcopy. A future IPC optimisation pass must either exclude
-    # a_cache from the snapshot entirely, or use a custom shallow copy that skips mat_A_lu.
+    # WARNING: deepcopy of KLUFactorization shares C pointers (_symbolic, _numeric) and will double-free on GC, Do not copy!
     mat_A_lu::KLU.KLUFactorization{Float64, Int64} = klu(sparse([1], [1], [1.0]))
     # Two-tier cache hashes
     structure_hash::UInt64 = UInt64(0) # hash of IJV positions (I, J) — topology
@@ -158,6 +203,18 @@ function element_other_node(element::AbsoluteElement, node::NodeCoord)
     else
         error("element_other_node called when node not in element")
     end
+end
+
+"Return the non-ground endpoint of a singly grounded element, or `nothing` otherwise."
+function grounded_element_node(element::AbsoluteElement)::Union{NodeCoord, Nothing}
+    v1 = element.connections.v1
+    v2 = element.connections.v2
+
+    if is_grounded(v1)
+        return is_grounded(v2) ? nothing : v2
+    end
+
+    return is_grounded(v2) ? v1 : nothing
 end
 
 function add_pipes_abs_element!(abs_vector::Vector{AbsoluteElement}, edge::EdgeCoord, conductance::Float64)
@@ -338,58 +395,6 @@ function build_node_connection_map!(derivedmapstate::DerivedMapState)
     return nothing
 end
 
-"Set derivedmapstate.actualfluids by propagating concrete fluids from primefluidtags through nodeconnections"
-function connect_fluidtags!(derivedmapstate::DerivedMapState)
-    nodeconnections = derivedmapstate.nodeconnections
-    actualfluids = derivedmapstate.nodeactualfluids
-
-    # Copy prime tags into actual fluids in-place
-    empty!(actualfluids)
-    for (k, v) in derivedmapstate.nodeprimefluidtags
-        actualfluids[k] = v
-    end
-
-    # Build worklist of concrete fluid sources
-    to_start = NodeCoord[]
-    for (node, tag) in derivedmapstate.nodeprimefluidtags
-        if is_gas(tag) || is_liquid(tag)
-            push!(to_start, node)
-        end
-    end
-
-    to_visit = NodeCoord[]
-    visited = Set{NodeCoord}()
-
-    # Traverse from all concrete sources and propagate their fluid type through connected nodes
-    while !isempty(to_start)
-        start_node = pop!(to_start)
-        start_node in visited && continue
-        start_fluidtag = derivedmapstate.nodeprimefluidtags[start_node]
-        push!(to_visit, start_node)
-
-        # traverse the graph of nodes, starting from the start node
-        # uses some random combination of BFS and DFS
-        while !isempty(to_visit)
-            current_node = pop!(to_visit)
-            current_node in visited && continue
-
-            connections = get(nodeconnections, current_node, ConnectionVect())
-            for node in connections
-                # add unvisited connected nodes to visit set
-                if !(node in visited)
-                    push!(to_visit, node)
-                end
-            end
-
-            tag = prioritise_fluidtag(actualfluids[current_node], start_fluidtag)
-            actualfluids[current_node] = tag
-            push!(visited, current_node)
-        end
-    end
-    return nothing
-end
-
-
 """
 Performs graph traversal across all elements, starting from grounded elements to
 exclude elements not connected to ground. Current sources (CONST_CURRENT,
@@ -566,7 +571,7 @@ function abs_element_get_current(element::AbsoluteElement, derivedmapstate::Deri
 
     # for resistors, current calculated from voltage difference and resistance
     if element.type == CONST_RESISTOR
-        volt1 = mna_state.node_voltages[element.connections.v1]
+        volt1 = is_grounded(element.connections.v1) ? 0.0 : mna_state.node_voltages[element.connections.v1]
         volt2 = is_grounded(element.connections.v2) ? 0.0 : mna_state.node_voltages[element.connections.v2]
         return (volt1 - volt2) * element.value
     end
@@ -584,83 +589,232 @@ function abs_element_get_current(element::AbsoluteElement, derivedmapstate::Deri
     error("Tried to get current for unimplemented element type")
 end
 
-"Get the fluid tag contributed by a single tile on a ShipMap for the specified node axis"
-function get_tile_fluid_tag(ship::ShipMap, tile::TileCoord, hex_axis::HexAxis)
-    if haskey(ship.components, tile)
-        tile_comp = ship.components[tile]
-        tile_tags = get_fluidtags(tile_comp)
-        local_dir = rotate(to_hexaxis(hex_axis), HexFrame.rotate_reverse(tile_comp.rotation))
-        return getfield(tile_tags, Symbol(to_nodepos(local_dir)))
+# ===============================================================
+# Fluid Declaration Collection and Propagation
+# ===============================================================
+
+"Push mapped declarations from a single component"
+function push_mapped_declarations!(out::Vector{AbsFluidDecl}, tilecomp::ComponentOnTile, tile::TileCoord)
+    rel_decls = produce_rel_fluid_declarations(tilecomp.component)
+    rot = tilecomp.rotation
+    for rel in rel_decls
+        push!(out, map_declaration(rel, tile, rot))
     end
-    return HexFluids.NONE
+    return nothing
 end
 
-"Get the fluid tags from tiles adjacent to a node for a single ShipMap"
-function get_node_fluid_tags(node::NodeCoord, ship::ShipMap)
-    if node.dir === HexFrame.NODE_INTERNAL
-        tile_comp = get_component(ship, node.tile)
-        if tile_comp === nothing
-            return (HexFluids.NONE,)
+"Collect all fluid declarations from a single ship"
+function list_fluid_declarations!(out::Vector{AbsFluidDecl}, ship::ShipMap)
+    for (coord, data) in ship.components
+        push_mapped_declarations!(out, data, coord)
+    end
+end
+
+"Collect all fluid declarations from all ships"
+function list_fluid_declarations!(out::Vector{AbsFluidDecl}, gamemap::GameMap)
+    empty!(out)
+    sizehint!(out, 16)
+    for ship_name in get_all_ship_names(gamemap)
+        list_fluid_declarations!(out, get_ship(gamemap, ship_name))
+    end
+end
+
+"""
+Resolve two declarations on the same node. Priority: FluidSource > FluidTypeRule > FluidConstraintRule.
+Throws on incompatible declarations.
+"""
+function prioritise_declarations(existing::FluidDeclaration, incoming::FluidDeclaration)
+    # FluidSource wins over everything
+    if incoming isa FluidSource
+        _check_compatible(existing, incoming.fluid_type)
+        return incoming
+    elseif existing isa FluidSource
+        _check_compatible(incoming, existing.fluid_type)
+        return existing
+    end
+    # FluidTypeRule wins over FluidConstraintRule
+    if incoming isa FluidTypeRule
+        _check_compatible(existing, incoming.fluid_type)
+        return incoming
+    elseif existing isa FluidTypeRule
+        _check_compatible(incoming, existing.fluid_type)
+        return existing
+    end
+
+    # Current constraints are mutually exclusive one-hot enums. If future work adds
+    # overlapping constraints, this branch may need intersection semantics instead.
+    existing.constraint === incoming.constraint ||
+        error("Conflicting fluid constraints: $(existing.constraint) vs $(incoming.constraint)")
+
+    return incoming
+end
+
+"Check that a declaration is compatible with a concrete fluid type"
+function _check_compatible(decl::FluidDeclaration, fluid::FluidType)
+    if decl isa FluidSource
+        decl.fluid_type === fluid || error("Conflicting fluid sources: $(decl.fluid_type) vs $(fluid)")
+    elseif decl isa FluidTypeRule
+        decl.fluid_type === fluid || error("FluidTypeRule $(decl.fluid_type) incompatible with $(fluid)")
+    elseif decl isa FluidConstraintRule
+        check_constraint(fluid, decl.constraint) || error("Fluid $(fluid) does not satisfy constraint $(decl.constraint)")
+    end
+    return nothing
+end
+
+"Build per-node declaration index and source node set from collected declarations"
+function index_fluid_declarations!(derivedmapstate::DerivedMapState)
+    node_decls = derivedmapstate.node_declarations
+    source_nodes = derivedmapstate.source_nodes
+    empty!(node_decls)
+    empty!(source_nodes)
+
+    for abs_decl in derivedmapstate.all_fluid_declarations
+        node = abs_decl.node_coord
+        # Only index nodes that survived pruning
+        haskey(derivedmapstate.prunednodes, node) || continue
+
+        decl = abs_decl.declaration
+        existing = get(node_decls, node, nothing)
+        if existing === nothing
+            node_decls[node] = decl
+        else
+            node_decls[node] = prioritise_declarations(existing, decl)
         end
-        fluidtags = get_fluidtags(tile_comp)
-        tag = getfield(fluidtags, Symbol(HexFrame.NODE_INTERNAL))
-        return (tag,)
-    end
 
-    proper_node = to_proper(node)
-    adjacent_tiles_info = get_adjacent_tiles_for_node(proper_node)
-
-    # Inline 3 lookups to avoid map() allocation. Safe because edge nodes always have 3 adjacent tiles
-    # (grounded nodes are excluded by list_nodes!, internal nodes by the early return above).
-    tag1 = get_tile_fluid_tag(ship, adjacent_tiles_info[1][1], to_hexaxis(adjacent_tiles_info[1][2]))
-    tag2 = get_tile_fluid_tag(ship, adjacent_tiles_info[2][1], to_hexaxis(adjacent_tiles_info[2][2]))
-    tag3 = get_tile_fluid_tag(ship, adjacent_tiles_info[3][1], to_hexaxis(adjacent_tiles_info[3][2]))
-
-    return (tag1, tag2, tag3)
-end
-
-"Search all ships for a fluid tag at a tile/axis pair, returning the first non-NONE tag found."
-function _find_fluid_tag_multi(gamemap::GameMap, tile::TileCoord, hex_axis::HexAxis)
-    for (_, ship) in gamemap.ships
-        candidate = get_tile_fluid_tag(ship, tile, hex_axis)
-        if candidate !== HexFluids.NONE
-            return candidate
+        if decl isa FluidSource
+            push!(source_nodes, node)
         end
     end
-    return HexFluids.NONE
 end
 
-"Get the fluid tags from tiles adjacent to a node, checking all ships (aggregates ship lookups)."
-function get_node_fluid_tags(node::NodeCoord, gamemap::GameMap)
-    if node.dir === HexFrame.NODE_INTERNAL
-        for (_, ship) in gamemap.ships
-            tagtuple = get_node_fluid_tags(node, ship)
-            if tagtuple[1] !== HexFluids.NONE
-                return tagtuple
+"Check that a declaration at a traversed node is compatible with the region's fluid type"
+function _check_declaration_compatible(decl::FluidDeclaration, fluid_type::FluidType)
+    if decl isa FluidConstraintRule
+        check_constraint(fluid_type, decl.constraint) || error("Fluid $(fluid_type) incompatible with constraint $(decl.constraint)")
+    elseif decl isa FluidTypeRule
+        decl.fluid_type === fluid_type || error("FluidTypeRule $(decl.fluid_type) conflicts with region fluid $(fluid_type)")
+    elseif decl isa FluidSource
+        decl.fluid_type === fluid_type || error("FluidSource $(decl.fluid_type) conflicts with region fluid $(fluid_type)")
+    end
+    return nothing
+end
+
+"Fallback temperature when a region has no active flow"
+function _fallback_temperature(fluid::FluidType)::Float64
+    temp = get_default_temperature(Val(fluid))
+    return temp !== nothing ? temp : 300.0
+end
+
+"Index singly grounded pruned elements by their non-ground node for O(1) source lookup."
+function index_grounded_source_elements!(derivedmapstate::DerivedMapState)
+    source_index = derivedmapstate.grounded_source_element_index
+    empty!(source_index)
+
+    for (index, element) in pairs(derivedmapstate.prunedelements)
+        node = grounded_element_node(element)
+        node === nothing && continue
+        get!(source_index, node, index)
+    end
+
+    return nothing
+end
+
+"Traverse from source nodes to assign fluid types and build regions. No MNA needed."
+function propagate_fluid_types!(derivedmapstate::DerivedMapState)
+    nodeconnections = derivedmapstate.nodeconnections
+    actualfluids    = derivedmapstate.nodeactualfluids
+    node_to_region  = derivedmapstate.node_to_region
+    node_decls      = derivedmapstate.node_declarations
+    source_nodes    = derivedmapstate.source_nodes
+
+    empty!(actualfluids)
+    empty!(node_to_region)
+
+    visited = Set{NodeCoord}()
+    region_id = 0
+
+    for start_node in source_nodes
+        start_node in visited && continue
+        start_decl = node_decls[start_node]::FluidSource
+        fluid_type = start_decl.fluid_type
+
+        region_id += 1
+        pending_nodes = NodeCoord[start_node]
+
+        while !isempty(pending_nodes)
+            current = pop!(pending_nodes)
+            current in visited && continue
+            push!(visited, current)
+
+            # Check declaration compatibility at this node
+            decl = get(node_decls, current, nothing)
+            if decl !== nothing
+                _check_declaration_compatible(decl, fluid_type)
+            end
+
+            actualfluids[current] = fluid_type
+            node_to_region[current] = region_id
+
+            for neighbour in get(nodeconnections, current, ConnectionVect())
+                neighbour in visited || push!(pending_nodes, neighbour)
             end
         end
-        return (HexFluids.NONE,)
     end
-
-    proper_node = to_proper(node)
-    adjacent_tiles_info = get_adjacent_tiles_for_node(proper_node)
-
-    # Inline 3 lookups, same invariant as the ShipMap version
-    tag1 = _find_fluid_tag_multi(gamemap, adjacent_tiles_info[1][1], adjacent_tiles_info[1][2])
-    tag2 = _find_fluid_tag_multi(gamemap, adjacent_tiles_info[2][1], adjacent_tiles_info[2][2])
-    tag3 = _find_fluid_tag_multi(gamemap, adjacent_tiles_info[3][1], adjacent_tiles_info[3][2])
-
-    return (tag1, tag2, tag3)
+    return nothing
 end
 
-"Assign the highest priority fluid tag to each pruned node, reusing the existing nodeprimefluidtags dict."
-function fluidtag_nodes!(derivedmapstate::DerivedMapState, gamemap::GameMap)
-    node_prime_fluidtags = derivedmapstate.nodeprimefluidtags
-    empty!(node_prime_fluidtags)
-    for (node, _) in derivedmapstate.prunednodes
-        tags = get_node_fluid_tags(node, gamemap)
-        primetag = prioritise_fluidtag(tags...)
-        node_prime_fluidtags[node] = primetag
+"Get the MNA current magnitude through the grounded element at a source node"
+function _get_source_flow_rate(node::NodeCoord, derivedmapstate::DerivedMapState, mna_state)
+    element_index = get(derivedmapstate.grounded_source_element_index, node, 0)
+    element_index == 0 && return 0.0
+
+    element = derivedmapstate.prunedelements[element_index]
+    current = abs_element_get_current(element, derivedmapstate, mna_state)
+    return current === nothing ? 0.0 : abs(current)
+end
+
+"Compute per-region temperatures using flow-weighted averages. Requires solved MNA state."
+function compute_region_temperatures!(derivedmapstate::DerivedMapState, mna_state)
+    region_temps = derivedmapstate.region_temperatures
+    node_temps   = derivedmapstate.node_temperatures
+    node_to_region = derivedmapstate.node_to_region
+
+    empty!(region_temps)
+    empty!(node_temps)
+
+    # Collect per-region flow-weighted temperature sums
+    region_weighted_temp = Dict{Int, Float64}()
+    region_total_flow    = Dict{Int, Float64}()
+    region_fluid_type    = Dict{Int, FluidType}()
+
+    for abs_decl in derivedmapstate.all_fluid_declarations
+        abs_decl.declaration isa FluidSource || continue
+        node = abs_decl.node_coord
+        rid = get(node_to_region, node, 0)
+        rid == 0 && continue
+
+        source = abs_decl.declaration::FluidSource
+        region_fluid_type[rid] = source.fluid_type
+
+        flow = _get_source_flow_rate(node, derivedmapstate, mna_state)
+        if flow > 0.0
+            region_weighted_temp[rid] = get(region_weighted_temp, rid, 0.0) + flow * source.temperature
+            region_total_flow[rid]    = get(region_total_flow, rid, 0.0) + flow
+        end
+    end
+
+    # Compute final temperatures and assign to nodes
+    for (rid, fluid) in region_fluid_type
+        total_flow = get(region_total_flow, rid, 0.0)
+        if total_flow > 0.0
+            region_temps[rid] = region_weighted_temp[rid] / total_flow
+        else
+            region_temps[rid] = _fallback_temperature(fluid)
+        end
+    end
+
+    for (node, rid) in node_to_region
+        node_temps[node] = region_temps[rid]
     end
     return nothing
 end

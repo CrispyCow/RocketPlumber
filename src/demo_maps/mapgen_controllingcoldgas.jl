@@ -30,7 +30,8 @@ function mapgen_controllingcoldgas()
         connected_node = HexFrame.NODE_Q_POS,
         max_conductance = 2.0,
         min_conductance = 0.0,
-        growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS)
+        growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS),
+        limit_temperature_k = 400.0
     )
     components[TileCoord(-4, 3)]  = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_POS)
     components[TileCoord(-4, 1)]  = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_POS)

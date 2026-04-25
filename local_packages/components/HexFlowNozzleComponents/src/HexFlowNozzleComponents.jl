@@ -20,9 +20,9 @@ using HexFlowSwitchComponents
 # ComponentBehavior Mandatories
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional
-import HexComponentsAPI: get_fluidtags, on_click!, get_thrust, update_flowbehav!, render_map_elem!, placement_valid, collect_effect_particles!, get_actions, do_action!
+import HexComponentsAPI: on_click!, get_thrust, get_component_temperature, update_flowbehav!, render_map_elem!, placement_valid, collect_effect_particles!, get_actions, do_action!, produce_rel_fluid_declarations
 # Behavior Fragment Dependencies
-import HexFlowBasicComponents: stall!, unstall!, is_stalled
+import HexFlowBasicComponents: stall!, unstall!, is_stalled, damage!, undamage!, is_damaged, get_overheat_percentage, get_overheat_tint, update_overheat_state!
 import HexFlowSwitchComponents: get_switch_percentage
 
 # Behavior Fragment Exports
@@ -41,16 +41,60 @@ struct NozzleBehavFrag
     connected_node::NodePos
     throat_area::Float64
     stallstate::StallBehavFrag
+    overheat::OverheatLimitBehavFrag
 end
 
 const nozzle_element_index::Int = 1 # Nozzle resistor is always at index 1
+const DEFAULT_NOZZLE_LIMIT_TEMPERATURE_K = 3000.0
+const SWITCHED_NOZZLE_LIMIT_TEMPERATURE_K = 400.0
+
+default_nozzle_relative_scale(throat_area::Real)::Float64 = Float64(throat_area) / 0.2
+default_nozzle_radiative_surface_area(throat_area::Real)::Float64 = 25.0 * default_nozzle_relative_scale(throat_area)
+default_nozzle_thermal_mass(throat_area::Real)::Float64 = 2.0 * default_nozzle_relative_scale(throat_area)^(3 / 2)
+
+function default_nozzle_overheat(
+        throat_area::Real;
+        limit_temperature_k::Real = DEFAULT_NOZZLE_LIMIT_TEMPERATURE_K,
+        thermal_mass::Union{Nothing, Real} = nothing,
+        radiative_surface_area::Union{Nothing, Real} = nothing,
+        temperature::ComponentTemperatureBehavFrag = ComponentTemperatureBehavFrag(),
+        damage::DamageStateBehavFrag = DamageStateBehavFrag()
+    )
+    thermal_mass_f = isnothing(thermal_mass) ? default_nozzle_thermal_mass(throat_area) : Float64(thermal_mass)
+    radiative_surface_area_f = isnothing(radiative_surface_area) ? default_nozzle_radiative_surface_area(throat_area) : Float64(radiative_surface_area)
+    return OverheatLimitBehavFrag(limit_temperature_k, thermal_mass_f, radiative_surface_area_f; temperature = temperature, damage = damage)
+end
+
+function NozzleBehavFrag(connected_node::NodePos, throat_area::Real, stallstate::StallBehavFrag)
+    throat_area_f = Float64(throat_area)
+    return NozzleBehavFrag(connected_node, throat_area_f, stallstate, default_nozzle_overheat(throat_area_f))
+end
+
+function NozzleBehavFrag(connected_node::NodePos, throat_area::Real, stallstate::StallBehavFrag, overheat::OverheatLimitBehavFrag)
+    return NozzleBehavFrag(connected_node, Float64(throat_area), stallstate, overheat)
+end
+
+function multiply_colours(base_colour::ColourType, tint_colour::ColourType)::ColourType
+    return ColourType(
+        base_colour[1] * tint_colour[1],
+        base_colour[2] * tint_colour[2],
+        base_colour[3] * tint_colour[3],
+        base_colour[4] * tint_colour[4]
+    )
+end
 
 is_stalled(nozzle::NozzleBehavFrag) = is_stalled(nozzle.stallstate)
 stall!(nozzle::NozzleBehavFrag) = stall!(nozzle.stallstate)
 unstall!(nozzle::NozzleBehavFrag) = unstall!(nozzle.stallstate)
+is_damaged(nozzle::NozzleBehavFrag) = is_damaged(nozzle.overheat)
+damage!(nozzle::NozzleBehavFrag) = damage!(nozzle.overheat)
+undamage!(nozzle::NozzleBehavFrag) = undamage!(nozzle.overheat)
+get_component_temperature(nozzle::NozzleBehavFrag)::Float64 = get_component_temperature(nozzle.overheat)
+get_overheat_percentage(nozzle::NozzleBehavFrag)::Float64 = get_overheat_percentage(nozzle.overheat)
+get_overheat_tint(nozzle::NozzleBehavFrag)::ColourType = get_overheat_tint(nozzle.overheat)
 
 function produce_rel_elements(nozzle::NozzleBehavFrag)::NTuple{1, RelativeElement}
-    is_active::Bool = !is_stalled(nozzle)
+    is_active::Bool = !is_stalled(nozzle) && !is_damaged(nozzle)
     node = nozzle.connected_node
     throat_area = nozzle.throat_area
 
@@ -60,28 +104,35 @@ function produce_rel_elements(nozzle::NozzleBehavFrag)::NTuple{1, RelativeElemen
     return (rel_elem,)
 end
 
-function get_tunables(nozzle::NozzleBehavFrag)::NTuple{1, TunableProps}
+function get_tunables(nozzle::NozzleBehavFrag)::NTuple{4, TunableProps}
     throat_props = TunableProps(
         nozzle.throat_area,
         "Nozzle Throat Area",
         "sqrt(conductance)"
     )
 
-    return (throat_props,)
+    overheat_tunables = get_tunables(nozzle.overheat)
+    return (throat_props, overheat_tunables[1], overheat_tunables[2], overheat_tunables[3])
 end
 
-function set_tunables(nozzle::NozzleBehavFrag, tunables::NTuple{1, T})::NozzleBehavFrag where {T <: Real}
+function set_tunables(nozzle::NozzleBehavFrag, tunables::NTuple{4, T})::NozzleBehavFrag where {T <: Real}
     float_vals = Float64.(tunables)
+    new_overheat = set_tunables(nozzle.overheat, (float_vals[2], float_vals[3], float_vals[4]))
 
     newnozzle = NozzleBehavFrag(
         nozzle.connected_node,
         float_vals[1], # throat area
-        nozzle.stallstate
+        nozzle.stallstate,
+        new_overheat
     )
     return newnozzle
 end
 
 function get_thrust(nozzle::NozzleBehavFrag; tile::TileCoord, rotation::HexAxis, mna_state::MNA_State, derivedmapstate::DerivedMapState, kwargs...)
+    if is_stalled(nozzle) || is_damaged(nozzle)
+        return SVector{2, Float64}(0.0, 0.0)
+    end
+
     # Get nozzle state
     nozzle_throat_area = nozzle.throat_area
     nozzle_input_node = map_element(nozzle.connected_node, tile, rotation)
@@ -90,16 +141,17 @@ function get_thrust(nozzle::NozzleBehavFrag; tile::TileCoord, rotation::HexAxis,
     nozzle_flow = nozzle_input_pressure * nozzle_conductance
 
     # Look up the fluid at the nozzle's input node
-    fluid = get(derivedmapstate.nodeactualfluids, nozzle_input_node, HexFluids.NONE)
-    density = lookup_fluid_density(fluid)
-    exhaust_velocity = lookup_fluid_exhaust_velocity(fluid)
+    fluid = get(derivedmapstate.nodeactualfluids, nozzle_input_node, nothing)
+    density = fluid !== nothing ? lookup_fluid_density(fluid) : nothing
+    fluid_temperature_k = get(derivedmapstate.node_temperatures, nozzle_input_node, THERMAL_AMBIENT_TEMPERATURE_K)
+    exhaust_velocity = fluid !== nothing ? lookup_fluid_exhaust_velocity(fluid, fluid_temperature_k) : nothing
 
     # If density or exhaust velocity is unknown, there's either no fluid connected or a new
     # fluid type was added without defining its physical properties
     if isnothing(density) || isnothing(exhaust_velocity)
         # If there's significant flow but no fluid properties, something is wrong
         if abs(nozzle_flow) > 1e-6
-            error("Nozzle at tile $tile has significant flow ($nozzle_flow) but fluid properties could not be found for fluid tag '$fluid'. Ensure lookup_fluid_density and lookup_fluid_exhaust_velocity are defined for this fluid.")
+            error("Nozzle at tile $tile has significant flow ($nozzle_flow) but fluid properties could not be found for fluid '$fluid'. Ensure lookup_fluid_density and lookup_fluid_exhaust_velocity are defined for this fluid.")
         end
         return SVector{2, Float64}(0.0, 0.0)
     end
@@ -128,13 +180,38 @@ function on_click!(nozzle::NozzleBehavFrag; kwargs...)
     return nothing
 end
 
-get_actions(nozzle::NozzleBehavFrag; kwargs...) = get_actions(nozzle.stallstate; kwargs...)
-do_action!(nozzle::NozzleBehavFrag, action_id::Symbol; kwargs...) = do_action!(nozzle.stallstate, action_id; kwargs...)
+function get_actions(nozzle::NozzleBehavFrag; kwargs...)
+    stall_actions = get_actions(nozzle.stallstate; kwargs...)
+    damage_actions = get_actions(nozzle.overheat; kwargs...)
+    return (stall_actions..., damage_actions...)
+end
 
-function update_flowbehav!(nozzle::NozzleBehavFrag; rotation::HexAxis, tile::TileCoord, mna_state::MNA_State, kwargs...)
+function do_action!(nozzle::NozzleBehavFrag, action_id::Symbol; kwargs...)
+    if action_id === :unstall
+        return do_action!(nozzle.stallstate, action_id; kwargs...)
+    elseif action_id === :repair_component
+        return do_action!(nozzle.overheat, action_id; kwargs...)
+    end
+    return (false, "Action :$(action_id) not recognised by NozzleBehavFrag")
+end
+
+function update_flowbehav!(nozzle::NozzleBehavFrag; rotation::HexAxis, tile::TileCoord, mna_state::MNA_State, derivedmapstate::DerivedMapState, kwargs...)
     # Get the voltage at the nozzle's connected node
     nozzle_input_node = map_element(nozzle.connected_node, tile, rotation)
     nozzle_input_pressure = get(mna_state.node_voltages, nozzle_input_node, 0.0)
+
+    # Thermal state uses the previous solved tick's flow and temperature fields.
+    fluid_temperature_k = get(derivedmapstate.node_temperatures, nozzle_input_node, THERMAL_AMBIENT_TEMPERATURE_K)
+    fluid = get(derivedmapstate.nodeactualfluids, nozzle_input_node, nothing)
+    mass_flow_rate = 0.0
+    if !isnothing(fluid)
+        nozzle_rel_element = produce_rel_elements(nozzle)[nozzle_element_index]
+        nozzle_abs_element = map_element(nozzle_rel_element, tile, nozzle_element_index, rotation)
+        nozzle_current = something(abs_element_get_current(nozzle_abs_element, derivedmapstate, mna_state), 0.0)
+        fluid_density = something(lookup_fluid_density(fluid), 0.0)
+        mass_flow_rate = max(nozzle_current, 0.0) * fluid_density
+    end
+    update_overheat_state!(nozzle.overheat; fluid_temperature_k = fluid_temperature_k, mass_flow_rate = mass_flow_rate)
 
     # If the voltage is negative, current will be flowing backwards, so stall the nozzle
     if nozzle_input_pressure < 0.0
@@ -143,7 +220,11 @@ function update_flowbehav!(nozzle::NozzleBehavFrag; rotation::HexAxis, tile::Til
     return nothing
 end
 
-render_map_elem!(queue::Vector{<:RenderCommand}, nozzle::NozzleBehavFrag; kwargs...) = render_map_elem!(queue, nozzle.stallstate; kwargs...)
+function render_map_elem!(queue::Vector{<:RenderCommand}, nozzle::NozzleBehavFrag; kwargs...)
+    render_map_elem!(queue, nozzle.stallstate; kwargs...)
+    render_map_elem!(queue, nozzle.overheat; kwargs...)
+    return nothing
+end
 
 function placement_valid(nozzle::NozzleBehavFrag, coord::TileCoord, gamemap::GameMap; rotation::HexAxis, ship_name::Symbol = :primary, kwargs...)
     # Nozzles must hang off ship edges - their input node must be on surface, but the nozzle tile itself must not be
@@ -213,7 +294,7 @@ function collect_effect_particles!(
 
     # Get fluid color
     nozzle_input_node = map_element(nozzle.connected_node, tile, rotation)
-    fluid = get(derivedmapstate.nodeactualfluids, nozzle_input_node, HexFluids.NONE)
+    fluid = get(derivedmapstate.nodeactualfluids, nozzle_input_node, nothing)
     fluid_colour_full = get_fluid_colour(fluid; default = ColourType(1.0, 1.0, 1.0, 1.0))
     particle_colour = SVector{4, Float32}(fluid_colour_full[1], fluid_colour_full[2], fluid_colour_full[3], 0.5f0) # Set alpha to 50%
 
@@ -268,27 +349,39 @@ end
 struct BasicNozzleCompBehav <: ComponentBehavior
     nozzle::NozzleBehavFrag
     sprite::PlainSpriteBehavFrag
-    fluid::FluidTagBehavFrag
 end
 
 function BasicNozzleCompBehav(;
         connected_node::NodePos,
         throat_area::Float64,
-        sprite::Symbol
+        sprite::Symbol,
+        limit_temperature_k::Float64 = DEFAULT_NOZZLE_LIMIT_TEMPERATURE_K,
+        thermal_mass::Union{Nothing, Float64} = nothing,
+        radiative_surface_area::Union{Nothing, Float64} = nothing
     )
-    nozzlefrag = NozzleBehavFrag(connected_node, throat_area, StallBehavFrag())
+    nozzlefrag = NozzleBehavFrag(
+        connected_node,
+        throat_area,
+        StallBehavFrag(),
+        default_nozzle_overheat(
+            throat_area;
+            limit_temperature_k = limit_temperature_k,
+            thermal_mass = thermal_mass,
+            radiative_surface_area = radiative_surface_area
+        )
+    )
     spritefrag = PlainSpriteBehavFrag(sprite)
-    fluidnt = (; Symbol(connected_node) => HexFluids.ANY_GAS)
-    fluidfrag = FluidTagBehavFrag(NodeFluidTags(; fluidnt...))
-
-    return BasicNozzleCompBehav(nozzlefrag, spritefrag, fluidfrag)
+    return BasicNozzleCompBehav(nozzlefrag, spritefrag)
 end
 
 produce_rel_elements(comp::BasicNozzleCompBehav) = produce_rel_elements(comp.nozzle)
 get_tunables(comp::BasicNozzleCompBehav) = get_tunables(comp.nozzle)
-set_tunables(comp::BasicNozzleCompBehav, tunables::NTuple{1, Real}) = @set comp.nozzle = set_tunables(comp.nozzle, tunables)
-get_fluidtags(comp::BasicNozzleCompBehav) = get_fluidtags(comp.fluid)
+set_tunables(comp::BasicNozzleCompBehav, tunables::NTuple{4, Real}) = @set comp.nozzle = set_tunables(comp.nozzle, tunables)
+function produce_rel_fluid_declarations(comp::BasicNozzleCompBehav)
+    return (RelativeFluidDeclaration(comp.nozzle.connected_node, HexFluids.FluidConstraintRule(HexFluids.IS_GAS)),)
+end
 get_thrust(comp::BasicNozzleCompBehav; kwargs...) = get_thrust(comp.nozzle; kwargs...)
+get_component_temperature(comp::BasicNozzleCompBehav; kwargs...) = get_component_temperature(comp.nozzle)
 on_click!(comp::BasicNozzleCompBehav; kwargs...) = on_click!(comp.nozzle; kwargs...)
 get_actions(comp::BasicNozzleCompBehav; kwargs...) = get_actions(comp.nozzle; kwargs...)
 do_action!(comp::BasicNozzleCompBehav, action_id::Symbol; kwargs...) = do_action!(comp.nozzle, action_id; kwargs...)
@@ -310,7 +403,6 @@ end
 struct SwitchedNozzleCompBehav <: ComponentBehavior
     nozzle::NozzleBehavFrag
     switch::BoolSwitchBehavFrag
-    fluid::FluidTagBehavFrag
 end
 
 function SwitchedNozzleCompBehav(;
@@ -318,10 +410,23 @@ function SwitchedNozzleCompBehav(;
         connected_node::NodePos,
         max_conductance::Float64,
         min_conductance::Float64,
-        growth_factor::Float64
+        growth_factor::Float64,
+        limit_temperature_k::Float64 = SWITCHED_NOZZLE_LIMIT_TEMPERATURE_K,
+        thermal_mass::Union{Nothing, Float64} = nothing,
+        radiative_surface_area::Union{Nothing, Float64} = nothing
     )
     # Nozzle connects internal node to ground
-    nozzlefrag = NozzleBehavFrag(HexFrame.NODE_INTERNAL, throat_area, StallBehavFrag())
+    nozzlefrag = NozzleBehavFrag(
+        HexFrame.NODE_INTERNAL,
+        throat_area,
+        StallBehavFrag(),
+        default_nozzle_overheat(
+            throat_area;
+            limit_temperature_k = limit_temperature_k,
+            thermal_mass = thermal_mass,
+            radiative_surface_area = radiative_surface_area
+        )
+    )
 
     # Switch connects external node to internal node
     switch_connection = RelativeElementConnections(connected_node, HexFrame.NODE_INTERNAL)
@@ -334,14 +439,7 @@ function SwitchedNozzleCompBehav(;
         current_conductance = min_conductance
     )
 
-    # Fluid tags for both connected node and internal node
-    fluidnt = (;
-        Symbol(connected_node) => HexFluids.ANY_GAS,
-        Symbol(HexFrame.NODE_INTERNAL) => HexFluids.ANY_GAS,
-    )
-    fluidfrag = FluidTagBehavFrag(NodeFluidTags(; fluidnt...))
-
-    return SwitchedNozzleCompBehav(nozzlefrag, switchfrag, fluidfrag)
+    return SwitchedNozzleCompBehav(nozzlefrag, switchfrag)
 end
 
 # Combine elements from both switch and nozzle (nozzle first, then switch)
@@ -351,26 +449,41 @@ function produce_rel_elements(comp::SwitchedNozzleCompBehav)::NTuple{2, Relative
     return (nozzle_elements[1], switch_elements[1])
 end
 
-# Combine tunables from both fragments (throat area + 3 switch tunables)
-function get_tunables(comp::SwitchedNozzleCompBehav)::NTuple{4, TunableProps}
+# Combine tunables from both fragments (throat area + 3 overheat tunables + 3 switch tunables)
+function get_tunables(comp::SwitchedNozzleCompBehav)::NTuple{7, TunableProps}
     nozzle_tunables = get_tunables(comp.nozzle)
     switch_tunables = get_tunables(comp.switch)
-    return (nozzle_tunables[1], switch_tunables[1], switch_tunables[2], switch_tunables[3])
+    return (
+        nozzle_tunables[1],
+        nozzle_tunables[2],
+        nozzle_tunables[3],
+        nozzle_tunables[4],
+        switch_tunables[1],
+        switch_tunables[2],
+        switch_tunables[3],
+    )
 end
 
-function set_tunables(comp::SwitchedNozzleCompBehav, tunables::NTuple{4, Real})::SwitchedNozzleCompBehav
-    # First tunable is throat area, remaining 3 are switch tunables
-    nozzle_tunables = (tunables[1],)
-    switch_tunables = (tunables[2], tunables[3], tunables[4])
+function set_tunables(comp::SwitchedNozzleCompBehav, tunables::NTuple{7, Real})::SwitchedNozzleCompBehav
+    # Tunable order: throat area, temperature limit, thermal mass, radiative surface area, max conductance, min conductance, growth factor.
+    nozzle_tunables = (tunables[1], tunables[2], tunables[3], tunables[4])
+    switch_tunables = (tunables[5], tunables[6], tunables[7])
 
     new_nozzle = set_tunables(comp.nozzle, nozzle_tunables)
     new_switch = set_tunables(comp.switch, switch_tunables)
 
-    return SwitchedNozzleCompBehav(new_nozzle, new_switch, comp.fluid)
+    return SwitchedNozzleCompBehav(new_nozzle, new_switch)
 end
 
-get_fluidtags(comp::SwitchedNozzleCompBehav) = get_fluidtags(comp.fluid)
+function produce_rel_fluid_declarations(comp::SwitchedNozzleCompBehav)
+    connected_node = comp.switch.switch.connection.v1
+    return (
+        RelativeFluidDeclaration(connected_node, HexFluids.FluidConstraintRule(HexFluids.IS_GAS)),
+        RelativeFluidDeclaration(HexFrame.NODE_INTERNAL, HexFluids.FluidConstraintRule(HexFluids.IS_GAS)),
+    )
+end
 get_thrust(comp::SwitchedNozzleCompBehav; kwargs...) = get_thrust(comp.nozzle; kwargs...)
+get_component_temperature(comp::SwitchedNozzleCompBehav; kwargs...) = get_component_temperature(comp.nozzle)
 collect_effect_particles!(manager, comp::SwitchedNozzleCompBehav; kwargs...) = collect_effect_particles!(manager, comp.nozzle; kwargs...)
 
 function on_click!(comp::SwitchedNozzleCompBehav; kwargs...)
@@ -423,11 +536,14 @@ end
 
 # Render valve sprite just under the main background sprite
 function render_base_elem!(queue::Vector{<:RenderCommand}, comp::SwitchedNozzleCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
+    nozzle_tint = get_overheat_tint(comp.nozzle)
+    base_colour = multiply_colours(colour, nozzle_tint)
+
     bkg_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_bkg, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = bkg_height, pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_bkg, rotation, position; scale = scale, transparency = transparency, colour = base_colour, draw_height = bkg_height, pos_offset = pos_offset))
 
     valve_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_valve, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = valve_height, pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_valve, rotation, position; scale = scale, transparency = transparency, colour = base_colour, draw_height = valve_height, pos_offset = pos_offset))
     return nothing
 end
 
@@ -435,22 +551,24 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::SwitchedNozzleCo
     # Get the connected external node for fluid lookup
     connected_node_pos = comp.switch.switch.connection.v1 # External node from switch connection
     connected_node = map_element(connected_node_pos, position, rotation)
-    fluid = get(derivedmapstate.nodeactualfluids, connected_node, HexFluids.NONE)
+    fluid = get(derivedmapstate.nodeactualfluids, connected_node, nothing)
 
     # Render fluidmask with fluid color (defaulting to black)
     fluidmask_colour = get_fluid_colour(fluid)
     fluidmask_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset)
     push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_fluidmask, rotation, position; colour = fluidmask_colour, draw_height = fluidmask_height, pos_offset = pos_offset))
 
+    nozzle_tint = get_overheat_tint(comp.nozzle)
+
     # Render valve with position offset based on switch state (0% = no offset, 100% = 30px Y offset)
     switch_percentage = get_switch_percentage(comp.switch)
     valve_offset = SVector{2, Float32}(0.0, 30.0 * switch_percentage)
     valve_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_valve, rotation, position; sprite_offset_tweak_px = valve_offset, draw_height = valve_height, pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_valve, rotation, position; colour = nozzle_tint, sprite_offset_tweak_px = valve_offset, draw_height = valve_height, pos_offset = pos_offset))
 
     # Render background sprite on top
     bkg_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_bkg, rotation, position; draw_height = bkg_height, pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_bkg, rotation, position; colour = nozzle_tint, draw_height = bkg_height, pos_offset = pos_offset))
 
     # Delegate to nozzle fragment for stall overlay (particles handled separately via collect_effect_particles!)
     render_map_elem!(queue, comp.nozzle; glmap = glmap, rotation = rotation, position = position, render_height_offset = render_height_offset, pos_offset = pos_offset)
@@ -463,7 +581,11 @@ end
 const decomp_voltage_element_index::Int = 1  # Voltage source element index for current detection
 
 "Decomposition chamber that converts liquid to gas with animated fluid effects. Expansion factor is derived from fluid density ratio."
-struct DecompChamberCompBehav <: ComponentBehavior end
+struct DecompChamberCompBehav <: ComponentBehavior
+    output_temperature::Float64
+end
+
+DecompChamberCompBehav() = DecompChamberCompBehav(800.0)
 
 function produce_rel_elements(comp::DecompChamberCompBehav)::NTuple{2, RelativeElement}
     # Compute expansion factor from density ratio (liquid density / gas density)
@@ -487,16 +609,21 @@ function produce_rel_elements(comp::DecompChamberCompBehav)::NTuple{2, RelativeE
     return (voltage_elem, current_elem)
 end
 
-function get_fluidtags(comp::DecompChamberCompBehav)::NodeFluidTags
-    return NodeFluidTags(
-        NODE_Q_POS = HexFluids.MONOPROP_LIQUID,
-        NODE_Q_NEG = HexFluids.MONOPROP_GAS
+function produce_rel_fluid_declarations(comp::DecompChamberCompBehav)
+    return (
+        RelativeFluidDeclaration(HexFrame.NODE_Q_POS, HexFluids.FluidTypeRule(HexFluids.MONOPROP_LIQUID)),
+        RelativeFluidDeclaration(HexFrame.NODE_Q_NEG, HexFluids.FluidSource(HexFluids.MONOPROP_GAS, comp.output_temperature)),
     )
 end
 
-get_tunables(::DecompChamberCompBehav)::Tuple{} = ()
+function get_tunables(comp::DecompChamberCompBehav)::NTuple{1, TunableProps}
+    output_temp_props = TunableProps(comp.output_temperature, "Output Temperature", "K")
+    return (output_temp_props,)
+end
 
-set_tunables(comp::DecompChamberCompBehav, ::Tuple{})::DecompChamberCompBehav = comp
+function set_tunables(::DecompChamberCompBehav, tunables::NTuple{1, T})::DecompChamberCompBehav where {T <: Real}
+    return DecompChamberCompBehav(Float64(tunables[1]))
+end
 
 function render_base_elem!(queue::Vector{<:RenderCommand}, comp::DecompChamberCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     # Render gas fluidmask in black as background
@@ -517,12 +644,12 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::DecompChamberCom
 
     # Get liquid fluid colour from NODE_Q_POS
     liquid_node = map_element(HexFrame.NODE_Q_POS, position, rotation)
-    liquid_fluid = get(derivedmapstate.nodeactualfluids, liquid_node, HexFluids.NONE)
+    liquid_fluid = get(derivedmapstate.nodeactualfluids, liquid_node, nothing)
     liquid_colour = get_fluid_colour(liquid_fluid)
 
     # Get gas fluid colour from NODE_Q_NEG
     gas_node = map_element(HexFrame.NODE_Q_NEG, position, rotation)
-    gas_fluid = get(derivedmapstate.nodeactualfluids, gas_node, HexFluids.NONE)
+    gas_fluid = get(derivedmapstate.nodeactualfluids, gas_node, nothing)
     gas_colour = get_fluid_colour(gas_fluid)
 
     # Always render gas fluidmask with basic shader (static background)

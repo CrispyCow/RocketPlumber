@@ -1,7 +1,12 @@
 #!/usr/bin/env julia
 
 """
-Update every local package environment in this repository.
+Refresh every local package environment in this repository.
+
+By default this resolves, instantiates, and precompiles each environment without
+independently updating registry packages, which helps keep local package
+manifests aligned with the root game environment. Pass `--update` to opt into a
+full per-environment package update.
 
 Any new local package should live somewhere under `local_packages/` with its own
 `Project.toml` so this script discovers it automatically.
@@ -12,6 +17,30 @@ using Pkg
 
 const REPO_ROOT = normpath(joinpath(@__DIR__, ".."))
 const LOCAL_PACKAGES_ROOT = joinpath(REPO_ROOT, "local_packages")
+
+Base.@kwdef struct RefreshOptions
+    allow_updates::Bool = false
+end
+
+function parse_args(args::Vector{String})
+    allow_updates = false
+
+    for arg in args
+        if arg == "--update"
+            allow_updates = true
+        elseif arg in ("-h", "--help")
+            println("Usage: julia tools/local_package_updater.jl [--update]")
+            println()
+            println("Without --update, the script only resolves, instantiates, and precompiles each local package environment.")
+            println("With --update, it also runs Pkg.update() inside each environment before resolving.")
+            return nothing
+        else
+            error("Unrecognised argument: $(arg)")
+        end
+    end
+
+    return RefreshOptions(; allow_updates)
+end
 
 "Return all local package directories in a stable order."
 function find_local_package_dirs()
@@ -32,13 +61,13 @@ function package_label(pkg_dir::AbstractString)
 end
 
 "Run repository maintenance steps for one local package environment."
-function refresh_package!(pkg_dir::AbstractString)
+function refresh_package!(pkg_dir::AbstractString, options::RefreshOptions)
     label = package_label(pkg_dir)
 
     println()
     println("=== Refreshing ", label, " ===")
     Pkg.activate(pkg_dir)
-    Pkg.update()
+    options.allow_updates && Pkg.update()
     Pkg.resolve()
     Pkg.instantiate()
     Pkg.precompile()
@@ -47,7 +76,10 @@ function refresh_package!(pkg_dir::AbstractString)
     return nothing
 end
 
-function main()
+function main(args::Vector{String}=ARGS)
+    options = parse_args(args)
+    options === nothing && return nothing
+
     if !isdir(LOCAL_PACKAGES_ROOT)
         error("Could not find local_packages directory at $(LOCAL_PACKAGES_ROOT)")
     end
@@ -57,12 +89,13 @@ function main()
 
     println("Repository root: ", REPO_ROOT)
     println("Discovered ", length(package_dirs), " local package environments.")
+    println("Mode: ", options.allow_updates ? "update + resolve + instantiate + precompile" : "resolve + instantiate + precompile")
 
     failures = Pair{String, Exception}[]
 
     for pkg_dir in package_dirs
         try
-            refresh_package!(pkg_dir)
+            refresh_package!(pkg_dir, options)
         catch err
             push!(failures, package_label(pkg_dir) => err)
             println("*** Failed ", package_label(pkg_dir), ": ", sprint(showerror, err))

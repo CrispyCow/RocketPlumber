@@ -527,7 +527,7 @@ struct EncounterClassConfig
     class_weight::ScalingRule
     hull_size::HullSizeConfig
     target_components::LinearScaling
-    fuel_configs::Dict{FluidTags, FuelTagConfig}
+    fuel_configs::Dict{FluidType, FuelTagConfig}
     pipe_options::Vector{PipeSpawnOptions}
 end
 
@@ -601,11 +601,11 @@ end
 
 "Select a fuel tag from dict-based fuel configs with deterministic ordering."
 function select_fuel_tag(
-        fuel_configs::Dict{FluidTags, FuelTagConfig},
+        fuel_configs::Dict{FluidType, FuelTagConfig},
         richness::Float64, point, seed::UInt32
-    )::FluidTags
+    )::FluidType
     sorted_tags = sort!(collect(keys(fuel_configs)))
-    evaluated = Tuple{FluidTags, Float64}[
+    evaluated = Tuple{FluidType, Float64}[
         (tag, evaluate_scaling(fuel_configs[tag].weight, richness)) for tag in sorted_tags
     ]
     return weighted_roll_noise(evaluated, point, seed)
@@ -643,7 +643,7 @@ end
 
 "Generate an encounter's ShipMap from config data."
 function generate_encounter(
-        encounter_class::EncounterClass, fuel_tag::FluidTags,
+        encounter_class::EncounterClass, fuel_tag::Union{FluidType, Nothing},
         richness::Float64, seed::UInt32, class_config::EncounterClassConfig
     )::ShipMap
     steps, stacks = compute_hull_size(class_config.hull_size, richness)
@@ -655,19 +655,21 @@ function generate_encounter(
     draw_seed = seed
     max_iterations = target_count + 10
 
-    fuel_config = class_config.fuel_configs[fuel_tag]
-    for iteration in 1:max_iterations
-        current_count = count_components(gamemap)
-        current_count >= target_count && break
+    fuel_config = !isnothing(fuel_tag) ? get(class_config.fuel_configs, fuel_tag, nothing) : nothing
+    if !isnothing(fuel_config)
+        for iteration in 1:max_iterations
+            current_count = count_components(gamemap)
+            current_count >= target_count && break
 
-        pool = evaluate_component_pool(fuel_config.component_pool, richness)
-        isempty(pool) && break
+            pool = evaluate_component_pool(fuel_config.component_pool, richness)
+            isempty(pool) && break
 
-        draw_seed = get_noise(UInt32(iteration), draw_seed)
-        chosen_set = weighted_roll_noise(pool, iteration, draw_seed)
+            draw_seed = get_noise(UInt32(iteration), draw_seed)
+            chosen_set = weighted_roll_noise(pool, iteration, draw_seed)
 
-        success, _ = place_shipset!(gamemap, chosen_set, draw_seed)
-        !success && break
+            success, _ = place_shipset!(gamemap, chosen_set, draw_seed)
+            !success && break
+        end
     end
 
     place_pipeset!(gamemap, class_config.pipe_options, seed)
@@ -1081,7 +1083,7 @@ function spawn_encounter_point!(ep::EncounterPoint, sm::SpaceMapState, current_t
 
     class_config = config.encounter_class_configs[ep.encounter_class]
     fuel_seed = get_noise(UInt32(200), ep.ship_type_seed)
-    ep.fuel_tag = select_fuel_tag(class_config.fuel_configs, ep.richness, ep.index, fuel_seed)
+    ep.fuel_tag = isempty(class_config.fuel_configs) ? nothing : select_fuel_tag(class_config.fuel_configs, ep.richness, ep.index, fuel_seed)
 
     ep.display_name = generate_encounter_name(ep.ship_type_seed, ep.encounter_class)
 

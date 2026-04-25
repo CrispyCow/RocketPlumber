@@ -80,7 +80,8 @@ function mapgen_teasership()
         connected_node = HexFrame.NODE_Q_POS,
         max_conductance = 2.0,
         min_conductance = 0.0,
-        growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS)
+        growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS),
+        limit_temperature_k = 400.0
     )
     tiny_on_off_valve = StandardValveCompBehav(BoolSwitchBehavFrag, TinyValve;
         max_conductance = 1.0,
@@ -101,20 +102,12 @@ function mapgen_teasership()
     )
 
     # The save contains one armed nozzle and two partially-open valves.
-    nozzle_switch_tags = FluidTagBehavFrag(NodeFluidTags(
-        HexFluids.ANY_GAS,
-        HexFluids.NONE,
-        HexFluids.NONE,
-        HexFluids.NONE,
-        HexFluids.NONE,
-        HexFluids.NONE,
-        HexFluids.ANY_GAS,
-    ))
     armed_switched_tiny_nozzle = SwitchedNozzleCompBehav(
         NozzleBehavFrag(
             HexFrame.NODE_INTERNAL,
             0.2,
-            StallBehavFrag(BinaryStateBehavFrag(false))
+            StallBehavFrag(BinaryStateBehavFrag(false)),
+            OverheatLimitBehavFrag(400.0, 5.3, 5.0)
         ),
         BoolSwitchBehavFrag(SwitchBehavFrag(
             RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_INTERNAL),
@@ -122,8 +115,7 @@ function mapgen_teasership()
             0.0,
             calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS),
             HexFlowSwitchComponents.SwitchState(2.0, 0.0)
-        )),
-        nozzle_switch_tags
+        ))
     )
     partially_open_legacy_valve = StandardValveCompBehav{SteppedSwitchBehavFrag, TinyValve}(
         SteppedSwitchBehavFrag(SwitchBehavFrag(

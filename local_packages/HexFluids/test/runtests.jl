@@ -12,9 +12,19 @@ using Base.Threads: @spawn
     @test lookup_fluid_density(HexFluids.MONOPROP_LIQUID) == 5.0
     @test lookup_fluid_density(HexFluids.MONOPROP_GAS) == 1.0
 
-    @test isnothing(lookup_fluid_exhaust_velocity(HexFluids.ANY_GAS))
-    @test isnothing(lookup_fluid_density(HexFluids.ANY_GAS))
-    @test isnothing(lookup_fluid_density(HexFluids.NONE))
+    @test lookup_fluid_reference_temperature(HexFluids.COLD_GAS) == 300.0
+    @test lookup_fluid_reference_temperature(HexFluids.MONOPROP_GAS) == 800.0
+end
+
+@testset "Temperature-scaled exhaust velocity" begin
+    cold_gas_reference_velocity = HexFluids.lookup_fluid_exhaust_velocity(HexFluids.COLD_GAS)::Float64
+    cold_gas_reference_temperature = HexFluids.lookup_fluid_reference_temperature(HexFluids.COLD_GAS)::Float64
+
+    @test HexFluids.lookup_fluid_exhaust_velocity(HexFluids.COLD_GAS, cold_gas_reference_temperature) == cold_gas_reference_velocity
+    @test HexFluids.lookup_fluid_exhaust_velocity(HexFluids.COLD_GAS, cold_gas_reference_temperature / 4) ≈ cold_gas_reference_velocity / 2
+    @test HexFluids.lookup_fluid_exhaust_velocity(HexFluids.COLD_GAS, cold_gas_reference_temperature * 4) == cold_gas_reference_velocity
+
+    @test HexFluids.lookup_fluid_exhaust_velocity(HexFluids.MONOPROP_LIQUID, 300.0) === nothing
 end
 
 @testset "Runtime tuning setters" begin
@@ -37,8 +47,8 @@ end
     exhaust_snapshot = get_fluid_exhaust_velocities()
     density_snapshot = get_fluid_densities()
 
-    @test exhaust_snapshot isa Dict{FluidTags, Float64}
-    @test density_snapshot isa Dict{FluidTags, Float64}
+    @test exhaust_snapshot isa Dict{FluidType, Float64}
+    @test density_snapshot isa Dict{FluidType, Float64}
 
     @test exhaust_snapshot[HexFluids.COLD_GAS] == something(lookup_fluid_exhaust_velocity(HexFluids.COLD_GAS))
     @test density_snapshot[HexFluids.MONOPROP_LIQUID] == something(lookup_fluid_density(HexFluids.MONOPROP_LIQUID))
@@ -48,11 +58,16 @@ end
     @test lookup_fluid_exhaust_velocity(HexFluids.COLD_GAS) == baseline
 end
 
-@testset "Setter validation for unsupported tags" begin
-    @test_throws ErrorException set_fluid_exhaust_velocity!(HexFluids.ANY_GAS, 100.0)
-    @test_throws ErrorException set_fluid_exhaust_velocity!(HexFluids.NONE, 100.0)
-    @test_throws ErrorException set_fluid_density!(HexFluids.ANY_GAS, 1.0)
-    @test_throws ErrorException set_fluid_density!(HexFluids.ANY_LIQUID, 1.0)
+@testset "Setter validation for unknown fluid types" begin
+    # FluidType values without configured properties should throw
+    unknown_fluid = reinterpret(HexFluids.FluidType, UInt32(0xFF))
+    @test_throws ErrorException set_fluid_exhaust_velocity!(unknown_fluid, 100.0)
+    @test_throws ErrorException set_fluid_density!(unknown_fluid, 1.0)
+end
+
+@testset "Fluid labels" begin
+    @test fluid_type_label(HexFluids.COLD_GAS) == "Cold Gas"
+    @test fluid_type_label(nothing) === nothing
 end
 
 @testset "Concurrent tuning smoke test" begin

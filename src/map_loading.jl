@@ -125,7 +125,7 @@ function JLD2.rconvert(::Type{EncounterPoint}, nt::NamedTuple)
         spawn_time = get(nt, :spawn_time, 0.0),
         ship_type_seed = get(nt, :ship_type_seed, UInt32(0)),
         encounter_class = get(nt, :encounter_class, ENCOUNTER_SCRAP),
-        fuel_tag = get(nt, :fuel_tag, HexFluids.NONE),
+        fuel_tag = get(nt, :fuel_tag, nothing),
         display_name = get(nt, :display_name, ""),
         richness = get(nt, :richness, 0.0),
     )

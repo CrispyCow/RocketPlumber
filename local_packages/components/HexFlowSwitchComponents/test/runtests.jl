@@ -1,7 +1,6 @@
 using Test
 using HexFrame
 using HexElements
-using HexFluids
 using HexComponentsAPI
 using HexFlowSwitchComponents
 
@@ -108,6 +107,11 @@ end
         @test sw2.max_conductance ≈ 3.0
         @test sw2.min_conductance ≈ 0.0
         @test sw2.growth_factor ≈ 1.5
+
+        sw_clamped = make_switch(target_conductance = 0.0, current_conductance = 0.0)
+        sw3 = set_tunables(sw_clamped, (3.0, 0.1, 1.5))
+        @test sw3.state.target_conductance ≈ 0.1
+        @test sw3.state.current_conductance ≈ 0.1
     end
 
     @testset "update_flowbehav! — exponential convergence" begin
@@ -376,10 +380,8 @@ end
         @test valve2.switch.percentage_step_size ≈ 0.1
     end
 
-    @testset "Fluid tags" begin
-        tags = get_fluidtags(valve)
-        @test tags.NODE_Q_POS === HexFluids.NONE
-        @test tags.NODE_Q_NEG === HexFluids.NONE
+    @testset "No fluid declarations" begin
+        @test isempty(produce_rel_fluid_declarations(valve))
     end
 
     @testset "on_click! dispatches step up/down" begin
@@ -444,10 +446,8 @@ end
         @test elements[1].type === CONST_RESISTOR
     end
 
-    @testset "Fluid tags" begin
-        tags = get_fluidtags(valve)
-        @test tags.NODE_Q_POS === HexFluids.NONE
-        @test tags.NODE_Q_NEG === HexFluids.NONE
+    @testset "No fluid declarations" begin
+        @test isempty(produce_rel_fluid_declarations(valve))
     end
 
     @testset "Sprite trait dispatch" begin
@@ -492,10 +492,8 @@ end
         @test valve2.switch.switch.max_conductance ≈ 3.0
     end
 
-    @testset "Fluid tags" begin
-        tags = get_fluidtags(valve)
-        @test tags.NODE_Q_POS === HexFluids.NONE
-        @test tags.NODE_Q_NEG === HexFluids.NONE
+    @testset "No fluid declarations" begin
+        @test isempty(produce_rel_fluid_declarations(valve))
     end
 
     @testset "on_click! dispatches open/close" begin

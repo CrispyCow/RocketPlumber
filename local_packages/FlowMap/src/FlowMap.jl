@@ -152,7 +152,7 @@ end
     spawn_time::Float64 = 0.0                           # Time (years) when the current trajectory started
     ship_type_seed::UInt32 = UInt32(0)                  # Seed for proc-gen
     encounter_class::EncounterClass = ENCOUNTER_SCRAP   # What kind of encounter this is
-    fuel_tag::FluidTags = HexFluids.NONE                # Primary fuel type (NONE for scrap)
+    fuel_tag::Union{FluidType, Nothing} = nothing        # Primary fuel type (nothing for scrap)
     display_name::String = ""                           # Human-readable name (generated at spawn time)
     richness::Float64 = 0.0                             # Richness at spawn time (cached for UI display)
 end
@@ -1413,8 +1413,8 @@ function get_dry_mass(gamemap::GameMap; mass_per_tile::Float64 = get_tile_mass()
     return tile_mass + component_dry_mass
 end
 
-"Wet mass (stored fluid) across all ships. If `fluid` is `nothing`, returns total fluid mass; if a specific FluidTags, returns mass of only that fluid."
-function get_wet_mass(gamemap::GameMap; fluid::Union{FluidTags, Nothing} = nothing)::Float64
+"Wet mass (stored fluid) across all ships. If `fluid` is `nothing`, returns total fluid mass; if a specific FluidType, returns mass of only that fluid."
+function get_wet_mass(gamemap::GameMap; fluid::Union{FluidType, Nothing} = nothing)::Float64
     wet_mass = 0.0
     for (_, ship) in gamemap.ships
         for (_, comp) in get_all_components(ship)

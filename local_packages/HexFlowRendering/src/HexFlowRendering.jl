@@ -83,15 +83,16 @@ const RENDER_HEIGHT_COMPONENT_ANIM::Int32 = 3000      # animated effects drawn o
 const RENDER_HEIGHT_OVERLAY_BASE::Int32 = 101000      # overlays, e.g., stall overlay
 const RENDER_HEIGHT_TRACTOR_BEAM::Int32 = RENDER_HEIGHT_BACKGROUND - 100  # tractor beam visuals, deep background
 
-const fluid_colour_lookup = Dict{FluidTags, ColourType}(
+const fluid_colour_lookup = Dict{FluidType, ColourType}(
     HexFluids.MONOPROP_LIQUID => ColourType(0.608, 0.169, 0.69, 1.0), # purple
     HexFluids.MONOPROP_GAS => ColourType(0.737, 0.569, 0.769, 1.0), # light purple
     HexFluids.COLD_GAS => ColourType(0.71, 0.918, 0.929, 1.0) # light blue
 )
 
-"Returns GLfloat RGBA colour from a FluidTag, or default if tag not found."
-function get_fluid_colour(tag::FluidTags; default::ColourType = DEFAULT_EMPTY_FLUID_COLOUR)::ColourType
-    return get(fluid_colour_lookup, tag, default)
+"Returns GLfloat RGBA colour from a FluidType, or default if fluid is nothing or not found."
+function get_fluid_colour(fluid::Union{FluidType, Nothing}; default::ColourType = DEFAULT_EMPTY_FLUID_COLOUR)::ColourType
+    isnothing(fluid) && return default
+    return get(fluid_colour_lookup, fluid, default)
 end
 
 "Loads shader source code from the shaders subdirectory."
@@ -495,10 +496,8 @@ end
 
 "Returns RenderCommands for a pipe by deriving its fluid type and colour from `derivedmapstate`."
 function render_pipe(glmap::GLObjectMap, pipe::EdgeCoord, derivedmapstate::DerivedMapState; transparency::AbstractFloat = 1.0f0, gameticks::Integer = 0)
-    v1_tag = get(derivedmapstate.nodeactualfluids, to_nodecoord(pipe.v1), HexFluids.NONE)
-    v2_tag = get(derivedmapstate.nodeactualfluids, to_nodecoord(pipe.v2), HexFluids.NONE)
-    tag = prioritise_fluidtag(v1_tag, v2_tag)
-    colour = get_fluid_colour(tag; default = DEFAULT_PIPE_COLOUR)
+    fluid = get(derivedmapstate.nodeactualfluids, to_nodecoord(pipe.v1), get(derivedmapstate.nodeactualfluids, to_nodecoord(pipe.v2), nothing))
+    colour = get_fluid_colour(fluid; default = DEFAULT_PIPE_COLOUR)
 
     rotation_matrix = get_rotmat(pipe)'
     position = glvec(pipe)
@@ -509,12 +508,12 @@ function render_pipe(glmap::GLObjectMap, pipe::EdgeCoord, derivedmapstate::Deriv
     )
 
     # Render fluid effect based on fluid type
-    fluid_cmd = if HexFluids.is_liquid(tag)
+    fluid_cmd = if !isnothing(fluid) && is_liquid(fluid)
         render_liquid_sprite(
             glmap, :BigPipes_Edge_fluidmask, rotation_matrix, position;
             colour = colour, transparency = transparency, draw_height = RENDER_HEIGHT_PIPE, gameticks = gameticks
         )
-    elseif HexFluids.is_gas(tag)
+    elseif !isnothing(fluid) && is_gas(fluid)
         render_gas_sprite(
             glmap, :BigPipes_Edge_fluidmask, rotation_matrix, position;
             colour = colour, transparency = transparency, draw_height = RENDER_HEIGHT_PIPE, gameticks = gameticks

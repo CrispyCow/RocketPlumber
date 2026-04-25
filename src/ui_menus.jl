@@ -256,12 +256,12 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
     if CImGui.CollapsingHeader("Parameter Tuning")
         if CImGui.TreeNode("Edit Fluid Densities")
             densities = get_fluid_densities()
-            fluid_keys = sort(collect(keys(densities)); by = UInt8)
+            fluid_keys = sort(collect(keys(densities)); by = UInt32)
 
             if isempty(fluid_keys)
                 CImGui.Text("No fluid densities configured")
             else
-                labels = [something(fluid_tag_label(k), string(k)) for k in fluid_keys]
+                labels = [something(fluid_type_label(k), string(k)) for k in fluid_keys]
 
                 selected_idx = gui_listbox_int!(_density_editor_state, :selected_index, "##density_fluid", labels, Int32(0))
                 selected_idx = clamp(selected_idx, Int32(0), Int32(length(fluid_keys) - 1))
@@ -288,12 +288,12 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
 
         if CImGui.TreeNode("Edit Fluid Exhaust Velocities")
             velocities = get_fluid_exhaust_velocities()
-            fluid_keys = sort(collect(keys(velocities)); by = UInt8)
+            fluid_keys = sort(collect(keys(velocities)); by = UInt32)
 
             if isempty(fluid_keys)
                 CImGui.Text("No fluid exhaust velocities configured")
             else
-                labels = [something(fluid_tag_label(k), string(k)) for k in fluid_keys]
+                labels = [something(fluid_type_label(k), string(k)) for k in fluid_keys]
 
                 selected_idx = gui_listbox_int!(_exhaust_vel_editor_state, :selected_index, "##exhaust_fluid", labels, Int32(0))
                 selected_idx = clamp(selected_idx, Int32(0), Int32(length(fluid_keys) - 1))
@@ -443,8 +443,8 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             class_enums = [ENCOUNTER_SHIP, ENCOUNTER_FUEL_CACHE, ENCOUNTER_SCRAP]
             class_sel = gui_listbox_int!(inputstate, :enc_class_sel, "Class", class_names, Cint(0))
 
-            fuel_names = ["COLD_GAS", "MONOPROP_LIQUID", "NONE"]
-            fuel_enums = [HexFluids.COLD_GAS, HexFluids.MONOPROP_LIQUID, HexFluids.NONE]
+            fuel_names = ["COLD_GAS", "MONOPROP_LIQUID", "None (scrap)"]
+            fuel_enums = Union{HexFluids.FluidType, Nothing}[HexFluids.COLD_GAS, HexFluids.MONOPROP_LIQUID, nothing]
             fuel_sel = gui_listbox_int!(inputstate, :enc_fuel_sel, "Fuel Tag", fuel_names, Cint(0))
 
             richness_val = gui_input_double!(
@@ -472,7 +472,7 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             CImGui.Text(@sprintf("Hull: %d steps, %d stacks", steps, stacks))
             CImGui.Text(@sprintf("Target components: %d", target))
 
-            fuel_valid = haskey(class_config.fuel_configs, enc_fuel)
+            fuel_valid = enc_fuel === nothing || haskey(class_config.fuel_configs, enc_fuel)
             if !fuel_valid
                 valid_tags = join(string.(keys(class_config.fuel_configs)), ", ")
                 CImGui.TextColored(

@@ -138,6 +138,9 @@ function inspect_ui!(tile::TileCoord, gamemap::GameMap, derivedmapstate::Derived
     found_comp, comp_ship = has_component_any_ship(gamemap, tile)
     if found_comp
         tilecomp, _ = get_component_any_ship(gamemap, tile)
+        component_temperature = get_component_temperature(tilecomp)
+        temperature_str = isnothing(component_temperature) ? "None" : "$(format_value(component_temperature)) K"
+        CImGui.Text("Temperature: $(temperature_str)")
         CImGui.Text("Type: $(String(nameof(typeof(tilecomp.component))))")
         CImGui.Text("Ship: $(comp_ship)")
 
@@ -176,25 +179,33 @@ function inspect_ui!(vert::VertexCoord, gamemap::GameMap, derivedmapstate::Deriv
     CImGui.Text("Node Voltage: $(format_value(mna_state.node_voltages[node])) V\n")
 
     fluidtag = get(derivedmapstate.nodeactualfluids, node, nothing)
-    fluidstr = String(Symbol(fluidtag))
-    CImGui.Text("Fluid Tag: $(fluidstr)")
+    fluidstr = !isnothing(fluidtag) ? fluid_type_label(fluidtag) : "None"
+    CImGui.Text("Fluid Type: $(fluidstr)")
 
-    # Display contributing fluid tags from adjacent tiles (only for axis nodes)
-    if HexFrame.is_axis(node.dir)
-        CImGui.Text("\nContributing Fluid Tags:")
-        CImGui.Separator()
-        CImGui.Indent()
+    region_id = get(derivedmapstate.node_to_region, node, nothing)
+    region_str = !isnothing(region_id) ? string(region_id) : "None"
+    CImGui.Text("Fluid Region: $(region_str)")
 
-        contributing_tags = get_node_fluid_tags(node, gamemap)
-        adjacent_tiles_info = HexFrame.get_adjacent_tiles_for_node(node)
+    region_temp = !isnothing(region_id) ? get(derivedmapstate.region_temperatures, region_id, nothing) : nothing
+    region_temp_str = !isnothing(region_temp) ? "$(format_value(region_temp)) K" : "None"
+    CImGui.Text("Region Temperature: $(region_temp_str)")
 
-        for (idx, ((tile, _), tag)) in enumerate(zip(adjacent_tiles_info, contributing_tags))
-            tag_str = String(Symbol(tag))
-            CImGui.Text("Tile $(coord_description(tile)): $tag_str")
+    # Display fluid declarations affecting this node
+    if haskey(derivedmapstate.node_declarations, node)
+        decl = derivedmapstate.node_declarations[node]
+        if decl isa HexFluids.FluidSource
+            CImGui.Text("Declaration: Source ($(fluid_type_label(decl.fluid_type)), T=$(format_value(decl.temperature)) K)")
+        elseif decl isa HexFluids.FluidTypeRule
+            CImGui.Text("Declaration: TypeRule ($(fluid_type_label(decl.fluid_type)))")
+        elseif decl isa HexFluids.FluidConstraintRule
+            CImGui.Text("Declaration: Constraint ($(fluid_constraint_label(decl.constraint)))")
         end
-
-        CImGui.Unindent()
     end
+
+    # Display temperature if available
+    temp = get(derivedmapstate.node_temperatures, node, nothing)
+    temp_str = !isnothing(temp) ? "$(format_value(temp)) K" : "None"
+    CImGui.Text("Node Temperature: $(temp_str)")
 
     return nothing
 end
@@ -377,12 +388,12 @@ end
 const SPACEMAP_LEFT_PANEL_WIDTH = 280.0
 const SPACEMAP_CLICK_RADIUS_SQ = 400.0   # Squared distance in plot units for click detection
 
-"Convert a `FluidTags` value to an `ImVec4` colour for UI display."
-function fluid_tag_to_imvec4(tag::HexFluids.FluidTags)::ImVec4
-    if tag == HexFluids.NONE
+"Convert a `FluidType` or `nothing` to an `ImVec4` colour for UI display."
+function fluid_tag_to_imvec4(fluid::Union{HexFluids.FluidType, Nothing})::ImVec4
+    if isnothing(fluid)
         return ImVec4(0.6, 0.6, 0.6, 0.7)
     end
-    c = HexFlowRendering.get_fluid_colour(tag)
+    c = HexFlowRendering.get_fluid_colour(fluid)
     return ImVec4(Float64(c[1]), Float64(c[2]), Float64(c[3]), Float64(c[4]))
 end
 
@@ -829,7 +840,7 @@ function render_spacemap_target_info!(gamemap::GameMap, selected_idx::Int)
         fluid_tag_to_imvec4(ep.fuel_tag),
         "$(encounter_class_label(ep.encounter_class)): $(ep.display_name)"
     )
-    fuel_label = fluid_tag_label(ep.fuel_tag)
+    fuel_label = fluid_type_label(ep.fuel_tag)
     if !isnothing(fuel_label)
         CImGui.TextColored(fluid_tag_to_imvec4(ep.fuel_tag), "Fuel: $fuel_label")
     end
@@ -1152,7 +1163,7 @@ function render_spacemap_plot_area!(
 
             # Bucket encounters by (class, fuel_tag) for coloured markers.
             # Shape distinguishes class; colour distinguishes fuel type.
-            marker_buckets = Dict{Tuple{EncounterClass, HexFluids.FluidTags}, Tuple{Vector{Float64}, Vector{Float64}}}()
+            marker_buckets = Dict{Tuple{EncounterClass, Union{HexFluids.FluidType, Nothing}}, Tuple{Vector{Float64}, Vector{Float64}}}()
             for i in 1:n_enc
                 ep = encounter_points[i]
                 key = (ep.encounter_class, ep.fuel_tag)
@@ -1174,7 +1185,7 @@ function render_spacemap_plot_area!(
                 end
                 colour = fluid_tag_to_imvec4(tag)
                 ImPlot.SetNextMarkerStyle(marker, size, colour)
-                fuel_label = fluid_tag_label(tag)
+                fuel_label = fluid_type_label(tag)
                 label = isnothing(fuel_label) ? encounter_class_label(class) : "$(encounter_class_label(class)) ($fuel_label)"
                 ImPlot.PlotScatter(label, xs, ys, length(xs))
             end

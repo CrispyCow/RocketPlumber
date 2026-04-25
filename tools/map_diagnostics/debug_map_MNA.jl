@@ -439,9 +439,10 @@ function run_simulation_tick!(gamemap::GameMap, derived::DerivedMapState,
         println("    After pruning ($prune_iters iters): $(length(derived.prunedelements)) elements    $(length(derived.prunednodes)) nodes")
 
         if !isempty(derived.prunednodes)
-            fluidtag_nodes!(derived, gamemap)
+            list_fluid_declarations!(derived.all_fluid_declarations, gamemap)
+            index_fluid_declarations!(derived)
             build_node_connection_map!(derived)
-            connect_fluidtags!(derived)
+            propagate_fluid_types!(derived)
             MNA_indexnodes!(mna, derived)
             MNA_splitelements!(mna, derived)
 

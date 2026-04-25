@@ -11,9 +11,9 @@ export Sprite, Component, ComponentOnTile, TunableProps, ActionInfo
 
 # Tile Component Behavior Exports
 export ComponentBehavior
-export produce_rel_elements, produce_abs_elements
+export produce_rel_elements, produce_abs_elements, produce_rel_fluid_declarations
 export get_tunables, set_tunables, render_base_elem!, render_map_elem!
-export get_fluidtags, update_flowbehav!, on_click!, get_thrust, get_component_mass, map_rotation, can_be_moved, placement_valid
+export update_flowbehav!, on_click!, get_thrust, get_component_temperature, get_component_mass, map_rotation, can_be_moved, placement_valid
 export get_component_dry_mass, get_component_wet_mass
 export collect_effect_particles!
 export get_actions, do_action!
@@ -22,7 +22,7 @@ export get_default_component_mass, set_default_component_mass!
 # Pipe Behavior Exports
 export PipeBehavior
 export get_conductance, get_pipe_tunables, set_pipe_tunables, render_pipe_base!, render_pipe_map!
-export get_pipe_fluidtags, can_pipe_be_moved, get_tile_pipe_equivalent
+export can_pipe_be_moved, get_tile_pipe_equivalent
 
 
 # ===============================================================
@@ -63,10 +63,11 @@ There are suitable defaults, but concrete ComponentBehavior types T can also imp
 OPTIONAL METHODS:
 
     render_map_elem!(queue::AbstractVector, behav::T; glmap, rotation, position, kwargs...)::Nothing
-    get_fluidtags(behav::T)::NodeFluidTags
+    produce_rel_fluid_declarations(behav::T)::Tuple
     update_flowbehav!(behav::T; kwargs...)::Nothing
     on_click!(behav::T; kwargs...)::Nothing
     get_thrust(behav::T; kwargs...)::SVector{2, Float64}
+    get_component_temperature(behav::T; kwargs...)::Union{Nothing, Float64}
     get_component_mass(behav::T; kwargs...)::Float64
     collect_effect_particles!(manager, behav::T; kwargs...)::Nothing
     map_rotation(behav::T, rotation::HexAxis)::HexAxis
@@ -126,8 +127,8 @@ function render_map_elem!(queue::AbstractVector, behav::T; glmap, rotation, posi
     return render_base_elem!(queue, behav; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, render_height_offset = render_height_offset)
 end
 
-"Default empty fluidtag for components not otherwise specified"
-get_fluidtags(behav::T) where {T <: ComponentBehavior} = NodeFluidTags()
+"Default produce_rel_fluid_declarations returns empty tuple (no fluid declarations)"
+produce_rel_fluid_declarations(behav::T) where {T <: ComponentBehavior} = ()
 
 "Default update does nothing"
 update_flowbehav!(behav::T; kwargs...) where {T <: ComponentBehavior} = nothing
@@ -137,6 +138,9 @@ on_click!(behav::T; kwargs...) where {T <: ComponentBehavior} = nothing
 
 "Default thrust is zero vector for non-nozzles"
 get_thrust(behav::T; kwargs...) where {T <: ComponentBehavior} = SVector{2, Float64}(0.0, 0.0)
+
+"Default component temperature is `nothing`, meaning the component does not expose a component-local temperature."
+get_component_temperature(behav::T; kwargs...) where {T <: ComponentBehavior} = nothing
 
 const _default_component_mass = Threads.Atomic{Float64}(20.0)
 "Get the default mass assigned to components that don't override `get_component_mass`."
@@ -150,8 +154,8 @@ end
 "Dry (structural) mass of a component, excluding any stored fluid. Defaults to the tunable default component mass."
 get_component_dry_mass(behav::T; kwargs...) where {T <: ComponentBehavior} = get_default_component_mass()
 
-"Mass of fluid stored in a component. If `fluid` is `nothing`, returns total fluid mass; if a specific FluidTags, returns mass of only that fluid. Defaults to 0.0 (no stored fluid)."
-get_component_wet_mass(behav::T; fluid::Union{FluidTags, Nothing} = nothing, kwargs...) where {T <: ComponentBehavior} = 0.0
+"Mass of fluid stored in a component. If `fluid` is `nothing`, returns total fluid mass; if a specific FluidType, returns mass of only that fluid. Defaults to 0.0 (no stored fluid)."
+get_component_wet_mass(behav::T; fluid::Union{FluidType, Nothing} = nothing, kwargs...) where {T <: ComponentBehavior} = 0.0
 
 "Total mass of a component (dry + wet). Override `get_component_dry_mass` and/or `get_component_wet_mass` rather than this."
 get_component_mass(behav::T; kwargs...) where {T <: ComponentBehavior} = get_component_dry_mass(behav) + get_component_wet_mass(behav)
@@ -196,9 +200,9 @@ end
 
 # ComponentBehavior Method Delegation
 produce_rel_elements(comp::ComponentOnTile) = produce_rel_elements(comp.component)
+produce_rel_fluid_declarations(comp::ComponentOnTile) = produce_rel_fluid_declarations(comp.component)
 get_tunables(comp::ComponentOnTile) = get_tunables(comp.component)
 set_tunables(comp::ComponentOnTile, tunables::NTuple{N, Real}) where {N} = set_tunables(comp.component, tunables)
-get_fluidtags(comp::ComponentOnTile) = get_fluidtags(comp.component)
 render_map_elem!(queue::AbstractVector, comp::ComponentOnTile; kwargs...) = render_map_elem!(queue, comp.component; rotation = comp.rotation, kwargs...)
 render_base_elem!(queue::AbstractVector, comp::ComponentOnTile; kwargs...) = render_base_elem!(queue, comp.component; rotation = comp.rotation, kwargs...)
 collect_effect_particles!(manager, comp::ComponentOnTile; kwargs...) = collect_effect_particles!(manager, comp.component; rotation = comp.rotation, kwargs...)
@@ -213,6 +217,7 @@ function on_click!(comp::ComponentOnTile; unrotated_clicksite = nothing, kwargs.
     return nothing
 end
 get_thrust(comp::ComponentOnTile; kwargs...) = get_thrust(comp.component; rotation = comp.rotation, kwargs...)
+get_component_temperature(comp::ComponentOnTile; kwargs...) = get_component_temperature(comp.component; kwargs...)
 get_component_mass(comp::ComponentOnTile; kwargs...) = get_component_mass(comp.component; kwargs...)
 get_component_dry_mass(comp::ComponentOnTile; kwargs...) = get_component_dry_mass(comp.component; kwargs...)
 get_component_wet_mass(comp::ComponentOnTile; kwargs...) = get_component_wet_mass(comp.component; kwargs...)
@@ -262,7 +267,6 @@ There are suitable defaults, but concrete PipeBehavior types T can also implemen
 OPTIONAL METHODS:
 
     render_pipe_map!(queue::AbstractVector, behav::T; glmap, rotation, position, kwargs...)::Nothing
-    get_pipe_fluidtags(behav::T)::FluidTags
     can_pipe_be_moved(behav::T; kwargs...)::(Bool, String)
     produce_abs_elements(behav::T, edge::EdgeCoord)::NTuple{N, AbsoluteElement}
     get_tile_pipe_equivalent(behav::T)::Union{ComponentBehavior, Nothing}
@@ -299,9 +303,6 @@ function render_pipe_map!(queue::AbstractVector, behav::T; glmap, rotation, posi
     # Default map-level forwards visual offset and height to base render (avoid leaking unrelated kwargs)
     return render_pipe_base!(queue, behav; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, render_height_offset = render_height_offset)
 end
-
-"Default empty fluidtag for pipes not otherwise specified"
-get_pipe_fluidtags(behav::T) where {T <: PipeBehavior} = FluidTags()
 
 "Default can_pipe_be_moved returns true with empty reason, indicating pipe can be moved"
 can_pipe_be_moved(behav::T; kwargs...) where {T <: PipeBehavior} = (true, "")

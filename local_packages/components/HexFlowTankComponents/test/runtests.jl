@@ -247,10 +247,10 @@ end
     @test tuned_comp.tank.gas_state.charge == 5.0
     @test tuned_comp.series_conductance == 8.0
 
-    tags = get_fluidtags(comp)
-    @test tags.NODE_Q_POS === HexFluids.COLD_GAS
-    @test tags.NODE_Q_NEG === HexFluids.MONOPROP_LIQUID
-    @test tags.NODE_R_POS === HexFluids.NONE
+    decls = produce_rel_fluid_declarations(comp)
+    @test length(decls) == 2
+    @test decls[1] === RelativeFluidDeclaration(HexFrame.NODE_Q_POS, FluidSource(HexFluids.COLD_GAS, 300.0))
+    @test decls[2] === RelativeFluidDeclaration(HexFrame.NODE_INTERNAL, FluidSource(HexFluids.MONOPROP_LIQUID, 300.0))
 
     @test map_rotation(comp, HexFrame.R_POS) === HexFrame.Q_POS
 
@@ -316,7 +316,9 @@ end
     @test gas_elements[1].type === CONST_VOLTAGE
     @test gas_elements[1].value ≈ 25.0
     @test gas_elements[2].type === CONST_RESISTOR
-    @test get_fluidtags(gas_comp).NODE_Q_POS === HexFluids.COLD_GAS
+    gas_decls = produce_rel_fluid_declarations(gas_comp)
+    @test length(gas_decls) == 1
+    @test gas_decls[1] === RelativeFluidDeclaration(HexFrame.NODE_INTERNAL, FluidSource(HexFluids.COLD_GAS, 300.0))
     @test get_component_wet_mass(gas_comp) ≈ 20.0
 
     gas_mna = register_vsources!(MNA_State(), TEST_TILE, 1)
@@ -341,7 +343,9 @@ end
     @test length(liquid_elements) == 4
     @test liquid_elements[1].type === CONST_VOLTAGE
     @test liquid_elements[1].value > 0.0
-    @test get_fluidtags(liquid_comp).NODE_Q_POS === HexFluids.MONOPROP_LIQUID
+    liq_decls = produce_rel_fluid_declarations(liquid_comp)
+    @test length(liq_decls) == 1
+    @test liq_decls[1] === RelativeFluidDeclaration(HexFrame.NODE_INTERNAL, FluidSource(HexFluids.MONOPROP_LIQUID, 300.0))
     @test get_component_wet_mass(liquid_comp) ≈ 100.0
     @test map_rotation(liquid_comp, HexFrame.S_POS) === HexFrame.Q_POS
     @test map_rotation(liquid_comp, HexFrame.R_NEG) === HexFrame.Q_NEG

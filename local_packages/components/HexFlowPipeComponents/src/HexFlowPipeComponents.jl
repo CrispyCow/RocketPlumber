@@ -89,25 +89,23 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, behav::BigTilePipeComp
     base_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
     push!(queue, render_basic_tile(glmap, :BigPipes_Tile, rotation, position; scale = scale, transparency = transparency, draw_height = base_height, pos_offset = pos_offset))
 
-    # Get fluid from both connected nodes
+    # Get fluid from either connected node (both should agree in a connected region)
     node_q_pos = map_element(HexFrame.NODE_Q_POS, position, rotation)
     node_q_neg = map_element(HexFrame.NODE_Q_NEG, position, rotation)
 
-    fluid_q_pos = get(derivedmapstate.nodeactualfluids, node_q_pos, HexFluids.NONE)
-    fluid_q_neg = get(derivedmapstate.nodeactualfluids, node_q_neg, HexFluids.NONE)
-
-    combined_fluid = prioritise_fluidtag(fluid_q_pos, fluid_q_neg)
-    colour = get_fluid_colour(combined_fluid)
+    fluid = get(derivedmapstate.nodeactualfluids, node_q_pos, get(derivedmapstate.nodeactualfluids, node_q_neg, nothing))
 
     fluidmask_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset)
 
     # Render fluidmask with appropriate renderer based on fluid type
-    if HexFluids.is_liquid(combined_fluid)
+    if !isnothing(fluid) && is_liquid(fluid)
+        colour = get_fluid_colour(fluid)
         push!(queue, render_liquid_tile(glmap, :BigPipes_Tile_fluidmask, rotation, position, gameticks; colour = colour, scale = scale, transparency = transparency, draw_height = fluidmask_height, pos_offset = pos_offset))
-    elseif HexFluids.is_gas(combined_fluid)
+    elseif !isnothing(fluid) && is_gas(fluid)
+        colour = get_fluid_colour(fluid)
         push!(queue, render_gas_tile(glmap, :BigPipes_Tile_fluidmask, rotation, position, gameticks; colour = colour, scale = scale, transparency = transparency, draw_height = fluidmask_height, pos_offset = pos_offset))
-    else # No fluid or unknown - use basic sprite in black
-        push!(queue, render_basic_tile(glmap, :BigPipes_Tile_fluidmask, rotation, position; colour = colour, scale = scale, transparency = transparency, draw_height = fluidmask_height, pos_offset = pos_offset))
+    else # No fluid — use basic sprite in black
+        push!(queue, render_basic_tile(glmap, :BigPipes_Tile_fluidmask, rotation, position; colour = DEFAULT_EMPTY_FLUID_COLOUR, scale = scale, transparency = transparency, draw_height = fluidmask_height, pos_offset = pos_offset))
     end
 
     return nothing

@@ -46,7 +46,8 @@ const SwitchedTinyNozzle = SwitchedNozzleCompBehav(
     connected_node = HexFrame.NODE_Q_POS,
     max_conductance = 2.0,
     min_conductance = 0.0,
-    growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS)
+    growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS),
+    limit_temperature_k = 400.0
 )
 
 const TurboPump = TurboPumpCompBehav(
@@ -562,7 +563,7 @@ ship_class_config = EncounterClassConfig(
     NoScaling(3.0),
     HullSizeConfig(LinearScaling(1.0, 0.6), LinearScaling(2.0, 8.0)),
     LinearScaling(1.0, 2.0),
-    Dict{FluidTags, FuelTagConfig}(
+    Dict{FluidType, FuelTagConfig}(
         HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), _ship_coldgas_pool),
         HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 2.5), _ship_monoprop_pool),
     ),
@@ -573,7 +574,7 @@ fuel_cache_class_config = EncounterClassConfig(
     NoScaling(3.0),
     HullSizeConfig(LinearScaling(1.0, 0.3), LinearScaling(8.0, 10.0)),
     LinearScaling(2.0, 3.0),
-    Dict{FluidTags, FuelTagConfig}(
+    Dict{FluidType, FuelTagConfig}(
         HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), _cache_coldgas_pool),
         HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 2.5), _cache_monoprop_pool),
     ),
@@ -584,9 +585,7 @@ scrap_class_config = EncounterClassConfig(
     NoScaling(3.0),
     HullSizeConfig(LinearScaling(1.0, 0.8), LinearScaling(2.0, 2.0)),
     LinearScaling(0.0, 1.0),
-    Dict{FluidTags, FuelTagConfig}(
-        HexFluids.NONE => FuelTagConfig(NoScaling(1.0), _scrap_pool),
-    ),
+    Dict{FluidType, FuelTagConfig}(),
     standard_pipeoptions,
 )
 

@@ -38,12 +38,17 @@ function set_node_voltage!(mna_state::MNA_State, tile::TileCoord, node, voltage:
     return mna_state
 end
 
-"Populate a minimal derived map state with the turbine-side fluid tag."
-function make_derived_state(tile::TileCoord = TEST_TILE; rotation::HexAxis = TEST_ROTATION, fluid::FluidTags = HexFluids.COLD_GAS)
-    nodeactualfluids = Dict{NodeCoord, FluidTags}(
-        map_element(HexFrame.NODE_S_POS, tile, rotation) => fluid,
+"Populate a minimal derived map state with the turbine-side fluid tag and temperature."
+function make_derived_state(
+        tile::TileCoord = TEST_TILE;
+        rotation::HexAxis = TEST_ROTATION,
+        fluid::HexFluids.FluidType = HexFluids.COLD_GAS,
+        temperature_k::Float64 = HexFluids.THERMAL_AMBIENT_TEMPERATURE_K
     )
-    return DerivedMapState(nodeactualfluids = nodeactualfluids)
+    turbine_input_node = map_element(HexFrame.NODE_S_POS, tile, rotation)
+    nodeactualfluids = Dict{NodeCoord, HexFluids.FluidType}(turbine_input_node => fluid)
+    node_temperatures = Dict{NodeCoord, Float64}(turbine_input_node => temperature_k)
+    return DerivedMapState(nodeactualfluids = nodeactualfluids, node_temperatures = node_temperatures)
 end
 
 const TURBOPUMP_STATIC_FRICTION_BIAS = 200.0
@@ -181,10 +186,11 @@ end
     @test tuned.rotor.friction_coefficient ≈ 0.5
     @test tuned.cycle_efficiency ≈ 0.90
 
-    tags = get_fluidtags(comp)
-    @test tags.NODE_Q_POS === HexFluids.ANY_LIQUID
-    @test tags.NODE_Q_NEG === HexFluids.ANY_LIQUID
-    @test tags.NODE_S_POS === HexFluids.ANY_GAS
+    decls = produce_rel_fluid_declarations(comp)
+    @test length(decls) == 3
+    @test decls[1] === RelativeFluidDeclaration(HexFrame.NODE_Q_POS, FluidConstraintRule(HexFluids.IS_LIQUID))
+    @test decls[2] === RelativeFluidDeclaration(HexFrame.NODE_Q_NEG, FluidConstraintRule(HexFluids.IS_LIQUID))
+    @test decls[3] === RelativeFluidDeclaration(HexFrame.NODE_S_POS, FluidConstraintRule(HexFluids.IS_GAS))
 
     stall!(comp.stall_state)
     actions = get_actions(comp)
@@ -213,17 +219,28 @@ end
     spun_up = make_turbopump(current_rpm = 0.0)
     spinup_mna = MNA_State()
     set_node_voltage!(spinup_mna, TEST_TILE, HexFrame.NODE_S_POS, 5.0)
-    spinup_derived = make_derived_state()
+    spinup_derived = make_derived_state(fluid = HexFluids.MONOPROP_GAS, temperature_k = 800.0)
     update_flowbehav!(spun_up; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = spinup_mna, derivedmapstate = spinup_derived)
     turbine_g = spun_up.max_turbine_conductance  # at 0 RPM, G = max
     turbine_current = 5.0 * turbine_g
     density = HexFluids.lookup_fluid_density(HexFluids.COLD_GAS)::Float64
-    exhaust_velocity = HexFluids.lookup_fluid_exhaust_velocity(HexFluids.COLD_GAS)::Float64
-    turbine_power = density * turbine_current * exhaust_velocity^2 * HexFlowPumpComponents.TURBOPUMP_TURBINE_POWER_SCALING
+    temperature_change_k = 800.0 - HexFluids.THERMAL_AMBIENT_TEMPERATURE_K
+    turbine_power = density * turbine_current * temperature_change_k * HexFlowPumpComponents.TURBOPUMP_TURBINE_TEMPERATURE_POWER_SCALING
     spinup_applied_inertia = spun_up.rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
     spinup_friction = turbopump_friction_power(spun_up, 0.0)
     spinup_expected = (spun_up.cycle_efficiency * turbine_power - spinup_friction) / (spinup_applied_inertia * BASE_UPS)
     @test get_current_rpm(spun_up.rotor) ≈ spinup_expected
+
+    # Ambient-temperature gas should not add turbine power.
+    ambient_gas = make_turbopump(current_rpm = 1200.0, rotor_inertia = 6000.0, friction_coefficient = 0.1)
+    ambient_gas_mna = MNA_State()
+    set_node_voltage!(ambient_gas_mna, TEST_TILE, HexFrame.NODE_S_POS, 40.0)
+    ambient_gas_derived = make_derived_state(temperature_k = HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
+    update_flowbehav!(ambient_gas; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = ambient_gas_mna, derivedmapstate = ambient_gas_derived)
+    ambient_applied_inertia = ambient_gas.rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
+    ambient_friction = turbopump_friction_power(ambient_gas, 1200.0)
+    ambient_expected = 1200.0 - ambient_friction / (ambient_applied_inertia * BASE_UPS)
+    @test get_current_rpm(ambient_gas.rotor) ≈ ambient_expected
 
     # Loaded pump (50% RPM, pump current, no gas input)
     loaded = make_turbopump(current_rpm = 1500.0, rotor_inertia = 6000.0, friction_coefficient = 0.1)
@@ -253,7 +270,7 @@ end
     startup_mna = register_vsources!(MNA_State(), TEST_TILE, 1)
     startup_mna.vsource_currents[ElementID(TEST_TILE, 1)] = -0.3
     set_node_voltage!(startup_mna, TEST_TILE, HexFrame.NODE_S_POS, 40.0)
-    update_flowbehav!(startup; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = startup_mna, derivedmapstate = make_derived_state())
+    update_flowbehav!(startup; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = startup_mna, derivedmapstate = make_derived_state(fluid = HexFluids.MONOPROP_GAS, temperature_k = 800.0))
     @test !is_stalled(startup.stall_state)
     @test get_current_rpm(startup.rotor) > 0.0
 
@@ -261,7 +278,7 @@ end
     contract_comp = make_turbopump(current_rpm = 0.0)
     contract_mna = MNA_State()
     set_node_voltage!(contract_mna, TEST_TILE, HexFrame.NODE_S_POS, 50.0)
-    update_flowbehav!(contract_comp; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = contract_mna, derivedmapstate = make_derived_state())
+    update_flowbehav!(contract_comp; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = contract_mna, derivedmapstate = make_derived_state(fluid = HexFluids.MONOPROP_GAS, temperature_k = 800.0))
     contract_elements = produce_rel_elements(contract_comp)
     @test get_current_rpm(contract_comp.rotor) > 0.0
     @test contract_elements[1].value ≈ contract_comp.max_pump_voltage * get_rpm_fraction(contract_comp.rotor)
@@ -310,8 +327,14 @@ end
     @test length(turbo_elements) == 2
     @test turbo_elements[1].type === CONST_VOLTAGE
     @test turbo_elements[2].type === CONST_RESISTOR
-    @test get_fluidtags(turbo_electric).NODE_Q_POS === HexFluids.ANY_LIQUID
-    @test get_fluidtags(transfer_electric).NODE_Q_NEG === HexFluids.ANY_LIQUID
+    turbo_decls = produce_rel_fluid_declarations(turbo_electric)
+    @test length(turbo_decls) == 2
+    @test turbo_decls[1] === RelativeFluidDeclaration(HexFrame.NODE_Q_POS, FluidConstraintRule(HexFluids.IS_LIQUID))
+    @test turbo_decls[2] === RelativeFluidDeclaration(HexFrame.NODE_Q_NEG, FluidConstraintRule(HexFluids.IS_LIQUID))
+    transfer_decls = produce_rel_fluid_declarations(transfer_electric)
+    @test length(transfer_decls) == 2
+    @test transfer_decls[1] === RelativeFluidDeclaration(HexFrame.NODE_Q_POS, FluidConstraintRule(HexFluids.IS_LIQUID))
+    @test transfer_decls[2] === RelativeFluidDeclaration(HexFrame.NODE_Q_NEG, FluidConstraintRule(HexFluids.IS_LIQUID))
 
     turbo_mna = register_vsources!(MNA_State(), TEST_TILE, 1)
     turbo_mna.vsource_currents[ElementID(TEST_TILE, 1)] = 2.0

@@ -842,8 +842,8 @@ function get_entry_fluid_transfer()::LearningEntry
                                     coord, component_on_tile = entry
                                     pump_input_node = map_element(HexFrame.NODE_Q_NEG, coord, component_on_tile.rotation)
                                     pump_output_node = map_element(HexFrame.NODE_Q_POS, coord, component_on_tile.rotation)
-                                    input_fluid = get(inputs.derivedmapstate.nodeactualfluids, pump_input_node, HexFluids.NONE)
-                                    output_fluid = get(inputs.derivedmapstate.nodeactualfluids, pump_output_node, HexFluids.NONE)
+                                    input_fluid = get(inputs.derivedmapstate.nodeactualfluids, pump_input_node, nothing)
+                                    output_fluid = get(inputs.derivedmapstate.nodeactualfluids, pump_output_node, nothing)
                                     return input_fluid == HexFluids.MONOPROP_LIQUID && output_fluid == HexFluids.MONOPROP_LIQUID
                                 end
 
@@ -1073,7 +1073,7 @@ function get_entry_turbo_pump_intro()::LearningEntry
                                     component_on_tile.component isa StandardValveCompBehav{SteppedSwitchBehavFrag} || return false
 
                                     valve_input_node = map_element(HexFrame.NODE_Q_NEG, coord, component_on_tile.rotation)
-                                    fluid = get(inputs.derivedmapstate.nodeactualfluids, valve_input_node, HexFluids.NONE)
+                                    fluid = get(inputs.derivedmapstate.nodeactualfluids, valve_input_node, nothing)
                                     return fluid == HexFluids.MONOPROP_GAS
                                 end
 

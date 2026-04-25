@@ -3,190 +3,210 @@ module HexFluids
 using Base.Threads: Atomic, atomic_xchg!
 
 # Type Exports
-export NodeFluidTags, FluidTags
+export FluidType, FluidConstraint
+export FluidSource, FluidTypeRule, FluidConstraintRule, FluidDeclaration
+
 # Function Exports
-export prioritise_fluidtag, is_gas, is_liquid, is_behavior, fluid_tag_label
+export check_constraint, is_gas, is_liquid
+export fluid_type_label, fluid_constraint_label
+export get_default_temperature
+export THERMAL_AMBIENT_TEMPERATURE_K
 export lookup_fluid_exhaust_velocity, lookup_fluid_density
 export set_fluid_exhaust_velocity!, set_fluid_density!
 export get_fluid_exhaust_velocities, get_fluid_densities
+export lookup_fluid_reference_temperature, set_fluid_reference_temperature!
+export get_fluid_reference_temperatures
 
 # ===============================================================
-# Fluid Types
+# Fluid Types and Constraints
 # ===============================================================
 
-# Bitmasks for fluid tag classification (UInt8):
-# Bit 7 (0x80): is_gas - indicates a concrete gas fluid type
-# Bit 6 (0x40): is_liquid - indicates a concrete liquid fluid type
-# Bit 5 (0x20): is_behavior - indicates a generic behavior tag (ANY_GAS, ANY_LIQUID)
-# Lower bits (0-4): unique identifier for each fluid type
-const isgas_mask = 1 << 7
-const isliquid_mask = 1 << 6
-const isbehavior_mask = 1 << 5
+#= ---------- Encoding ----------- =#
+# UInt32 layout: upper 16 bits = constraint flags (one-hot), lower 16 bits = unique ID.
+# FluidType values carry their constraint membership in the upper bits.
+# FluidConstraint values are pure flag masks with zero lower bits.
 
-@enum FluidTags::UInt8 begin
-    # generic behavior
-    NONE = 0x00
-    ANY_GAS = 0x01 | isbehavior_mask
-    ANY_LIQUID = 0x02 | isbehavior_mask
-    # concrete fluids
-    COLD_GAS = 0x03 | isgas_mask
-    MONOPROP_LIQUID = 0x04 | isliquid_mask
-    MONOPROP_GAS = 0x05 | isgas_mask
+const IS_GAS_BIT    = 0x00010000
+const IS_LIQUID_BIT = 0x00020000
+
+@enum FluidType::UInt32 begin
+    COLD_GAS        = IS_GAS_BIT    | 0x0001   # 0x00010001
+    MONOPROP_LIQUID = IS_LIQUID_BIT | 0x0002   # 0x00020002
+    MONOPROP_GAS    = IS_GAS_BIT    | 0x0003   # 0x00010003
 end
+
+@enum FluidConstraint::UInt32 begin
+    IS_GAS    = IS_GAS_BIT       # 0x00010000
+    IS_LIQUID = IS_LIQUID_BIT    # 0x00020000
+end
+
+# ===============================================================
+# Classification and Constraint Checking
+# ===============================================================
+
+"Check if a fluid type satisfies a constraint (bitmask test)"
+check_constraint(fluid::FluidType, constraint::FluidConstraint) = UInt32(fluid) & UInt32(constraint) != 0
+
+"Check if a fluid type matches another (must be identical)"
+check_constraint(fluid::FluidType, other::FluidType) = fluid === other
+
+"Check if fluid type is a gas (bitmask test)"
+is_gas(fluid::FluidType)::Bool = UInt32(fluid) & IS_GAS_BIT != 0
+is_gas(::Nothing)::Bool = false
+
+"Check if fluid type is a liquid (bitmask test)"
+is_liquid(fluid::FluidType)::Bool = UInt32(fluid) & IS_LIQUID_BIT != 0
+is_liquid(::Nothing)::Bool = false
+
+# ===============================================================
+# Fluid Declaration Types (isbits)
+# ===============================================================
+
+"A fluid source: injects a concrete fluid at a specific temperature"
+struct FluidSource
+    fluid_type::FluidType
+    temperature::Float64
+end
+
+"A type rule: this node must carry exactly this fluid type (no temperature contribution)"
+struct FluidTypeRule
+    fluid_type::FluidType
+end
+
+"A constraint rule: this node must carry a fluid satisfying this constraint"
+struct FluidConstraintRule
+    constraint::FluidConstraint
+end
+
+"Union of all fluid declaration variants. isbitsunion-safe (3 isbits types, max 2 fields)."
+const FluidDeclaration = Union{FluidSource, FluidTypeRule, FluidConstraintRule}
+
+# ===============================================================
+# Default Temperatures
+# ===============================================================
+
+const THERMAL_AMBIENT_TEMPERATURE_K = 300.0
+
+"Default temperature for a fluid type. Returns `nothing` if no default (e.g. MONOPROP_GAS is derived from decomp chamber)."
+get_default_temperature(::Val{COLD_GAS})       = THERMAL_AMBIENT_TEMPERATURE_K
+get_default_temperature(::Val{MONOPROP_LIQUID}) = THERMAL_AMBIENT_TEMPERATURE_K
+get_default_temperature(::Val{T}) where {T}    = nothing
 
 # ===============================================================
 # Fluid Physical Properties
 # ===============================================================
 
-"Dictionary of exhaust velocities for concrete gas fluids, with per-value atomic storage for thread-safe runtime tuning."
-const _fluid_exhaust_velocities = Dict{FluidTags, Atomic{Float64}}(
-    COLD_GAS => Atomic{Float64}(500.0),
+"Exhaust velocities for concrete gas fluids, with per-value atomic storage for thread-safe runtime tuning."
+const _fluid_exhaust_velocities = Dict{FluidType, Atomic{Float64}}(
+    COLD_GAS     => Atomic{Float64}(500.0),
     MONOPROP_GAS => Atomic{Float64}(1500.0),
 )
 
-"Dictionary of fluid densities for concrete fluids, with per-value atomic storage for thread-safe runtime tuning."
-const _fluid_densities = Dict{FluidTags, Atomic{Float64}}(
-    COLD_GAS => Atomic{Float64}(1.0),
+"Fluid densities for concrete fluids, with per-value atomic storage for thread-safe runtime tuning."
+const _fluid_densities = Dict{FluidType, Atomic{Float64}}(
+    COLD_GAS        => Atomic{Float64}(1.0),
     MONOPROP_LIQUID => Atomic{Float64}(5.0),
-    MONOPROP_GAS => Atomic{Float64}(1.0),
+    MONOPROP_GAS    => Atomic{Float64}(1.0),
 )
 
-"Look up the exhaust velocity for a fluid tag. Returns `nothing` if not defined."
-function lookup_fluid_exhaust_velocity(tag::FluidTags)::Union{Float64, Nothing}
-    velocity_ref = get(_fluid_exhaust_velocities, tag, nothing)
-    return isnothing(velocity_ref) ? nothing : velocity_ref[]
+"Reference temperatures for exhaust velocity scaling v_e(T) = v_e_ref x √(T / T_ref)."
+const _fluid_reference_temperatures = Dict{FluidType, Atomic{Float64}}(
+    COLD_GAS     => Atomic{Float64}(300.0),
+    MONOPROP_GAS => Atomic{Float64}(800.0),
+)
+
+#= ---------- Lookups ----------- =#
+
+"Look up the exhaust velocity for a fluid type. Returns `nothing` if not defined."
+function lookup_fluid_exhaust_velocity(fluid::FluidType)::Union{Float64, Nothing}
+    ref = get(_fluid_exhaust_velocities, fluid, nothing)
+    return isnothing(ref) ? nothing : ref[]
 end
 
-"Look up the density for a fluid tag. Returns `nothing` if not defined."
-function lookup_fluid_density(tag::FluidTags)::Union{Float64, Nothing}
-    density_ref = get(_fluid_densities, tag, nothing)
-    return isnothing(density_ref) ? nothing : density_ref[]
+"Look up the temperature-scaled exhaust velocity for a fluid type, clamped to its reference-temperature maximum."
+function lookup_fluid_exhaust_velocity(fluid::FluidType, temperature_k::Real)::Union{Float64, Nothing}
+    reference_exhaust_velocity = lookup_fluid_exhaust_velocity(fluid)
+    reference_temperature_k = lookup_fluid_reference_temperature(fluid)
+    if isnothing(reference_exhaust_velocity) || isnothing(reference_temperature_k)
+        return nothing
+    end
+
+    temperature_ratio = max(Float64(temperature_k), 0.0) / reference_temperature_k
+    temperature_scale = sqrt(temperature_ratio)
+    return min(reference_exhaust_velocity * temperature_scale, reference_exhaust_velocity)
 end
 
-"Set the exhaust velocity for a fluid tag. Use for runtime tuning."
-function set_fluid_exhaust_velocity!(tag::FluidTags, value::Float64)
-    velocity_ref = get(_fluid_exhaust_velocities, tag, nothing)
-    isnothing(velocity_ref) && error("No exhaust velocity configured for fluid tag $(tag)")
-    atomic_xchg!(velocity_ref, value)
+"Look up the density for a fluid type. Returns `nothing` if not defined."
+function lookup_fluid_density(fluid::FluidType)::Union{Float64, Nothing}
+    ref = get(_fluid_densities, fluid, nothing)
+    return isnothing(ref) ? nothing : ref[]
+end
+
+"Look up the reference temperature for exhaust velocity scaling. Returns `nothing` if not defined."
+function lookup_fluid_reference_temperature(fluid::FluidType)::Union{Float64, Nothing}
+    ref = get(_fluid_reference_temperatures, fluid, nothing)
+    return isnothing(ref) ? nothing : ref[]
+end
+
+#= ---------- Setters ----------- =#
+
+"Set the exhaust velocity for a fluid type. Use for runtime tuning."
+function set_fluid_exhaust_velocity!(fluid::FluidType, value::Float64)
+    ref = get(_fluid_exhaust_velocities, fluid, nothing)
+    isnothing(ref) && error("No exhaust velocity configured for fluid type $(fluid)")
+    atomic_xchg!(ref, value)
     return nothing
 end
 
-"Set the density for a fluid tag. Use for runtime tuning."
-function set_fluid_density!(tag::FluidTags, value::Float64)
-    density_ref = get(_fluid_densities, tag, nothing)
-    isnothing(density_ref) && error("No density configured for fluid tag $(tag)")
-    atomic_xchg!(density_ref, value)
+"Set the density for a fluid type. Use for runtime tuning."
+function set_fluid_density!(fluid::FluidType, value::Float64)
+    ref = get(_fluid_densities, fluid, nothing)
+    isnothing(ref) && error("No density configured for fluid type $(fluid)")
+    atomic_xchg!(ref, value)
     return nothing
 end
+
+"Set the reference temperature for exhaust velocity scaling. Use for runtime tuning."
+function set_fluid_reference_temperature!(fluid::FluidType, value::Float64)
+    ref = get(_fluid_reference_temperatures, fluid, nothing)
+    isnothing(ref) && error("No reference temperature configured for fluid type $(fluid)")
+    atomic_xchg!(ref, value)
+    return nothing
+end
+
+#= ---------- Snapshots ----------- =#
 
 "Return a snapshot of exhaust velocities for UI enumeration."
-function get_fluid_exhaust_velocities()::Dict{FluidTags, Float64}
-    return Dict(tag => value_ref[] for (tag, value_ref) in _fluid_exhaust_velocities)
-end
+get_fluid_exhaust_velocities()::Dict{FluidType, Float64} =
+    Dict(k => v[] for (k, v) in _fluid_exhaust_velocities)
 
 "Return a snapshot of fluid densities for UI enumeration."
-function get_fluid_densities()::Dict{FluidTags, Float64}
-    return Dict(tag => value_ref[] for (tag, value_ref) in _fluid_densities)
-end
+get_fluid_densities()::Dict{FluidType, Float64} =
+    Dict(k => v[] for (k, v) in _fluid_densities)
 
-"Check if fluid tag is a concrete gas type (determined with bitmask)"
-is_gas(tag::FluidTags)::Bool = (UInt8(tag) & isgas_mask) != 0
-
-"Check if fluid tag is a concrete liquid type (determined with bitmask)"
-is_liquid(tag::FluidTags)::Bool = (UInt8(tag) & isliquid_mask) != 0
-
-"Check if fluid tag is a behavior type (determined with bitmask)"
-is_behavior(tag::FluidTags)::Bool = (UInt8(tag) & isbehavior_mask) != 0
-
-"Maps hex node positions to their fluid tags for a component"
-@kwdef struct NodeFluidTags
-    NODE_Q_POS::FluidTags = NONE
-    NODE_R_NEG::FluidTags = NONE
-    NODE_S_POS::FluidTags = NONE
-    NODE_Q_NEG::FluidTags = NONE
-    NODE_R_POS::FluidTags = NONE
-    NODE_S_NEG::FluidTags = NONE
-    NODE_INTERNAL::FluidTags = NONE
-end
-
-# ===============================================================
-# Fluid Priority Logic
-# ===============================================================
-
-"""
-Return the "highest-priority" fluid tag according to these rules:
-
-1. Identical tags are returned as is.  
-2. `NONE` can be overwritten by any other tag.  
-3. A behavior tag (`ANY_GAS` or `ANY_LIQUID`) matches only concrete tags of its kind, returning the concrete tag.  
-4. Conflicting behavior tags or two distinct concrete tags raise an error—fluids can't be mixed.
-
-Behavior Matrix:
-
-| tag_a                | tag_b                         | outcome                               |
-|----------------------|-------------------------------|---------------------------------------|
-| tag_a == tag_b       | —                             | returns tag_a                         |
-| `NONE`               | any other tag                 | returns the other tag                 |
-| any other tag        | `NONE`                        | returns the other tag                 |
-| `ANY_GAS`            | concrete gas tag              | returns the concrete gas tag          |
-| `ANY_LIQUID`         | concrete liquid tag           | returns the concrete liquid tag       |
-| concrete gas tag     | `ANY_GAS`                     | returns the concrete gas tag          |
-| concrete liquid tag  | `ANY_LIQUID`                  | returns the concrete liquid tag       |
-| `ANY_GAS`            | `ANY_LIQUID`                  | error                                 |
-| `ANY_LIQUID`         | `ANY_GAS`                     | error                                 |
-| any two distinct concrete tags                       | error                                 |
-"""
-function prioritise_fluidtag(tag_a::FluidTags, tag_b::FluidTags)::FluidTags
-    # Helper for ANY_GAS / ANY_LIQUID behavior
-    function handle_behavior(behavior_tag::FluidTags, other_tag::FluidTags)
-        if behavior_tag === ANY_GAS && is_gas(other_tag)
-            return other_tag
-        elseif behavior_tag === ANY_LIQUID && is_liquid(other_tag)
-            return other_tag
-        else
-            error("Behavior $(behavior_tag) incompatible with concrete tag $(other_tag)")
-        end
-    end
-
-    # Identical or NONE shortcuts
-    tag_a === tag_b && return tag_a
-    tag_a === NONE && return tag_b
-    tag_b === NONE && return tag_a
-
-    # Dispatch on behavior tags
-    if is_behavior(tag_a)
-        return handle_behavior(tag_a, tag_b)
-    elseif is_behavior(tag_b)
-        return handle_behavior(tag_b, tag_a)
-    end
-
-    # Both concrete but distinct → conflict
-    error("Conflicting concrete tags: $(tag_a) vs $(tag_b)")
-end
-
-"Single-argument fallback returns the tag unchanged"
-prioritise_fluidtag(tag::FluidTags)::FluidTags = tag
-
-"Variadic version combines multiple tags by recursively pairing them"
-function prioritise_fluidtag(a::FluidTags, b::FluidTags, rest::FluidTags...)::FluidTags
-    first_result = prioritise_fluidtag(a, b)
-    return isempty(rest) ? first_result : prioritise_fluidtag(first_result, rest...)
-end
+"Return a snapshot of reference temperatures for UI enumeration."
+get_fluid_reference_temperatures()::Dict{FluidType, Float64} =
+    Dict(k => v[] for (k, v) in _fluid_reference_temperatures)
 
 # ===============================================================
 # Display
 # ===============================================================
 
-"Human-readable display label for a `FluidTags` value."
-function fluid_tag_label(tag::FluidTags)::Union{String, Nothing}
-    tag == NONE            && return nothing
-    tag == COLD_GAS        && return "Cold Gas"
-    tag == MONOPROP_LIQUID && return "Monopropellant"
-    tag == MONOPROP_GAS    && return "Monopropellant Gas"
-    tag == ANY_GAS         && return "Gas (Generic)"
-    tag == ANY_LIQUID      && return "Liquid (Generic)"
-    @warn "fluid_tag_label: no label defined for FluidTags member" tag
-    return "Unknown ($(string(tag)))"
+"Human-readable label for a `FluidType` value."
+function fluid_type_label(ft::FluidType)::String
+    ft == COLD_GAS        && return "Cold Gas"
+    ft == MONOPROP_LIQUID && return "Monopropellant"
+    ft == MONOPROP_GAS    && return "Monopropellant Gas"
+    return "Unknown ($(string(ft)))"
+end
+
+fluid_type_label(::Nothing) = nothing
+
+"Human-readable label for a `FluidConstraint` value."
+function fluid_constraint_label(fc::FluidConstraint)::String
+    fc == IS_GAS    && return "Gas (any)"
+    fc == IS_LIQUID && return "Liquid (any)"
+    return "Unknown ($(string(fc)))"
 end
 
 end # module HexFluids

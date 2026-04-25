@@ -4,7 +4,6 @@ Basic component behavior fragments and compositions.
 This module provides fundamental building blocks for component behaviors:
 - PlainSpriteBehavFrag: Simple sprite rendering
 - BasicElemBehavFrag: Circuit element composition
-- FluidTagBehavFrag: Fluid type specification
 - BinaryStateBehavFrag/FloatStateBehavFrag: Mutable state tracking
 - StallBehavFrag: Stall state management
 - BasicCompBehav: Complete basic component composition
@@ -14,19 +13,23 @@ All components follow the ComponentBehavior interface defined in HexComponentsAP
 module HexFlowBasicComponents
 
 using Accessors
-using HexFrame, HexElements, HexFluids, HexComponentsAPI, RenderEngine, HexFlowRendering
+using HexFrame, HexElements, HexComponentsAPI, RenderEngine, HexFlowRendering
+using HexFluids: THERMAL_AMBIENT_TEMPERATURE_K
 
 # ComponentBehavior Mandatories
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional
-import HexComponentsAPI: get_fluidtags, update_flowbehav!, render_map_elem!, map_rotation, get_actions, do_action!
+import HexComponentsAPI: update_flowbehav!, render_map_elem!, map_rotation, get_actions, do_action!, get_component_temperature
 
 # Behavior Fragment Exports
 export HorizontalFlipOnlyBehavFrag, NoRotationBehavFrag
-export PlainSpriteBehavFrag, BasicElemBehavFrag, FluidTagBehavFrag
+export PlainSpriteBehavFrag, BasicElemBehavFrag
 export BinaryStateBehavFrag, FloatStateBehavFrag
 export getstate, settrue!, setfalse!, setstate!
 export StallBehavFrag, stall!, unstall!, is_stalled
+export DamageStateBehavFrag, damage!, undamage!, is_damaged
+export ComponentTemperatureBehavFrag, get_component_temperature, set_component_temperature!
+export OverheatLimitBehavFrag, get_overheat_limit_temperature, get_overheat_percentage, get_overheat_tint, update_overheat_state!
 # Concrete Component Behavior Exports
 export BasicCompBehav
 
@@ -116,18 +119,6 @@ function set_tunables(comp::BasicElemBehavFrag{N}, tunables::NTuple{N, T})::Basi
     return @set comp.elements = new_elements
 end
 
-#= ---------- FluidTagBehavFrag ----------- =#
-
-"Simple fluid behavior for a component that allocates fixed fluidtags to its relative nodes"
-struct FluidTagBehavFrag
-    tags::NodeFluidTags
-end
-
-"Returns the stored fluid tags for this component's nodes"
-function get_fluidtags(behav::FluidTagBehavFrag)
-    return behav.tags
-end
-
 #= ---------- BinaryStateBehavFrag ----------- =#
 
 "Behavioral fragment to track a single binary state value. Interact with `getstate`, `settrue!` and `setfalse!` functions"
@@ -189,6 +180,172 @@ function do_action!(stall::StallBehavFrag, action_id::Symbol; kwargs...)
     return (false, "Action :$(action_id) not recognised by StallBehavFrag")
 end
 
+#= ---------- DamageStateBehavFrag ----------- =#
+
+"Behavioral fragment to track persistent component damage. Interact with `damage!`, `undamage!` and `is_damaged` functions"
+mutable struct DamageStateBehavFrag
+    damage_state::BinaryStateBehavFrag
+end
+
+DamageStateBehavFrag() = DamageStateBehavFrag(BinaryStateBehavFrag(false))
+
+damage!(frag::DamageStateBehavFrag) = settrue!(frag.damage_state)
+undamage!(frag::DamageStateBehavFrag) = setfalse!(frag.damage_state)
+is_damaged(frag::DamageStateBehavFrag)::Bool = getstate(frag.damage_state)
+
+"Renders a temporary damage overlay icon when the component is damaged"
+function render_map_elem!(queue::Vector{<:RenderCommand}, behav::DamageStateBehavFrag; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
+    if is_damaged(behav)
+        overlay_height = Int32(HexFlowRendering.RENDER_HEIGHT_OVERLAY_BASE) + Int32(render_height_offset)
+        push!(queue, render_basic_tile(glmap, :test_damaged, HexFrame.Q_POS, position; draw_height = overlay_height, pos_offset = pos_offset)) # Temporary damaged overlay sprite.
+    end
+    return nothing
+end
+
+function get_actions(damage::DamageStateBehavFrag; kwargs...)
+    damaged = is_damaged(damage)
+    tooltip = damaged ? "Temporarily repair this damaged component" : "Component is not currently damaged"
+    return (ActionInfo(:repair_component, "Repair Component", damaged, tooltip),)
+end
+
+function do_action!(damage::DamageStateBehavFrag, action_id::Symbol; kwargs...)
+    if action_id === :repair_component
+        if is_damaged(damage)
+            undamage!(damage) # Temporary direct repair path until dedicated repair gameplay exists.
+            return (true, "Component repaired")
+        else
+            return (false, "Component is not currently damaged")
+        end
+    end
+    return (false, "Action :$(action_id) not recognised by DamageStateBehavFrag")
+end
+
+#= ---------- ComponentTemperatureBehavFrag ----------- =#
+
+"Behavioral fragment tracking a component-local temperature state in Kelvin"
+mutable struct ComponentTemperatureBehavFrag
+    temperature_state::FloatStateBehavFrag
+end
+
+ComponentTemperatureBehavFrag() = ComponentTemperatureBehavFrag(FloatStateBehavFrag(300.0))
+ComponentTemperatureBehavFrag(temperature_k::Real) = ComponentTemperatureBehavFrag(FloatStateBehavFrag(Float64(temperature_k)))
+
+get_component_temperature(frag::ComponentTemperatureBehavFrag)::Float64 = getstate(frag.temperature_state)
+set_component_temperature!(frag::ComponentTemperatureBehavFrag, temperature_k::Real) = setstate!(frag.temperature_state, Float64(temperature_k))
+
+#= ---------- OverheatLimitBehavFrag ----------- =#
+
+const THERMAL_FLUID_COUPLING_SCALE = 1.0
+const THERMAL_RADIATION_SCALE = 1.0e-10
+
+"Reusable overheating fragment with local temperature state, persistent damage, and configurable heat-balance parameters"
+struct OverheatLimitBehavFrag
+    limit_temperature_k::Float64
+    thermal_mass::Float64
+    radiative_surface_area::Float64
+    temperature::ComponentTemperatureBehavFrag
+    damage::DamageStateBehavFrag
+
+    function OverheatLimitBehavFrag(
+            limit_temperature_k::Real,
+            thermal_mass::Real,
+            radiative_surface_area::Real,
+            temperature::ComponentTemperatureBehavFrag,
+            damage::DamageStateBehavFrag
+        )
+        limit_temperature_f = Float64(limit_temperature_k)
+        thermal_mass_f = Float64(thermal_mass)
+        radiative_surface_area_f = Float64(radiative_surface_area)
+
+        limit_temperature_f > THERMAL_AMBIENT_TEMPERATURE_K || error("Overheat limit temperature must exceed ambient temperature")
+        thermal_mass_f > 0.0 || error("Thermal mass must be positive")
+        radiative_surface_area_f >= 0.0 || error("Radiative surface area must be non-negative")
+
+        return new(limit_temperature_f, thermal_mass_f, radiative_surface_area_f, temperature, damage)
+    end
+end
+
+function OverheatLimitBehavFrag(
+        limit_temperature_k::Real,
+        thermal_mass::Real,
+        radiative_surface_area::Real;
+        temperature::ComponentTemperatureBehavFrag = ComponentTemperatureBehavFrag(),
+        damage::DamageStateBehavFrag = DamageStateBehavFrag()
+    )
+    return OverheatLimitBehavFrag(limit_temperature_k, thermal_mass, radiative_surface_area, temperature, damage)
+end
+
+get_overheat_limit_temperature(frag::OverheatLimitBehavFrag)::Float64 = frag.limit_temperature_k
+get_component_temperature(frag::OverheatLimitBehavFrag)::Float64 = get_component_temperature(frag.temperature)
+set_component_temperature!(frag::OverheatLimitBehavFrag, temperature_k::Real) = set_component_temperature!(frag.temperature, temperature_k)
+damage!(frag::OverheatLimitBehavFrag) = damage!(frag.damage)
+undamage!(frag::OverheatLimitBehavFrag) = undamage!(frag.damage)
+is_damaged(frag::OverheatLimitBehavFrag)::Bool = is_damaged(frag.damage)
+
+function get_tunables(frag::OverheatLimitBehavFrag)::NTuple{3, TunableProps}
+    return (
+        TunableProps(frag.limit_temperature_k, "Temperature Limit", "K"),
+        TunableProps(frag.thermal_mass, "Thermal Mass", "thermal units"),
+        TunableProps(frag.radiative_surface_area, "Radiative Surface Area", "area units"),
+    )
+end
+
+function set_tunables(frag::OverheatLimitBehavFrag, tunables::NTuple{3, T})::OverheatLimitBehavFrag where {T <: Real}
+    return OverheatLimitBehavFrag(
+        Float64(tunables[1]),
+        Float64(tunables[2]),
+        Float64(tunables[3]),
+        frag.temperature,
+        frag.damage
+    )
+end
+
+function get_overheat_percentage(frag::OverheatLimitBehavFrag)::Float64
+    current_temperature = get_component_temperature(frag)
+    if current_temperature <= THERMAL_AMBIENT_TEMPERATURE_K
+        return 0.0
+    elseif current_temperature >= frag.limit_temperature_k
+        return 1.0
+    end
+
+    temperature_span = frag.limit_temperature_k - THERMAL_AMBIENT_TEMPERATURE_K
+    return (current_temperature - THERMAL_AMBIENT_TEMPERATURE_K) / temperature_span
+end
+
+function get_overheat_tint(frag::OverheatLimitBehavFrag)::ColourType
+    overheat_percentage = get_overheat_percentage(frag)
+    green_blue = 1.0 - overheat_percentage
+    return ColourType(1.0, green_blue, green_blue, 1.0)
+end
+
+function update_overheat_state!(
+        frag::OverheatLimitBehavFrag;
+        fluid_temperature_k::Real = THERMAL_AMBIENT_TEMPERATURE_K,
+        mass_flow_rate::Real = 0.0,
+        dt::Real = 1 / BASE_UPS
+    )
+    current_temperature = get_component_temperature(frag)
+    fluid_temperature_f = Float64(fluid_temperature_k)
+    mass_flow_rate_f = max(Float64(mass_flow_rate), 0.0)
+    dt_f = Float64(dt)
+
+    fluid_heat_flow = THERMAL_FLUID_COUPLING_SCALE * mass_flow_rate_f * (fluid_temperature_f - current_temperature)
+    radiative_heat_flow = THERMAL_RADIATION_SCALE * frag.radiative_surface_area * (THERMAL_AMBIENT_TEMPERATURE_K^4 - current_temperature^4)
+    net_heat_flow = fluid_heat_flow + radiative_heat_flow
+    next_temperature = current_temperature + net_heat_flow * dt_f / frag.thermal_mass
+
+    set_component_temperature!(frag, next_temperature)
+    if next_temperature >= frag.limit_temperature_k
+        damage!(frag)
+    end
+
+    return next_temperature
+end
+
+render_map_elem!(queue::Vector{<:RenderCommand}, frag::OverheatLimitBehavFrag; kwargs...) = render_map_elem!(queue, frag.damage; kwargs...)
+get_actions(frag::OverheatLimitBehavFrag; kwargs...) = get_actions(frag.damage; kwargs...)
+do_action!(frag::OverheatLimitBehavFrag, action_id::Symbol; kwargs...) = do_action!(frag.damage, action_id; kwargs...)
+
 # ===============================================================
 # Concrete Component Behaviors
 # ===============================================================
@@ -202,12 +359,10 @@ Composed from a BasicElemBehavFrag and PlainSpriteBehavFrag.
 @kwdef struct BasicCompBehav{N} <: ComponentBehavior
     elems::BasicElemBehavFrag{N}
     sprite::PlainSpriteBehavFrag
-    fluids::FluidTagBehavFrag = FluidTagBehavFrag(NodeFluidTags())
 end
 
 produce_rel_elements(behav::BasicCompBehav{N}) where {N} = produce_rel_elements(behav.elems)
 get_tunables(behav::BasicCompBehav{N}) where {N} = get_tunables(behav.elems)
-get_fluidtags(behav::BasicCompBehav{N}) where {N} = get_fluidtags(behav.fluids)
 
 function set_tunables(behav::BasicCompBehav{N}, tunables::NTuple{N, T})::BasicCompBehav{N} where {N, T <: Real}
     return @set behav.elems = set_tunables(behav.elems, tunables)

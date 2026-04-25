@@ -33,7 +33,8 @@ using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowEngine, RenderEngi
 # ComponentBehavior Mandatories (or PipeBehavior Mandatories)
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional (or PipeBehavior Optional)
-import HexComponentsAPI: get_fluidtags, update_flowbehav!, render_map_elem!, on_click!, placement_valid, get_component_wet_mass, get_actions, do_action!, collect_effect_particles!
+import HexComponentsAPI: produce_rel_fluid_declarations, update_flowbehav!, render_map_elem!, on_click!, placement_valid 
+import HexComponentsAPI: get_component_temperature, get_component_wet_mass, get_actions, do_action!, collect_effect_particles!
 # Dependencies on other component modules
 import HexFlowOtherModule: helper_function
 
@@ -216,6 +217,9 @@ on_click!(behav; kwargs...)
 
 # Thrust calculation (default: zero vector)
 get_thrust(behav; tile, rotation, mna_state, derivedmapstate, kwargs...)::SVector{2, Float64}
+
+# Component-local temperature display hook (default: nothing)
+get_component_temperature(behav; kwargs...)::Union{Nothing, Float64}
 
 # Dry mass contribution. Override this for structural mass.
 get_component_dry_mass(behav; kwargs...)::Float64

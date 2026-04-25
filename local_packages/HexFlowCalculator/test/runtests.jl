@@ -21,7 +21,7 @@ function make_trigger_test_encounter_config()
         NoScaling(1.0),
         HullSizeConfig(LinearScaling(2.0, 0.0), LinearScaling(2.0, 0.0)),
         LinearScaling(0.0, 0.0),
-        Dict{FluidTags, FuelTagConfig}(
+        Dict{FluidType, FuelTagConfig}(
             HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), WeightedComponentSet[]),
         ),
         PipeSpawnOptions[],
@@ -77,6 +77,20 @@ HexComponentsAPI.get_conductance(::MockPipeBehav) = 1.0
 HexComponentsAPI.get_pipe_tunables(::MockPipeBehav) = ()
 HexComponentsAPI.set_pipe_tunables(::MockPipeBehav, ::NTuple{0, Real}) = MockPipeBehav()
 HexComponentsAPI.render_pipe_base!(queue, ::MockPipeBehav; kwargs...) = nothing
+
+struct InvalidFluidBridgeCompBehav <: ComponentBehavior end
+HexComponentsAPI.produce_rel_elements(::InvalidFluidBridgeCompBehav) = (
+    RelativeElement(RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG), 1.0, HexElements.CONST_RESISTOR),
+    RelativeElement(RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.GROUND), 1.0, HexElements.CONST_RESISTOR),
+    RelativeElement(RelativeElementConnections(HexFrame.NODE_Q_NEG, HexFrame.GROUND), 1.0, HexElements.CONST_RESISTOR),
+)
+HexComponentsAPI.produce_rel_fluid_declarations(::InvalidFluidBridgeCompBehav) = (
+    RelativeFluidDeclaration(HexFrame.NODE_Q_POS, HexFluids.FluidSource(HexFluids.MONOPROP_GAS, 800.0)),
+    RelativeFluidDeclaration(HexFrame.NODE_Q_NEG, HexFluids.FluidConstraintRule(HexFluids.IS_LIQUID)),
+)
+HexComponentsAPI.get_tunables(::InvalidFluidBridgeCompBehav) = ()
+HexComponentsAPI.set_tunables(::InvalidFluidBridgeCompBehav, ::NTuple{0, Real}) = InvalidFluidBridgeCompBehav()
+HexComponentsAPI.render_base_elem!(queue, ::InvalidFluidBridgeCompBehav; kwargs...) = nothing
 
 #= ---------- Additional Mock for DoActionCommand ----------- =#
 
@@ -1030,6 +1044,20 @@ end
         final_status = FlowMap.get_docking_status(gm, :asteroid)
         @test final_status isa FlowMap.ConnectedDockStat
     end
+end
+
+@testset "process_command! rejects invalid fluid bridge placements" begin
+    gm = GameMap()
+    set_surface_tile!(gm, TileCoord(0, 0))
+
+    cq = create_command_queue(4)
+    cmd = create_set_tile_command(cq, TileCoord(0, 0), InvalidFluidBridgeCompBehav(), Q_POS)
+    logs, console = make_log_console()
+
+    @test_throws Exception HexFlowCalculator.process_command!(cmd, gm, console, throw_errors = true)
+    @test !has_component(gm, TileCoord(0, 0))
+    @test any(contains(log, "Invalid map edit") for log in logs)
+    @test any(contains(log, "incompatible with constraint") for log in logs)
 end
 
 @testset "cancel_if_time_wrong! — time mismatch cancels" begin

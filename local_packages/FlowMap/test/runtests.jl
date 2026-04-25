@@ -1169,7 +1169,7 @@ end
         @test ep.velocity ≈ SVector(0.0, 0.0)
         @test ep.spawn_time == 0.0
         @test ep.encounter_class == ENCOUNTER_SCRAP
-        @test ep.fuel_tag == HexFluids.NONE
+        @test ep.fuel_tag === nothing
         @test ep.display_name == ""
         @test ep.richness == 0.0
     end

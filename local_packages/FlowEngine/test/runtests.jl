@@ -26,15 +26,15 @@ end
 struct DummyCompUpdate <: ComponentBehavior end
 import HexComponentsAPI: update_flowbehav!
 function update_flowbehav!(::DummyCompUpdate; tile::TileCoord, mna_state::MNA_State, derivedmapstate::DerivedMapState, kwargs...)
-    derived_value = get(derivedmapstate.nodeactualfluids, NodeCoord(tile, HexFrame.NODE_INTERNAL), HexFluids.NONE)
+    derived_value = get(derivedmapstate.nodeactualfluids, NodeCoord(tile, HexFrame.NODE_INTERNAL), nothing)
     mna_state.node_voltages[NodeCoord(tile, HexFrame.NODE_INTERNAL)] = derived_value === HexFluids.COLD_GAS ? 3.21 : -1.0
     return nothing
 end
 
 struct DummyFluidComp <: ComponentBehavior end
-import HexComponentsAPI: get_fluidtags
-function get_fluidtags(::DummyFluidComp)
-    return NodeFluidTags(NODE_INTERNAL = HexFluids.COLD_GAS)
+import HexComponentsAPI: produce_rel_fluid_declarations
+function produce_rel_fluid_declarations(::DummyFluidComp)
+    return (FlowEngine.RelativeFluidDeclaration(HexFrame.NODE_INTERNAL, HexFluids.FluidSource(HexFluids.COLD_GAS, 300.0)),)
 end
 
 
@@ -119,19 +119,123 @@ end
     @test ms2.node_voltages[NodeCoord(TileCoord(7,7), HexFrame.NODE_INTERNAL)] ≈ 3.21
 end
 
-@testset "get_node_fluid_tags" begin
+@testset "fluid declarations" begin
     gm = GameMap()
     sec = ShipMap()
     add_ship!(gm, :two, sec)
     set_component!(gm, TileCoord(10,10), ComponentOnTile(DummyFluidComp(), HexFrame.Q_POS); ship_name = :two)
-    ctag = get_node_fluid_tags(NodeCoord(TileCoord(10,10), HexFrame.NODE_INTERNAL), gm)
-    @test ctag[1] === HexFluids.COLD_GAS
+    derived = DerivedMapState()
+    list_fluid_declarations!(derived.all_fluid_declarations, gm)
+    @test length(derived.all_fluid_declarations) == 1
+    decl = derived.all_fluid_declarations[1]
+    @test decl.declaration isa HexFluids.FluidSource
+    @test decl.declaration.fluid_type === HexFluids.COLD_GAS
 
     # Per-ship
     ship_fluid = ShipMap()
     set_component!(ship_fluid, TileCoord(20,20), ComponentOnTile(DummyFluidComp(), HexFrame.Q_POS))
-    ptag = get_node_fluid_tags(NodeCoord(TileCoord(20,20), HexFrame.NODE_INTERNAL), ship_fluid)
-    @test ptag[1] === HexFluids.COLD_GAS
+    derived2 = DerivedMapState()
+    list_fluid_declarations!(derived2.all_fluid_declarations, ship_fluid)
+    @test length(derived2.all_fluid_declarations) == 1
+end
+
+@testset "propagate_fluid_types! rejects incompatible traversed declarations" begin
+    source_node = nc(0, 0, HexFrame.NODE_Q_POS)
+    constrained_node = nc(1, 0, HexFrame.NODE_Q_NEG)
+
+    derived = DerivedMapState(
+        nodeconnections = Dict(
+            source_node => FlowEngine.ConnectionVect((constrained_node,)),
+            constrained_node => FlowEngine.ConnectionVect((source_node,)),
+        ),
+        node_declarations = Dict(
+            source_node => HexFluids.FluidSource(HexFluids.MONOPROP_GAS, 800.0),
+            constrained_node => HexFluids.FluidConstraintRule(HexFluids.IS_LIQUID),
+        ),
+        source_nodes = Set((source_node,)),
+    )
+
+    err = try
+        propagate_fluid_types!(derived)
+        nothing
+    catch exc
+        exc
+    end
+
+    @test err isa ErrorException
+    @test occursin("MONOPROP_GAS", sprint(showerror, err))
+    @test !haskey(derived.nodeactualfluids, constrained_node)
+end
+
+@testset "prioritise_declarations rejects conflicting constraint rules" begin
+    matching_constraint = FlowEngine.prioritise_declarations(
+        HexFluids.FluidConstraintRule(HexFluids.IS_GAS),
+        HexFluids.FluidConstraintRule(HexFluids.IS_GAS),
+    )
+
+    @test matching_constraint == HexFluids.FluidConstraintRule(HexFluids.IS_GAS)
+
+    err = try
+        FlowEngine.prioritise_declarations(
+            HexFluids.FluidConstraintRule(HexFluids.IS_GAS),
+            HexFluids.FluidConstraintRule(HexFluids.IS_LIQUID),
+        )
+        nothing
+    catch exc
+        exc
+    end
+
+    @test err isa ErrorException
+    @test occursin("Conflicting fluid constraints", sprint(showerror, err))
+end
+
+@testset "propagate_fluid_types! visits whole region with stack traversal" begin
+    source_node = nc(0, 0, HexFrame.NODE_Q_POS)
+    middle_node = nc(1, 0, HexFrame.NODE_Q_NEG)
+    end_node = nc(2, 0, HexFrame.NODE_R_POS)
+
+    derived = DerivedMapState(
+        nodeconnections = Dict(
+            source_node => FlowEngine.ConnectionVect((middle_node,)),
+            middle_node => FlowEngine.ConnectionVect((source_node, end_node)),
+            end_node => FlowEngine.ConnectionVect((middle_node,)),
+        ),
+        node_declarations = Dict(
+            source_node => HexFluids.FluidSource(HexFluids.COLD_GAS, 300.0),
+        ),
+        source_nodes = Set((source_node,)),
+    )
+
+    propagate_fluid_types!(derived)
+
+    @test derived.nodeactualfluids[source_node] === HexFluids.COLD_GAS
+    @test derived.nodeactualfluids[middle_node] === HexFluids.COLD_GAS
+    @test derived.nodeactualfluids[end_node] === HexFluids.COLD_GAS
+    @test derived.node_to_region[source_node] == derived.node_to_region[end_node]
+end
+
+@testset "compute_region_temperatures! uses grounded source index for reversed elements" begin
+    source_node = nc(0, 0, HexFrame.NODE_Q_POS)
+    ground = ground_node()
+    grounded_resistor = make_element(TileCoord(0, 0), 1, ground, source_node, 2.0, CONST_RESISTOR)
+
+    derived = DerivedMapState(
+        prunedelements = [grounded_resistor],
+        all_fluid_declarations = [
+            FlowEngine.AbsoluteFluidDeclaration(source_node, HexFluids.FluidSource(HexFluids.COLD_GAS, 450.0)),
+        ],
+        node_to_region = Dict(source_node => 1),
+    )
+    FlowEngine.index_grounded_source_elements!(derived)
+
+    mna_state = MNA_State(
+        node_voltages = Dict(source_node => 5.0),
+    )
+
+    compute_region_temperatures!(derived, mna_state)
+
+    @test derived.region_temperatures[1] ≈ 450.0
+    @test derived.node_temperatures[source_node] ≈ 450.0
 end
 
 

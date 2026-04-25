@@ -17,7 +17,7 @@ using HexFlowBasicComponents
 # ComponentBehavior Mandatories
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional
-import HexComponentsAPI: get_fluidtags, update_flowbehav!, on_click!, render_map_elem!, map_rotation, can_be_moved, get_component_wet_mass, get_actions, do_action!
+import HexComponentsAPI: update_flowbehav!, on_click!, render_map_elem!, map_rotation, can_be_moved, get_component_wet_mass, get_actions, do_action!, produce_rel_fluid_declarations
 # Behavior Fragment Dependencies
 import HexFlowBasicComponents: stall!, unstall!, is_stalled, StallBehavFrag
 
@@ -234,7 +234,7 @@ Render gas tank fluid visualization.
 Renders a black background fluidmask followed by the fluid-colored mask with transparency
 proportional to fill fraction (more transparent when emptier).
 """
-function render_fluid!(queue::Vector{<:RenderCommand}, behav::GasTankBehavFrag, fluidmask::Symbol, fluid::FluidTags, gameticks::Int; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0)
+function render_fluid!(queue::Vector{<:RenderCommand}, behav::GasTankBehavFrag, fluidmask::Symbol, fluid::FluidType, gameticks::Int; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0)
     # Render fluidmask in black as background
     black = DEFAULT_EMPTY_FLUID_COLOUR
     push!(queue, render_basic_tile(glmap, fluidmask, rotation, position; scale = scale, transparency = transparency, colour = black, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset), pos_offset = pos_offset))
@@ -279,7 +279,7 @@ Render liquid tank fluid visualization.
 Renders the fluid-colored mask with horizontal clipping based on fill fraction,
 always oriented horizontally (Q_POS) regardless of component rotation.
 """
-function render_fluid!(queue::Vector{<:RenderCommand}, behav::LiquidTankBehavFrag, fluidmask::Symbol, fluid::FluidTags, gameticks::Int; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0)
+function render_fluid!(queue::Vector{<:RenderCommand}, behav::LiquidTankBehavFrag, fluidmask::Symbol, fluid::FluidType, gameticks::Int; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0)
     black = DEFAULT_EMPTY_FLUID_COLOUR
     fixed_rotation = HexFrame.Q_POS # Force horizontal for fluid rendering
     push!(queue, render_basic_tile(glmap, fluidmask, fixed_rotation, position; scale = scale, transparency = transparency, colour = black, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset), pos_offset = pos_offset))
@@ -556,13 +556,13 @@ struct ThevininTankCompBehav{T <: AbstractTankBehavFrag, N} <: ComponentBehavior
     tank::T
     out_nodes::NTuple{N, NodePos}
     series_conductance::Float64
-    fluid::FluidTags
+    fluid::FluidType
 end
 
 "Keyword-based constructor for a Thevinin tank that supports N out nodes"
 function ThevininTankCompBehav(
         ::Type{T}, connection_number::Integer;
-        fluid::FluidTags,
+        fluid::FluidType,
         max_charge::Real,
         max_voltage::Real,
         initial_charge::Real = 0.0,
@@ -623,12 +623,14 @@ function set_tunables(comp::ThevininTankCompBehav{T, N}, tunables::NTuple{4, Tva
     return ThevininTankCompBehav(new_tank_frag, comp.out_nodes, new_thev, comp.fluid)
 end
 
-function get_fluidtags(comp::ThevininTankCompBehav)
-    return NodeFluidTags(; (Symbol(n) => comp.fluid for n in comp.out_nodes)...)
+function produce_rel_fluid_declarations(comp::ThevininTankCompBehav)
+    temp = get_default_temperature(Val(comp.fluid))
+    temp_val = temp !== nothing ? temp : 300.0
+    return (RelativeFluidDeclaration(HexFrame.NODE_INTERNAL, FluidSource(comp.fluid, temp_val)),)
 end
 
 "Wet mass of a tank: charge x fluid density. Returns 0.0 if the requested fluid doesn't match this tank's fluid."
-function get_component_wet_mass(comp::ThevininTankCompBehav; fluid::Union{FluidTags, Nothing} = nothing, kwargs...)
+function get_component_wet_mass(comp::ThevininTankCompBehav; fluid::Union{FluidType, Nothing} = nothing, kwargs...)
     if fluid !== nothing && fluid != comp.fluid
         return 0.0
     end
@@ -672,8 +674,8 @@ struct PressureFedTankCompBehav{N} <: ComponentBehavior
     tank::PressureFedTankBehavFrag
     liquid_nodes::NTuple{N, NodePos}
     series_conductance::Float64
-    gas_fluid::FluidTags
-    liquid_fluid::FluidTags
+    gas_fluid::FluidType
+    liquid_fluid::FluidType
     rotation_behav::NoRotationBehavFrag
 end
 
@@ -681,8 +683,8 @@ function PressureFedTankCompBehav(
         tank::PressureFedTankBehavFrag,
         liquid_nodes::NTuple{N, NodePos},
         series_conductance::Real,
-        gas_fluid::FluidTags,
-        liquid_fluid::FluidTags,
+        gas_fluid::FluidType,
+        liquid_fluid::FluidType,
         rotation_behav::NoRotationBehavFrag = NoRotationBehavFrag()
     ) where {N}
     return PressureFedTankCompBehav(
@@ -732,16 +734,17 @@ function set_tunables(comp::PressureFedTankCompBehav{N}, tunables::NTuple{5, T})
     )
 end
 
-function get_fluidtags(comp::PressureFedTankCompBehav{N}) where {N}
-    all_pairs = (
-        Symbol(comp.tank.gas_node) => comp.gas_fluid,
-        (Symbol(node) => comp.liquid_fluid for node in comp.liquid_nodes)...
+function produce_rel_fluid_declarations(comp::PressureFedTankCompBehav)
+    gas_temp = let t = get_default_temperature(Val(comp.gas_fluid)); t !== nothing ? t : 300.0; end
+    liq_temp = let t = get_default_temperature(Val(comp.liquid_fluid)); t !== nothing ? t : 300.0; end
+    return (
+        RelativeFluidDeclaration(comp.tank.gas_node, FluidSource(comp.gas_fluid, gas_temp)),
+        RelativeFluidDeclaration(HexFrame.NODE_INTERNAL, FluidSource(comp.liquid_fluid, liq_temp)),
     )
-    return NodeFluidTags(; all_pairs...)
 end
 
 "Wet mass is the combined stored liquid and non-negative stored gas mass"
-function get_component_wet_mass(comp::PressureFedTankCompBehav; fluid::Union{FluidTags, Nothing} = nothing, kwargs...)
+function get_component_wet_mass(comp::PressureFedTankCompBehav; fluid::Union{FluidType, Nothing} = nothing, kwargs...)
     liquid_mass = 0.0
     gas_mass = 0.0
 

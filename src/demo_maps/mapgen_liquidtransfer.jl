@@ -45,7 +45,8 @@ function mapgen_liquidtransfer()
         connected_node = HexFrame.NODE_Q_POS,
         max_conductance = 2.0,
         min_conductance = 0.0,
-        growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS)
+        growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS),
+        limit_temperature_k = 400.0
     )
 
     # Primary ship: empty monopropellant tanks and cold gas thrusters for manoeuvring.

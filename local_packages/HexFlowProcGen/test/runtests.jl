@@ -423,7 +423,7 @@ const mock_pipe_opts = [PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES,
             LinearScaling(5.0, 0.0),           # Always 5 stacks
         ),
         LinearScaling(2.0, 0.0),               # target_components: always 2
-        Dict{FluidTags, FuelTagConfig}(
+        Dict{FluidType, FuelTagConfig}(
             HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0),
                 [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
             HexFluids.MONOPROP_LIQUID => FuelTagConfig(NoScaling(1.0),
@@ -464,7 +464,7 @@ const mock_pipe_opts = [PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES,
     end
 
     @testset "Fuel tag selection" begin
-        fuel_configs = Dict{FluidTags, FuelTagConfig}(
+        fuel_configs = Dict{FluidType, FuelTagConfig}(
             HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0),
                 [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
         )
@@ -817,7 +817,7 @@ function make_test_class_config(pipe_opts = mock_pipe_opts)
         NoScaling(1.0),
         HullSizeConfig(LinearScaling(3.0, 0.0), LinearScaling(5.0, 0.0)),
         LinearScaling(2.0, 0.0),
-        Dict{FluidTags, FuelTagConfig}(
+        Dict{FluidType, FuelTagConfig}(
             HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0),
                 [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
             HexFluids.MONOPROP_LIQUID => FuelTagConfig(NoScaling(1.0),
@@ -887,7 +887,7 @@ end
         @test is_on_box_edge(ep.position, sm.position, spawn_x, spawn_y)
         @test ep.velocity[1] > 0.0
         @test ep.encounter_class isa EncounterClass
-        @test ep.fuel_tag isa HexFluids.FluidTags
+        @test ep.fuel_tag isa HexFluids.FluidType
         @test !isempty(ep.display_name)
         @test ep.richness >= 1.0
     end

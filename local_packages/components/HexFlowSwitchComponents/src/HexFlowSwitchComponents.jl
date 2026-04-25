@@ -19,7 +19,7 @@ using HexFlowBasicComponents
 # ComponentBehavior Mandatories
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional
-import HexComponentsAPI: get_fluidtags, update_flowbehav!, on_click!, render_map_elem!, get_actions, do_action!
+import HexComponentsAPI: update_flowbehav!, on_click!, render_map_elem!, get_actions, do_action!
 
 # Behavior Fragment Exports
 export SwitchBehavFrag, get_switch_percentage, get_target_percentage, calculate_growth_factor
@@ -144,14 +144,18 @@ end
 
 function set_tunables(switch::SwitchBehavFrag, tunables::NTuple{3, T})::SwitchBehavFrag where {T <: Real}
     float_vals = Float64.(tunables)
+    max_conductance = float_vals[1]
+    min_conductance = float_vals[2]
+    target_conductance = clamp(switch.state.target_conductance, min_conductance, max_conductance)
+    current_conductance = clamp(switch.state.current_conductance, min_conductance, max_conductance)
 
     newswitch = SwitchBehavFrag(
         connection = switch.connection,
-        max_conductance = float_vals[1],
-        min_conductance = float_vals[2],
+        max_conductance = max_conductance,
+        min_conductance = min_conductance,
         growth_factor = float_vals[3],
-        target_conductance = switch.state.target_conductance,
-        current_conductance = switch.state.current_conductance
+        target_conductance = target_conductance,
+        current_conductance = current_conductance
     )
     return newswitch
 end
@@ -568,7 +572,7 @@ controlbox_sprite(::StandardValveCompBehav{BoolSwitchBehavFrag})    = :Valves_On
 
 produce_rel_elements(comp::StandardValveCompBehav) = produce_rel_elements(comp.switch)
 update_flowbehav!(comp::StandardValveCompBehav; kwargs...) = update_flowbehav!(comp.switch; kwargs...)
-get_fluidtags(::StandardValveCompBehav) = NodeFluidTags()
+
 
 get_tunables(comp::StandardValveCompBehav) = get_tunables(comp.switch)
 
@@ -642,7 +646,7 @@ end
 
 function render_map_elem!(queue::Vector{<:RenderCommand}, comp::StandardValveCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     node_q_pos = map_element(HexFrame.NODE_Q_POS, position, rotation)
-    fluid = get(derivedmapstate.nodeactualfluids, node_q_pos, HexFluids.NONE)
+    fluid = get(derivedmapstate.nodeactualfluids, node_q_pos, nothing)
     colour = get_fluid_colour(fluid)
 
     # Fluid mask -- fluid-type dependent rendering
