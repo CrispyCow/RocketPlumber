@@ -271,21 +271,24 @@ function snapshot!(dest::DerivedMapState, src::DerivedMapState)
     resize!(dest.allelements, length(src.allelements))
     copyto!(dest.allelements, src.allelements)
 
-    resize!(dest.prunedelements, length(src.prunedelements))
-    copyto!(dest.prunedelements, src.prunedelements)
+    resize!(dest.filteredelements, length(src.filteredelements))
+    copyto!(dest.filteredelements, src.filteredelements)
 
-    # Dic: empty and merge
+    resize!(dest.all_fluid_declarations, length(src.all_fluid_declarations))
+    copyto!(dest.all_fluid_declarations, src.all_fluid_declarations)
+
+    # Dicts: empty and merge
     empty!(dest.allnodes)
     merge!(dest.allnodes, src.allnodes)
 
-    empty!(dest.grounded_source_element_index)
-    merge!(dest.grounded_source_element_index, src.grounded_source_element_index)
+    empty!(dest.filterednodes)
+    merge!(dest.filterednodes, src.filterednodes)
 
-    empty!(dest.prunednodes)
-    merge!(dest.prunednodes, src.prunednodes)
+    empty!(dest.node_declarations)
+    merge!(dest.node_declarations, src.node_declarations)
 
-    empty!(dest.nodeconnections)
-    merge!(dest.nodeconnections, src.nodeconnections)
+    empty!(dest.source_nodes)
+    union!(dest.source_nodes, src.source_nodes)
 
     empty!(dest.nodeactualfluids)
     merge!(dest.nodeactualfluids, src.nodeactualfluids)
@@ -960,12 +963,13 @@ function process_command!(
         if new_hash != original_hash
             test_derivedmapstate = DerivedMapState()
             test_mna_state = MNA_State()
+            test_scratchpad = CalculatorScratchpad()
 
             # Test the sandbox with full validation (use tick 0 for validation)
             update_components!(sandbox, test_mna_state, test_derivedmapstate)
-            update_map!(sandbox, test_derivedmapstate, test_mna_state, Int64(0))
+            update_map!(sandbox, test_derivedmapstate, test_mna_state, test_scratchpad, Int64(0))
             update_mna!(test_derivedmapstate, test_mna_state, Int64(0))
-            compute_region_temperatures!(test_derivedmapstate, test_mna_state)
+            compute_region_temperatures!(test_derivedmapstate, test_scratchpad, test_mna_state)
         end
 
         # If we get here, validation succeeded - apply to real gamemap
@@ -1202,36 +1206,37 @@ end
 Rebuild derived map state and MNA matrix from the current `gamemap`.
 Called every tick (fast enough for now; may need revisiting if it becomes a bottleneck).
 """
-function update_map!(gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, current_tick::Int64)
+function update_map!(gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, scratchpad::CalculatorScratchpad, current_tick::Int64)
     @timeit flowcalc_loop_timer "Map Updates" begin
         # Derive basic map state
         @timeit flowcalc_loop_timer "find ship edge" find_ship_surface_edgetiles!(derivedmapstate, gamemap)
         @timeit flowcalc_loop_timer "list elements" list_elements!(derivedmapstate.allelements, gamemap)
         @timeit flowcalc_loop_timer "list nodes" list_nodes!(derivedmapstate.allnodes, derivedmapstate.allelements) # diagnostic only
 
-        # Iteratively prune until clear_dangling_dependants reaches a fixed point
-        # This is a simple but inefficient approach, should consider optimising if it becomes a bottleneck
-        derivedmapstate.prunedelements = derivedmapstate.allelements
+        # Refill the single working survivor vector from allelements, reusing storage
+        resize!(derivedmapstate.filteredelements, length(derivedmapstate.allelements))
+        copyto!(derivedmapstate.filteredelements, derivedmapstate.allelements)
+
+        # Iteratively prune until clear_dangling_dependants reaches a fixed point.
+        # All three passes (prune, ground_search, dangling dependants) operate in-place
+        # on the same filteredelements vector through a single fixed-point loop.
         last_hash::UInt64 = 0
-        while last_hash != hash(derivedmapstate.prunedelements)
-            # call cleanup functions
-            @timeit flowcalc_loop_timer "prune" derivedmapstate.prunedelements = prune(derivedmapstate.prunedelements)
-            @timeit flowcalc_loop_timer "grounding search" derivedmapstate.prunedelements = ground_search(derivedmapstate.prunedelements)
-            last_hash = hash(derivedmapstate.prunedelements)
-            @timeit flowcalc_loop_timer "dangling dependants" derivedmapstate.prunedelements = clear_dangling_dependants(derivedmapstate.prunedelements)
+        while last_hash != hash(derivedmapstate.filteredelements)
+            @timeit flowcalc_loop_timer "prune" prune!(derivedmapstate.filteredelements, scratchpad)
+            @timeit flowcalc_loop_timer "grounding search" ground_search!(derivedmapstate.filteredelements, scratchpad)
+            last_hash = hash(derivedmapstate.filteredelements)
+            @timeit flowcalc_loop_timer "dangling dependants" clear_dangling_dependants!(derivedmapstate.filteredelements, scratchpad.dangling_dependant_element_id_set)
         end
-        @timeit flowcalc_loop_timer "index sources" index_grounded_source_elements!(derivedmapstate)
-        @timeit flowcalc_loop_timer "list pruned nodes" list_nodes!(derivedmapstate.prunednodes, derivedmapstate.prunedelements)
+
+        @timeit flowcalc_loop_timer "list filtered nodes" list_nodes!(derivedmapstate.filterednodes, derivedmapstate.filteredelements)
+        @timeit flowcalc_loop_timer "index sources" index_grounded_source_elements!(scratchpad.filtered_source_element_index, derivedmapstate.filteredelements)
 
         # derive MNA, if there are any nodes. MNA on empty arrays crashes
-        if !isempty(derivedmapstate.prunednodes)
-            @timeit flowcalc_loop_timer "fluid declarations" begin
-                empty!(derivedmapstate.all_fluid_declarations)
-                list_fluid_declarations!(derivedmapstate.all_fluid_declarations, gamemap)
-                index_fluid_declarations!(derivedmapstate)
-            end
-            @timeit flowcalc_loop_timer "node connections" build_node_connection_map!(derivedmapstate)
-            @timeit flowcalc_loop_timer "propagate fluid types" propagate_fluid_types!(derivedmapstate)
+        if !isempty(derivedmapstate.filterednodes)
+            @timeit flowcalc_loop_timer "fluid declarations" list_fluid_declarations!(derivedmapstate.all_fluid_declarations, gamemap)
+            @timeit flowcalc_loop_timer "index fluid declarations" index_fluid_declarations!(derivedmapstate)
+            @timeit flowcalc_loop_timer "node connections" build_node_connection_map!(scratchpad.final_nodeconnections, derivedmapstate.filteredelements)
+            @timeit flowcalc_loop_timer "propagate fluid types" propagate_fluid_types!(derivedmapstate, scratchpad)
             @timeit flowcalc_loop_timer "MNA index nodes" MNA_indexnodes!(mna_state, derivedmapstate)
             @timeit flowcalc_loop_timer "MNA split elements" MNA_splitelements!(mna_state, derivedmapstate)
 
@@ -1248,12 +1253,12 @@ function update_map!(gamemap::GameMap, derivedmapstate::DerivedMapState, mna_sta
             empty!(derivedmapstate.all_fluid_declarations)
             empty!(derivedmapstate.node_declarations)
             empty!(derivedmapstate.source_nodes)
-            empty!(derivedmapstate.grounded_source_element_index)
             empty!(derivedmapstate.node_to_region)
             empty!(derivedmapstate.region_temperatures)
             empty!(derivedmapstate.node_temperatures)
             mna_state.a_cache.structure_hash = UInt64(0) # reset structure cache
             mna_state.a_cache.value_hash = UInt64(0)     # reset value cache
+            clear_calculator_scratchpad!(scratchpad)
         end
     end
     return nothing
@@ -1285,7 +1290,7 @@ end
 
 "Re-solve the MNA system (Z vector rebuild + linear solve). Called once per tick."
 function update_mna!(derivedmapstate::DerivedMapState, mna_state::MNA_State, current_tick::Int64)
-    if !isempty(derivedmapstate.prunednodes)
+    if !isempty(derivedmapstate.filterednodes)
         @timeit flowcalc_loop_timer "MNA Solve" begin
             @timeit flowcalc_loop_timer "get Z" MNA_getZ!(mna_state)
             @timeit flowcalc_loop_timer "MNA solve" MNA_solve!(mna_state)
@@ -1653,6 +1658,7 @@ function flowcalculator_loop!(
     derivedmapstate = initial_snapshot.derived
     mna_state = MNA_State()  # fresh full state; first update_map!/update_mna! populates it
     gamestate = initial_snapshot.gamestate
+    scratchpad = CalculatorScratchpad()  # reused across ticks; fields emptied by each phase
 
     # Initialise the shared target spacemap time from the loaded map
     @atomic shared_state.target_spacemap_time = get_target_time(gamemap.space_map)
@@ -1702,9 +1708,9 @@ function flowcalculator_loop!(
                     update_docking!(gamemap)
                     update_manoeuvre_phase!(gamestate, gamemap, ipc)
                     @timeit flowcalc_loop_timer "Component Updates" update_components!(gamemap, mna_state, derivedmapstate)
-                    update_map!(gamemap, derivedmapstate, mna_state, gamestate.ticks)
+                    update_map!(gamemap, derivedmapstate, mna_state, scratchpad, gamestate.ticks)
                     update_mna!(derivedmapstate, mna_state, gamestate.ticks)
-                    @timeit flowcalc_loop_timer "Region Temperatures" compute_region_temperatures!(derivedmapstate, mna_state)
+                    @timeit flowcalc_loop_timer "Region Temperatures" compute_region_temperatures!(derivedmapstate, scratchpad, mna_state)
                     @timeit flowcalc_loop_timer "Thruster Handling" handle_thrusters!(gamestate, gamemap, derivedmapstate, mna_state)
                     target_time = @atomic shared_state.target_spacemap_time
                     step_space_map_time!(gamemap.space_map, target_time)
@@ -1713,9 +1719,9 @@ function flowcalculator_loop!(
 
                 elseif commands_processed
                     # Paused with pending commands: rebuild derived state without advancing time
-                    update_map!(gamemap, derivedmapstate, mna_state, gamestate.ticks)
+                    update_map!(gamemap, derivedmapstate, mna_state, scratchpad, gamestate.ticks)
                     update_mna!(derivedmapstate, mna_state, gamestate.ticks)
-                    @timeit flowcalc_loop_timer "Region Temperatures" compute_region_temperatures!(derivedmapstate, mna_state)
+                    @timeit flowcalc_loop_timer "Region Temperatures" compute_region_temperatures!(derivedmapstate, scratchpad, mna_state)
 
                     _publish_snapshot!(publish_snapshot, gamemap, derivedmapstate, mna_state, gamestate, timing.current_time)
                 end

@@ -1,0 +1,37 @@
+====================================================================================================
+FLOW CALCULATOR LOOP (Background Thread) - Counter: 3000
+====================================================================================================
+────────────────────────────────────────────────────────────────────────────────────
+                                           Time                    Allocations      
+                                  ───────────────────────   ────────────────────────
+        Tot / % measured:              8.28s /  12.1%            231MiB /  83.2%    
+
+Section                   ncalls     time    %tot     avg     alloc    %tot      avg
+────────────────────────────────────────────────────────────────────────────────────
+Map Updates                  500    654ms   65.1%  1.31ms    138MiB   71.9%   283KiB
+  list elements              500    150ms   15.0%   301μs   51.2MiB   26.6%   105KiB
+  grounding search           500    104ms   10.3%   208μs   23.6MiB   12.3%  48.3KiB
+  prune                      500   72.9ms    7.3%   146μs   13.9MiB    7.2%  28.5KiB
+  fluid declarations         500   72.9ms    7.2%   146μs   11.2MiB    5.8%  22.9KiB
+  MNA update A               500   51.0ms    5.1%   102μs    202KiB    0.1%     413B
+  propagate fluid types      500   41.5ms    4.1%  83.0μs   6.04MiB    3.1%  12.4KiB
+  list nodes                 500   24.9ms    2.5%  49.7μs    109KiB    0.1%     224B
+  node connections           500   24.4ms    2.4%  48.8μs   41.9KiB    0.0%    85.8B
+  list pruned nodes          500   22.0ms    2.2%  44.0μs   75.3KiB    0.0%     154B
+  find ship edge             500   15.3ms    1.5%  30.6μs    386KiB    0.2%     792B
+  dangling dependants        500   14.8ms    1.5%  29.7μs   31.4MiB   16.3%  64.2KiB
+  MNA split elements         500   8.87ms    0.9%  17.7μs   19.0KiB    0.0%    38.8B
+  MNA index nodes            500   8.23ms    0.8%  16.5μs   32.4KiB    0.0%    66.4B
+  index sources              500   2.84ms    0.3%  5.69μs   10.0KiB    0.0%    20.5B
+Snapshot Publishing          500    247ms   24.6%   494μs   50.7MiB   26.4%   104KiB
+Component Updates            500   32.2ms    3.2%  64.4μs   1.48MiB    0.8%  3.03KiB
+MNA Solve                    500   23.4ms    2.3%  46.8μs    133KiB    0.1%     273B
+  MNA solve                  500   12.5ms    1.2%  25.0μs   67.8KiB    0.0%     139B
+  MNA scale                  500   8.15ms    0.8%  16.3μs   50.3KiB    0.0%     103B
+  get Z                      500   1.81ms    0.2%  3.63μs   10.4KiB    0.0%    21.4B
+Thruster Handling            500   23.1ms    2.3%  46.2μs   0.96MiB    0.5%  1.97KiB
+Region Temperatures          500   22.5ms    2.2%  45.0μs    713KiB    0.4%  1.43KiB
+UPS Metrics                1.05k   2.21ms    0.2%  2.11μs   38.6KiB    0.0%    37.6B
+Command Processing           500    250μs    0.0%   500ns   1.16KiB    0.0%    2.37B
+────────────────────────────────────────────────────────────────────────────────────
+====================================================================================================

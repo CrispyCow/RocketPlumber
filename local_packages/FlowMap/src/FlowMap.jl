@@ -378,7 +378,7 @@ function set_component!(ship::ShipMap, coord::TileCoord, component::ComponentOnT
     return nothing
 end
 
-function set_component!(ship::ShipMap, components::AbstractDict{TileCoord, ComponentOnTile})
+function set_component!(ship::ShipMap, components::AbstractDict{TileCoord, <:ComponentOnTile})
     for (coord, component) in components
         ship.components[coord] = component
     end
@@ -512,7 +512,7 @@ function set_component!(gamemap::GameMap, coord::TileCoord, component::Component
     return nothing
 end
 
-function set_component!(gamemap::GameMap, components::AbstractDict{TileCoord, ComponentOnTile}; ship_name::Symbol = :primary)
+function set_component!(gamemap::GameMap, components::AbstractDict{TileCoord, <:ComponentOnTile}; ship_name::Symbol = :primary)
     set_component!(_get_ship(gamemap, ship_name), components)
     return nothing
 end

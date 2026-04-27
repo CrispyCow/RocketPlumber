@@ -144,19 +144,21 @@ end
     constrained_node = nc(1, 0, HexFrame.NODE_Q_NEG)
 
     derived = DerivedMapState(
-        nodeconnections = Dict(
-            source_node => FlowEngine.ConnectionVect((constrained_node,)),
-            constrained_node => FlowEngine.ConnectionVect((source_node,)),
-        ),
         node_declarations = Dict(
             source_node => HexFluids.FluidSource(HexFluids.MONOPROP_GAS, 800.0),
             constrained_node => HexFluids.FluidConstraintRule(HexFluids.IS_LIQUID),
         ),
         source_nodes = Set((source_node,)),
     )
+    scratchpad = FlowEngine.CalculatorScratchpad(
+        final_nodeconnections = Dict(
+            source_node => FlowEngine.ConnectionVect((constrained_node,)),
+            constrained_node => FlowEngine.ConnectionVect((source_node,)),
+        ),
+    )
 
     err = try
-        propagate_fluid_types!(derived)
+        propagate_fluid_types!(derived, scratchpad)
         nothing
     catch exc
         exc
@@ -195,18 +197,20 @@ end
     end_node = nc(2, 0, HexFrame.NODE_R_POS)
 
     derived = DerivedMapState(
-        nodeconnections = Dict(
-            source_node => FlowEngine.ConnectionVect((middle_node,)),
-            middle_node => FlowEngine.ConnectionVect((source_node, end_node)),
-            end_node => FlowEngine.ConnectionVect((middle_node,)),
-        ),
         node_declarations = Dict(
             source_node => HexFluids.FluidSource(HexFluids.COLD_GAS, 300.0),
         ),
         source_nodes = Set((source_node,)),
     )
+    scratchpad = FlowEngine.CalculatorScratchpad(
+        final_nodeconnections = Dict(
+            source_node => FlowEngine.ConnectionVect((middle_node,)),
+            middle_node => FlowEngine.ConnectionVect((source_node, end_node)),
+            end_node => FlowEngine.ConnectionVect((middle_node,)),
+        ),
+    )
 
-    propagate_fluid_types!(derived)
+    propagate_fluid_types!(derived, scratchpad)
 
     @test derived.nodeactualfluids[source_node] === HexFluids.COLD_GAS
     @test derived.nodeactualfluids[middle_node] === HexFluids.COLD_GAS
@@ -220,22 +224,40 @@ end
     grounded_resistor = make_element(TileCoord(0, 0), 1, ground, source_node, 2.0, CONST_RESISTOR)
 
     derived = DerivedMapState(
-        prunedelements = [grounded_resistor],
+        filteredelements = [grounded_resistor],
         all_fluid_declarations = [
             FlowEngine.AbsoluteFluidDeclaration(source_node, HexFluids.FluidSource(HexFluids.COLD_GAS, 450.0)),
         ],
         node_to_region = Dict(source_node => 1),
     )
-    FlowEngine.index_grounded_source_elements!(derived)
+    scratchpad = FlowEngine.CalculatorScratchpad()
+    FlowEngine.index_grounded_source_elements!(scratchpad.filtered_source_element_index, derived.filteredelements)
 
     mna_state = MNA_State(
         node_voltages = Dict(source_node => 5.0),
     )
 
-    compute_region_temperatures!(derived, mna_state)
+    compute_region_temperatures!(derived, scratchpad, mna_state)
 
     @test derived.region_temperatures[1] ≈ 450.0
     @test derived.node_temperatures[source_node] ≈ 450.0
+end
+
+
+"Run ground search on a copy of elements via the new in-place API; returns the mutated survivor vector."
+function run_ground_search(elements::Vector{AbsoluteElement})
+    elems = copy(elements)
+    scratchpad = FlowEngine.CalculatorScratchpad()
+    ground_search!(elems, scratchpad)
+    return elems
+end
+
+"Run prune on a copy of elements via the new in-place API; returns the mutated survivor vector."
+function run_prune(elements::Vector{AbsoluteElement})
+    elems = copy(elements)
+    scratchpad = FlowEngine.CalculatorScratchpad()
+    prune!(elems, scratchpad)
+    return elems
 end
 
 
@@ -299,7 +321,7 @@ end
             make_element(TileCoord(1,0), 1, n_b, n_c, 1.0, CONST_RESISTOR),
             make_element(TileCoord(2,0), 1, n_c, n_a, 1.0, CONST_RESISTOR),
         ]
-        result = prune(elems)
+        result = run_prune(elems)
         @test length(result) == 3
     end
 
@@ -308,7 +330,7 @@ end
             make_element(TileCoord(0,0), 1, n_a, n_b, 1.0, CONST_RESISTOR),
             make_element(TileCoord(1,0), 1, n_b, n_c, 1.0, CONST_RESISTOR),
         ]
-        result = prune(elems)
+        result = run_prune(elems)
         @test isempty(result)
     end
 
@@ -318,13 +340,24 @@ end
             make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
             make_element(TileCoord(1,0), 1, n_b, n_a, 2.0, CONST_RESISTOR),
         ]
-        result = prune(elems)
+        result = run_prune(elems)
+        @test length(result) == 3
+    end
+
+    @testset "counts parallel edges during prune" begin
+        elems = [
+            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(1,0), 1, n_a, n_b, 2.0, CONST_VOLTAGE),
+        ]
+
+        result = run_prune(elems)
         @test length(result) == 3
     end
 
     @testset "single grounded element pruned" begin
         elems = [make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE)]
-        result = prune(elems)
+        result = run_prune(elems)
         @test isempty(result)
     end
 
@@ -335,12 +368,38 @@ end
             make_element(TileCoord(1,0), 1, n_b, n_d, 1.0, CONST_RESISTOR),
             make_element(TileCoord(2,0), 1, n_c, n_d, 1.0, CONST_RESISTOR),
         ]
-        result = prune(elems)
+        result = run_prune(elems)
         @test length(result) == 4
     end
 
     @testset "empty input" begin
-        @test isempty(prune(AbsoluteElement[]))
+        @test isempty(run_prune(AbsoluteElement[]))
+    end
+
+    @testset "prune! leaves scratch buffer clean after call" begin
+        elems = [
+            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(1,0), 1, n_b, n_a, 2.0, CONST_RESISTOR),
+        ]
+        scratchpad = FlowEngine.CalculatorScratchpad()
+        prune!(elems, scratchpad)
+        @test length(elems) == 3
+        @test isempty(scratchpad.pruning_nodeconnections)
+    end
+
+    @testset "prune! result matches old prunedelements output" begin
+        # In-place prune: call on a copy, assert same survivor count as run_prune
+        elems_copy = [
+            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(1,0), 1, n_b, n_a, 2.0, CONST_RESISTOR),
+        ]
+        result = run_prune(elems_copy)
+        nodes = list_nodes(result)
+        @test length(result) == 3
+        @test nodes[n_a] == 3
+        @test nodes[n_b] == 2
     end
 end
 
@@ -363,7 +422,7 @@ end
             make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
             make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
         ]
-        result = ground_search(elems)
+        result = run_ground_search(elems)
         @test length(result) == 2
     end
 
@@ -373,7 +432,7 @@ end
             make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
             make_element(TileCoord(2,0), 1, n_c, n_d, 1.0, CONST_RESISTOR),
         ]
-        result = ground_search(elems)
+        result = run_ground_search(elems)
         @test length(result) == 2
         result_ids = Set(e.id for e in result)
         @test !(ElementID(TileCoord(2,0), UInt8(1)) in result_ids)
@@ -384,9 +443,39 @@ end
             make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
             make_element(TileCoord(0,0), 2, n_a, n_b, 0.0, CONST_RESISTOR),
         ]
-        result = ground_search(elems)
+        result = run_ground_search(elems)
         @test length(result) == 1
         @test result[1].type == CONST_VOLTAGE
+    end
+
+    @testset "grounded zero-conductance resistor does not anchor traversal" begin
+        elems = [
+            make_element(TileCoord(0,0), 1, n_a, gnd, 0.0, CONST_RESISTOR),
+            make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+        ]
+        result = run_ground_search(elems)
+        @test isempty(result)
+    end
+
+    @testset "non-ground zero-conductance resistor is kept when its nodes are grounded" begin
+        elems = [
+            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(1,0), 1, n_b, gnd, 3.0, CONST_RESISTOR),
+            make_element(TileCoord(2,0), 1, n_a, n_b, 0.0, CONST_RESISTOR),
+        ]
+        result = run_ground_search(elems)
+        @test length(result) == 3
+        @test any(element -> element.value == 0.0 && element.type == CONST_RESISTOR, result)
+    end
+
+    @testset "grounded zero-conductance resistor is kept when its node is grounded by other paths" begin
+        elems = [
+            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(1,0), 1, n_a, gnd, 0.0, CONST_RESISTOR),
+        ]
+        result = run_ground_search(elems)
+        @test length(result) == 2
+        @test any(element -> element.value == 0.0 && element.type == CONST_RESISTOR, result)
     end
 
     @testset "current sources excluded from traversal" begin
@@ -396,7 +485,7 @@ end
             make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
             make_element(TileCoord(1,0), 1, n_a, n_b, 0.5, CONST_CURRENT),
         ]
-        result = ground_search(elems)
+        result = run_ground_search(elems)
         @test length(result) == 1
         @test result[1].type == CONST_VOLTAGE
     end
@@ -408,7 +497,7 @@ end
             make_element(TileCoord(1,0), 1, n_a, n_b, 0.5, CONST_CURRENT),
             make_element(TileCoord(2,0), 1, n_b, gnd, 1.0, CONST_RESISTOR),
         ]
-        result = ground_search(elems)
+        result = run_ground_search(elems)
         @test length(result) == 3
     end
 
@@ -417,7 +506,7 @@ end
             make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
             make_element(TileCoord(1,0), 1, n_a, n_b, 3.0, CONST_VOLTAGE),
         ]
-        result = ground_search(elems)
+        result = run_ground_search(elems)
         @test length(result) == 2
     end
 
@@ -428,7 +517,7 @@ end
             make_element(TileCoord(1,0), 1, n_b, n_c, 3.0, CONST_VOLTAGE),
             make_element(TileCoord(2,0), 1, n_c, n_d, 1.0, CONST_RESISTOR),
         ]
-        result = ground_search(elems)
+        result = run_ground_search(elems)
         @test length(result) == 4
     end
 
@@ -439,33 +528,68 @@ end
             make_element(TileCoord(2,0), 1, n_c, gnd, 3.0, CONST_VOLTAGE),
             make_element(TileCoord(2,0), 2, n_c, n_d, 1.0, CONST_RESISTOR),
         ]
-        result = ground_search(elems)
+        result = run_ground_search(elems)
         @test length(result) == 4
     end
 
     @testset "empty input" begin
-        @test isempty(ground_search(AbsoluteElement[]))
+        @test isempty(run_ground_search(AbsoluteElement[]))
+    end
+
+    @testset "ground_search! leaves scratch buffers clean after call" begin
+        elems = [
+            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(1,0), 1, n_b, gnd, 2.0, CONST_RESISTOR),
+        ]
+        scratchpad = FlowEngine.CalculatorScratchpad()
+        ground_search!(elems, scratchpad)
+        @test length(elems) == 3
+        @test isempty(scratchpad.groundsearch_nodeconnections)
+        @test isempty(scratchpad.groundsearch_root_index)
+        @test isempty(scratchpad.groundsearch_grounded_nodes)
+        @test isempty(scratchpad.groundsearch_pending_nodes)
+    end
+
+    @testset "ground_search! preserves the legacy grounded traversal result" begin
+        elems = [
+            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(1,0), 1, n_b, gnd, 2.0, CONST_RESISTOR),
+        ]
+        result = run_ground_search(elems)
+        nodes = list_nodes(result)
+        @test length(result) == 3
+        @test nodes[n_a] == 2
+        @test nodes[n_b] == 2
     end
 end
 
 
 # ===============================================================
-# Phase 5: clear_dangling_dependants Tests
+# Phase 5: clear_dangling_dependants! Tests
 # ===============================================================
 
-@testset "clear_dangling_dependants" begin
+@testset "clear_dangling_dependants!" begin
     n_a = nc(0, 0, HexFrame.NODE_Q_POS)
     n_b = nc(1, 0, HexFrame.NODE_Q_POS)
     n_c = nc(0, 0, HexFrame.NODE_INTERNAL)
     gnd = NodeCoord(TileCoord(0, 0), HexFrame.GROUND)
+
+    # Local convenience wrapper so individual tests read as simple in/out checks.
+    scratch = Set{ElementID}()
+    function call_clear!(elems)
+        clear_dangling_dependants!(elems, scratch)
+        return elems
+    end
 
     @testset "independent elements unaffected" begin
         elems = [
             make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
             make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
         ]
-        result = clear_dangling_dependants(elems)
-        @test length(result) == 2
+        call_clear!(elems)
+        @test length(elems) == 2
     end
 
     @testset "dependent with controller present stays" begin
@@ -473,8 +597,8 @@ end
             make_element(TileCoord(0,0), 1, n_a, gnd, 1.0, V_DEP_VOLTAGE; dependent_index=2),
             make_element(TileCoord(0,0), 2, n_c, n_b, 1.0, CONST_RESISTOR),
         ]
-        result = clear_dangling_dependants(elems)
-        @test length(result) == 2
+        call_clear!(elems)
+        @test length(elems) == 2
     end
 
     @testset "dependent with missing controller removed" begin
@@ -482,9 +606,9 @@ end
             make_element(TileCoord(0,0), 1, n_a, gnd, 1.0, V_DEP_VOLTAGE; dependent_index=3),
             make_element(TileCoord(0,0), 2, n_c, n_b, 1.0, CONST_RESISTOR),
         ]
-        result = clear_dangling_dependants(elems)
-        @test length(result) == 1
-        @test result[1].type == CONST_RESISTOR
+        call_clear!(elems)
+        @test length(elems) == 1
+        @test elems[1].type == CONST_RESISTOR
     end
 
     @testset "mutual dependants both present stay" begin
@@ -492,8 +616,8 @@ end
             make_element(TileCoord(0,0), 1, n_a, gnd, 1.0, V_DEP_VOLTAGE; dependent_index=2),
             make_element(TileCoord(0,0), 2, n_b, gnd, -2.0, C_DEP_CURRENT; dependent_index=1),
         ]
-        result = clear_dangling_dependants(elems)
-        @test length(result) == 2
+        call_clear!(elems)
+        @test length(elems) == 2
     end
 
     @testset "cascading removal" begin
@@ -501,13 +625,56 @@ end
             make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
             make_element(TileCoord(0,0), 2, n_b, gnd, 1.0, C_DEP_CURRENT; dependent_index=3),
         ]
-        result = clear_dangling_dependants(elems)
-        @test length(result) == 1
-        @test result[1].type == CONST_VOLTAGE
+        call_clear!(elems)
+        @test length(elems) == 1
+        @test elems[1].type == CONST_VOLTAGE
     end
 
     @testset "empty input" begin
-        @test isempty(clear_dangling_dependants(AbsoluteElement[]))
+        elems = AbsoluteElement[]
+        call_clear!(elems)
+        @test isempty(elems)
+    end
+
+    @testset "original order preserved" begin
+        # Three elements: first and third survive, second is removed.
+        # Original index positions of survivors must be maintained.
+        elems = [
+            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0,0), 2, n_b, gnd, 1.0, C_DEP_CURRENT; dependent_index=9),
+            make_element(TileCoord(0,0), 3, n_c, n_b, 1.0, CONST_RESISTOR),
+        ]
+        ids_before = [elems[1].id, elems[3].id]
+        call_clear!(elems)
+        @test length(elems) == 2
+        @test elems[1].id == ids_before[1]
+        @test elems[2].id == ids_before[2]
+    end
+
+    @testset "scratch set is empty after call" begin
+        elems = [
+            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+        ]
+        call_clear!(elems)
+        @test isempty(scratch)
+    end
+
+    @testset "scratch set reusable across consecutive calls" begin
+        # First call: removes a dependant
+        elems1 = [
+            make_element(TileCoord(0,0), 1, n_a, gnd, 1.0, V_DEP_VOLTAGE; dependent_index=9),
+            make_element(TileCoord(0,0), 2, n_b, n_c, 1.0, CONST_RESISTOR),
+        ]
+        call_clear!(elems1)
+        @test length(elems1) == 1  # dependant removed
+
+        # Second call with different input: stale IDs from call 1 must not affect call 2
+        elems2 = [
+            make_element(TileCoord(1,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(1,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+        ]
+        call_clear!(elems2)
+        @test length(elems2) == 2  # no removals — stale IDs from call 1 must not affect this
     end
 end
 
@@ -528,18 +695,18 @@ end
     "Run the same iterative pruning pipeline as update_map! in HexFlowCalculator"
     function run_prune_pipeline(elements::Vector{AbsoluteElement})
         pruned = elements
+        scratch = Set{ElementID}()
         last_hash::UInt64 = 0
         while last_hash != hash(pruned)
-            pruned = prune(pruned)
-            pruned = ground_search(pruned)
+            pruned = run_prune(pruned)
+            pruned = run_ground_search(pruned)
             last_hash = hash(pruned)
-            pruned = clear_dangling_dependants(pruned)
+            clear_dangling_dependants!(pruned, scratch)
         end
         return pruned
     end
 
     @testset "simple grounded circuit survives" begin
-        # Tank pattern: Vsrc(int→GND), R(int→a), R(int→b) + pipe R(a→c)
         elems = [
             make_element(TileCoord(0,0), 1, n_int, gnd, 5.0, CONST_VOLTAGE),
             make_element(TileCoord(0,0), 2, n_int, n_a, 2.0, CONST_RESISTOR),
@@ -644,8 +811,8 @@ end
     function solve_circuit(elements::Vector{AbsoluteElement})
         derived = DerivedMapState()
         mna = MNA_State()
-        derived.prunedelements = elements
-        derived.prunednodes = list_nodes(elements)
+        derived.filteredelements = elements
+        derived.filterednodes = list_nodes(elements)
         MNA_indexnodes!(mna, derived)
         MNA_splitelements!(mna, derived)
         MNA_updateA!(mna)
@@ -723,8 +890,8 @@ end
     function solve_circuit(elements::Vector{AbsoluteElement})
         derived = DerivedMapState()
         mna = MNA_State()
-        derived.prunedelements = elements
-        derived.prunednodes = list_nodes(elements)
+        derived.filteredelements = elements
+        derived.filterednodes = list_nodes(elements)
         MNA_indexnodes!(mna, derived)
         MNA_splitelements!(mna, derived)
         MNA_updateA!(mna)
@@ -802,8 +969,8 @@ end
     function build_mna(elements::Vector{AbsoluteElement})
         derived = DerivedMapState()
         mna = MNA_State()
-        derived.prunedelements = elements
-        derived.prunednodes = list_nodes(elements)
+        derived.filteredelements = elements
+        derived.filterednodes = list_nodes(elements)
         MNA_indexnodes!(mna, derived)
         MNA_splitelements!(mna, derived)
         return mna
@@ -879,8 +1046,8 @@ end
             make_element(TileCoord(2,0), 1, n_b, n_c, 4.0, CONST_RESISTOR),
         ]
         derived = DerivedMapState()
-        derived.prunedelements = extended_elements
-        derived.prunednodes = list_nodes(extended_elements)
+        derived.filteredelements = extended_elements
+        derived.filterednodes = list_nodes(extended_elements)
         MNA_indexnodes!(mna, derived)
         MNA_splitelements!(mna, derived)
         MNA_updateA!(mna)
@@ -945,8 +1112,8 @@ end
 
     derived = DerivedMapState()
     mna = MNA_State()
-    derived.prunedelements = elements
-    derived.prunednodes = list_nodes(elements)
+    derived.filteredelements = elements
+    derived.filterednodes = list_nodes(elements)
     MNA_indexnodes!(mna, derived)
     MNA_splitelements!(mna, derived)
 
@@ -975,12 +1142,13 @@ end
     "Run the iterative pruning pipeline (mirrors HexFlowCalculator.update_map!)"
     function run_prune_pipeline(elements::Vector{AbsoluteElement})
         pruned = elements
+        scratch = Set{ElementID}()
         last_hash::UInt64 = 0
         while last_hash != hash(pruned)
-            pruned = prune(pruned)
-            pruned = ground_search(pruned)
+            pruned = run_prune(pruned)
+            pruned = run_ground_search(pruned)
             last_hash = hash(pruned)
-            pruned = clear_dangling_dependants(pruned)
+            clear_dangling_dependants!(pruned, scratch)
         end
         return pruned
     end
@@ -989,9 +1157,9 @@ end
     function solve_circuit(elements::Vector{AbsoluteElement})
         derived = DerivedMapState()
         mna = MNA_State()
-        derived.prunedelements = elements
-        derived.prunednodes = list_nodes(elements)
-        if isempty(derived.prunednodes)
+        derived.filteredelements = elements
+        derived.filterednodes = list_nodes(elements)
+        if isempty(derived.filterednodes)
             return (mna, derived)
         end
         MNA_indexnodes!(mna, derived)
@@ -1139,25 +1307,101 @@ end
     gnd = NodeCoord(TileCoord(0, 0), HexFrame.GROUND)
 
     @testset "basic connections" begin
-        derived = DerivedMapState()
-        derived.prunedelements = [
+        nodeconnections = Dict{NodeCoord, FlowEngine.ConnectionVect}()
+        elements = [
             make_element(TileCoord(0,0), 1, n_a, n_b, 1.0, CONST_RESISTOR),
             make_element(TileCoord(1,0), 1, n_b, n_c, 1.0, CONST_RESISTOR),
         ]
-        build_node_connection_map!(derived)
-        @test n_b in derived.nodeconnections[n_a]
-        @test n_a in derived.nodeconnections[n_b]
-        @test n_c in derived.nodeconnections[n_b]
-        @test n_b in derived.nodeconnections[n_c]
+        build_node_connection_map!(nodeconnections, elements)
+        @test n_b in nodeconnections[n_a]
+        @test n_a in nodeconnections[n_b]
+        @test n_c in nodeconnections[n_b]
+        @test n_b in nodeconnections[n_c]
     end
 
     @testset "grounded elements excluded from connections" begin
-        derived = DerivedMapState()
-        derived.prunedelements = [
+        nodeconnections = Dict{NodeCoord, FlowEngine.ConnectionVect}()
+        elements = [
             make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
         ]
-        build_node_connection_map!(derived)
-        @test !haskey(derived.nodeconnections, n_a) || isempty(derived.nodeconnections[n_a])
+        build_node_connection_map!(nodeconnections, elements)
+        @test !haskey(nodeconnections, n_a) || isempty(nodeconnections[n_a])
+    end
+
+    @testset "default builder keeps zero-conductance links" begin
+        nodeconnections = Dict{NodeCoord, FlowEngine.ConnectionVect}()
+        elements = [
+            make_element(TileCoord(0,0), 1, n_a, n_b, 0.0, CONST_RESISTOR),
+        ]
+        build_node_connection_map!(nodeconnections, elements)
+        @test n_b in nodeconnections[n_a]
+        @test n_a in nodeconnections[n_b]
+    end
+
+    @testset "filtered builder excludes current and zero-conductance edges" begin
+        nodeconnections = Dict{NodeCoord, FlowEngine.ConnectionVect}()
+        elements = [
+            make_element(TileCoord(0,0), 1, n_a, n_b, 0.0, CONST_RESISTOR),
+            make_element(TileCoord(1,0), 1, n_b, n_c, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(2,0), 1, n_c, gnd, 1.0, CONST_CURRENT),
+        ]
+        build_node_connection_map!(
+            nodeconnections,
+            elements;
+            element_filter_function = FlowEngine._include_ground_search_connection_element,
+        )
+        @test !haskey(nodeconnections, n_a)
+        @test n_c in nodeconnections[n_b]
+        @test !haskey(nodeconnections, gnd)
+    end
+
+    @testset "ground neighbour mode keeps grounded degree without ground key" begin
+        nodeconnections = Dict{NodeCoord, FlowEngine.ConnectionVect}()
+        elements = [
+            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+        ]
+
+        build_node_connection_map!(
+            nodeconnections,
+            elements;
+            include_ground_neighbour = true,
+            deduplicate_neighbours = false,
+        )
+
+        @test FlowEngine.GROUND_NODE in nodeconnections[n_a]
+        @test !haskey(nodeconnections, FlowEngine.GROUND_NODE)
+        @test n_b in nodeconnections[n_a]
+    end
+end
+
+@testset "index_grounded_source_elements!" begin
+    n_a = nc(0, 0, HexFrame.NODE_Q_POS)
+    n_b = nc(1, 0, HexFrame.NODE_Q_POS)
+    gnd = NodeCoord(TileCoord(0, 0), HexFrame.GROUND)
+
+    @testset "indexes reversed grounded elements by default" begin
+        source_index = Dict{NodeCoord, Int}()
+        elements = [
+            make_element(TileCoord(0,0), 1, gnd, n_a, 2.0, CONST_RESISTOR),
+        ]
+        index_grounded_source_elements!(source_index, elements)
+        @test source_index[n_a] == 1
+    end
+
+    @testset "filter can exclude current sources" begin
+        source_index = Dict{NodeCoord, Int}()
+        elements = [
+            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(1,0), 1, n_b, gnd, 1.0, CONST_CURRENT),
+        ]
+        index_grounded_source_elements!(
+            source_index,
+            elements;
+            element_filter_function = element -> element.type != CONST_CURRENT,
+        )
+        @test source_index[n_a] == 1
+        @test !haskey(source_index, n_b)
     end
 end
 

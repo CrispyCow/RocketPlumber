@@ -7,11 +7,12 @@ import FlowMap: find_ship_surface_edgetiles!
 using SparseArrays, LinearAlgebra, KLU, SmallCollections, StructEquality
 
 # Type Exports
-export DerivedMapState, MNA_State, MNA_StateSnapshot, AMatrixCache
+export DerivedMapState, CalculatorScratchpad, MNA_State, MNA_StateSnapshot, AMatrixCache
 export RelativeFluidDeclaration, AbsoluteFluidDeclaration, RelFluidDecl, AbsFluidDecl
 # Function Exports
 export add_pipes_abs_element!, abs_element_get_current, update_components!, index_grounded_source_elements!
-export list_elements, list_elements!, list_nodes, list_nodes!, prune, ground_search, clear_dangling_dependants
+export list_elements, list_elements!, list_nodes, list_nodes!, prune!, ground_search!, clear_dangling_dependants!
+export clear_calculator_scratchpad!
 export list_fluid_declarations!, push_mapped_declarations!, map_declaration
 export index_fluid_declarations!, propagate_fluid_types!, compute_region_temperatures!
 export prioritise_declarations, build_node_connection_map!
@@ -26,6 +27,7 @@ const CONST_CURRENT = HexElements.CONST_CURRENT
 const CONST_VOLTAGE = HexElements.CONST_VOLTAGE
 const C_DEP_CURRENT = HexElements.C_DEP_CURRENT
 const V_DEP_VOLTAGE = HexElements.V_DEP_VOLTAGE
+const GROUND_NODE = NodeCoord(TileCoord(0, 0), HexFrame.GROUND)
 
 # ===============================================================
 # Game State Struct Types
@@ -71,13 +73,13 @@ end
 
 "Holds characteristics which can be deterministically derived from the GameMap"
 @kwdef mutable struct DerivedMapState
+    # All ship parts
     ship_surface_edge::Set{TileCoord} = Set{TileCoord}()
     allelements::Vector{AbsoluteElement} = Vector{AbsoluteElement}()
     allnodes::Dict{NodeCoord, UInt16} = Dict{NodeCoord, UInt16}()
-    prunedelements::Vector{AbsoluteElement} = Vector{AbsoluteElement}()
-    grounded_source_element_index::Dict{NodeCoord, Int} = Dict{NodeCoord, Int}()
-    prunednodes::Dict{NodeCoord, UInt16} = Dict{NodeCoord, UInt16}()
-    nodeconnections::Dict{NodeCoord, ConnectionVect} = Dict{NodeCoord, ConnectionVect}()
+    # Survivors filtered by pruning/grounding/dangling checks
+    filteredelements::Vector{AbsoluteElement} = Vector{AbsoluteElement}() 
+    filterednodes::Dict{NodeCoord, UInt16} = Dict{NodeCoord, UInt16}()
     # Fluid declarations (collected from components)
     all_fluid_declarations::Vector{AbsFluidDecl} = Vector{AbsFluidDecl}()
     node_declarations::Dict{NodeCoord, FluidDeclaration} = Dict{NodeCoord, FluidDeclaration}()
@@ -90,6 +92,35 @@ end
     node_temperatures::Dict{NodeCoord, Float64} = Dict{NodeCoord, Float64}()
 end
 @struct_hash_equal DerivedMapState
+
+"Calculator-thread-only scratch buffers used during update_map! and not published in snapshots."
+@kwdef mutable struct CalculatorScratchpad
+    pruning_nodeconnections::Dict{NodeCoord, ConnectionVect} = Dict{NodeCoord, ConnectionVect}()
+    groundsearch_root_index::Dict{NodeCoord, Int} = Dict{NodeCoord, Int}()
+    groundsearch_nodeconnections::Dict{NodeCoord, ConnectionVect} = Dict{NodeCoord, ConnectionVect}()
+    groundsearch_grounded_nodes::Set{NodeCoord} = Set{NodeCoord}()
+    groundsearch_pending_nodes::Vector{NodeCoord} = Vector{NodeCoord}()
+    dangling_dependant_element_id_set::Set{ElementID} = Set{ElementID}()
+    filtered_source_element_index::Dict{NodeCoord, Int} = Dict{NodeCoord, Int}()  # grounded sources indexed by non-ground node
+    final_nodeconnections::Dict{NodeCoord, ConnectionVect} = Dict{NodeCoord, ConnectionVect}()  # adjacency for fluid propagation
+    fluid_propagation_visited::Set{NodeCoord} = Set{NodeCoord}()  # reusable visited-node buffer for propagate_fluid_types!
+    fluid_propagation_pending::Vector{NodeCoord} = Vector{NodeCoord}()  # reusable DFS stack for propagate_fluid_types!
+end
+
+"Empty all scratch buffers in one call. Use at early-exit paths to leave the scratchpad in a clean state."
+function clear_calculator_scratchpad!(scratchpad::CalculatorScratchpad)
+    empty!(scratchpad.pruning_nodeconnections)
+    empty!(scratchpad.groundsearch_root_index)
+    empty!(scratchpad.groundsearch_nodeconnections)
+    empty!(scratchpad.groundsearch_grounded_nodes)
+    empty!(scratchpad.groundsearch_pending_nodes)
+    empty!(scratchpad.dangling_dependant_element_id_set)
+    empty!(scratchpad.filtered_source_element_index)
+    empty!(scratchpad.final_nodeconnections)
+    empty!(scratchpad.fluid_propagation_visited)
+    empty!(scratchpad.fluid_propagation_pending)
+    return nothing
+end
 
 """
 Pre-allocated buffers and cached state for zero-allocation A matrix construction.
@@ -239,15 +270,10 @@ function update_components!(gamemap::GameMap, mna_state::MNA_State, derivedmapst
     return nothing
 end
 
-"Push mapped absolute elements from a ComponentOnTile directly into the output vector, bypassing ntuple allocation."
+"Push active absolute elements from a ComponentOnTile directly into the output vector."
 function push_mapped_elements!(out::Vector{AbsoluteElement}, tilecomp::ComponentOnTile, tile::TileCoord)
-    rel_elements = produce_rel_elements(tilecomp.component)
-    rot = tilecomp.rotation
-    i = 1
-    for rel in rel_elements
-        abs_elem = map_element(rel, tile, i, rot)
+    for abs_elem in produce_abs_elements(tilecomp, tile)
         abs_elem.active && push!(out, abs_elem)
-        i += 1
     end
     return nothing
 end
@@ -326,42 +352,84 @@ function list_nodes(elements::Vector{AbsoluteElement})
     return node_count
 end
 
-"Prune dead branches that will break the MNA, by iteratively removing nodes with a single element connection"
-function prune(elements::Vector{AbsoluteElement})::Vector{AbsoluteElement}
-    final_nodes::Dict{NodeCoord, UInt16} = list_nodes(elements)
-    final_elements::Vector{AbsoluteElement} = copy(elements)
+"Return `true` for all elements. Used as the default filter hook for graph builders."
+_include_all_elements(::AbsoluteElement)::Bool = true
 
-    bad_nodes = [k for (k, v) in final_nodes if v <= 1] # nodes with 0 or 1 connections are bad
+function _all_non_ground_nodes_present(element::AbsoluteElement, present_nodes::AbstractSet)::Bool
+    for i in 1:2
+        node = getfield(element.connections, i)
+        if !is_grounded(node) && node ∉ present_nodes
+            return false
+        end
+    end
+    return true
+end
 
-    while !isempty(bad_nodes)
-        node = pop!(bad_nodes)
+function _prune_leaf_cascade!(nodeconnections::Dict{NodeCoord, ConnectionVect}, node::NodeCoord)
+    haskey(nodeconnections, node) || return nothing
+    connected_nodes = nodeconnections[node]
+    length(connected_nodes) == 1 || return nothing
 
-        i = 1
-        for element in final_elements
-            if element_has_node(element, node)
-                other_node = element_other_node(element, node)
-                if !is_grounded(other_node)
-                    if final_nodes[other_node] != 0 # prevent underflow
-                        final_nodes[other_node] -= 1
-                    end
-                    if final_nodes[other_node] <= 1 # push newly unconnected nodes
-                        push!(bad_nodes, other_node)
-                    end
-                end
-            else # element doesn't have bad node, should be kept
-                final_elements[i] = element
-                i += 1
+    connected_node = first(connected_nodes)
+
+    delete!(nodeconnections, node)
+
+    haskey(nodeconnections, connected_node) || return nothing
+
+    updated_connections = filter(!=(node), nodeconnections[connected_node])
+    nodeconnections[connected_node] = updated_connections
+
+    if length(updated_connections) <= 1
+        _prune_leaf_cascade!(nodeconnections, connected_node)
+    end
+
+    return nothing
+end
+
+"Prune dead branches in-place on `elements` using the cascade leaf-removal algorithm."
+function prune!(elements::Vector{AbsoluteElement}, scratchpad::CalculatorScratchpad)::Nothing
+    pruning_nodeconnections = scratchpad.pruning_nodeconnections
+
+    build_node_connection_map!(
+        pruning_nodeconnections,
+        elements;
+        include_ground_neighbour = true,
+        # Prune degree counts incident elements, so parallel edges must stay distinct.
+        deduplicate_neighbours = false,
+    )
+
+    # Restart the dictionary scan after each local cascade, because the cascade mutates the iterator
+    while true
+        leaf_node = nothing
+        for (node, connected_nodes) in pruning_nodeconnections
+            if length(connected_nodes) <= 1
+                leaf_node = node
+                break
             end
         end
 
-        resize!(final_elements, i - 1)
+        isnothing(leaf_node) && break
+
+        if isempty(pruning_nodeconnections[leaf_node])
+            delete!(pruning_nodeconnections, leaf_node)
+        else
+            _prune_leaf_cascade!(pruning_nodeconnections, leaf_node)
+        end
     end
 
-    return final_elements
+    present_nodes = keys(pruning_nodeconnections)
+    filter!(element -> _all_non_ground_nodes_present(element, present_nodes), elements)
+
+    empty!(pruning_nodeconnections)
+
+    return nothing
 end
 
 """
-Returns a Dict of connections between nodes, where the keys are the nodes and the values are sets of connected nodes.
+Fill `nodeconnections` with node-to-node adjacency derived from `elements`.
+
+By default this preserves the existing fluid-propagation behaviour by excluding
+grounded elements entirely.
 
 NOTE: This function uses small vectors in the hot loop to avoid allocation for each node.
 There is actually a finite set of nodes that could be connected to each node (12) so this
@@ -369,193 +437,161 @@ can be significantly optimized by using a SmallBitSet indexing those 12 possibil
 could drop the size in memory of a ConnectionVect from 74 bytes to 2 bytes, which will reduce the
 copy overhead on the pushes to immutable types, and would reduce memory usage of nodeconnections.
 """
-function build_node_connection_map!(derivedmapstate::DerivedMapState)
-    elements = derivedmapstate.prunedelements
-    nodeconnections = derivedmapstate.nodeconnections
+function build_node_connection_map!(
+        nodeconnections::Dict{NodeCoord, ConnectionVect},
+        elements::Vector{AbsoluteElement};
+        element_filter_function::Function = _include_all_elements,
+        include_ground_neighbour::Bool = false,
+        deduplicate_neighbours::Bool = true,
+    )
+
     empty!(nodeconnections)
 
     for element in elements
+        element_filter_function(element) || continue
+
         v1 = element.connections.v1
         v2 = element.connections.v2
 
-        if is_grounded(v2) # grounded nodes contribute no connections
-            continue
+        if !is_grounded(v1)
+            neighbour = is_grounded(v2) ? GROUND_NODE : v2
+            if include_ground_neighbour || neighbour != GROUND_NODE
+                old_connections = get(nodeconnections, v1, ConnectionVect())
+                if !deduplicate_neighbours || neighbour ∉ old_connections
+                    nodeconnections[v1] = push(old_connections, neighbour)
+                end
+            end
         end
 
-        oldset = get(nodeconnections, v1, ConnectionVect())
-        if !(v2 in oldset)
-            nodeconnections[v1] = push(oldset, v2)
-        end
-
-        oldset = get(nodeconnections, v2, ConnectionVect())
-        if !(v1 in oldset)
-            nodeconnections[v2] = push(oldset, v1)
+        if !is_grounded(v2)
+            neighbour = is_grounded(v1) ? GROUND_NODE : v1
+            if include_ground_neighbour || neighbour != GROUND_NODE
+                old_connections = get(nodeconnections, v2, ConnectionVect())
+                if !deduplicate_neighbours || neighbour ∉ old_connections
+                    nodeconnections[v2] = push(old_connections, neighbour)
+                end
+            end
         end
     end
     return nothing
 end
 
+_include_ground_search_connection_element(element::AbsoluteElement)::Bool =
+    element.type != CONST_CURRENT &&
+    element.type != C_DEP_CURRENT &&
+    !(element.type == CONST_RESISTOR && element.value == 0.0) &&
+    !is_grounded(element.connections.v1) &&
+    !is_grounded(element.connections.v2)
+
+_include_ground_search_root_element(element::AbsoluteElement)::Bool =
+    !isnothing(grounded_element_node(element)) &&
+    element.type != CONST_CURRENT &&
+    element.type != C_DEP_CURRENT &&
+    !(element.type == CONST_RESISTOR && element.value == 0.0)
+
 """
-Performs graph traversal across all elements, starting from grounded elements to
+Mutate `elements` vector to keep only elements that are grounded-reachable.
+
+Performs graph traversal across node connection map, starting from grounded elements to
 exclude elements not connected to ground. Current sources (CONST_CURRENT,
-C_DEP_CURRENT) are excluded from the traversal graph because they do not provide
-voltage references — a node connected to ground solely through current sources has
-undetermined voltage, causing MNA singularity.
+C_DEP_CURRENT) are excluded from the connection map because they do not provide
+voltage references. A node connected to ground solely through current sources has
+undetermined voltage, causing MNA singularity. 
+
+This behavior is captured in _include_ground_search_connection_element
 
 Current sources whose non-ground nodes are reachable through other elements are
 still included in the output (they are valid circuit elements when their nodes
 have determined voltages from other paths).
 
-Returns elements that are reachable from ground through voltage-reference-capable
-paths, plus current sources whose nodes are coincidentally reachable.
+This behavior is captured in _include_ground_search_root_element
 """
-function ground_search(elements::Vector{AbsoluteElement})
-    node_elements = Dict{NodeCoord, MutableSmallVector{10, UInt16}}()
-    sizehint!(node_elements, length(elements))
+function ground_search!(elements::Vector{AbsoluteElement}, scratchpad::CalculatorScratchpad)::Nothing
+    groundsearch_nodeconnections = scratchpad.groundsearch_nodeconnections
+    root_index = scratchpad.groundsearch_root_index
+    groundsearch_grounded_nodes = scratchpad.groundsearch_grounded_nodes
+    pending_nodes = scratchpad.groundsearch_pending_nodes
 
-    for (index, element) in enumerate(elements)
-        # skip zero-conductance resistors (no voltage/current contribution)
-        if element.type == CONST_RESISTOR && element.value == 0.0
-            continue
-        end
-
-        # skip current sources — they don't provide voltage references
-        if element.type == CONST_CURRENT || element.type == C_DEP_CURRENT
-            continue
-        end
-
-        # register non-ground nodes for traversal
-        for i in 1:2
-            node = getfield(element.connections, i)
-            # if the node is not grounded, then it can be used to find other elements
-            if !is_grounded(node)
-                if !haskey(node_elements, node)
-                    node_elements[node] = MutableSmallVector{10, UInt16}()
-                end
-                push!(node_elements[node], UInt16(index))
-            end
-        end
-    end
-
-    #= ---------- BFS from grounded non-current elements ---------- =#
-    grounded_elements = Set{UInt16}(
-        UInt16(index) for (index, elem) in enumerate(elements)
-        if is_grounded(elem.connections.v2)
-           && elem.type != CONST_CURRENT
-           && elem.type != C_DEP_CURRENT
+    build_node_connection_map!(groundsearch_nodeconnections, elements;
+        element_filter_function = _include_ground_search_connection_element,
     )
-    to_visit = Set{UInt16}()
-    visited = Set{UInt16}()
-    sizehint!(visited, length(elements))
+    index_grounded_source_elements!(root_index, elements;
+        element_filter_function = _include_ground_search_root_element,
+    )
 
-    while !isempty(grounded_elements)
-        # start at grounded element that hasn't been visited yet
-        grounded_element = pop!(grounded_elements)
-        grounded_element ∈ visited && continue
-        push!(to_visit, grounded_element)
+    empty!(groundsearch_grounded_nodes)
+    empty!(pending_nodes)
 
-        while !isempty(to_visit)
-            current = pop!(to_visit)
-            push!(visited, current)
+    for node in keys(root_index)
+        node ∈ groundsearch_grounded_nodes && continue
+        push!(pending_nodes, node)
 
-            for i in 1:2
-                node = getfield(elements[current].connections, i)
-                if !is_grounded(node)
-                    connected_elements = get(node_elements, node, nothing)
-                    connected_elements === nothing && continue
-                    for element in connected_elements
-                        element ∉ visited && push!(to_visit, element)
-                    end
-                end
+        while !isempty(pending_nodes)
+            current = pop!(pending_nodes)
+            current ∈ groundsearch_grounded_nodes && continue
+            push!(groundsearch_grounded_nodes, current)
+
+            connected_nodes = get(groundsearch_nodeconnections, current, nothing)
+            isnothing(connected_nodes) && continue
+            for neighbour in connected_nodes
+                neighbour ∈ groundsearch_grounded_nodes || push!(pending_nodes, neighbour)
             end
         end
     end
 
-    #= ---------- Collect visited nodes ---------- =#
-    visited_nodes = Set{NodeCoord}()
-    sizehint!(visited_nodes, length(visited) * 2)
-    for idx in visited
-        for i in 1:2
-            node = getfield(elements[idx].connections, i)
-            is_grounded(node) || push!(visited_nodes, node)
-        end
-    end
+    filter!(element -> _all_non_ground_nodes_present(element, groundsearch_grounded_nodes), elements)
 
-    #= ---------- Include current sources whose nodes are all reachable ---------- =#
-    for (index, element) in enumerate(elements)
-        uidx = UInt16(index)
-        uidx ∈ visited && continue # already included
-        (element.type == CONST_CURRENT || element.type == C_DEP_CURRENT) || continue
+    empty!(groundsearch_nodeconnections)
+    empty!(root_index)
+    empty!(groundsearch_grounded_nodes)
+    empty!(pending_nodes)
 
-        all_visited = true
-        for i in 1:2
-            node = getfield(element.connections, i)
-            if !is_grounded(node) && node ∉ visited_nodes
-                all_visited = false
-                break
-            end
-        end
-        all_visited && push!(visited, uidx)
-    end
-
-    return elements[sort!(collect(visited))]
+    return nothing
 end
 
 """
-Removes dependant elements that depend on an element that has been pruned.
-This can leave other elements in a state where they should also now be pruned,
-if this function modifies the vector you should call prune and ground_search again.
+Removes dependant elements whose controlling element has been pruned, mutating `elements` in place.
+
+`element_id_set` is a caller-owned scratch buffer (typically
+`scratchpad.dangling_dependant_element_id_set` from `CalculatorScratchpad`);
+it is filled, used for fixed-point iteration, then emptied before this function returns.
+
+If this function removes any elements, the caller should rerun prune and the ground-search pass.
 """
-function clear_dangling_dependants(elements::Vector{AbsoluteElement})::Vector{AbsoluteElement}
-    # exit early for empty vector
-    if isempty(elements)
-        return Vector{AbsoluteElement}()
-    end
-
-    # create set of element IDs for fast membership tests
-    element_IDs = Set{ElementID}()
-    sizehint!(element_IDs, length(elements))
+function clear_dangling_dependants!(elements::Vector{AbsoluteElement}, element_id_set::Set{ElementID})::Nothing
+    # Refill the reusable ID set from the current survivor list.
+    empty!(element_id_set)
+    sizehint!(element_id_set, length(elements); shrink = false)  # grow-only: avoids shrink+regrow allocation cycles
     for element in elements
-        push!(element_IDs, element.id)
+        push!(element_id_set, element.id)
     end
 
-    final_elements::Vector{AbsoluteElement} = Vector{AbsoluteElement}()
-    sizehint!(final_elements, length(elements))
-
-    # Check dependent elements repeatedly until no change is made (fixed-point).
-    # We iterate over the original `elements` each pass, skipping any whose ID was
-    # already removed from element_IDs in a prior pass.
+    # Repeatedly scan the vector, removing dependants whose controller ID has already been deleted from the set.
     changed = true
     while changed
         changed = false
-        empty!(final_elements)
-
         for element in elements
-            # skip elements already removed in a prior pass
-            element.id in element_IDs || continue
+            element.id in element_id_set || continue  # already removed in a prior pass
+            element.dependent_id.index == 0 && continue  # no controller needed
 
-            push!(final_elements, element)
-
-            # elements with no dependent can always stay
-            if element.dependent_id.index == 0
-                continue
-            end
-
-            # dependent element must have its dependency present
-            if !(element.dependent_id in element_IDs)
-                pop!(final_elements)
-                delete!(element_IDs, element.id) # remove our own ID so dependants of us are also cleared
+            if !(element.dependent_id in element_id_set)
+                delete!(element_id_set, element.id)  # cascades to our own dependants
                 changed = true
             end
         end
     end
 
-    return final_elements
+    # Compact the vector in place, keep only elements still in the survivor set.
+    filter!(element -> element.id in element_id_set, elements)
+
+    empty!(element_id_set)  # leave the scratch buffer clean for the next call
+
+    return nothing
 end
 
 "Returns the current through an absolute element, or nothing if element was pruned"
 function abs_element_get_current(element::AbsoluteElement, derivedmapstate::DerivedMapState, mna_state::Union{MNA_State, MNA_StateSnapshot})
-    if !(element in derivedmapstate.prunedelements)
+    if !(element in derivedmapstate.filteredelements)
         return nothing
     end
 
@@ -670,12 +706,12 @@ function index_fluid_declarations!(derivedmapstate::DerivedMapState)
 
     for abs_decl in derivedmapstate.all_fluid_declarations
         node = abs_decl.node_coord
-        # Only index nodes that survived pruning
-        haskey(derivedmapstate.prunednodes, node) || continue
+        # Only index nodes that survived filtering
+        haskey(derivedmapstate.filterednodes, node) || continue
 
         decl = abs_decl.declaration
         existing = get(node_decls, node, nothing)
-        if existing === nothing
+        if isnothing(existing)
             node_decls[node] = decl
         else
             node_decls[node] = prioritise_declarations(existing, decl)
@@ -702,17 +738,22 @@ end
 "Fallback temperature when a region has no active flow"
 function _fallback_temperature(fluid::FluidType)::Float64
     temp = get_default_temperature(Val(fluid))
-    return temp !== nothing ? temp : 300.0
+    return !isnothing(temp) ? temp : 300.0
 end
 
-"Index singly grounded pruned elements by their non-ground node for O(1) source lookup."
-function index_grounded_source_elements!(derivedmapstate::DerivedMapState)
-    source_index = derivedmapstate.grounded_source_element_index
+"Index singly grounded elements by their non-ground node for O(1) source lookup."
+function index_grounded_source_elements!(
+        source_index::Dict{NodeCoord, Int},
+        elements::Vector{AbsoluteElement};
+    element_filter_function::Function = _include_all_elements,
+    )
+
     empty!(source_index)
 
-    for (index, element) in pairs(derivedmapstate.prunedelements)
+    for (index, element) in pairs(elements)
+        element_filter_function(element) || continue
         node = grounded_element_node(element)
-        node === nothing && continue
+        isnothing(node) && continue
         get!(source_index, node, index)
     end
 
@@ -720,17 +761,19 @@ function index_grounded_source_elements!(derivedmapstate::DerivedMapState)
 end
 
 "Traverse from source nodes to assign fluid types and build regions. No MNA needed."
-function propagate_fluid_types!(derivedmapstate::DerivedMapState)
-    nodeconnections = derivedmapstate.nodeconnections
+function propagate_fluid_types!(derivedmapstate::DerivedMapState, scratchpad::CalculatorScratchpad)
+    nodeconnections = scratchpad.final_nodeconnections
     actualfluids    = derivedmapstate.nodeactualfluids
     node_to_region  = derivedmapstate.node_to_region
     node_decls      = derivedmapstate.node_declarations
     source_nodes    = derivedmapstate.source_nodes
+    visited         = scratchpad.fluid_propagation_visited
+    pending_nodes   = scratchpad.fluid_propagation_pending
 
     empty!(actualfluids)
     empty!(node_to_region)
+    empty!(visited)
 
-    visited = Set{NodeCoord}()
     region_id = 0
 
     for start_node in source_nodes
@@ -739,7 +782,7 @@ function propagate_fluid_types!(derivedmapstate::DerivedMapState)
         fluid_type = start_decl.fluid_type
 
         region_id += 1
-        pending_nodes = NodeCoord[start_node]
+        push!(pending_nodes, start_node)
 
         while !isempty(pending_nodes)
             current = pop!(pending_nodes)
@@ -748,7 +791,7 @@ function propagate_fluid_types!(derivedmapstate::DerivedMapState)
 
             # Check declaration compatibility at this node
             decl = get(node_decls, current, nothing)
-            if decl !== nothing
+            if !isnothing(decl)
                 _check_declaration_compatible(decl, fluid_type)
             end
 
@@ -759,22 +802,24 @@ function propagate_fluid_types!(derivedmapstate::DerivedMapState)
                 neighbour in visited || push!(pending_nodes, neighbour)
             end
         end
+        # pending_nodes is empty here (BFS ran to completion), ready for next region
     end
+    empty!(visited)
     return nothing
 end
 
-"Get the MNA current magnitude through the grounded element at a source node"
-function _get_source_flow_rate(node::NodeCoord, derivedmapstate::DerivedMapState, mna_state)
-    element_index = get(derivedmapstate.grounded_source_element_index, node, 0)
+"Get the MNA current magnitude through the filtered (grounded) source element at a node"
+function _get_source_flow_rate(node::NodeCoord, derivedmapstate::DerivedMapState, scratchpad::CalculatorScratchpad, mna_state)
+    element_index = get(scratchpad.filtered_source_element_index, node, 0)
     element_index == 0 && return 0.0
 
-    element = derivedmapstate.prunedelements[element_index]
+    element = derivedmapstate.filteredelements[element_index]
     current = abs_element_get_current(element, derivedmapstate, mna_state)
-    return current === nothing ? 0.0 : abs(current)
+    return isnothing(current) ? 0.0 : abs(current)
 end
 
 "Compute per-region temperatures using flow-weighted averages. Requires solved MNA state."
-function compute_region_temperatures!(derivedmapstate::DerivedMapState, mna_state)
+function compute_region_temperatures!(derivedmapstate::DerivedMapState, scratchpad::CalculatorScratchpad, mna_state)
     region_temps = derivedmapstate.region_temperatures
     node_temps   = derivedmapstate.node_temperatures
     node_to_region = derivedmapstate.node_to_region
@@ -796,7 +841,7 @@ function compute_region_temperatures!(derivedmapstate::DerivedMapState, mna_stat
         source = abs_decl.declaration::FluidSource
         region_fluid_type[rid] = source.fluid_type
 
-        flow = _get_source_flow_rate(node, derivedmapstate, mna_state)
+        flow = _get_source_flow_rate(node, derivedmapstate, scratchpad, mna_state)
         if flow > 0.0
             region_weighted_temp[rid] = get(region_weighted_temp, rid, 0.0) + flow * source.temperature
             region_total_flow[rid]    = get(region_total_flow, rid, 0.0) + flow
@@ -819,9 +864,9 @@ function compute_region_temperatures!(derivedmapstate::DerivedMapState, mna_stat
     return nothing
 end
 
-"Populate `mna_state` node index lookups from pruned nodes (empties and refills existing dicts)."
+"Populate `mna_state` node index lookups from filtered nodes (empties and refills existing dicts)."
 function MNA_indexnodes!(mna_state::MNA_State, derivedmapstate::DerivedMapState)
-    nodes = derivedmapstate.prunednodes
+    nodes = derivedmapstate.filterednodes
 
     num_nodes = length(nodes)
     node_to_index = mna_state.node_to_index
@@ -858,7 +903,7 @@ function MNA_splitelements!(mna_state::MNA_State, derivedmapstate::DerivedMapSta
     empty!(mna_state.vsource_lookup)
 
     # sort elements into their respective dicts
-    for element::AbsoluteElement in derivedmapstate.prunedelements
+    for element::AbsoluteElement in derivedmapstate.filteredelements
         if is_resistor(element)
             mna_state.resistors[element.id] = element
         elseif is_csource(element)

@@ -193,8 +193,8 @@ A wrapper struct for a component that has been placed on the map.
 Includes shared placement information, currently only the rotation.
 All behavioural methods are delegated to the component.
 """
-struct ComponentOnTile
-    component::ComponentBehavior
+struct ComponentOnTile{T <: ComponentBehavior}
+    component::T
     rotation::HexAxis
 end
 

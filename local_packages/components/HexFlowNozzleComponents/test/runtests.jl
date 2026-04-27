@@ -47,8 +47,10 @@ function make_nozzle_state(nozzle::NozzleBehavFrag; tile::TileCoord = TEST_TILE,
 
     nozzle_rel_element = produce_rel_elements(nozzle)[1]
     nozzle_abs_element = map_element(nozzle_rel_element, tile, 1, rotation)
+    filteredelements = [nozzle_abs_element]
     derivedmapstate = DerivedMapState(
-        prunedelements = [nozzle_abs_element],
+        filteredelements = filteredelements,
+        filterednodes = list_nodes(filteredelements),
         nodeactualfluids = Dict(nozzle_input_node => fluid),
         node_temperatures = Dict(nozzle_input_node => temperature_k)
     )

@@ -28,6 +28,12 @@ import JLD2: rconvert
 
 #= ---------- Core Map Types ----------- =#
 
+"Rebuild legacy non-parametric `ComponentOnTile` values from a NamedTuple."
+JLD2.rconvert(::Type{HexComponentsAPI.ComponentOnTile}, nt::NamedTuple) = HexComponentsAPI.ComponentOnTile(
+    nt.component,
+    get(nt, :rotation, HexFrame.Q_POS),
+)
+
 "Rebuild `ShipMap` from a NamedTuple."
 JLD2.rconvert(::Type{FlowMap.ShipMap}, nt::NamedTuple) = FlowMap.ShipMap(
     components = get(nt, :components, Dict{TileCoord, ComponentOnTile}()),
@@ -152,6 +158,7 @@ end
 "Build the JLD2 typemap used to route current save types through reconstruction hooks."
 function _build_map_typemap()::Dict{String, Any}
     return Dict(
+        "HexComponentsAPI.ComponentOnTile" => JLD2.Upgrade(HexComponentsAPI.ComponentOnTile),
         "FlowMap.ShipMap" => JLD2.Upgrade(FlowMap.ShipMap),
         "FlowMap.GameMap" => JLD2.Upgrade(FlowMap.GameMap),
         "FlowMap.LearningProgress" => JLD2.Upgrade(FlowMap.LearningProgress),

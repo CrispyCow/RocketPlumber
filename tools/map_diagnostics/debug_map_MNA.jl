@@ -402,8 +402,8 @@ Returns `(success, failed_step, exception)`.
 On failure the function still populates derived/mna as far as possible
 so that analyse_A_matrix can inspect the partial state.
 """
-function run_simulation_tick!(gamemap::GameMap, derived::DerivedMapState,
-                              mna::MNA_State, tick::Int64)
+function run_simulation_tick!(gamemap::GameMap, derived::DerivedMapState, mna::MNA_State, tick::Int64)
+    scratchpad = CalculatorScratchpad()
 
     # --- update_components! ---
     println("\n  Step 1: update_components!")
@@ -420,29 +420,31 @@ function run_simulation_tick!(gamemap::GameMap, derived::DerivedMapState,
     try
         find_ship_surface_edgetiles!(derived, gamemap)
 
-        derived.allelements = list_elements(gamemap)
-        derived.allnodes = list_nodes(derived.allelements)
+        list_elements!(derived.allelements, gamemap)
+        list_nodes!(derived.allnodes, derived.allelements)
         println("    All elements: $(length(derived.allelements))    All nodes: $(length(derived.allnodes))")
 
-        # Iterative pruning loop (runs until hash-stable)
-        derived.prunedelements = derived.allelements
+        # Refill the single working survivor vector, then run the fixed-point loop
+        resize!(derived.filteredelements, length(derived.allelements))
+        copyto!(derived.filteredelements, derived.allelements)
+
         last_hash::UInt64 = 0
         prune_iters = 0
-        while last_hash != hash(derived.prunedelements)
-            derived.prunedelements = prune(derived.prunedelements)
-            derived.prunedelements = ground_search(derived.prunedelements)
-            last_hash = hash(derived.prunedelements)
-            derived.prunedelements = clear_dangling_dependants(derived.prunedelements)
+        while last_hash != hash(derived.filteredelements)
+            prune!(derived.filteredelements, scratchpad)
+            ground_search!(derived.filteredelements, scratchpad)
+            last_hash = hash(derived.filteredelements)
+            clear_dangling_dependants!(derived.filteredelements, scratchpad.dangling_dependant_element_id_set)
             prune_iters += 1
         end
-        derived.prunednodes = list_nodes(derived.prunedelements)
-        println("    After pruning ($prune_iters iters): $(length(derived.prunedelements)) elements    $(length(derived.prunednodes)) nodes")
+        list_nodes!(derived.filterednodes, derived.filteredelements)
+        println("    After filtering ($prune_iters iters): $(length(derived.filteredelements)) elements    $(length(derived.filterednodes)) nodes")
 
-        if !isempty(derived.prunednodes)
+        if !isempty(derived.filterednodes)
             list_fluid_declarations!(derived.all_fluid_declarations, gamemap)
             index_fluid_declarations!(derived)
-            build_node_connection_map!(derived)
-            propagate_fluid_types!(derived)
+            build_node_connection_map!(scratchpad.final_nodeconnections, derived.filteredelements)
+            propagate_fluid_types!(derived, scratchpad)
             MNA_indexnodes!(mna, derived)
             MNA_splitelements!(mna, derived)
 
@@ -454,7 +456,7 @@ function run_simulation_tick!(gamemap::GameMap, derived::DerivedMapState,
             empty!(mna.vsource_currents)
             empty!(mna.node_voltages_scaled)
             empty!(derived.nodeactualfluids)
-            println("    Circuit empty — no pruned nodes, skipping MNA")
+            println("    Circuit empty — no filtered nodes, skipping MNA")
         end
     catch e
         println("  [✗] update_map! FAILED: $e")
@@ -462,7 +464,7 @@ function run_simulation_tick!(gamemap::GameMap, derived::DerivedMapState,
     end
 
     # --- update_mna! (solve) ---
-    if !isempty(derived.prunednodes)
+    if !isempty(derived.filterednodes)
         println("  Step 3: update_mna!")
         try
             mna.mat_Z = MNA_getZ(mna)
@@ -524,11 +526,11 @@ function main(args::Vector{String})
     # --- Always print element listings ---
     if !isempty(derived.allelements)
         println()
-        print_elements(derived.allelements; label = "All elements (pre-prune)")
+        print_elements(derived.allelements; label = "All elements (baseline)")
     end
-    if !isempty(derived.prunedelements)
+    if !isempty(derived.filteredelements)
         println()
-        print_elements(derived.prunedelements; label = "Pruned elements (post-prune)")
+        print_elements(derived.filteredelements; label = "Filtered elements (post-prune/ground/dangling)")
     end
 
     # --- A matrix analysis (runs on success AND failure if state is available) ---
