@@ -614,7 +614,7 @@ end
 
 "Renders all node vertices with colours based on MNA voltage/pressure values."
 function node_queued_render!(queue::Vector{<:RenderCommand}, map::GLObjectMap, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot)
-    nodes = list_nodes(derivedmapstate.allelements)
+    nodes = list_nodes(derivedmapstate.primaryelements)
     isempty(nodes) && return nothing
 
     for (node, _) in nodes

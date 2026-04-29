@@ -61,13 +61,13 @@ function make_turbopump(
         ;
         max_pump_voltage::Float64 = 50.0,
         series_conductance::Float64 = 1.0,
-    max_turbine_conductance::Float64 = 0.3,
-    cycle_efficiency::Float64 = 0.6,
+        max_turbine_conductance::Float64 = 0.3,
+        cycle_efficiency::Float64 = 0.6,
         current_rpm::Float64 = 0.0,
         max_rpm::Float64 = 3000.0,
-    rotor_inertia::Float64 = 1000.0,
-    friction_coefficient::Float64 = 0.005,
-        stall_state::StallBehavFrag = StallBehavFrag()
+        rotor_inertia::Float64 = 1000.0,
+        friction_coefficient::Float64 = 0.005,
+        deactivation::AutoDeactivationBehavFrag = AutoDeactivationBehavFrag()
     )
     return TurboPumpCompBehav(
         max_pump_voltage = max_pump_voltage,
@@ -78,7 +78,7 @@ function make_turbopump(
         max_rpm = max_rpm,
         rotor_inertia = rotor_inertia,
         friction_coefficient = friction_coefficient,
-        stall_state = stall_state
+        deactivation = deactivation
     )
 end
 
@@ -167,10 +167,11 @@ end
     @test elements[3].value ≈ effective_turbine_conductance(comp)
     @test all(elem.active for elem in elements)
 
-    stall!(comp.stall_state)
-    stalled_elements = produce_rel_elements(comp)
-    @test all(!elem.active for elem in stalled_elements)
-    unstall!(comp.stall_state)
+    # Auto-deactivation disables all three elements.
+    deactivate!(comp.deactivation)
+    deactivated_elements = produce_rel_elements(comp)
+    @test all(!elem.active for elem in deactivated_elements)
+    reactivate!(comp.deactivation)
 
     tunables = get_tunables(comp)
     @test tunables isa NTuple{8, TunableProps}
@@ -192,22 +193,14 @@ end
     @test decls[2] === RelativeFluidDeclaration(HexFrame.NODE_Q_NEG, FluidConstraintRule(HexFluids.IS_LIQUID))
     @test decls[3] === RelativeFluidDeclaration(HexFrame.NODE_S_POS, FluidConstraintRule(HexFluids.IS_GAS))
 
-    stall!(comp.stall_state)
-    actions = get_actions(comp)
-    @test length(actions) == 1
-    @test actions[1].id === :unstall
-    success, _ = do_action!(comp, :unstall)
-    @test success
-    @test !is_stalled(comp.stall_state)
-
-    stall!(comp.stall_state)
+    # No :unstall action and clicking is a no-op.
+    @test get_actions(comp) == ()
     on_click!(comp)
-    @test !is_stalled(comp.stall_state)
+    @test !is_inactive(comp.deactivation)
 end
 
 @testset "Turbo pump RPM updates" begin
     # Friction-only decay (no gas, no pump load)
-    # Use high inertia / low friction so single-tick delta stays within positive RPM range
     friction_only = make_turbopump(current_rpm = 1200.0, rotor_inertia = 6000.0, friction_coefficient = 0.1)
     update_flowbehav!(friction_only; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = MNA_State(), derivedmapstate = make_derived_state())
     applied_inertia = friction_only.rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
@@ -254,24 +247,13 @@ end
     load_expected = 1500.0 + (-pump_power - load_friction) / (load_applied_inertia * BASE_UPS)
     @test get_current_rpm(loaded.rotor) ≈ load_expected
 
-    # Back-drive stalls the pump; RPM decays via friction only
-    reversed = make_turbopump(current_rpm = 1200.0, rotor_inertia = 6000.0, friction_coefficient = 0.1)
-    reversed_mna = register_vsources!(MNA_State(), TEST_TILE, 1)
-    reversed_mna.vsource_currents[ElementID(TEST_TILE, 1)] = 0.5
-    update_flowbehav!(reversed; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = reversed_mna, derivedmapstate = make_derived_state())
-    reversed_applied_inertia = reversed.rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
-    reversed_friction = turbopump_friction_power(reversed, 1200.0)
-    reversed_expected = 1200.0 - reversed_friction / (reversed_applied_inertia * BASE_UPS)
-    @test is_stalled(reversed.stall_state)
-    @test get_current_rpm(reversed.rotor) ≈ reversed_expected
-
     # Normal startup: negative pump current + gas pressure = spin-up
     startup = make_turbopump(current_rpm = 0.0)
     startup_mna = register_vsources!(MNA_State(), TEST_TILE, 1)
     startup_mna.vsource_currents[ElementID(TEST_TILE, 1)] = -0.3
     set_node_voltage!(startup_mna, TEST_TILE, HexFrame.NODE_S_POS, 40.0)
     update_flowbehav!(startup; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = startup_mna, derivedmapstate = make_derived_state(fluid = HexFluids.MONOPROP_GAS, temperature_k = 800.0))
-    @test !is_stalled(startup.stall_state)
+    @test !is_inactive(startup.deactivation)
     @test get_current_rpm(startup.rotor) > 0.0
 
     # Post-tick element contract: pump voltage tracks RPM fraction
@@ -288,8 +270,137 @@ end
     missing_fluid_mna = MNA_State()
     set_node_voltage!(missing_fluid_mna, TEST_TILE, HexFrame.NODE_S_POS, 40.0)
     update_flowbehav!(missing_fluid; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = missing_fluid_mna, derivedmapstate = DerivedMapState())
-    missing_expected = 1200.0 - reversed_friction / (reversed_applied_inertia * BASE_UPS)
+    missing_applied_inertia = missing_fluid.rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
+    missing_friction = turbopump_friction_power(missing_fluid, 1200.0)
+    missing_expected = 1200.0 - missing_friction / (missing_applied_inertia * BASE_UPS)
     @test get_current_rpm(missing_fluid.rotor) ≈ missing_expected
+end
+
+@testset "Turbopump auto-deactivation" begin
+    tile = TEST_TILE
+    rotation = TEST_ROTATION
+
+    # Negative turbine-shunt voltage (reverse flow into S_POS) causes deactivation.
+    reversed_turbine = make_turbopump(current_rpm = 1200.0, rotor_inertia = 6000.0, friction_coefficient = 0.1)
+    rev_mna = MNA_State()
+    set_node_voltage!(rev_mna, tile, HexFrame.NODE_S_POS, -5.0; rotation = rotation)
+    update_flowbehav!(reversed_turbine; tile = tile, rotation = rotation, mna_state = rev_mna, derivedmapstate = make_derived_state())
+    @test is_inactive(reversed_turbine.deactivation)
+    # RPM decays via friction only after deactivation.
+    applied_inertia = reversed_turbine.rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
+    friction_power = turbopump_friction_power(reversed_turbine, 1200.0)
+    @test get_current_rpm(reversed_turbine.rotor) ≈ 1200.0 - friction_power / (applied_inertia * BASE_UPS)
+
+    # Positive pump-source current alone does NOT deactivate the turbopump.
+    positive_source = make_turbopump(current_rpm = 1200.0, rotor_inertia = 6000.0, friction_coefficient = 0.1)
+    pos_mna = register_vsources!(MNA_State(), tile, 1)
+    pos_mna.vsource_currents[ElementID(tile, 1)] = 0.5  # back-drive through pump source
+    # No reverse turbine voltage — turbine node at zero.
+    update_flowbehav!(positive_source; tile = tile, rotation = rotation, mna_state = pos_mna, derivedmapstate = make_derived_state())
+    @test !is_inactive(positive_source.deactivation)
+
+    # Reverse pump current does not contribute to rotor energy (clamp ensures this).
+    reverse_pump_energy = make_turbopump(current_rpm = 1500.0, rotor_inertia = 6000.0, friction_coefficient = 0.1)
+    rpe_mna = register_vsources!(MNA_State(), tile, 1)
+    rpe_mna.vsource_currents[ElementID(tile, 1)] = 2.0  # positive = reverse pump flow
+    update_flowbehav!(reverse_pump_energy; tile = tile, rotation = rotation, mna_state = rpe_mna, derivedmapstate = make_derived_state())
+    rpe_applied_inertia = reverse_pump_energy.rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
+    rpe_friction = turbopump_friction_power(reverse_pump_energy, 1500.0)
+    # Pump_current clamp yields 0 (max(-2.0, 0) = 0), so pump_power = 0, only friction acts.
+    rpe_expected = 1500.0 - rpe_friction / (rpe_applied_inertia * BASE_UPS)
+    @test get_current_rpm(reverse_pump_energy.rotor) ≈ rpe_expected
+
+    # Inactive pump: RPM decays via friction only, no further deactivation change.
+    inactive_decay = make_turbopump(current_rpm = 800.0, rotor_inertia = 6000.0, friction_coefficient = 0.1, deactivation = AutoDeactivationBehavFrag())
+    deactivate!(inactive_decay.deactivation)
+    update_flowbehav!(inactive_decay; tile = tile, rotation = rotation, mna_state = MNA_State(), derivedmapstate = make_derived_state())
+    id_applied_inertia = inactive_decay.rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
+    id_friction = turbopump_friction_power(inactive_decay, 800.0)
+    @test get_current_rpm(inactive_decay.rotor) ≈ 800.0 - id_friction / (id_applied_inertia * BASE_UPS)
+    @test is_inactive(inactive_decay.deactivation)  # stays inactive (reactivation is via scheduler)
+end
+
+@testset "Turbopump reactivation probe" begin
+    tile = TEST_TILE
+    rotation = TEST_ROTATION
+
+    # Active pump: no probe.
+    active_comp = make_turbopump(current_rpm = 500.0)
+    @test isnothing(get_reactivation_probe(active_comp; tile = tile, rotation = rotation))
+
+    # Inactive pump: three-element probe in correct index order.
+    inactive_comp = make_turbopump(current_rpm = 500.0, deactivation = AutoDeactivationBehavFrag())
+    deactivate!(inactive_comp.deactivation)
+    probe = get_reactivation_probe(inactive_comp; tile = tile, rotation = rotation)
+    @test probe isa ReactivationProbe
+    @test length(probe.rel_elements) == 3
+    @test probe.rel_elements[1].type === CONST_VOLTAGE    # pump source at index 1
+    @test probe.rel_elements[2].type === CONST_RESISTOR   # series resistor at index 2
+    @test probe.rel_elements[3].type === CONST_RESISTOR   # turbine shunt at index 3
+    @test all(elem.active for elem in probe.rel_elements)
+    # Probe voltage reflects current RPM.
+    @test probe.rel_elements[1].value ≈ inactive_comp.max_pump_voltage * get_rpm_fraction(inactive_comp.rotor)
+end
+
+@testset "Turbopump accept_reactivation_probe!" begin
+    tile = TEST_TILE
+    rotation = TEST_ROTATION
+
+    "Build a minimal DerivedMapState with the turbine abs element registered."
+    function make_turbine_probe_state(comp::TurboPumpCompBehav; s_pos_voltage::Float64)
+        turbine_rel_elem = RelativeElement(
+            RelativeElementConnections(HexFrame.NODE_S_POS, HexFrame.GROUND),
+            effective_turbine_conductance(comp),
+            HexElements.CONST_RESISTOR;
+            active = true
+        )
+        turbine_abs_elem = map_element(turbine_rel_elem, tile, 3, rotation)
+        s_pos_node = map_element(HexFrame.NODE_S_POS, tile, rotation)
+        mna_state = MNA_State()
+        mna_state.node_voltages[s_pos_node] = s_pos_voltage
+        derivedmapstate = DerivedMapState(
+            filteredelements = [turbine_abs_elem],
+            filterednodes = list_nodes([turbine_abs_elem])
+        )
+        return mna_state, derivedmapstate
+    end
+
+    # Positive turbine current (useful flow) → accept.
+    comp_accept = make_turbopump(current_rpm = 500.0)
+    deactivate!(comp_accept.deactivation)
+    mna_pos, dm_pos = make_turbine_probe_state(comp_accept; s_pos_voltage = 5.0)
+    @test accept_reactivation_probe!(comp_accept; tile = tile, rotation = rotation, derivedmapstate = dm_pos, mna_state = mna_pos)
+    @test !is_inactive(comp_accept.deactivation)
+
+    # Zero turbine current (neutral) → accept (not harmful).
+    comp_neutral = make_turbopump(current_rpm = 500.0)
+    deactivate!(comp_neutral.deactivation)
+    mna_zero, dm_zero = make_turbine_probe_state(comp_neutral; s_pos_voltage = 0.0)
+    @test accept_reactivation_probe!(comp_neutral; tile = tile, rotation = rotation, derivedmapstate = dm_zero, mna_state = mna_zero)
+    @test !is_inactive(comp_neutral.deactivation)
+
+    # Harmful reverse turbine current → reject; state unchanged.
+    comp_reject = make_turbopump(current_rpm = 500.0)
+    deactivate!(comp_reject.deactivation)
+    mna_neg, dm_neg = make_turbine_probe_state(comp_reject; s_pos_voltage = -5.0)
+    @test !accept_reactivation_probe!(comp_reject; tile = tile, rotation = rotation, derivedmapstate = dm_neg, mna_state = mna_neg)
+    @test is_inactive(comp_reject.deactivation)
+
+    # Pruned turbine element → reject.
+    comp_pruned = make_turbopump(current_rpm = 500.0)
+    deactivate!(comp_pruned.deactivation)
+    @test !accept_reactivation_probe!(comp_pruned; tile = tile, rotation = rotation, derivedmapstate = DerivedMapState(), mna_state = MNA_State())
+    @test is_inactive(comp_pruned.deactivation)
+
+    # Reverse pump-source current does NOT block reactivation.
+    comp_revpump = make_turbopump(current_rpm = 500.0)
+    deactivate!(comp_revpump.deactivation)
+    mna_revpump, dm_revpump = make_turbine_probe_state(comp_revpump; s_pos_voltage = 3.0)
+    # Inject a positive (reversing) pump source current into the mock state.
+    register_vsources!(mna_revpump, tile, 1)
+    mna_revpump.vsource_currents[ElementID(tile, 1)] = 2.0
+    @test accept_reactivation_probe!(comp_revpump; tile = tile, rotation = rotation, derivedmapstate = dm_revpump, mna_state = mna_revpump)
+    @test !is_inactive(comp_revpump.deactivation)
 end
 
 @testset "Variable conductance" begin

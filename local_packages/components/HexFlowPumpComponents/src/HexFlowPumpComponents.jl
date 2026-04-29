@@ -18,8 +18,9 @@ using HexFlowBasicComponents, HexFlowSwitchComponents
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional
 import HexComponentsAPI: on_click!, update_flowbehav!, render_map_elem!, get_actions, do_action!, produce_rel_fluid_declarations
+import HexComponentsAPI: get_reactivation_probe, accept_reactivation_probe!
 # Behavior Fragment Dependencies
-import HexFlowBasicComponents: stall!, unstall!, is_stalled
+import HexFlowBasicComponents: deactivate!, reactivate!, is_inactive
 import HexFlowSwitchComponents: set_target_conductance_to_min!, set_target_conductance_to_max!
 
 # Behavior Fragment Exports
@@ -41,6 +42,8 @@ struct PumpBehavFrag
 end
 
 const pump_element_index::Int = 1 # Pump voltage source element index
+const turbine_element_index::Int = 3 # Turbine shunt resistor element index
+const pump_probe_tol = 1e-9 # Tolerance for probe acceptance and deactivation detection
 
 "Return the pump voltage after applying a clamped 0-1 scale factor."
 get_scaled_pump_voltage(p::PumpBehavFrag, voltage_scale::Real)::Float64 = p.pump_voltage * clamp(Float64(voltage_scale), 0.0, 1.0)
@@ -154,7 +157,7 @@ struct TurboPumpCompBehav <: ComponentBehavior
     max_turbine_conductance::Float64  # turbine conductance at 0 RPM (drops to 0 at max_rpm)
     cycle_efficiency::Float64         # turbine energy conversion factor (0–1)
     rotor::RotorStateBehavFrag        # RPM state, inertia, friction, max_rpm
-    stall_state::StallBehavFrag       # stall detection and unstall action
+    deactivation::AutoDeactivationBehavFrag  # auto-deactivation state (replaces manual stall)
 end
 
 "Practical keyword-based constructor for TurboPumpCompBehav."
@@ -167,7 +170,7 @@ function TurboPumpCompBehav(;
         max_rpm::Real = 3000.0,
         rotor_inertia::Real = 100.0,
         friction_coefficient::Real = 0.02,
-        stall_state::StallBehavFrag = StallBehavFrag()
+        deactivation::AutoDeactivationBehavFrag = AutoDeactivationBehavFrag()
     )
     rotor = RotorStateBehavFrag(
         current_rpm = current_rpm,
@@ -181,7 +184,7 @@ function TurboPumpCompBehav(;
         max(Float64(max_turbine_conductance), 0.0),
         max(Float64(cycle_efficiency), 1e-6),
         rotor,
-        stall_state
+        deactivation
     )
 end
 
@@ -193,7 +196,7 @@ end
 
 "Produces pump voltage source, series resistor, and variable-conductance turbine resistor."
 function produce_rel_elements(comp::TurboPumpCompBehav)::NTuple{3, RelativeElement}
-    active = !is_stalled(comp.stall_state)
+    active = !is_inactive(comp.deactivation)
     rpm_fraction = get_rpm_fraction(comp.rotor)
     pump_voltage = active ? comp.max_pump_voltage * rpm_fraction : 0.0
 
@@ -241,7 +244,7 @@ function set_tunables(comp::TurboPumpCompBehav, tunables::NTuple{8, T})::TurboPu
         max(vals[3], 0.0),
         max(vals[8], 1e-6),
         newrotor,
-        comp.stall_state
+        comp.deactivation
     )
     setstate!(comp.rotor.rpm, clamp(vals[4], 0.0, comp.rotor.max_rpm))
     return comp
@@ -255,47 +258,49 @@ function produce_rel_fluid_declarations(::TurboPumpCompBehav)
     )
 end
 
-"Clicking the pump un-stalls it."
-function on_click!(comp::TurboPumpCompBehav; kwargs...)
-    do_action!(comp.stall_state, :unstall)
-    return nothing
-end
+# No on_click! override needed; auto-deactivation requires no manual reset.
+on_click!(comp::TurboPumpCompBehav; kwargs...) = nothing
+get_actions(comp::TurboPumpCompBehav; kwargs...) = ()
 
-get_actions(comp::TurboPumpCompBehav; kwargs...) = get_actions(comp.stall_state; kwargs...)
-do_action!(comp::TurboPumpCompBehav, action_id::Symbol; kwargs...) = do_action!(comp.stall_state, action_id; kwargs...)
-
-"Updates rotor RPM from the previous tick's MNA solution and stalls on pump reversal."
+"Updates rotor RPM from the previous tick's MNA solution and deactivates on harmful turbine reversal."
 function update_flowbehav!(comp::TurboPumpCompBehav; mna_state::MNA_State, tile::TileCoord, rotation::HexAxis, derivedmapstate::DerivedMapState, kwargs...)
     applied_inertia = comp.rotor.rotor_inertia * TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
     friction_power = comp.rotor.friction_coefficient * (get_current_rpm(comp.rotor) + 200.0) # adds 'static' friction to help rpm get to zero
 
-    # Normal flow is negative, positive means backdrive and should cause a stall
-    source_current = get(mna_state.vsource_currents, ElementID(tile, pump_element_index), 0.0)
-    if source_current > 0.0
-        stall!(comp.stall_state)
-    end
-
-    # When stalled, only friction acts (no turbine, no pump load)
-    if is_stalled(comp.stall_state)
+    # When inactive, only friction acts (no turbine, no pump load)
+    if is_inactive(comp.deactivation)
         delta_rpm = -friction_power / (applied_inertia * BASE_UPS)
         update_rpm!(comp.rotor, delta_rpm)
         return nothing
     end
 
-    # Read turbine flow
+    # Read turbine shunt current (signed) to detect harmful reverse flow.
+    # Turbine element: NODE_S_POS → GROUND, current = V_s_pos × G_turbine.
     s_pos_node = map_element(HexFrame.NODE_S_POS, tile, rotation)
     s_pos_voltage = get(mna_state.node_voltages, s_pos_node, 0.0)
     turbine_g = effective_turbine_conductance(comp)
-    turbine_current = max(s_pos_voltage * turbine_g, 0.0)
-    # Look up the fluid at the turbine's input node
+    turbine_current = s_pos_voltage * turbine_g  # signed; negative means reverse flow into S_POS
+
+    # Deactivate when reverse flow through the turbine sink exceeds tolerance.
+    if turbine_current < -pump_probe_tol
+        deactivate!(comp.deactivation)
+        delta_rpm = -friction_power / (applied_inertia * BASE_UPS)
+        update_rpm!(comp.rotor, delta_rpm)
+        return nothing
+    end
+
+    # Forward turbine current only contributes to power; reverse current is allowed but yields no energy.
+    turbine_current_forward = max(turbine_current, 0.0)
     fluid = get(derivedmapstate.nodeactualfluids, s_pos_node, nothing)
     density = fluid !== nothing ? something(lookup_fluid_density(fluid), 0.0) : 0.0
     fluid_temperature_k = get(derivedmapstate.node_temperatures, s_pos_node, THERMAL_AMBIENT_TEMPERATURE_K)
     temperature_change_k = max(fluid_temperature_k - THERMAL_AMBIENT_TEMPERATURE_K, 0.0)
-    # compute turbine power
-    turbine_power = density * turbine_current * temperature_change_k * TURBOPUMP_TURBINE_TEMPERATURE_POWER_SCALING
+    turbine_power = density * turbine_current_forward * temperature_change_k * TURBOPUMP_TURBINE_TEMPERATURE_POWER_SCALING
 
-    # Pump load — voltage × current for the pump voltage source
+    # Pump load — clamp to forward pump current only.
+    # Reverse pump current is allowed hydraulically but intentionally excluded from rotor energy
+    # integration; the clamp below is what bounds it, not deactivation.
+    source_current = get(mna_state.vsource_currents, ElementID(tile, pump_element_index), 0.0)
     pump_current = max(-Float64(source_current), 0.0)
     rpm_fraction = get_rpm_fraction(comp.rotor)
     pump_voltage = comp.max_pump_voltage * rpm_fraction
@@ -307,6 +312,53 @@ function update_flowbehav!(comp::TurboPumpCompBehav; mna_state::MNA_State, tile:
     update_rpm!(comp.rotor, delta_rpm)
 
     return nothing
+end
+
+"""Return a three-element probe matching `produce_rel_elements` for the speculative reactivation
+scheduler, or `nothing` when the pump is already active. The pump voltage source reflects the
+current rotor RPM at the time of probing."""
+function get_reactivation_probe(comp::TurboPumpCompBehav; kwargs...)
+    is_inactive(comp.deactivation) || return nothing
+    rpm_fraction = get_rpm_fraction(comp.rotor)
+    pump_source = RelativeElement(
+        RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.NODE_Q_POS),
+        comp.max_pump_voltage * rpm_fraction,
+        HexElements.CONST_VOLTAGE;
+        active = true
+    )
+    series_resistor = RelativeElement(
+        RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.NODE_Q_NEG),
+        comp.series_conductance,
+        HexElements.CONST_RESISTOR;
+        active = true
+    )
+    turbine_resistor = RelativeElement(
+        RelativeElementConnections(HexFrame.NODE_S_POS, HexFrame.GROUND),
+        effective_turbine_conductance(comp),
+        HexElements.CONST_RESISTOR;
+        active = true
+    )
+    return ReactivationProbe((pump_source, series_resistor, turbine_resistor))
+end
+
+"""
+Accept reactivation when the speculative turbine shunt current is not harmfully reversed.
+Reactivation is allowed for both useful and neutral turbine flow; only harmful reverse flow
+through the turbine sink blocks reactivation. Returns `false` if turbine element was pruned.
+"""
+function accept_reactivation_probe!(comp::TurboPumpCompBehav; tile::TileCoord, rotation::HexAxis, derivedmapstate::DerivedMapState, mna_state, kwargs...)
+    turbine_rel_elem = RelativeElement(
+        RelativeElementConnections(HexFrame.NODE_S_POS, HexFrame.GROUND),
+        effective_turbine_conductance(comp),
+        HexElements.CONST_RESISTOR;
+        active = true
+    )
+    turbine_abs_elem = map_element(turbine_rel_elem, tile, turbine_element_index, rotation)
+    turbine_current = abs_element_get_current(turbine_abs_elem, derivedmapstate, mna_state)
+    isnothing(turbine_current) && return false
+    turbine_current < -pump_probe_tol && return false
+    reactivate!(comp.deactivation)
+    return true
 end
 
 "Renders static turbopump elements: fluid mask, rotor, and static parts."
@@ -372,9 +424,6 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBeh
         smoke_sprite = animation_sprite_picker(smoke_sprites, gameticks, 4)
         push!(queue, render_basic_tile(glmap, smoke_sprite, rotation, position; colour = fluidmask_colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM) + Int32(10) + Int32(render_height_offset), pos_offset = pos_offset))
     end
-
-    # Render stall overlay
-    render_map_elem!(queue, comp.stall_state; glmap = glmap, rotation = rotation, position = position, render_height_offset = render_height_offset)
 
     return nothing
 end

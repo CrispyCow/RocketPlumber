@@ -27,6 +27,7 @@ export PlainSpriteBehavFrag, BasicElemBehavFrag
 export BinaryStateBehavFrag, FloatStateBehavFrag
 export getstate, settrue!, setfalse!, setstate!
 export StallBehavFrag, stall!, unstall!, is_stalled
+export AutoDeactivationBehavFrag, deactivate!, reactivate!, is_inactive
 export DamageStateBehavFrag, damage!, undamage!, is_damaged
 export ComponentTemperatureBehavFrag, get_component_temperature, set_component_temperature!
 export OverheatLimitBehavFrag, get_overheat_limit_temperature, get_overheat_percentage, get_overheat_tint, update_overheat_state!
@@ -179,6 +180,23 @@ function do_action!(stall::StallBehavFrag, action_id::Symbol; kwargs...)
     end
     return (false, "Action :$(action_id) not recognised by StallBehavFrag")
 end
+
+#= ---------- AutoDeactivationBehavFrag ----------- =#
+
+"""Behavioral fragment for auto-deactivation state.
+
+Components deactivate automatically on harmful flow conditions and reactivate via the
+speculative probe scheduler. Use `deactivate!`, `reactivate!`, and `is_inactive`.
+"""
+mutable struct AutoDeactivationBehavFrag
+    inactive_state::BinaryStateBehavFrag
+end
+
+AutoDeactivationBehavFrag() = AutoDeactivationBehavFrag(BinaryStateBehavFrag(false))
+
+deactivate!(frag::AutoDeactivationBehavFrag) = settrue!(frag.inactive_state)
+reactivate!(frag::AutoDeactivationBehavFrag) = setfalse!(frag.inactive_state)
+is_inactive(frag::AutoDeactivationBehavFrag)::Bool = getstate(frag.inactive_state)
 
 #= ---------- DamageStateBehavFrag ----------- =#
 

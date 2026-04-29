@@ -125,9 +125,9 @@ end
     add_ship!(gm, :two, sec)
     set_component!(gm, TileCoord(10,10), ComponentOnTile(DummyFluidComp(), HexFrame.Q_POS); ship_name = :two)
     derived = DerivedMapState()
-    list_fluid_declarations!(derived.all_fluid_declarations, gm)
-    @test length(derived.all_fluid_declarations) == 1
-    decl = derived.all_fluid_declarations[1]
+    list_fluid_declarations!(derived.primary_fluid_declarations, gm)
+    @test length(derived.primary_fluid_declarations) == 1
+    decl = derived.primary_fluid_declarations[1]
     @test decl.declaration isa HexFluids.FluidSource
     @test decl.declaration.fluid_type === HexFluids.COLD_GAS
 
@@ -135,8 +135,8 @@ end
     ship_fluid = ShipMap()
     set_component!(ship_fluid, TileCoord(20,20), ComponentOnTile(DummyFluidComp(), HexFrame.Q_POS))
     derived2 = DerivedMapState()
-    list_fluid_declarations!(derived2.all_fluid_declarations, ship_fluid)
-    @test length(derived2.all_fluid_declarations) == 1
+    list_fluid_declarations!(derived2.primary_fluid_declarations, ship_fluid)
+    @test length(derived2.primary_fluid_declarations) == 1
 end
 
 @testset "propagate_fluid_types! rejects incompatible traversed declarations" begin
@@ -225,7 +225,7 @@ end
 
     derived = DerivedMapState(
         filteredelements = [grounded_resistor],
-        all_fluid_declarations = [
+        primary_fluid_declarations = [
             FlowEngine.AbsoluteFluidDeclaration(source_node, HexFluids.FluidSource(HexFluids.COLD_GAS, 450.0)),
         ],
         node_to_region = Dict(source_node => 1),

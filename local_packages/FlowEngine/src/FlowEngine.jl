@@ -75,13 +75,13 @@ end
 @kwdef mutable struct DerivedMapState
     # All ship parts
     ship_surface_edge::Set{TileCoord} = Set{TileCoord}()
-    allelements::Vector{AbsoluteElement} = Vector{AbsoluteElement}()
-    allnodes::Dict{NodeCoord, UInt16} = Dict{NodeCoord, UInt16}()
+    primaryelements::Vector{AbsoluteElement} = Vector{AbsoluteElement}()   # base collected elements before filtering
+    primarynodes::Dict{NodeCoord, UInt16} = Dict{NodeCoord, UInt16}()      # diagnostic node count from primary elements
     # Survivors filtered by pruning/grounding/dangling checks
     filteredelements::Vector{AbsoluteElement} = Vector{AbsoluteElement}() 
     filterednodes::Dict{NodeCoord, UInt16} = Dict{NodeCoord, UInt16}()
     # Fluid declarations (collected from components)
-    all_fluid_declarations::Vector{AbsFluidDecl} = Vector{AbsFluidDecl}()
+    primary_fluid_declarations::Vector{AbsFluidDecl} = Vector{AbsFluidDecl}()
     node_declarations::Dict{NodeCoord, FluidDeclaration} = Dict{NodeCoord, FluidDeclaration}()
     source_nodes::Set{NodeCoord} = Set{NodeCoord}()
     # Propagated fluid state
@@ -697,14 +697,14 @@ function _check_compatible(decl::FluidDeclaration, fluid::FluidType)
     return nothing
 end
 
-"Build per-node declaration index and source node set from collected declarations"
-function index_fluid_declarations!(derivedmapstate::DerivedMapState)
+"Build per-node declaration index and source node set."
+function index_fluid_declarations!(derivedmapstate::DerivedMapState, declarations::AbstractVector{<:AbsFluidDecl})
     node_decls = derivedmapstate.node_declarations
     source_nodes = derivedmapstate.source_nodes
     empty!(node_decls)
     empty!(source_nodes)
 
-    for abs_decl in derivedmapstate.all_fluid_declarations
+    for abs_decl in declarations
         node = abs_decl.node_coord
         # Only index nodes that survived filtering
         haskey(derivedmapstate.filterednodes, node) || continue
@@ -832,7 +832,7 @@ function compute_region_temperatures!(derivedmapstate::DerivedMapState, scratchp
     region_total_flow    = Dict{Int, Float64}()
     region_fluid_type    = Dict{Int, FluidType}()
 
-    for abs_decl in derivedmapstate.all_fluid_declarations
+    for abs_decl in derivedmapstate.primary_fluid_declarations
         abs_decl.declaration isa FluidSource || continue
         node = abs_decl.node_coord
         rid = get(node_to_region, node, 0)

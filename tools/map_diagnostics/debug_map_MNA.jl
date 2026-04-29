@@ -420,13 +420,13 @@ function run_simulation_tick!(gamemap::GameMap, derived::DerivedMapState, mna::M
     try
         find_ship_surface_edgetiles!(derived, gamemap)
 
-        list_elements!(derived.allelements, gamemap)
-        list_nodes!(derived.allnodes, derived.allelements)
-        println("    All elements: $(length(derived.allelements))    All nodes: $(length(derived.allnodes))")
+        list_elements!(derived.primaryelements, gamemap)
+        list_nodes!(derived.primarynodes, derived.primaryelements)
+        println("    All elements: $(length(derived.primaryelements))    All nodes: $(length(derived.primarynodes))")
 
         # Refill the single working survivor vector, then run the fixed-point loop
-        resize!(derived.filteredelements, length(derived.allelements))
-        copyto!(derived.filteredelements, derived.allelements)
+        resize!(derived.filteredelements, length(derived.primaryelements))
+        copyto!(derived.filteredelements, derived.primaryelements)
 
         last_hash::UInt64 = 0
         prune_iters = 0
@@ -441,8 +441,8 @@ function run_simulation_tick!(gamemap::GameMap, derived::DerivedMapState, mna::M
         println("    After filtering ($prune_iters iters): $(length(derived.filteredelements)) elements    $(length(derived.filterednodes)) nodes")
 
         if !isempty(derived.filterednodes)
-            list_fluid_declarations!(derived.all_fluid_declarations, gamemap)
-            index_fluid_declarations!(derived)
+            list_fluid_declarations!(derived.primary_fluid_declarations, gamemap)
+            index_fluid_declarations!(derived, derived.primary_fluid_declarations)
             build_node_connection_map!(scratchpad.final_nodeconnections, derived.filteredelements)
             propagate_fluid_types!(derived, scratchpad)
             MNA_indexnodes!(mna, derived)
@@ -524,9 +524,9 @@ function main(args::Vector{String})
     success, fail_step, err = run_simulation_tick!(gamemap, derived, mna, Int64(1))
 
     # --- Always print element listings ---
-    if !isempty(derived.allelements)
+    if !isempty(derived.primaryelements)
         println()
-        print_elements(derived.allelements; label = "All elements (baseline)")
+        print_elements(derived.primaryelements; label = "All elements (baseline)")
     end
     if !isempty(derived.filteredelements)
         println()

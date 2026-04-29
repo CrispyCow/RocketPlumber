@@ -18,6 +18,7 @@ export get_component_dry_mass, get_component_wet_mass
 export collect_effect_particles!
 export get_actions, do_action!
 export get_default_component_mass, set_default_component_mass!
+export ReactivationProbe, get_reactivation_probe, accept_reactivation_probe!
 
 # Pipe Behavior Exports
 export PipeBehavior
@@ -84,13 +85,6 @@ function produce_rel_elements(behav::T) where {T <: ComponentBehavior}
     error("Required method produce_rel_elements not implemented for $(nameof(T))")
 end
 
-"Struct to pass all needed info about a tunable component parameter to the properties panel"
-struct TunableProps
-    current_val::Float64
-    type_desc::String
-    unit_desc::String
-end
-
 "Describes a single action that a component can perform, for display in a popup UI."
 struct ActionInfo
     id::Symbol                                  # Unique identifier for this action on this component
@@ -102,6 +96,13 @@ end
 
 "Convenience constructor preserving the existing 4-arg call sites."
 ActionInfo(id, label, enabled, tooltip) = ActionInfo(id, label, enabled, tooltip, nothing)
+
+"Struct to pass all needed info about a tunable component parameter to the properties panel"
+struct TunableProps
+    current_val::Float64
+    type_desc::String
+    unit_desc::String
+end
 
 "Error for concrete ComponentBehavior without required method get_tunables"
 function get_tunables(behav::T) where {T <: ComponentBehavior}
@@ -185,6 +186,33 @@ function placement_valid(behav::T, coord::TileCoord, surface; kwargs...) where {
     error("placement_valid should be called with GameMap as the surface argument; the method for that is implemented in FlowMap")
 end
 
+"A lightweight probe used by the speculative reactivation scheduler"
+struct ReactivationProbe{E <: Tuple, D <: Tuple}
+    rel_elements::E
+    rel_fluid_declarations::D
+end
+
+"Convenience constructor for probes that carry only circuit elements."
+ReactivationProbe(rel_elements::Tuple) = ReactivationProbe(rel_elements, ())
+
+"""
+Return a `ReactivationProbe` describing the speculative inputs to test for this component,
+or `nothing` if the component has no pending reactivation request this tick.
+
+Returning a non-`nothing` probe signals to the calculator scheduler that this component
+wishes to test whether it can be safely reactivated. The scheduler will run a speculative
+solve with the probe's elements appended and then call `accept_reactivation_probe!`.
+"""
+get_reactivation_probe(behav::T; kwargs...) where {T <: ComponentBehavior} = nothing
+
+"""
+Called after a speculative solve completed without errors, using this component's probe inputs.
+
+Should return `true` only if the speculative solve state indicates the reactivation is safe.
+May mutate the component on success. Must leave the component unchanged when returning `false`.
+"""
+accept_reactivation_probe!(behav::T; kwargs...) where {T <: ComponentBehavior} = false
+
 # ===============================================================
 # ComponentOnTile Wrapper
 # ===============================================================
@@ -226,6 +254,8 @@ can_be_moved(comp::ComponentOnTile; kwargs...) = can_be_moved(comp.component; kw
 placement_valid(comp::ComponentOnTile, coord, surface; kwargs...) = placement_valid(comp.component, coord, surface; rotation = comp.rotation, kwargs...)
 get_actions(comp::ComponentOnTile; kwargs...) = get_actions(comp.component; kwargs...)
 do_action!(comp::ComponentOnTile, action_id::Symbol; kwargs...) = do_action!(comp.component, action_id; kwargs...)
+get_reactivation_probe(comp::ComponentOnTile; kwargs...) = get_reactivation_probe(comp.component; rotation = comp.rotation, kwargs...)
+accept_reactivation_probe!(comp::ComponentOnTile; kwargs...) = accept_reactivation_probe!(comp.component; rotation = comp.rotation, kwargs...)
 
 "General implementation which leverages the existing ComponentBehavior produce_rel_elements function"
 function produce_abs_elements(tilecomp::ComponentOnTile, tile::TileCoord)

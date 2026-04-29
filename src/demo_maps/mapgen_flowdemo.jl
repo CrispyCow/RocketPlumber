@@ -68,7 +68,7 @@ function mapgen_flowdemo()
         fluid = HexFluids.COLD_GAS,
         max_charge = 200,
         max_voltage = 50,
-        initial_charge = 200.0,
+        initial_charge = 190.0,
         series_conductance = 5.0
     )
 

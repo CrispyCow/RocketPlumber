@@ -972,7 +972,7 @@ function get_entry_pressure_fed_intro()::LearningEntry
                                 tanks_empty = all((TileCoord(0, -1), TileCoord(0, 0))) do coord
                                     component_on_tile = get(pressure_fed_tanks, coord, nothing)
                                     !isnothing(component_on_tile) || return false
-                                    return is_stalled(component_on_tile.component.tank.liquid_stallstate)
+                                    return component_on_tile.component.tank.liquid_state.charge <= 0.0
                                 end
 
                                 tanks_empty && return nothing
@@ -999,8 +999,7 @@ function get_entry_pressure_fed_intro()::LearningEntry
                                     !isnothing(component_on_tile) || return false
 
                                     tank = component_on_tile.component.tank
-                                    near_full = tank.liquid_state.charge >= 0.98 * tank.max_liquid_charge
-                                    return near_full && is_stalled(tank.liquid_stallstate)
+                                    return tank.liquid_state.charge >= 0.98 * tank.max_liquid_charge
                                 end
 
                                 tanks_refilled && return nothing

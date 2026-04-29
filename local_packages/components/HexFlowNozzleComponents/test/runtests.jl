@@ -62,7 +62,6 @@ end
     nozzle = NozzleBehavFrag(
         HexFrame.NODE_Q_POS,
         0.2,
-        StallBehavFrag(),
         OverheatLimitBehavFrag(301.0, 5.3, 5.0)
     )
 
@@ -81,22 +80,126 @@ end
     @test thrust[1] == 0.0
     @test thrust[2] == 0.0
 
+    # Only the repair action remains; no manual unstall action is exposed.
     actions = get_actions(nozzle)
-    @test length(actions) == 2
-    @test actions[1].id === :unstall
-    @test actions[2].id === :repair_component
+    @test length(actions) == 1
+    @test actions[1].id === :repair_component
 
     repaired, _ = do_action!(nozzle, :repair_component)
     @test repaired
     @test !is_damaged(nozzle)
 end
 
+@testset "Nozzle auto-deactivation" begin
+    nozzle = NozzleBehavFrag(HexFrame.NODE_Q_POS, 0.2)
+
+    # Nozzle is initially active.
+    @test !is_inactive(nozzle)
+    @test produce_rel_elements(nozzle)[1].active == true
+
+    # deactivate! disables the nozzle element.
+    deactivate!(nozzle)
+    @test is_inactive(nozzle)
+    @test produce_rel_elements(nozzle)[1].active == false
+
+    # reactivate! restores the element.
+    reactivate!(nozzle)
+    @test !is_inactive(nozzle)
+    @test produce_rel_elements(nozzle)[1].active == true
+end
+
+@testset "Nozzle deactivates on reverse pressure" begin
+    nozzle = NozzleBehavFrag(HexFrame.NODE_Q_POS, 0.2)
+    tile = TEST_TILE
+    rotation = TEST_ROTATION
+
+    # Positive pressure: nozzle stays active.
+    mna_fwd = MNA_State()
+    set_node_voltage!(mna_fwd, tile, nozzle.connected_node, 10.0; rotation = rotation)
+    derivedmapstate = DerivedMapState()
+    update_flowbehav!(nozzle; tile = tile, rotation = rotation, mna_state = mna_fwd, derivedmapstate = derivedmapstate)
+    @test !is_inactive(nozzle)
+
+    # Negative pressure beyond tolerance: nozzle deactivates.
+    mna_rev = MNA_State()
+    set_node_voltage!(mna_rev, tile, nozzle.connected_node, -1.0; rotation = rotation)
+    update_flowbehav!(nozzle; tile = tile, rotation = rotation, mna_state = mna_rev, derivedmapstate = derivedmapstate)
+    @test is_inactive(nozzle)
+end
+
+@testset "Nozzle reactivation probe" begin
+    nozzle = NozzleBehavFrag(HexFrame.NODE_Q_POS, 0.2)
+    tile = TEST_TILE
+    rotation = TEST_ROTATION
+
+    # Active nozzle returns no probe.
+    @test isnothing(get_reactivation_probe(nozzle; tile = tile, rotation = rotation))
+
+    # Deactivated (not damaged) nozzle returns a one-element probe.
+    deactivate!(nozzle)
+    probe = get_reactivation_probe(nozzle; tile = tile, rotation = rotation)
+    @test probe isa ReactivationProbe
+    @test length(probe.rel_elements) == 1
+    @test probe.rel_elements[1].active == true
+
+    # Damaged nozzle returns no probe even when deactivated.
+    damage!(nozzle)
+    @test isnothing(get_reactivation_probe(nozzle; tile = tile, rotation = rotation))
+end
+
+@testset "Nozzle accept_reactivation_probe!" begin
+    tile = TEST_TILE
+    rotation = TEST_ROTATION
+
+    # Build absolute probe element and inject a positive current via a mock derived state.
+    function make_probe_state(nozzle::NozzleBehavFrag; pressure::Float64)
+        probe_rel_elem = RelativeElement(
+            RelativeElementConnections(nozzle.connected_node, HexFrame.GROUND),
+            nozzle.throat_area^2,
+            HexElements.CONST_RESISTOR;
+            active = true
+        )
+        probe_abs_elem = map_element(probe_rel_elem, tile, 1, rotation)
+        input_node = map_element(nozzle.connected_node, tile, rotation)
+        mna_state = MNA_State()
+        mna_state.node_voltages[input_node] = pressure
+        derivedmapstate = DerivedMapState(
+            filteredelements = [probe_abs_elem],
+            filterednodes = list_nodes([probe_abs_elem])
+        )
+        return mna_state, derivedmapstate
+    end
+
+    # Positive probe current → accept and reactivate.
+    nozzle_accept = NozzleBehavFrag(HexFrame.NODE_Q_POS, 0.2)
+    deactivate!(nozzle_accept)
+    mna_pos, dm_pos = make_probe_state(nozzle_accept; pressure = 5.0)
+    @test accept_reactivation_probe!(nozzle_accept; tile = tile, rotation = rotation, derivedmapstate = dm_pos, mna_state = mna_pos)
+    @test !is_inactive(nozzle_accept)
+
+    # Negative probe current → reject; state unchanged.
+    nozzle_reject = NozzleBehavFrag(HexFrame.NODE_Q_POS, 0.2)
+    deactivate!(nozzle_reject)
+    mna_neg, dm_neg = make_probe_state(nozzle_reject; pressure = -5.0)
+    @test !accept_reactivation_probe!(nozzle_reject; tile = tile, rotation = rotation, derivedmapstate = dm_neg, mna_state = mna_neg)
+    @test is_inactive(nozzle_reject)
+
+    # Zero (neutral) probe current → reject (not > probe_tol).
+    nozzle_neutral = NozzleBehavFrag(HexFrame.NODE_Q_POS, 0.2)
+    deactivate!(nozzle_neutral)
+    mna_zero, dm_zero = make_probe_state(nozzle_neutral; pressure = 0.0)
+    @test !accept_reactivation_probe!(nozzle_neutral; tile = tile, rotation = rotation, derivedmapstate = dm_zero, mna_state = mna_zero)
+    @test is_inactive(nozzle_neutral)
+
+    # Pruned element (not in filteredelements) → reject.
+    nozzle_pruned = NozzleBehavFrag(HexFrame.NODE_Q_POS, 0.2)
+    deactivate!(nozzle_pruned)
+    @test !accept_reactivation_probe!(nozzle_pruned; tile = tile, rotation = rotation, derivedmapstate = DerivedMapState(), mna_state = MNA_State())
+    @test is_inactive(nozzle_pruned)
+end
+
 @testset "Nozzle thrust temperature scaling" begin
-    nozzle = NozzleBehavFrag(
-        HexFrame.NODE_Q_POS,
-        0.2,
-        StallBehavFrag(),
-    )
+    nozzle = NozzleBehavFrag(HexFrame.NODE_Q_POS, 0.2)
 
     cold_mna_state, cold_derivedmapstate = make_nozzle_state(nozzle; pressure = 50.0, temperature_k = 200.0)
     cold_thrust = get_thrust(nozzle; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = cold_mna_state, derivedmapstate = cold_derivedmapstate)
@@ -163,10 +266,24 @@ end
     @test tuned.switch.switch.max_conductance ≈ 3.0
     @test tuned.switch.switch.min_conductance ≈ 0.1
 
-    damage!(comp.nozzle)
+    # Clicking an auto-deactivated switched nozzle always toggles the switch.
+    deactivate!(comp.nozzle)
     on_click!(comp)
     @test comp.switch.switch.state.target_conductance ≈ comp.switch.switch.max_conductance
-    @test is_damaged(comp.nozzle)
+    @test is_inactive(comp.nozzle)  # deactivation state unchanged by click
+
+    # No :unstall action is exposed on a switched nozzle.
+    action_ids = Set(action.id for action in get_actions(comp))
+    @test :unstall ∉ action_ids
+    @test :open_valve ∈ action_ids || :close_valve ∈ action_ids
+end
+
+@testset "Basic nozzle has no :unstall action" begin
+    basic = make_basic_nozzle()
+    action_ids = Set(action.id for action in get_actions(basic))
+    @test :unstall ∉ action_ids
+    # No click action expected either.
+    on_click!(basic)  # should be a no-op, not error
 end
 
 @testset "Decomposition chamber tunables" begin

@@ -22,7 +22,7 @@ function mapgen_teasership()
         fluid = HexFluids.MONOPROP_LIQUID,
         max_charge = 40.0,
         max_voltage = 1.0,
-        initial_charge = 40.0,
+        initial_charge = 35.0,
         series_conductance = 5.0
     )
     legacy_liquid_tank = ThevininTankCompBehav(
@@ -106,7 +106,7 @@ function mapgen_teasership()
         NozzleBehavFrag(
             HexFrame.NODE_INTERNAL,
             0.2,
-            StallBehavFrag(BinaryStateBehavFrag(false)),
+            AutoDeactivationBehavFrag(),
             OverheatLimitBehavFrag(400.0, 5.3, 5.0)
         ),
         BoolSwitchBehavFrag(SwitchBehavFrag(

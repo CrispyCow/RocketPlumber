@@ -617,7 +617,7 @@ end
 @testset "snapshot! methods" begin
     # DerivedMapState refill
     src_derived = DerivedMapState()
-    push!(src_derived.allelements, AbsoluteElement(
+    push!(src_derived.primaryelements, AbsoluteElement(
         connections = AbsoluteElementConnections(NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_POS), NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_NEG)),
         value = 1.0,
         type = HexElements.CONST_RESISTOR,
@@ -627,12 +627,12 @@ end
 
     dest_derived = DerivedMapState()
     HexFlowCalculator.snapshot!(dest_derived, src_derived)
-    @test length(dest_derived.allelements) == 1
+    @test length(dest_derived.primaryelements) == 1
     @test length(dest_derived.nodeactualfluids) == 1
 
     # Refill again with empty — should clear
     HexFlowCalculator.snapshot!(dest_derived, DerivedMapState())
-    @test isempty(dest_derived.allelements)
+    @test isempty(dest_derived.primaryelements)
     @test isempty(dest_derived.nodeactualfluids)
 
     # MNA_StateSnapshot refill from MNA_State

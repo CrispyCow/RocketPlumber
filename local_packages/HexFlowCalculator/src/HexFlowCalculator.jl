@@ -35,6 +35,7 @@ export flowcalculator_loop!
 
 # Function exports - Map updates
 export update_map!, update_mna!, handle_thrusters!, scale_voltage_dict!
+export collect_primary_map_inputs!, update_map_from_inputs!, solve_from_inputs!
 
 # Constant exports - Manoeuvre thresholds
 export MANOEUVRE_THRUST_THRESHOLD, MANOEUVRE_COMPLETION_THRESHOLD
@@ -268,18 +269,18 @@ function snapshot!(dest::DerivedMapState, src::DerivedMapState)
     union!(dest.ship_surface_edge, src.ship_surface_edge)
 
     # Vectors: resize and copy
-    resize!(dest.allelements, length(src.allelements))
-    copyto!(dest.allelements, src.allelements)
+    resize!(dest.primaryelements, length(src.primaryelements))
+    copyto!(dest.primaryelements, src.primaryelements)
 
     resize!(dest.filteredelements, length(src.filteredelements))
     copyto!(dest.filteredelements, src.filteredelements)
 
-    resize!(dest.all_fluid_declarations, length(src.all_fluid_declarations))
-    copyto!(dest.all_fluid_declarations, src.all_fluid_declarations)
+    resize!(dest.primary_fluid_declarations, length(src.primary_fluid_declarations))
+    copyto!(dest.primary_fluid_declarations, src.primary_fluid_declarations)
 
     # Dicts: empty and merge
-    empty!(dest.allnodes)
-    merge!(dest.allnodes, src.allnodes)
+    empty!(dest.primarynodes)
+    merge!(dest.primarynodes, src.primarynodes)
 
     empty!(dest.filterednodes)
     merge!(dest.filterednodes, src.filterednodes)
@@ -965,9 +966,10 @@ function process_command!(
             test_mna_state = MNA_State()
             test_scratchpad = CalculatorScratchpad()
 
-            # Test the sandbox with full validation (use tick 0 for validation)
+            # Validate using the non-speculative path (no reactivation probes during sandbox)
             update_components!(sandbox, test_mna_state, test_derivedmapstate)
-            update_map!(sandbox, test_derivedmapstate, test_mna_state, test_scratchpad, Int64(0))
+            collect_primary_map_inputs!(sandbox, test_derivedmapstate)
+            update_map_from_inputs!(test_derivedmapstate, test_mna_state, test_scratchpad, Int64(0))
             update_mna!(test_derivedmapstate, test_mna_state, Int64(0))
             compute_region_temperatures!(test_derivedmapstate, test_scratchpad, test_mna_state)
         end
@@ -1199,27 +1201,180 @@ function try_enqueue_command!(
 end
 
 # ===============================================================
+# Reactivation Scheduler
+# ===============================================================
+
+"""
+Calculator-thread-only state for the speculative reactivation system.
+
+Each tick the scheduler scans all components for pending reactivation requests.
+At most one probe is executed per tick (FIFO fairness). Stale queue entries are
+silently discarded at execution time by re-resolving the component from the map.
+
+The `probe_elements` and `probe_declarations` vectors are reusable scratch space
+for the probe-specific circuit additions. Before each trial they are loaded with
+only the new elements from the probe; the normal primary collections are extended
+with these and then restored after the trial solve completes.
+"""
+@kwdef mutable struct ReactivationScheduler
+    pending::Vector{TileCoord} = Vector{TileCoord}()       # FIFO queue of tile coords awaiting a probe
+    pending_set::Set{TileCoord} = Set{TileCoord}()         # duplicate-guard for O(1) membership test
+    probe_elements::Vector{AbsoluteElement} = Vector{AbsoluteElement}()       # probe-only elements (not a copy of primary)
+    probe_declarations::Vector{AbsFluidDecl} = Vector{AbsFluidDecl}()         # probe-only declarations
+end
+
+"""
+Scan all components for pending reactivation probe requests and enqueue new ones.
+
+Components already in the queue are skipped (deduplication via `pending_set`).
+"""
+function scan_reactivation_requests!(scheduler::ReactivationScheduler, gamemap::GameMap)
+    for ship_name in get_all_ship_names(gamemap)
+        for (coord, comp) in get_all_components(gamemap; ship_name = ship_name)
+            coord in scheduler.pending_set && continue
+            isnothing(get_reactivation_probe(comp)) && continue
+            push!(scheduler.pending, coord)
+            push!(scheduler.pending_set, coord)
+        end
+    end
+    return nothing
+end
+
+
+"""
+Load the probe's mapped elements and declarations into the scheduler's scratch buffers.
+
+Only stores elements/declarations contributed by the probe itself — not copies of the
+primary collections. The caller is responsible for appending these to
+`derivedmapstate.primaryelements`/`primary_fluid_declarations` before the trial solve
+and restoring the original lengths afterwards.
+"""
+function load_reactivation_probe!(
+        scheduler::ReactivationScheduler,
+        comp::ComponentOnTile,
+        coord::TileCoord
+    )
+    probe = get_reactivation_probe(comp)
+
+    # Map probe's relative elements. Probe elements use 1-based indexing within the probe tuple,
+    # matching the component's own element indexing — ElementID(coord, i) refers to the same slot.
+    empty!(scheduler.probe_elements)
+    for (i, rel_elem) in pairs(probe.rel_elements)
+        push!(scheduler.probe_elements, map_element(rel_elem, coord, i, comp.rotation))
+    end
+
+    empty!(scheduler.probe_declarations)
+    for rel_decl in probe.rel_fluid_declarations
+        push!(scheduler.probe_declarations, map_declaration(rel_decl, coord, comp.rotation))
+    end
+
+    return nothing
+end
+
+"""
+Attempt one speculative reactivation probe from the scheduler queue.
+
+Pops candidate coords from the front of the queue, discarding stale entries, until a valid
+target is found or the queue is exhausted. Returns `true` if a trial was run (accepted or
+rejected with fallback solve already executed), or `false` if the queue was empty.
+
+On an accepted probe the speculative solve results remain in `derivedmapstate` / `mna_state`.
+On a rejected or errored probe the base solve is re-run from the primary inputs.
+"""
+function run_reactivation_trial!(
+        scheduler::ReactivationScheduler,
+        gamemap::GameMap,
+        derivedmapstate::DerivedMapState,
+        mna_state::MNA_State,
+        scratchpad::CalculatorScratchpad,
+        current_tick::Int64
+    )::Bool
+    while !isempty(scheduler.pending)
+        # Pop the next candidate (FIFO: remove from front)
+        coord = popfirst!(scheduler.pending)
+        delete!(scheduler.pending_set, coord)
+
+        # Re-resolve: verify component still exists and still requests a probe (drops stale entries after map edits)
+        result = get_component_any_ship(gamemap, coord)
+        isnothing(result) && continue  # stale, try next
+        comp, ship_name = result
+        isnothing(get_reactivation_probe(comp)) && continue  # no longer requesting, skip
+
+        # Load probe-only elements/declarations into scheduler scratch buffers
+        load_reactivation_probe!(scheduler, comp, coord)
+
+        # Temporarily extend primary collections with probe elements for the trial solve
+        n_primary_elem = length(derivedmapstate.primaryelements)
+        n_primary_decl = length(derivedmapstate.primary_fluid_declarations)
+        append!(derivedmapstate.primaryelements, scheduler.probe_elements)
+        append!(derivedmapstate.primary_fluid_declarations, scheduler.probe_declarations)
+
+        # Speculative solve — isolated by try/catch so a failure does not crash the loop
+        trial_accepted = false
+        try
+            solve_from_inputs!(derivedmapstate, mna_state, scratchpad, current_tick)
+            trial_accepted = accept_reactivation_probe!(comp;
+                tile = coord,
+                ship_name = ship_name,
+                gamemap = gamemap,
+                derivedmapstate = derivedmapstate,
+                mna_state = mna_state,
+            )
+        catch
+            # Speculative solve threw — treat as rejection and clean up
+            clear_calculator_scratchpad!(scratchpad)
+        end
+
+        # Restore primary collections (remove appended probe elements regardless of outcome)
+        resize!(derivedmapstate.primaryelements, n_primary_elem)
+        resize!(derivedmapstate.primary_fluid_declarations, n_primary_decl)
+
+        if !trial_accepted
+            solve_from_inputs!(derivedmapstate, mna_state, scratchpad, current_tick)
+        end
+
+        return true  # one probe was attempted this tick (accepted or rejected)
+    end
+
+    return false  # queue was empty
+end
+
+# ===============================================================
 # Map Update Functions
 # ===============================================================
 
 """
-Rebuild derived map state and MNA matrix from the current `gamemap`.
-Called every tick (fast enough for now; may need revisiting if it becomes a bottleneck).
-"""
-function update_map!(gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, scratchpad::CalculatorScratchpad, current_tick::Int64)
-    @timeit flowcalc_loop_timer "Map Updates" begin
-        # Derive basic map state
-        @timeit flowcalc_loop_timer "find ship edge" find_ship_surface_edgetiles!(derivedmapstate, gamemap)
-        @timeit flowcalc_loop_timer "list elements" list_elements!(derivedmapstate.allelements, gamemap)
-        @timeit flowcalc_loop_timer "list nodes" list_nodes!(derivedmapstate.allnodes, derivedmapstate.allelements) # diagnostic only
+Collect all primary map inputs from `gamemap` into `derivedmapstate`.
 
-        # Refill the single working survivor vector from allelements, reusing storage
-        resize!(derivedmapstate.filteredelements, length(derivedmapstate.allelements))
-        copyto!(derivedmapstate.filteredelements, derivedmapstate.allelements)
+Fills `ship_surface_edge`, `primaryelements`, `primarynodes`, and
+`primary_fluid_declarations`. Does not filter or solve — call
+`update_map_from_inputs!` or `solve_from_inputs!` afterwards.
+"""
+function collect_primary_map_inputs!(gamemap::GameMap, derivedmapstate::DerivedMapState)
+    @timeit flowcalc_loop_timer "find ship edge" find_ship_surface_edgetiles!(derivedmapstate, gamemap)
+    @timeit flowcalc_loop_timer "list elements" list_elements!(derivedmapstate.primaryelements, gamemap)
+    @timeit flowcalc_loop_timer "list nodes" list_nodes!(derivedmapstate.primarynodes, derivedmapstate.primaryelements) # diagnostic only
+    @timeit flowcalc_loop_timer "fluid declarations" list_fluid_declarations!(derivedmapstate.primary_fluid_declarations, gamemap)
+    return nothing
+end
+
+"""
+Run the graph-filter, fluid-type propagation, and MNA setup from `derivedmapstate.primaryelements`
+and `derivedmapstate.primary_fluid_declarations`.
+"""
+function update_map_from_inputs!(
+        derivedmapstate::DerivedMapState,
+        mna_state::MNA_State,
+        scratchpad::CalculatorScratchpad,
+        current_tick::Int64
+    )
+    @timeit flowcalc_loop_timer "Map Updates" begin
+        # Refill the working survivor vector from the primary elements, reusing storage.
+        resize!(derivedmapstate.filteredelements, length(derivedmapstate.primaryelements))
+        copyto!(derivedmapstate.filteredelements, derivedmapstate.primaryelements)
 
         # Iteratively prune until clear_dangling_dependants reaches a fixed point.
-        # All three passes (prune, ground_search, dangling dependants) operate in-place
-        # on the same filteredelements vector through a single fixed-point loop.
+        # All three passes operate in-place on filteredelements through a single fixed-point loop.
         last_hash::UInt64 = 0
         while last_hash != hash(derivedmapstate.filteredelements)
             @timeit flowcalc_loop_timer "prune" prune!(derivedmapstate.filteredelements, scratchpad)
@@ -1231,10 +1386,8 @@ function update_map!(gamemap::GameMap, derivedmapstate::DerivedMapState, mna_sta
         @timeit flowcalc_loop_timer "list filtered nodes" list_nodes!(derivedmapstate.filterednodes, derivedmapstate.filteredelements)
         @timeit flowcalc_loop_timer "index sources" index_grounded_source_elements!(scratchpad.filtered_source_element_index, derivedmapstate.filteredelements)
 
-        # derive MNA, if there are any nodes. MNA on empty arrays crashes
         if !isempty(derivedmapstate.filterednodes)
-            @timeit flowcalc_loop_timer "fluid declarations" list_fluid_declarations!(derivedmapstate.all_fluid_declarations, gamemap)
-            @timeit flowcalc_loop_timer "index fluid declarations" index_fluid_declarations!(derivedmapstate)
+            @timeit flowcalc_loop_timer "index fluid declarations" index_fluid_declarations!(derivedmapstate, derivedmapstate.primary_fluid_declarations)
             @timeit flowcalc_loop_timer "node connections" build_node_connection_map!(scratchpad.final_nodeconnections, derivedmapstate.filteredelements)
             @timeit flowcalc_loop_timer "propagate fluid types" propagate_fluid_types!(derivedmapstate, scratchpad)
             @timeit flowcalc_loop_timer "MNA index nodes" MNA_indexnodes!(mna_state, derivedmapstate)
@@ -1250,7 +1403,6 @@ function update_map!(gamemap::GameMap, derivedmapstate::DerivedMapState, mna_sta
             empty!(mna_state.vsource_currents)
             empty!(mna_state.node_voltages_scaled)
             empty!(derivedmapstate.nodeactualfluids)
-            empty!(derivedmapstate.all_fluid_declarations)
             empty!(derivedmapstate.node_declarations)
             empty!(derivedmapstate.source_nodes)
             empty!(derivedmapstate.node_to_region)
@@ -1261,6 +1413,36 @@ function update_map!(gamemap::GameMap, derivedmapstate::DerivedMapState, mna_sta
             clear_calculator_scratchpad!(scratchpad)
         end
     end
+    return nothing
+end
+
+"""
+Run the full non-thruster solve pipeline from `derivedmapstate.primaryelements` and
+`derivedmapstate.primary_fluid_declarations`.
+
+Equivalent to `update_map_from_inputs!` + `update_mna!` + `compute_region_temperatures!`.
+Used for both the normal tick path and speculative reactivation trials (which temporarily
+extend the primary collections with probe elements before calling this).
+"""
+function solve_from_inputs!(
+        derivedmapstate::DerivedMapState,
+        mna_state::MNA_State,
+        scratchpad::CalculatorScratchpad,
+        current_tick::Int64
+    )
+    update_map_from_inputs!(derivedmapstate, mna_state, scratchpad, current_tick)
+    update_mna!(derivedmapstate, mna_state, current_tick)
+    compute_region_temperatures!(derivedmapstate, scratchpad, mna_state)
+    return nothing
+end
+
+"""
+Rebuild derived map state and MNA matrix from the current `gamemap`.
+Called every tick (fast enough for now; may need revisiting if it becomes a bottleneck).
+"""
+function update_map!(gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State, scratchpad::CalculatorScratchpad, current_tick::Int64)
+    collect_primary_map_inputs!(gamemap, derivedmapstate)
+    update_map_from_inputs!(derivedmapstate, mna_state, scratchpad, current_tick)
     return nothing
 end
 
@@ -1656,9 +1838,10 @@ function flowcalculator_loop!(
     # Unpack initial state from snapshot
     gamemap = initial_snapshot.gamemap
     derivedmapstate = initial_snapshot.derived
-    mna_state = MNA_State()  # fresh full state; first update_map!/update_mna! populates it
+    mna_state = MNA_State()  # fresh full state; first solve populates it
     gamestate = initial_snapshot.gamestate
     scratchpad = CalculatorScratchpad()  # reused across ticks; fields emptied by each phase
+    reactivation_scheduler = ReactivationScheduler()
 
     # Initialise the shared target spacemap time from the loaded map
     @atomic shared_state.target_spacemap_time = get_target_time(gamemap.space_map)
@@ -1708,9 +1891,16 @@ function flowcalculator_loop!(
                     update_docking!(gamemap)
                     update_manoeuvre_phase!(gamestate, gamemap, ipc)
                     @timeit flowcalc_loop_timer "Component Updates" update_components!(gamemap, mna_state, derivedmapstate)
-                    update_map!(gamemap, derivedmapstate, mna_state, scratchpad, gamestate.ticks)
-                    update_mna!(derivedmapstate, mna_state, gamestate.ticks)
-                    @timeit flowcalc_loop_timer "Region Temperatures" compute_region_temperatures!(derivedmapstate, scratchpad, mna_state)
+                    @timeit flowcalc_loop_timer "Reactivation Scan" scan_reactivation_requests!(reactivation_scheduler, gamemap)
+                    @timeit flowcalc_loop_timer "Primary Inputs" collect_primary_map_inputs!(gamemap, derivedmapstate)
+
+                    # Attempt one speculative reactivation probe; if none pending, run the base solve
+                    @timeit flowcalc_loop_timer "Reactivation Trial" begin
+                        if !run_reactivation_trial!(reactivation_scheduler, gamemap, derivedmapstate, mna_state, scratchpad, gamestate.ticks)
+                            solve_from_inputs!(derivedmapstate, mna_state, scratchpad, gamestate.ticks)
+                        end
+                    end
+
                     @timeit flowcalc_loop_timer "Thruster Handling" handle_thrusters!(gamestate, gamemap, derivedmapstate, mna_state)
                     target_time = @atomic shared_state.target_spacemap_time
                     step_space_map_time!(gamemap.space_map, target_time)
@@ -1719,9 +1909,8 @@ function flowcalculator_loop!(
 
                 elseif commands_processed
                     # Paused with pending commands: rebuild derived state without advancing time
-                    update_map!(gamemap, derivedmapstate, mna_state, scratchpad, gamestate.ticks)
-                    update_mna!(derivedmapstate, mna_state, gamestate.ticks)
-                    @timeit flowcalc_loop_timer "Region Temperatures" compute_region_temperatures!(derivedmapstate, scratchpad, mna_state)
+                    collect_primary_map_inputs!(gamemap, derivedmapstate)
+                    solve_from_inputs!(derivedmapstate, mna_state, scratchpad, gamestate.ticks)
 
                     _publish_snapshot!(publish_snapshot, gamemap, derivedmapstate, mna_state, gamestate, timing.current_time)
                 end
