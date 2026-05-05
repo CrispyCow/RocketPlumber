@@ -7,7 +7,7 @@ using HexFlowSwitchComponents
 using HexElements: CONST_RESISTOR
 
 const HORIZONTAL_CONNECTION = RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG)
-const INTERNAL_CONNECTION = RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_INTERNAL)
+const INTERNAL_CONNECTION = RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_INTERNAL_1)
 
 "Create a SwitchBehavFrag with sensible defaults for testing."
 function make_switch(;

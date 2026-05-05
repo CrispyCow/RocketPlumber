@@ -29,7 +29,7 @@ import HexFlowSwitchComponents: get_switch_percentage
 # Behavior Fragment Exports
 export NozzleBehavFrag
 # Concrete Component Behavior Exports
-export BasicNozzleCompBehav, SwitchedNozzleCompBehav, DecompChamberCompBehav
+export BasicNozzleCompBehav, SwitchedNozzleCompBehav, DecompChamberCompBehav, BipropChamberCompBehav
 
 # ===============================================================
 # Behavior Fragments
@@ -83,13 +83,8 @@ function NozzleBehavFrag(connected_node::NodePos, throat_area::Real)
     return NozzleBehavFrag(connected_node, throat_area_f, AutoDeactivationBehavFrag(), default_nozzle_overheat(throat_area_f))
 end
 
-function multiply_colours(base_colour::ColourType, tint_colour::ColourType)::ColourType
-    return ColourType(
-        base_colour[1] * tint_colour[1],
-        base_colour[2] * tint_colour[2],
-        base_colour[3] * tint_colour[3],
-        base_colour[4] * tint_colour[4]
-    )
+function multiply_colours(base::ColourType, tint::ColourType)::ColourType
+    return ColourType((base .* tint)...)
 end
 
 is_inactive(nozzle::NozzleBehavFrag) = is_inactive(nozzle.deactivation)
@@ -174,7 +169,7 @@ function get_thrust(nozzle::NozzleBehavFrag; tile::TileCoord, rotation::HexAxis,
     # NOTE: This assumes all nozzles produce thrust in the Q_POS direction in their local frame,
     # which is then rotated by the component's rotation parameter. This matches the current
     # component definitions where all nozzles have connected_node = NODE_Q_POS (or equivalent)
-    # and works correctly for switched nozzles that use NODE_INTERNAL.
+    # and works correctly for switched nozzles that use NODE_INTERNAL_1.
     rotation_matrix = hex_rotmats[rotation]
     base_vector = SVector{2, Float64}(1.0, 0.0)  # Unit vector in Q_POS direction (right)
     direction_vector = rotation_matrix * base_vector
@@ -281,9 +276,9 @@ function collect_effect_particles!(
         pos_offset = nothing,
         kwargs...
     )
-    # Particle spawning parameters controlling the visual behavior of particle exhaust
+    # Particle spawning parameters controlling the visual behaviour of particle exhaust
     max_particles_per_tick = 25
-    x90_current_factor = 6.0  # Matches flame saturation behavior
+    x90_current_factor = 6.0  # Matches flame saturation behaviour
 
     # Spawn area (elliptical - narrower horizontally)
     spawn_radius_vertical_px = sqrt(nozzle.throat_area) * 120.0  # pixels per sqrt(throat_area)
@@ -321,10 +316,11 @@ function collect_effect_particles!(
     exhaust_direction = SVector{2, Float64}(-thrust_direction[1], thrust_direction[2]) # Particles move opposite to thrust (negate X for screen-space convention)
     perpendicular_direction = SVector{2, Float64}(-exhaust_direction[2], exhaust_direction[1]) # Perpendicular direction for randomness (rotated 90 degrees)
 
-    # Get fluid color
+    # Get fluid colour
     nozzle_input_node = map_element(nozzle.connected_node, tile, rotation)
     fluid = get(derivedmapstate.nodeactualfluids, nozzle_input_node, nothing)
-    fluid_colour_full = get_fluid_colour(fluid; default = ColourType(1.0, 1.0, 1.0, 1.0))
+    temperature = get(derivedmapstate.node_temperatures, nozzle_input_node, HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
+    fluid_colour_full = get_fluid_colour(fluid, temperature; default = ColourType(1.0, 1.0, 1.0, 1.0))
     particle_colour = SVector{4, Float32}(fluid_colour_full[1], fluid_colour_full[2], fluid_colour_full[3], 0.5f0) # Set alpha to 50%
 
     # Batch generate particles
@@ -362,7 +358,7 @@ function collect_effect_particles!(
         velocities[i] = exhaust_direction .* (base_velocity_magnitude + horizontal_component) .+ perpendicular_direction .* perp_component
     end
 
-    # Spawn particles with color
+    # Spawn particles with colour
     spawn_particles!(manager, positions, velocities, gameticks, gameticks + particle_lifetime; colour = particle_colour)
 
     return nothing
@@ -447,7 +443,7 @@ function SwitchedNozzleCompBehav(;
     )
     # Nozzle connects internal node to ground
     nozzlefrag = NozzleBehavFrag(
-        HexFrame.NODE_INTERNAL,
+        HexFrame.NODE_INTERNAL_1,
         throat_area,
         AutoDeactivationBehavFrag(),
         default_nozzle_overheat(
@@ -459,7 +455,7 @@ function SwitchedNozzleCompBehav(;
     )
 
     # Switch connects external node to internal node
-    switch_connection = RelativeElementConnections(connected_node, HexFrame.NODE_INTERNAL)
+    switch_connection = RelativeElementConnections(connected_node, HexFrame.NODE_INTERNAL_1)
     switchfrag = BoolSwitchBehavFrag(
         connection = switch_connection,
         max_conductance = max_conductance,
@@ -509,7 +505,7 @@ function produce_rel_fluid_declarations(comp::SwitchedNozzleCompBehav)
     connected_node = comp.switch.switch.connection.v1
     return (
         RelativeFluidDeclaration(connected_node, HexFluids.FluidConstraintRule(HexFluids.IS_GAS)),
-        RelativeFluidDeclaration(HexFrame.NODE_INTERNAL, HexFluids.FluidConstraintRule(HexFluids.IS_GAS)),
+        RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, HexFluids.FluidConstraintRule(HexFluids.IS_GAS)),
     )
 end
 get_thrust(comp::SwitchedNozzleCompBehav; kwargs...) = get_thrust(comp.nozzle; kwargs...)
@@ -581,9 +577,10 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::SwitchedNozzleCo
     connected_node_pos = comp.switch.switch.connection.v1 # External node from switch connection
     connected_node = map_element(connected_node_pos, position, rotation)
     fluid = get(derivedmapstate.nodeactualfluids, connected_node, nothing)
+    temperature = get(derivedmapstate.node_temperatures, connected_node, HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
 
-    # Render fluidmask with fluid color (defaulting to black)
-    fluidmask_colour = get_fluid_colour(fluid)
+    # Render fluidmask with fluid colour (defaulting to black)
+    fluidmask_colour = get_fluid_colour(fluid, temperature)
     fluidmask_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset)
     push!(queue, render_basic_tile(glmap, :AllNozzles_SwitchedTinyNozzle_fluidmask, rotation, position; colour = fluidmask_colour, draw_height = fluidmask_height, pos_offset = pos_offset))
 
@@ -674,12 +671,14 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::DecompChamberCom
     # Get liquid fluid colour from NODE_Q_POS
     liquid_node = map_element(HexFrame.NODE_Q_POS, position, rotation)
     liquid_fluid = get(derivedmapstate.nodeactualfluids, liquid_node, nothing)
-    liquid_colour = get_fluid_colour(liquid_fluid)
+    liquid_temperature = get(derivedmapstate.node_temperatures, liquid_node, HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
+    liquid_colour = get_fluid_colour(liquid_fluid, liquid_temperature)
 
     # Get gas fluid colour from NODE_Q_NEG
     gas_node = map_element(HexFrame.NODE_Q_NEG, position, rotation)
     gas_fluid = get(derivedmapstate.nodeactualfluids, gas_node, nothing)
-    gas_colour = get_fluid_colour(gas_fluid)
+    gas_temperature = get(derivedmapstate.node_temperatures, gas_node, HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
+    gas_colour = get_fluid_colour(gas_fluid, gas_temperature)
 
     # Always render gas fluidmask with basic shader (static background)
     low_gas_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset)
@@ -700,6 +699,275 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::DecompChamberCom
     # Always render frame on top
     frame_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
     push!(queue, render_basic_tile(glmap, :DecompChamber1_frame, rotation, position; scale = scale, transparency = transparency, draw_height = frame_height, pos_offset = pos_offset))
+
+    return nothing
+end
+
+#= ---------- BipropChamberCompBehav ----------- =#
+
+const biprop_fuel_vcvs_index::Int = 1      # Fuel VCVS element index
+const biprop_oxid_vcvs_index::Int = 2      # Oxidiser VCVS element index
+const backflow_tolerance::Float64 = 0.02   # Tolerance for flow detection and backflow guard
+const biprop_flow_threshold::Float64 = 1e-9  # Total-flow threshold guarding the limiting-reactant divide
+
+"Mutable state for bipropellant combustion chamber"
+mutable struct BipropChamberState
+    output_temperature_state::Float64
+    auto_deactivation::AutoDeactivationBehavFrag
+end
+
+"Bipropellant combustion chamber with injector orifices, producing exhaust from fuel and oxidiser inputs. Combustion temperature peaks at the configured optimal flow ratio (oxidiser/fuel)."
+struct BipropChamberCompBehav <: ComponentBehavior
+    fuel_conductance::Float64
+    oxid_conductance::Float64
+    r_optimal::Float64
+    state::BipropChamberState
+end
+
+"""
+    BipropChamberCompBehav(; fuel_conductance, oxid_conductance, r_optimal)
+
+Construct a bipropellant combustion chamber with the given injector conductances and optimal
+flow ratio (Q_oxid / Q_fuel at peak combustion).
+
+The conductances define the injector pressure drops: at equal upstream pressures, the volumetric
+flow ratio Q_oxid / Q_fuel = oxid_conductance / fuel_conductance. Default conductances (fuel: 0.4,
+oxidiser: 1.0) produce the default optimal ratio of 2.5 and are deliberately below pipe
+conductances (2.0–10.0) so the orifice dominates the input impedance.
+"""
+function BipropChamberCompBehav(; fuel_conductance::Float64 = 0.4, oxid_conductance::Float64 = 1.0, r_optimal::Float64 = 2.5)
+    state = BipropChamberState(HexFluids.THERMAL_AMBIENT_TEMPERATURE_K, AutoDeactivationBehavFrag())
+    return BipropChamberCompBehav(fuel_conductance, oxid_conductance, r_optimal, state)
+end
+
+"""
+Build the chamber's six circuit elements at the supplied `active` setting.
+
+Used by `produce_rel_elements` (active = !is_inactive(...)), and by
+`get_reactivation_probe` / `accept_reactivation_probe!` (always active = true).
+Keeping this in one place prevents the trial-solve and the live stamp from drifting.
+"""
+function _build_biprop_elements(comp::BipropChamberCompBehav, active::Bool)::NTuple{6, RelativeElement}
+    fuel_density = lookup_fluid_density(HexFluids.FUEL_LIQUID)::Float64
+    oxid_density = lookup_fluid_density(HexFluids.OXIDISER_LIQUID)::Float64
+    exhaust_density = lookup_fluid_density(HexFluids.BIPROP_EXHAUST)::Float64
+    fuel_expansion_factor = fuel_density / exhaust_density
+    oxid_expansion_factor = oxid_density / exhaust_density
+
+    # Element 1: Fuel VCVS (NODE_INTERNAL_1 → GROUND), depends on element 3 (fuel CCCS)
+    fuel_vcvs = RelativeElement(
+        RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND),
+        1.0, HexElements.V_DEP_VOLTAGE; dependent_index = 3, active = active,
+    )
+
+    # Element 2: Oxidiser VCVS (NODE_INTERNAL_2 → GROUND), depends on element 4 (oxid CCCS)
+    oxid_vcvs = RelativeElement(
+        RelativeElementConnections(HexFrame.NODE_INTERNAL_2, HexFrame.GROUND),
+        1.0, HexElements.V_DEP_VOLTAGE; dependent_index = 4, active = active,
+    )
+
+    # Element 3: Fuel CCCS (PORT_OUT → GROUND), depends on element 1 (fuel VCVS)
+    fuel_cccs = RelativeElement(
+        RelativeElementConnections(HexFrame.NODE_Q_NEG, HexFrame.GROUND),
+        -fuel_expansion_factor, HexElements.C_DEP_CURRENT; dependent_index = 1, active = active,
+    )
+
+    # Element 4: Oxidiser CCCS (PORT_OUT → GROUND), depends on element 2 (oxid VCVS)
+    oxid_cccs = RelativeElement(
+        RelativeElementConnections(HexFrame.NODE_Q_NEG, HexFrame.GROUND),
+        -oxid_expansion_factor, HexElements.C_DEP_CURRENT; dependent_index = 2, active = active,
+    )
+
+    # Element 5: Fuel orifice resistor (PORT_FUEL → NODE_INTERNAL_1)
+    fuel_orifice = RelativeElement(
+        RelativeElementConnections(HexFrame.NODE_R_NEG, HexFrame.NODE_INTERNAL_1),
+        comp.fuel_conductance, HexElements.CONST_RESISTOR; active = active,
+    )
+
+    # Element 6: Oxidiser orifice resistor (PORT_OXID → NODE_INTERNAL_2)
+    oxid_orifice = RelativeElement(
+        RelativeElementConnections(HexFrame.NODE_S_NEG, HexFrame.NODE_INTERNAL_2),
+        comp.oxid_conductance, HexElements.CONST_RESISTOR; active = active,
+    )
+
+    return (fuel_vcvs, oxid_vcvs, fuel_cccs, oxid_cccs, fuel_orifice, oxid_orifice)
+end
+
+function produce_rel_elements(comp::BipropChamberCompBehav)::NTuple{6, RelativeElement}
+    is_active::Bool = !is_inactive(comp.state.auto_deactivation)
+    return _build_biprop_elements(comp, is_active)
+end
+
+function produce_rel_fluid_declarations(comp::BipropChamberCompBehav)
+    return (
+        RelativeFluidDeclaration(HexFrame.NODE_R_NEG, HexFluids.FluidTypeRule(HexFluids.FUEL_LIQUID)),
+        RelativeFluidDeclaration(HexFrame.NODE_S_NEG, HexFluids.FluidTypeRule(HexFluids.OXIDISER_LIQUID)),
+        RelativeFluidDeclaration(HexFrame.NODE_Q_NEG, HexFluids.FluidSource(HexFluids.BIPROP_EXHAUST, comp.state.output_temperature_state)),
+    )
+end
+
+function get_tunables(comp::BipropChamberCompBehav)::NTuple{3, TunableProps}
+    fuel_cond_props = TunableProps(comp.fuel_conductance, "Fuel Conductance", "s²")
+    oxid_cond_props = TunableProps(comp.oxid_conductance, "Oxidiser Conductance", "s²")
+    r_optimal_props = TunableProps(comp.r_optimal, "Optimal Flow Ratio", "")
+    return (fuel_cond_props, oxid_cond_props, r_optimal_props)
+end
+
+function set_tunables(comp::BipropChamberCompBehav, tunables::NTuple{3, T})::BipropChamberCompBehav where {T <: Real}
+    fuel_cond = Float64(tunables[1])
+    oxid_cond = Float64(tunables[2])
+    r_opt = Float64(tunables[3])
+    return BipropChamberCompBehav(fuel_cond, oxid_cond, r_opt, comp.state)
+end
+
+function update_flowbehav!(comp::BipropChamberCompBehav; rotation::HexAxis, tile::TileCoord, mna_state::MNA_State, derivedmapstate::DerivedMapState, kwargs...)
+    # Inactive chamber must not retain its previous combustion temperature
+    if is_inactive(comp.state.auto_deactivation)
+        comp.state.output_temperature_state = HexFluids.THERMAL_AMBIENT_TEMPERATURE_K
+        return nothing
+    end
+
+    # Read VCVS currents to detect propellant flow rates
+    fuel_current = get(mna_state.vsource_currents, ElementID(tile, biprop_fuel_vcvs_index), 0.0)
+    oxid_current = get(mna_state.vsource_currents, ElementID(tile, biprop_oxid_vcvs_index), 0.0)
+
+    # Deactivate on backflow (negative current beyond tolerance) on either leg
+    if fuel_current < -backflow_tolerance || oxid_current < -backflow_tolerance
+        deactivate!(comp.state.auto_deactivation)
+        comp.state.output_temperature_state = HexFluids.THERMAL_AMBIENT_TEMPERATURE_K
+        return nothing
+    end
+
+    # Peak combustion temperature is the BIPROP_EXHAUST reference temperature; fall back to ambient if unset
+    t_ambient = HexFluids.THERMAL_AMBIENT_TEMPERATURE_K
+    t_max_lookup = HexFluids.lookup_fluid_reference_temperature(HexFluids.BIPROP_EXHAUST)
+    t_max = isnothing(t_max_lookup) ? t_ambient : t_max_lookup
+
+    # Limiting-reactant combustion model on volumetric flows. Either flow at zero gives zero combustion.
+    fuel_flow = max(fuel_current, 0.0)
+    oxid_flow = max(oxid_current, 0.0)
+    total_flow = fuel_flow + oxid_flow
+
+    if total_flow < biprop_flow_threshold
+        comp.state.output_temperature_state = t_ambient
+        return nothing
+    end
+
+    combustible_fuel = min(fuel_flow, oxid_flow / comp.r_optimal)
+    combusted_flow = combustible_fuel * (1.0 + comp.r_optimal)
+    combustion_fraction = combusted_flow / total_flow
+    comp.state.output_temperature_state = t_ambient + combustion_fraction * (t_max - t_ambient)
+
+    return nothing
+end
+
+"""
+Return a six-element probe for the speculative reactivation scheduler, or `nothing`
+when the chamber is currently active.
+
+The probe rebuilds the full chamber stamp (2 VCVS, 2 CCCS, 2 orifice resistors) so the
+trial solve sees the same network the chamber would produce on its first live tick after
+reactivation. Acceptance is decided in `accept_reactivation_probe!` based on both legs
+flowing forward.
+"""
+function get_reactivation_probe(comp::BipropChamberCompBehav; kwargs...)
+    is_inactive(comp.state.auto_deactivation) || return nothing
+    return ReactivationProbe(_build_biprop_elements(comp, true))
+end
+
+"""
+Accept reactivation only when the speculative solve shows both fuel and oxidiser
+flowing forward through the chamber's VCVS sources.
+
+The acceptance gate is the inverse of the live deactivation gate in `update_flowbehav!`:
+deactivation triggers when either leg falls below `-backflow_tolerance`, so reactivation
+requires both legs to be at least `-backflow_tolerance` (i.e. neither is in significant
+backflow). On rejection the component is left untouched and the scheduler will retry on
+a future tick if the request is still pending.
+"""
+function accept_reactivation_probe!(comp::BipropChamberCompBehav;
+        tile::TileCoord, rotation::HexAxis,
+        derivedmapstate::DerivedMapState, mna_state, kwargs...)
+    fuel_current = get(mna_state.vsource_currents, ElementID(tile, biprop_fuel_vcvs_index), nothing)
+    oxid_current = get(mna_state.vsource_currents, ElementID(tile, biprop_oxid_vcvs_index), nothing)
+
+    # If either VCVS was pruned out of the trial solve, currents won't be in the dict.
+    # Treat that as rejection — we cannot prove forward flow.
+    isnothing(fuel_current) && return false
+    isnothing(oxid_current) && return false
+
+    fuel_current >= -backflow_tolerance || return false
+    oxid_current >= -backflow_tolerance || return false
+
+    reactivate!(comp.state.auto_deactivation)
+    return true
+end
+
+function render_base_elem!(queue::Vector{<:RenderCommand}, comp::BipropChamberCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
+    # Render gas fluidmask as black background
+    gas_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset)
+    push!(queue, render_basic_tile(glmap, :CombustionChamber1_gas_fluidmask, rotation, position; colour = DEFAULT_EMPTY_FLUID_COLOUR, scale = scale, transparency = transparency, draw_height = gas_height, pos_offset = pos_offset))
+
+    # Render frame on top
+    frame_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
+    push!(queue, render_basic_tile(glmap, :CombustionChamber1_frame, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = frame_height, pos_offset = pos_offset))
+
+    return nothing
+end
+
+function render_map_elem!(queue::Vector{<:RenderCommand}, comp::BipropChamberCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
+    # Detect current flow through both VCVS elements
+    fuel_current = get(mna_state.vsource_currents, ElementID(position, biprop_fuel_vcvs_index), 0.0)
+    oxid_current = get(mna_state.vsource_currents, ElementID(position, biprop_oxid_vcvs_index), 0.0)
+    non_trivial_fuel_current = abs(fuel_current) > backflow_tolerance
+    non_trivial_oxid_current = abs(oxid_current) > backflow_tolerance
+
+    # Get output gas colour from NODE_Q_NEG
+    output_node = map_element(HexFrame.NODE_Q_NEG, position, rotation)
+    output_fluid = get(derivedmapstate.nodeactualfluids, output_node, nothing)
+    output_temperature = get(derivedmapstate.node_temperatures, output_node, HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
+    gas_colour = get_fluid_colour(output_fluid, output_temperature)
+
+    # Get fuel and oxidiser colours from their input nodes
+    fuel_node = map_element(HexFrame.NODE_R_NEG, position, rotation)
+    fuel_fluid = get(derivedmapstate.nodeactualfluids, fuel_node, nothing)
+    fuel_temperature = get(derivedmapstate.node_temperatures, fuel_node, HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
+    fuel_colour = get_fluid_colour(fuel_fluid, fuel_temperature)
+
+    oxid_node = map_element(HexFrame.NODE_S_NEG, position, rotation)
+    oxid_fluid = get(derivedmapstate.nodeactualfluids, oxid_node, nothing)
+    oxid_temperature = get(derivedmapstate.node_temperatures, oxid_node, HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
+    oxid_colour = get_fluid_colour(oxid_fluid, oxid_temperature)
+
+    # Always render gas fluidmask with basic shader (static background)
+    low_gas_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset)
+    push!(queue, render_gas_tile(glmap, :CombustionChamber1_gas_fluidmask, rotation, position, gameticks; colour = gas_colour, scale = scale, transparency = transparency, draw_height = low_gas_height, pos_offset = pos_offset))
+
+    # Render animated fuel fluidmask if fuel is flowing
+    if non_trivial_fuel_current
+        fuel_sprites = (:CombustionChamber1_fuel_fluidmask_1, :CombustionChamber1_fuel_fluidmask_2, :CombustionChamber1_fuel_fluidmask_3, :CombustionChamber1_fuel_fluidmask_4)
+        fuel_sprite = animation_sprite_picker(fuel_sprites, gameticks, 4)
+        fuel_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 100) + Int32(render_height_offset)
+        push!(queue, render_liquid_tile(glmap, fuel_sprite, rotation, position, gameticks; colour = fuel_colour, scale = scale, transparency = transparency, draw_height = fuel_height, pos_offset = pos_offset))
+    end
+
+    # Render animated oxidiser fluidmask if oxidiser is flowing (offset above fuel layer to avoid z-fighting)
+    if non_trivial_oxid_current
+        oxid_sprites = (:CombustionChamber1_ox_fluidmask_1, :CombustionChamber1_ox_fluidmask_2, :CombustionChamber1_ox_fluidmask_3, :CombustionChamber1_ox_fluidmask_4)
+        oxid_sprite = animation_sprite_picker(oxid_sprites, gameticks, 4)
+        oxid_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 110) + Int32(render_height_offset)
+        push!(queue, render_liquid_tile(glmap, oxid_sprite, rotation, position, gameticks; colour = oxid_colour, scale = scale, transparency = transparency, draw_height = oxid_height, pos_offset = pos_offset))
+    end
+
+    # Render translucent gas overlay (combustion happening effect) if either liquid is flowing
+    if non_trivial_fuel_current || non_trivial_oxid_current
+        high_gas_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 200) + Int32(render_height_offset)
+        push!(queue, render_gas_tile(glmap, :CombustionChamber1_gas_fluidmask, rotation, position, gameticks; colour = gas_colour, scale = scale, transparency = transparency*0.2, draw_height = high_gas_height, pos_offset = pos_offset))
+    end
+
+    # Always render frame on top
+    frame_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
+    push!(queue, render_basic_tile(glmap, :CombustionChamber1_frame, rotation, position; scale = scale, transparency = transparency, draw_height = frame_height, pos_offset = pos_offset))
 
     return nothing
 end

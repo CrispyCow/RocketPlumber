@@ -1,7 +1,7 @@
 module HexFlowCalculator
 
 # Packages
-using Base.Threads, Dates, LinearAlgebra, StructEquality
+using Base.Threads, Dates, JLD2, LinearAlgebra, StructEquality
 using TimerOutputs, StaticArrays
 # Custom Packages
 using HexFrame, HexElements, HexFluids, HexFlowTelemetry
@@ -1339,6 +1339,37 @@ function run_reactivation_trial!(
     return false  # queue was empty
 end
 
+#= ---------- Crash Dump Persistence ----------- =#
+
+"""
+Persist a crash dump for the FlowCalculator loop. Returns the file path written.
+
+Drains the pending `MapEditCommand` channel into a Vector so the queue contents are
+captured (subsequent ticks would not see them, but the loop is exiting anyway).
+"""
+function _write_crash_dump(gamemap::GameMap, mna_state::MNA_State,
+        command_queue::CommandQueue, exception, trace_str::String)::String
+    pending_commands = MapEditCommand[]
+    while isready(command_queue.command_channel)
+        push!(pending_commands, take!(command_queue.command_channel))
+    end
+
+    timestamp = Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
+    crashpath = joinpath("maps", "crash_$(timestamp).jld2")
+    mkpath(dirname(crashpath))
+
+    jldsave(crashpath;
+        stored_gamemap     = gamemap,
+        pending_commands   = pending_commands,
+        node_voltages      = mna_state.node_voltages,
+        vsource_currents   = mna_state.vsource_currents,
+        exception_message  = sprint(showerror, exception),
+        exception_backtrace = trace_str,
+    )
+
+    return crashpath
+end
+
 # ===============================================================
 # Map Update Functions
 # ===============================================================
@@ -1935,6 +1966,16 @@ function flowcalculator_loop!(
             showerror(ios, e, bt)
             trace_str = String(take!(ios))
             println(stderr, trace_str)
+
+            # Persist a crash dump for post-mortem replay. Wrapped in its own try/catch so a
+            # write failure cannot mask the underlying exception.
+            try
+                crashpath = _write_crash_dump(gamemap, mna_state, command_queue, e, trace_str)
+                @info "Crash dump written to $crashpath"
+                threadsafe_console_push("Crash dump: $crashpath")
+            catch dump_err
+                @error "Failed to write crash dump" exception = (dump_err, catch_backtrace())
+            end
 
             # Request orderly shutdown so the error is visible and the main thread can react
             @atomic shared_state.should_exit = true

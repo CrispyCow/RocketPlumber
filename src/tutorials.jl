@@ -818,7 +818,7 @@ function get_entry_fluid_transfer()::LearningEntry
                                     isnothing(ship_name) && return false
 
                                     is_on_tanker = ship_name != :primary && any(values(get_all_components(inputs.gamemap; ship_name = ship_name))) do ship_component
-                                        ship_component.component isa ThevininTankCompBehav && ship_component.component.fluid == HexFluids.MONOPROP_LIQUID
+                                        ship_component.component isa ThevininTankCompBehav{LiquidTankBehavFrag}
                                     end
                                     faces_left = component_on_tile.rotation in (HexFrame.S_NEG, HexFrame.Q_POS, HexFrame.R_NEG)
                                     return is_on_tanker && faces_left
@@ -865,7 +865,7 @@ function get_entry_fluid_transfer()::LearningEntry
                                 primary_tanks_full = all(values(get_all_components(inputs.gamemap; ship_name = :primary))) do component_on_tile
                                     component = component_on_tile.component
                                     component isa ThevininTankCompBehav || return true
-                                    component.fluid == HexFluids.MONOPROP_LIQUID || return true
+                                    component.tank isa LiquidTankBehavFrag || return true
                                     # Liquid tanks store their charge inside ThevininTankCompBehav -> LiquidTankBehavFrag -> TankBehavFrag.
                                     return component.tank.tank.state.charge >= 0.99 * component.tank.tank.max_charge
                                 end

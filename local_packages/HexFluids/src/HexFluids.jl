@@ -33,6 +33,9 @@ const IS_LIQUID_BIT = 0x00020000
     COLD_GAS        = IS_GAS_BIT    | 0x0001   # 0x00010001
     MONOPROP_LIQUID = IS_LIQUID_BIT | 0x0002   # 0x00020002
     MONOPROP_GAS    = IS_GAS_BIT    | 0x0003   # 0x00010003
+    FUEL_LIQUID     = IS_LIQUID_BIT | 0x0004   # 0x00020004
+    OXIDISER_LIQUID = IS_LIQUID_BIT | 0x0005   # 0x00020005
+    BIPROP_EXHAUST  = IS_GAS_BIT    | 0x0006   # 0x00010006
 end
 
 @enum FluidConstraint::UInt32 begin
@@ -88,9 +91,17 @@ const FluidDeclaration = Union{FluidSource, FluidTypeRule, FluidConstraintRule}
 const THERMAL_AMBIENT_TEMPERATURE_K = 300.0
 
 "Default temperature for a fluid type. Returns `nothing` if no default (e.g. MONOPROP_GAS is derived from decomp chamber)."
-get_default_temperature(::Val{COLD_GAS})       = THERMAL_AMBIENT_TEMPERATURE_K
-get_default_temperature(::Val{MONOPROP_LIQUID}) = THERMAL_AMBIENT_TEMPERATURE_K
-get_default_temperature(::Val{T}) where {T}    = nothing
+get_default_temperature(::Val{COLD_GAS})        = THERMAL_AMBIENT_TEMPERATURE_K
+get_default_temperature(::Val{MONOPROP_LIQUID})  = THERMAL_AMBIENT_TEMPERATURE_K
+get_default_temperature(::Val{FUEL_LIQUID})      = THERMAL_AMBIENT_TEMPERATURE_K
+get_default_temperature(::Val{OXIDISER_LIQUID})  = THERMAL_AMBIENT_TEMPERATURE_K
+get_default_temperature(::Val{T}) where {T}     = nothing
+
+"Default temperature for a runtime fluid type with fallback. Returns the fluid's default temperature if available, otherwise the provided fallback."
+function get_default_temperature(fluid::FluidType, fallback::Real)::Float64
+    temp = get_default_temperature(Val(fluid))
+    return isnothing(temp) ? Float64(fallback) : temp
+end
 
 # ===============================================================
 # Fluid Physical Properties
@@ -100,6 +111,7 @@ get_default_temperature(::Val{T}) where {T}    = nothing
 const _fluid_exhaust_velocities = Dict{FluidType, Atomic{Float64}}(
     COLD_GAS     => Atomic{Float64}(500.0),
     MONOPROP_GAS => Atomic{Float64}(1500.0),
+    BIPROP_EXHAUST => Atomic{Float64}(3200.0),
 )
 
 "Fluid densities for concrete fluids, with per-value atomic storage for thread-safe runtime tuning."
@@ -107,12 +119,16 @@ const _fluid_densities = Dict{FluidType, Atomic{Float64}}(
     COLD_GAS        => Atomic{Float64}(1.0),
     MONOPROP_LIQUID => Atomic{Float64}(5.0),
     MONOPROP_GAS    => Atomic{Float64}(1.0),
+    FUEL_LIQUID     => Atomic{Float64}(5.0),
+    OXIDISER_LIQUID => Atomic{Float64}(5.0),
+    BIPROP_EXHAUST  => Atomic{Float64}(1.0),
 )
 
 "Reference temperatures for exhaust velocity scaling v_e(T) = v_e_ref x √(T / T_ref)."
 const _fluid_reference_temperatures = Dict{FluidType, Atomic{Float64}}(
     COLD_GAS     => Atomic{Float64}(300.0),
     MONOPROP_GAS => Atomic{Float64}(800.0),
+    BIPROP_EXHAUST => Atomic{Float64}(2300.0),
 )
 
 #= ---------- Lookups ----------- =#
@@ -197,6 +213,9 @@ function fluid_type_label(ft::FluidType)::String
     ft == COLD_GAS        && return "Cold Gas"
     ft == MONOPROP_LIQUID && return "Monopropellant"
     ft == MONOPROP_GAS    && return "Monopropellant Gas"
+    ft == FUEL_LIQUID     && return "Fuel"
+    ft == OXIDISER_LIQUID && return "Oxidiser"
+    ft == BIPROP_EXHAUST  && return "Bipropellant Exhaust"
     return "Unknown ($(string(ft)))"
 end
 

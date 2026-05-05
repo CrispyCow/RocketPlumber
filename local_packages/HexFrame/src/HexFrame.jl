@@ -445,7 +445,7 @@ end
 # ===============================================================
 
 """
-All possible node positions on a hex tile, including the internal node and ground.
+All possible node positions on a hex tile, including three internal nodes and ground.
 Order must match HexAxis.
 """
 @enum NodePos::UInt8 begin
@@ -455,7 +455,9 @@ Order must match HexAxis.
     NODE_Q_NEG
     NODE_R_POS
     NODE_S_NEG
-    NODE_INTERNAL
+    NODE_INTERNAL_1
+    NODE_INTERNAL_2
+    NODE_INTERNAL_3
     GROUND
 end
 
@@ -475,7 +477,9 @@ function is_proper(pos::NodePos)::Bool
         NODE_Q_POS,
         NODE_Q_NEG,
         GROUND,
-        NODE_INTERNAL,
+        NODE_INTERNAL_1,
+        NODE_INTERNAL_2,
+        NODE_INTERNAL_3,
     )
     return pos in prop_list
 end
@@ -570,8 +574,9 @@ For internal nodes: 1-tuple of `(TileCoord, NodePos)`.
 For grounded nodes: empty tuple.
 """
 function get_adjacent_tiles_for_node(node::NodeCoord)
-    if node.dir === NODE_INTERNAL
-        return ((node.tile, NODE_INTERNAL),)
+    # Internal nodes don't have neighbours, they belong only to their tile
+    if node.dir === NODE_INTERNAL_1 || node.dir === NODE_INTERNAL_2 || node.dir === NODE_INTERNAL_3
+        return ((node.tile, node.dir),)
     end
 
     # Ground nodes don't belong to any tile

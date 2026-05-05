@@ -32,12 +32,12 @@ function mapgen_pressurefedintro()
             initial_gas_charge = 0.0,
             max_liquid_charge = 40.0,
             max_gas_pressure = 50.0,
-            gas_node = HexFrame.NODE_Q_POS
+            gas_node = HexFrame.NODE_Q_POS,
+            initial_liquid_fluid = HexFluids.MONOPROP_LIQUID
         ),
         (HexFrame.NODE_Q_NEG,),
         5.0,
         HexFluids.COLD_GAS,
-        HexFluids.MONOPROP_LIQUID,
         NoRotationBehavFrag()
     )
 

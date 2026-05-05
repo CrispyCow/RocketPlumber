@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(julia --project=. -e \"using Pkg; Pkg.test\\(\\)\")",
+      "Bash(julia --project=. --threads=2,1 --gcthreads=1,1 src/repl_launch.jl)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\chris\\\\Repos\\\\RocketPlumberPrivate\" -Recurse -Directory)",
+      "Bash(Select-Object FullName)",
+      "Bash(xargs grep *)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\chris\\\\Repos\\\\RocketPlumberPrivate\" -Recurse -Filter \"*.toml\")",
+      "PowerShell(cd \"c:\\\\Users\\\\chris\\\\Repos\\\\RocketPlumberPrivate\"; julia --project=. --threads=2,1 --gcthreads=1,1 tools/map_diagnostics/debug_map_MNA.jl maps/newcrash.jld2 2>&1 | Out-File -FilePath \"$env:TEMP\\\\diagnostic_output.txt\" -Encoding utf8)",
+      "PowerShell(cd \"c:\\\\Users\\\\chris\\\\Repos\\\\RocketPlumberPrivate\"; $ErrorActionPreference = 'Continue'; julia --project=. --threads=2,1 --gcthreads=1,1 tools/map_diagnostics/debug_map_MNA.jl maps/newcrash.jld2 2>&1 | Out-File -FilePath \"$env:TEMP\\\\diag_full.txt\" -Encoding utf8 -Force; \"File saved to: $env:TEMP\\\\diag_full.txt\")",
+      "PowerShell(Get-ChildItem -Path \"$env:TEMP\\\\diag_full.txt\" -ErrorAction SilentlyContinue | Select-Object FullName)",
+      "PowerShell($content = Get-Content \"c:\\\\Users\\\\chris\\\\Repos\\\\RocketPlumberPrivate\\\\diag_output.txt\" -Encoding Unicode; $content | Out-File -FilePath \"c:\\\\Users\\\\chris\\\\Repos\\\\RocketPlumberPrivate\\\\diag_output_utf8.txt\" -Encoding UTF8 -Force; \"Converted to UTF-8\"; \\(Get-Item \"c:\\\\Users\\\\chris\\\\Repos\\\\RocketPlumberPrivate\\\\diag_output_utf8.txt\"\\).Length)",
+      "Bash(Get-Content C:\\\\Users\\\\chris\\\\.claude\\\\projects\\\\c--Users-chris-Repos-RocketPlumberPrivate\\\\3e584f99-aeb5-4b7f-86f2-66c0433db92f\\\\tool-results\\\\bp5cswpzs.txt)",
+      "Bash(Select-String -Context 0 \"^MAP SUMMARY|^A MATRIX ANALYSIS|^Null vector|^Elements touching|^G diagonal|^Voltage sources|total|^TYPE:|^RESULT:|⚠\")",
+      "Bash(Out-String)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\chris\\\\Repos\\\\RocketPlumberPrivate\" -Recurse -Directory -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(gh pr *)",
+      "PowerShell(gh pr list)"
+    ]
+  }
+}

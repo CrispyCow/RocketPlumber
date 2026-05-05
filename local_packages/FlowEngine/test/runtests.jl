@@ -26,15 +26,15 @@ end
 struct DummyCompUpdate <: ComponentBehavior end
 import HexComponentsAPI: update_flowbehav!
 function update_flowbehav!(::DummyCompUpdate; tile::TileCoord, mna_state::MNA_State, derivedmapstate::DerivedMapState, kwargs...)
-    derived_value = get(derivedmapstate.nodeactualfluids, NodeCoord(tile, HexFrame.NODE_INTERNAL), nothing)
-    mna_state.node_voltages[NodeCoord(tile, HexFrame.NODE_INTERNAL)] = derived_value === HexFluids.COLD_GAS ? 3.21 : -1.0
+    derived_value = get(derivedmapstate.nodeactualfluids, NodeCoord(tile, HexFrame.NODE_INTERNAL_1), nothing)
+    mna_state.node_voltages[NodeCoord(tile, HexFrame.NODE_INTERNAL_1)] = derived_value === HexFluids.COLD_GAS ? 3.21 : -1.0
     return nothing
 end
 
 struct DummyFluidComp <: ComponentBehavior end
 import HexComponentsAPI: produce_rel_fluid_declarations
 function produce_rel_fluid_declarations(::DummyFluidComp)
-    return (FlowEngine.RelativeFluidDeclaration(HexFrame.NODE_INTERNAL, HexFluids.FluidSource(HexFluids.COLD_GAS, 300.0)),)
+    return (FlowEngine.RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, HexFluids.FluidSource(HexFluids.COLD_GAS, 300.0)),)
 end
 
 
@@ -95,15 +95,15 @@ end
     ms = MNA_State()
     derived = DerivedMapState(
         nodeactualfluids = Dict(
-            NodeCoord(TileCoord(0,0), HexFrame.NODE_INTERNAL) => HexFluids.COLD_GAS,
-            NodeCoord(TileCoord(5,5), HexFrame.NODE_INTERNAL) => HexFluids.COLD_GAS,
+            NodeCoord(TileCoord(0,0), HexFrame.NODE_INTERNAL_1) => HexFluids.COLD_GAS,
+            NodeCoord(TileCoord(5,5), HexFrame.NODE_INTERNAL_1) => HexFluids.COLD_GAS,
         )
     )
     update_components!(gm, ms, derived)
-    @test NodeCoord(TileCoord(0,0), HexFrame.NODE_INTERNAL) in keys(ms.node_voltages)
-    @test NodeCoord(TileCoord(5,5), HexFrame.NODE_INTERNAL) in keys(ms.node_voltages)
-    @test ms.node_voltages[NodeCoord(TileCoord(0,0), HexFrame.NODE_INTERNAL)] ≈ 3.21
-    @test ms.node_voltages[NodeCoord(TileCoord(5,5), HexFrame.NODE_INTERNAL)] ≈ 3.21
+    @test NodeCoord(TileCoord(0,0), HexFrame.NODE_INTERNAL_1) in keys(ms.node_voltages)
+    @test NodeCoord(TileCoord(5,5), HexFrame.NODE_INTERNAL_1) in keys(ms.node_voltages)
+    @test ms.node_voltages[NodeCoord(TileCoord(0,0), HexFrame.NODE_INTERNAL_1)] ≈ 3.21
+    @test ms.node_voltages[NodeCoord(TileCoord(5,5), HexFrame.NODE_INTERNAL_1)] ≈ 3.21
 
     # Per-Ship
     ship_single = ShipMap()
@@ -111,12 +111,12 @@ end
     ms2 = MNA_State()
     derived2 = DerivedMapState(
         nodeactualfluids = Dict(
-            NodeCoord(TileCoord(7,7), HexFrame.NODE_INTERNAL) => HexFluids.COLD_GAS,
+            NodeCoord(TileCoord(7,7), HexFrame.NODE_INTERNAL_1) => HexFluids.COLD_GAS,
         )
     )
     update_components!(ship_single, ms2, derived2)
-    @test NodeCoord(TileCoord(7,7), HexFrame.NODE_INTERNAL) in keys(ms2.node_voltages)
-    @test ms2.node_voltages[NodeCoord(TileCoord(7,7), HexFrame.NODE_INTERNAL)] ≈ 3.21
+    @test NodeCoord(TileCoord(7,7), HexFrame.NODE_INTERNAL_1) in keys(ms2.node_voltages)
+    @test ms2.node_voltages[NodeCoord(TileCoord(7,7), HexFrame.NODE_INTERNAL_1)] ≈ 3.21
 end
 
 @testset "fluid declarations" begin
@@ -573,7 +573,7 @@ end
 @testset "clear_dangling_dependants!" begin
     n_a = nc(0, 0, HexFrame.NODE_Q_POS)
     n_b = nc(1, 0, HexFrame.NODE_Q_POS)
-    n_c = nc(0, 0, HexFrame.NODE_INTERNAL)
+    n_c = nc(0, 0, HexFrame.NODE_INTERNAL_1)
     gnd = NodeCoord(TileCoord(0, 0), HexFrame.GROUND)
 
     # Local convenience wrapper so individual tests read as simple in/out checks.
@@ -689,7 +689,7 @@ end
     n_c = nc(2, 0, HexFrame.NODE_Q_POS)
     n_d = nc(3, 0, HexFrame.NODE_Q_POS)
     n_e = nc(4, 0, HexFrame.NODE_Q_POS)
-    n_int = nc(0, 0, HexFrame.NODE_INTERNAL)
+    n_int = nc(0, 0, HexFrame.NODE_INTERNAL_1)
     gnd = NodeCoord(TileCoord(0, 0), HexFrame.GROUND)
 
     "Run the same iterative pruning pipeline as update_map! in HexFlowCalculator"
@@ -736,7 +736,7 @@ end
     end
 
     @testset "two tanks feeding a nozzle" begin
-        n_int2 = nc(3, 0, HexFrame.NODE_INTERNAL)
+        n_int2 = nc(3, 0, HexFrame.NODE_INTERNAL_1)
         elems = [
             make_element(TileCoord(0,0), 1, n_int, gnd, 5.0, CONST_VOLTAGE),
             make_element(TileCoord(0,0), 2, n_int, n_a, 2.0, CONST_RESISTOR),
@@ -751,7 +751,7 @@ end
     end
 
     @testset "CCCS with controller (turbopump pattern)" begin
-        n_pump_int = nc(5, 0, HexFrame.NODE_INTERNAL)
+        n_pump_int = nc(5, 0, HexFrame.NODE_INTERNAL_1)
         n_qpos = nc(5, 0, HexFrame.NODE_Q_POS)
         n_qneg = nc(5, 0, HexFrame.NODE_Q_NEG)
         n_spos = nc(5, 0, HexFrame.NODE_S_POS)
@@ -763,14 +763,14 @@ end
             make_element(TileCoord(5,0), 2, n_pump_int, n_qneg, 2.0, CONST_RESISTOR),
             make_element(TileCoord(5,0), 3, n_spos, gnd, 0.5, C_DEP_CURRENT; dependent_index=1),
             # Gas tank on Q_POS
-            make_element(TileCoord(4,0), 1, nc(4,0, HexFrame.NODE_INTERNAL), gnd, 3.0, CONST_VOLTAGE),
-            make_element(TileCoord(4,0), 2, nc(4,0, HexFrame.NODE_INTERNAL), n_qpos, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(4,0), 1, nc(4,0, HexFrame.NODE_INTERNAL_1), gnd, 3.0, CONST_VOLTAGE),
+            make_element(TileCoord(4,0), 2, nc(4,0, HexFrame.NODE_INTERNAL_1), n_qpos, 2.0, CONST_RESISTOR),
             # Pipe + nozzle
             make_element(TileCoord(6,0), 1, n_qneg, n_pipe_out, 1.0, CONST_RESISTOR),
             make_element(TileCoord(7,0), 1, n_pipe_out, gnd, 0.5, CONST_RESISTOR),
             # Gas tank feeding turbine S_POS
-            make_element(TileCoord(8,0), 1, nc(8,0, HexFrame.NODE_INTERNAL), gnd, 2.0, CONST_VOLTAGE),
-            make_element(TileCoord(8,0), 2, nc(8,0, HexFrame.NODE_INTERNAL), n_spos, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(8,0), 1, nc(8,0, HexFrame.NODE_INTERNAL_1), gnd, 2.0, CONST_VOLTAGE),
+            make_element(TileCoord(8,0), 2, nc(8,0, HexFrame.NODE_INTERNAL_1), n_spos, 2.0, CONST_RESISTOR),
         ]
         result = run_prune_pipeline(elems)
         @test length(result) == 9
@@ -785,8 +785,8 @@ end
             make_element(TileCoord(10,0), 1, n_dq_pos, gnd, 1.0, V_DEP_VOLTAGE; dependent_index=2),
             make_element(TileCoord(10,0), 2, n_dq_neg, gnd, -2.0, C_DEP_CURRENT; dependent_index=1),
             # Liquid tank
-            make_element(TileCoord(9,0), 1, nc(9,0, HexFrame.NODE_INTERNAL), gnd, 8.0, CONST_VOLTAGE),
-            make_element(TileCoord(9,0), 2, nc(9,0, HexFrame.NODE_INTERNAL), n_dq_pos, 4.0, CONST_RESISTOR),
+            make_element(TileCoord(9,0), 1, nc(9,0, HexFrame.NODE_INTERNAL_1), gnd, 8.0, CONST_VOLTAGE),
+            make_element(TileCoord(9,0), 2, nc(9,0, HexFrame.NODE_INTERNAL_1), n_dq_pos, 4.0, CONST_RESISTOR),
             # Gas nozzle
             make_element(TileCoord(11,0), 1, n_dq_neg, nc(11,0, HexFrame.NODE_Q_POS), 1.0, CONST_RESISTOR),
             make_element(TileCoord(12,0), 1, nc(11,0, HexFrame.NODE_Q_POS), gnd, 0.5, CONST_RESISTOR),
@@ -862,7 +862,7 @@ end
     end
 
     @testset "tank-pipe-nozzle circuit" begin
-        n_int = nc(0, 0, HexFrame.NODE_INTERNAL)
+        n_int = nc(0, 0, HexFrame.NODE_INTERNAL_1)
         elems = [
             make_element(TileCoord(0,0), 1, n_int, gnd, 5.0, CONST_VOLTAGE),
             make_element(TileCoord(0,0), 2, n_int, n_a, 2.0, CONST_RESISTOR),
@@ -901,13 +901,13 @@ end
     end
 
     @testset "CCCS (turbopump-like)" begin
-        n_pump_int = nc(5, 0, HexFrame.NODE_INTERNAL)
+        n_pump_int = nc(5, 0, HexFrame.NODE_INTERNAL_1)
         n_qpos = nc(5, 0, HexFrame.NODE_Q_POS)
         n_qneg = nc(5, 0, HexFrame.NODE_Q_NEG)
         n_spos = nc(5, 0, HexFrame.NODE_S_POS)
-        n_tank_int = nc(4, 0, HexFrame.NODE_INTERNAL)
+        n_tank_int = nc(4, 0, HexFrame.NODE_INTERNAL_1)
         n_load = nc(7, 0, HexFrame.NODE_Q_POS)
-        n_gas_int = nc(8, 0, HexFrame.NODE_INTERNAL)
+        n_gas_int = nc(8, 0, HexFrame.NODE_INTERNAL_1)
 
         elems = [
             # Pump
@@ -934,7 +934,7 @@ end
     @testset "VCVS (decomp chamber-like)" begin
         n_dq_pos = nc(10, 0, HexFrame.NODE_Q_POS)
         n_dq_neg = nc(10, 0, HexFrame.NODE_Q_NEG)
-        n_liq_int = nc(9, 0, HexFrame.NODE_INTERNAL)
+        n_liq_int = nc(9, 0, HexFrame.NODE_INTERNAL_1)
         n_gas_out = nc(11, 0, HexFrame.NODE_Q_POS)
 
         elems = [
@@ -1208,7 +1208,7 @@ end
         tp_tile = TileCoord(17, -16)
         dc_tile = TileCoord(16, -16)
 
-        n_tp_int  = nc(17, -16, HexFrame.NODE_INTERNAL)
+        n_tp_int  = nc(17, -16, HexFrame.NODE_INTERNAL_1)
         n_tp_qpos = nc(17, -16, HexFrame.NODE_Q_POS)
         n_tp_qneg = nc(17, -16, HexFrame.NODE_Q_NEG)
         n_tp_spos = nc(17, -16, HexFrame.NODE_S_POS)
@@ -1250,14 +1250,14 @@ end
         tp_tile = TileCoord(17, -16)
         dc_tile = TileCoord(16, -16)
 
-        n_tp_int  = nc(17, -16, HexFrame.NODE_INTERNAL)
+        n_tp_int  = nc(17, -16, HexFrame.NODE_INTERNAL_1)
         n_tp_qpos = nc(17, -16, HexFrame.NODE_Q_POS)
         n_tp_qneg = nc(17, -16, HexFrame.NODE_Q_NEG)
         n_tp_spos = nc(17, -16, HexFrame.NODE_S_POS)
         n_dc_qpos = nc(16, -16, HexFrame.NODE_Q_POS)
         n_dc_qneg = nc(15, -16, HexFrame.NODE_Q_POS)
-        n_liq_int = nc(14, -16, HexFrame.NODE_INTERNAL)
-        n_gas_int = nc(18, -16, HexFrame.NODE_INTERNAL)
+        n_liq_int = nc(14, -16, HexFrame.NODE_INTERNAL_1)
+        n_gas_int = nc(18, -16, HexFrame.NODE_INTERNAL_1)
         n_nozzle  = nc(19, -16, HexFrame.NODE_Q_POS)
 
         elems = [
@@ -1402,6 +1402,111 @@ end
         )
         @test source_index[n_a] == 1
         @test !haskey(source_index, n_b)
+    end
+end
+
+@testset "Multi-internal-node infrastructure" begin
+    gnd = NodeCoord(TileCoord(0, 0), HexFrame.GROUND)
+    T = TileCoord(0, 0)
+    n_qpos = nc(0, 0, HexFrame.NODE_Q_POS)
+
+    function solve_circuit_mi(elements::Vector{AbsoluteElement})
+        derived = DerivedMapState()
+        mna = MNA_State()
+        derived.filteredelements = elements
+        derived.filterednodes = list_nodes(elements)
+        MNA_indexnodes!(mna, derived)
+        MNA_splitelements!(mna, derived)
+        MNA_updateA!(mna)
+        mna.mat_Z = MNA_getZ(mna)
+        MNA_solve!(mna)
+        return (mna, derived)
+    end
+
+    @testset "Two internal nodes wired in series resolve correctly" begin
+        # Vsource: Q_POS → GROUND, V = 10.0
+        # R1 = 1.0: Q_POS → INTERNAL_1
+        # R2 = 1.0: INTERNAL_1 → INTERNAL_2
+        # R3 = 1.0: INTERNAL_2 → GROUND
+        n_int1 = nc(0, 0, HexFrame.NODE_INTERNAL_1)
+        n_int2 = nc(0, 0, HexFrame.NODE_INTERNAL_2)
+
+        elems = [
+            make_element(T, 1, n_qpos, gnd, 10.0, CONST_VOLTAGE),
+            make_element(T, 2, n_qpos, n_int1, 1.0, CONST_RESISTOR),
+            make_element(T, 3, n_int1, n_int2, 1.0, CONST_RESISTOR),
+            make_element(T, 4, n_int2, gnd, 1.0, CONST_RESISTOR),
+        ]
+        mna, _ = solve_circuit_mi(elems)
+        
+        # With three equal resistors in series, voltage divider gives:
+        # V_int1 = 10 * (2/3), V_int2 = 10 * (1/3)
+        @test mna.node_voltages[n_int1] ≈ 10.0 * (2.0/3.0)
+        @test mna.node_voltages[n_int2] ≈ 10.0 * (1.0/3.0)
+        @test length(mna.node_voltages) >= 3  # At least Q_POS, INTERNAL_1, INTERNAL_2
+    end
+
+    @testset "Three internal nodes are all distinct" begin
+        # Extend with four resistors in series spanning Q_POS → INT_1 → INT_2 → INT_3 → GROUND
+        n_int1 = nc(0, 0, HexFrame.NODE_INTERNAL_1)
+        n_int2 = nc(0, 0, HexFrame.NODE_INTERNAL_2)
+        n_int3 = nc(0, 0, HexFrame.NODE_INTERNAL_3)
+
+        elems = [
+            make_element(T, 1, n_qpos, gnd, 10.0, CONST_VOLTAGE),
+            make_element(T, 2, n_qpos, n_int1, 1.0, CONST_RESISTOR),
+            make_element(T, 3, n_int1, n_int2, 1.0, CONST_RESISTOR),
+            make_element(T, 4, n_int2, n_int3, 1.0, CONST_RESISTOR),
+            make_element(T, 5, n_int3, gnd, 1.0, CONST_RESISTOR),
+        ]
+        mna, _ = solve_circuit_mi(elems)
+        
+        # With four equal resistors in series, voltage divider gives:
+        @test mna.node_voltages[n_int1] ≈ 10.0 * (3.0/4.0)
+        @test mna.node_voltages[n_int2] ≈ 10.0 * (2.0/4.0)
+        @test mna.node_voltages[n_int3] ≈ 10.0 * (1.0/4.0)
+    end
+
+    @testset "Internal nodes on different tiles do not alias" begin
+        # Build the same series divider on two adjacent tiles T1 and T2,
+        # both using NODE_INTERNAL_2, drive with different voltages
+        T1 = TileCoord(0, 0)
+        T2 = TileCoord(1, 0)
+        n_int2_T1 = nc(0, 0, HexFrame.NODE_INTERNAL_2)
+        n_int2_T2 = nc(1, 0, HexFrame.NODE_INTERNAL_2)
+        n_qpos_T1 = nc(0, 0, HexFrame.NODE_Q_POS)
+        n_qpos_T2 = nc(1, 0, HexFrame.NODE_Q_POS)
+        gnd_T1 = nc(0, 0, HexFrame.GROUND)
+
+        elems = [
+            # T1: 10V source
+            make_element(T1, 1, n_qpos_T1, gnd_T1, 10.0, CONST_VOLTAGE),
+            make_element(T1, 2, n_qpos_T1, n_int2_T1, 1.0, CONST_RESISTOR),
+            make_element(T1, 3, n_int2_T1, gnd_T1, 1.0, CONST_RESISTOR),
+            # T2: 4V source
+            make_element(T2, 1, n_qpos_T2, gnd_T1, 4.0, CONST_VOLTAGE),
+            make_element(T2, 2, n_qpos_T2, n_int2_T2, 1.0, CONST_RESISTOR),
+            make_element(T2, 3, n_int2_T2, gnd_T1, 1.0, CONST_RESISTOR),
+        ]
+        mna, _ = solve_circuit_mi(elems)
+        
+        # Each divider should give half its source voltage
+        @test mna.node_voltages[n_int2_T1] ≈ 5.0
+        @test mna.node_voltages[n_int2_T2] ≈ 2.0
+        @test mna.node_voltages[n_int2_T1] !== mna.node_voltages[n_int2_T2]
+    end
+
+    @testset "is_proper returns true for all three internal node variants" begin
+        @test HexFrame.is_proper(HexFrame.NODE_INTERNAL_1)
+        @test HexFrame.is_proper(HexFrame.NODE_INTERNAL_2)
+        @test HexFrame.is_proper(HexFrame.NODE_INTERNAL_3)
+    end
+
+    @testset "get_adjacent_tiles_for_node returns the correct variant" begin
+        for dir in (HexFrame.NODE_INTERNAL_1, HexFrame.NODE_INTERNAL_2, HexFrame.NODE_INTERNAL_3)
+            result = HexFrame.get_adjacent_tiles_for_node(NodeCoord(TileCoord(0, 0), dir))
+            @test result == ((TileCoord(0, 0), dir),)
+        end
     end
 end
 

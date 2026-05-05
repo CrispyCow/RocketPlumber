@@ -86,6 +86,9 @@ function render_pipe_map!(queue::AbstractVector, behav::BigPipeBehav; glmap::GLO
     v1_node = to_nodecoord(position.v1)
     v2_node = to_nodecoord(position.v2)
     fluid = get(derivedmapstate.nodeactualfluids, v1_node, get(derivedmapstate.nodeactualfluids, v2_node, nothing))
+    # Use temperature from the node where the fluid was found, or ambient as fallback
+    fluid_node = haskey(derivedmapstate.nodeactualfluids, v1_node) ? v1_node : v2_node
+    temperature = get(derivedmapstate.node_temperatures, fluid_node, HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
 
     # Render fluidmask with appropriate renderer based on fluid type at base height
     base_height = Int32(HexFlowRendering.RENDER_HEIGHT_PIPE_BASE) + Int32(render_height_offset)
@@ -93,10 +96,10 @@ function render_pipe_map!(queue::AbstractVector, behav::BigPipeBehav; glmap::GLO
     position_vec = glvec(position)
 
     if !isnothing(fluid) && is_liquid(fluid)
-        colour = get_fluid_colour(fluid)
+        colour = get_fluid_colour(fluid, temperature)
         push!(queue, render_liquid_sprite(glmap, :BigPipes_Edge_fluidmask, rotation_matrix, position_vec; colour = colour, scale = scale, transparency = transparency, draw_height = base_height, gameticks = gameticks, pos_offset = pos_offset))
     elseif !isnothing(fluid) && is_gas(fluid)
-        colour = get_fluid_colour(fluid)
+        colour = get_fluid_colour(fluid, temperature)
         push!(queue, render_gas_sprite(glmap, :BigPipes_Edge_fluidmask, rotation_matrix, position_vec; colour = colour, scale = scale, transparency = transparency, draw_height = base_height, gameticks = gameticks, pos_offset = pos_offset))
     else
         push!(queue, render_basic_pipe(glmap, :BigPipes_Edge_fluidmask, rotation, position; colour = DEFAULT_EMPTY_FLUID_COLOUR, scale = scale, transparency = transparency, draw_height = base_height, pos_offset = pos_offset))

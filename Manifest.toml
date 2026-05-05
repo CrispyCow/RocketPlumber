@@ -427,7 +427,7 @@ uuid = "a5bfb9cd-4dce-4d41-851e-e34bf63bcb54"
 version = "0.1.0"
 
 [[deps.HexFlowCalculator]]
-deps = ["Dates", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowControl", "HexFlowProcGen", "HexFlowTelemetry", "HexFluids", "HexFrame", "LinearAlgebra", "StaticArrays", "StructEquality", "TimerOutputs"]
+deps = ["Dates", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowControl", "HexFlowProcGen", "HexFlowTelemetry", "HexFluids", "HexFrame", "JLD2", "LinearAlgebra", "StaticArrays", "StructEquality", "TimerOutputs"]
 path = "local_packages/HexFlowCalculator"
 uuid = "d8e9f3a2-7b4c-4e1d-9f3a-2c5b8e7d9f1a"
 version = "0.1.0"

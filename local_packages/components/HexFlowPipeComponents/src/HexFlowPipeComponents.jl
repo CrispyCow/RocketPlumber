@@ -94,15 +94,18 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, behav::BigTilePipeComp
     node_q_neg = map_element(HexFrame.NODE_Q_NEG, position, rotation)
 
     fluid = get(derivedmapstate.nodeactualfluids, node_q_pos, get(derivedmapstate.nodeactualfluids, node_q_neg, nothing))
+    # Use temperature from the node where the fluid was found, or ambient as fallback
+    fluid_node = haskey(derivedmapstate.nodeactualfluids, node_q_pos) ? node_q_pos : node_q_neg
+    temperature = get(derivedmapstate.node_temperatures, fluid_node, HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
 
     fluidmask_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset)
 
     # Render fluidmask with appropriate renderer based on fluid type
     if !isnothing(fluid) && is_liquid(fluid)
-        colour = get_fluid_colour(fluid)
+        colour = get_fluid_colour(fluid, temperature)
         push!(queue, render_liquid_tile(glmap, :BigPipes_Tile_fluidmask, rotation, position, gameticks; colour = colour, scale = scale, transparency = transparency, draw_height = fluidmask_height, pos_offset = pos_offset))
     elseif !isnothing(fluid) && is_gas(fluid)
-        colour = get_fluid_colour(fluid)
+        colour = get_fluid_colour(fluid, temperature)
         push!(queue, render_gas_tile(glmap, :BigPipes_Tile_fluidmask, rotation, position, gameticks; colour = colour, scale = scale, transparency = transparency, draw_height = fluidmask_height, pos_offset = pos_offset))
     else # No fluid — use basic sprite in black
         push!(queue, render_basic_tile(glmap, :BigPipes_Tile_fluidmask, rotation, position; colour = DEFAULT_EMPTY_FLUID_COLOUR, scale = scale, transparency = transparency, draw_height = fluidmask_height, pos_offset = pos_offset))

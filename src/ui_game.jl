@@ -42,24 +42,42 @@ mode_description(mode::PlacementModes) = get(MODE_DESCRIPTIONS, mode, "No proper
 
 """
 Generic tunable editor for the property box.
-Returns a tuple of `Cfloat` values from ImGui input widgets.
+Handles both scalar `TunableProps` (InputFloat) and `EnumTunableProps` (Combo) entries.
+Returns a heterogeneous tuple: scalars as `Cfloat`, enum values as their concrete type.
 """
 function edit_tunables!(tunables_tuple)
-    tunables = collect(tunables_tuple)
-    cfloat_array = similar(tunables, Cfloat)
+    N = length(tunables_tuple)
+    # Float buffer for all positions — only scalar positions are actually used for pointer writes
+    float_buf = fill(Cfloat(0.0), N)
+    result = Vector{Any}(undef, N)
 
-    for (index, props) in enumerate(tunables)
+    for (index, props) in enumerate(tunables_tuple)
         CImGui.PushID(index)
-        cfloat_array[index] = Cfloat(props.current_val)
 
-        CImGui.Text("$(props.type_desc) [$index]")
-        CImGui.SetNextItemWidth(100.0)
-        @c CImGui.InputFloat(props.unit_desc, pointer(cfloat_array, index), 0.0, 100.0, "%.3f")
+        if props isa TunableProps
+            float_buf[index] = Cfloat(props.current_val)
+            CImGui.Text("$(props.type_desc) [$index]")
+            CImGui.SetNextItemWidth(100.0)
+            @c CImGui.InputFloat(props.unit_desc, pointer(float_buf, index), 0.0, 100.0, "%.3f")
+            result[index] = float_buf[index]
+
+        elseif props isa EnumTunableProps
+            current_idx = Cint(something(findfirst(==(props.current_val), props.options), 1) - 1)
+            CImGui.Text("$(props.type_desc):")
+            CImGui.SetNextItemWidth(200.0)
+            @cref CImGui.ListBox("##enum_$index", &current_idx, props.option_labels)
+            clamped_idx = clamp(Int(current_idx), 0, length(props.options) - 1)
+            result[index] = props.options[clamped_idx + 1]
+
+        else
+            result[index] = props  # fallback: pass through unchanged
+        end
+
         CImGui.Separator()
         CImGui.PopID()
     end
 
-    return tuple(cfloat_array...)
+    return Tuple(result)
 end
 
 "Text description for a tile coordinate."
@@ -77,9 +95,9 @@ function coord_description(vert::VertexCoord)
     return "$direction node of $(coord_description(vert.tile))"
 end
 
-"Display component tunables in read-only format."
-function display_component_values!(tunables_tuple::NTuple{N, TunableProps}) where {N}
-    if N == 0
+"Display component tunables in read-only format. Handles both scalar and enum tunable descriptors."
+function display_component_values!(tunables_tuple)
+    if isempty(tunables_tuple)
         CImGui.Text("No configurable values")
         return nothing
     end
@@ -87,8 +105,14 @@ function display_component_values!(tunables_tuple::NTuple{N, TunableProps}) wher
     for (index, props) in enumerate(tunables_tuple)
         CImGui.PushID(index)
 
-        CImGui.Text("$(props.type_desc) [$index]")
-        CImGui.Text("$(format_value(props.current_val)) $(props.unit_desc)")
+        if props isa TunableProps
+            CImGui.Text("$(props.type_desc) [$index]")
+            CImGui.Text("$(format_value(props.current_val)) $(props.unit_desc)")
+        elseif props isa EnumTunableProps
+            idx = findfirst(==(props.current_val), props.options)
+            val_label = idx !== nothing ? props.option_labels[idx] : string(props.current_val)
+            CImGui.Text("$(props.type_desc): $(val_label)")
+        end
         CImGui.Separator()
 
         CImGui.PopID()
@@ -130,9 +154,11 @@ inspect_ui!(::Nothing, ::GameMap, ::DerivedMapState, ::MNA_StateSnapshot) = CImG
 "Inspect a tile coordinate, displaying component values and element details."
 function inspect_ui!(tile::TileCoord, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot)
     CImGui.Text("Hex Tile at $(coord_description(tile))")
-    internalnode = NodeCoord(tile, HexFrame.NODE_INTERNAL)
-    if haskey(mna_state.node_voltages, internalnode)
-        CImGui.Text("Internal Node Voltage: $(format_value(mna_state.node_voltages[internalnode])) V")
+    for (slot, dir) in ((1, HexFrame.NODE_INTERNAL_1), (2, HexFrame.NODE_INTERNAL_2), (3, HexFrame.NODE_INTERNAL_3))
+        internalnode = NodeCoord(tile, dir)
+        if haskey(mna_state.node_voltages, internalnode)
+            CImGui.Text("Internal Node $slot Voltage: $(format_value(mna_state.node_voltages[internalnode])) V")
+        end
     end
 
     found_comp, comp_ship = has_component_any_ship(gamemap, tile)
@@ -215,7 +241,7 @@ function inspect_ui!(edge::EdgeCoord, gamemap::GameMap, derivedmapstate::Derived
     CImGui.Text("Pipe Between:")
     CImGui.Text("$(coord_description(edge.v1)) and $(coord_description(edge.v2))")
 
-    # Check for pipe behaviors
+    # Check for pipe behaviours
     found_pipe, pipe_ship = has_pipe_any_ship(gamemap, edge)
     if found_pipe
         pipe_behav, _ = get_pipe_any_ship(gamemap, edge)
@@ -702,7 +728,7 @@ function ui_propertybox_render!(
             inputstate.pendingpipebehavior = ScrapPipeBehav()
         end
 
-        # Show tunables for the selected pipe behavior
+        # Show tunables for the selected pipe behaviour
         CImGui.Text("Pipe Properties:")
         CImGui.Separator()
 

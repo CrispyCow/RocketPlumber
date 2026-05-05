@@ -109,7 +109,7 @@ end
     unpowered = produce_rel_elements(pump, false)
 
     @test powered[1].type === CONST_VOLTAGE
-    @test powered[1].connections == RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.NODE_Q_POS)
+    @test powered[1].connections == RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.NODE_Q_POS)
     @test powered[1].value ≈ 50.0
     @test unpowered[1].value == 0.0
     @test HexFlowPumpComponents.get_scaled_pump_voltage(pump, 0.5) ≈ 25.0
@@ -157,10 +157,10 @@ end
     # At 1500/3000 RPM: pump voltage = 50 × 0.5 = 25, turbine G follows the non-linear rpm_frac^0.7 curve.
     @test length(elements) == 3
     @test elements[1].type === CONST_VOLTAGE
-    @test elements[1].connections == RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.NODE_Q_POS)
+    @test elements[1].connections == RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.NODE_Q_POS)
     @test elements[1].value ≈ 25.0
     @test elements[2].type === CONST_RESISTOR
-    @test elements[2].connections == RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.NODE_Q_NEG)
+    @test elements[2].connections == RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.NODE_Q_NEG)
     @test elements[2].value ≈ 1.0
     @test elements[3].type === CONST_RESISTOR
     @test elements[3].connections == RelativeElementConnections(HexFrame.NODE_S_POS, HexFrame.GROUND)

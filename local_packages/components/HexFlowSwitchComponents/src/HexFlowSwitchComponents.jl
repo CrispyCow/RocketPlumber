@@ -43,7 +43,7 @@ mutable struct SwitchState
     current_conductance::Float64
 end
 
-"Behavior fragment for shared switch functionality. Missing sprite behavior and behavior to set target_conductance."
+"Behaviour fragment for shared switch functionality. Missing sprite behaviour and behaviour to set target_conductance."
 struct SwitchBehavFrag
     connection::RelativeElementConnections
     max_conductance::Float64
@@ -647,7 +647,8 @@ end
 function render_map_elem!(queue::Vector{<:RenderCommand}, comp::StandardValveCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     node_q_pos = map_element(HexFrame.NODE_Q_POS, position, rotation)
     fluid = get(derivedmapstate.nodeactualfluids, node_q_pos, nothing)
-    colour = get_fluid_colour(fluid)
+    temperature = get(derivedmapstate.node_temperatures, node_q_pos, HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
+    colour = get_fluid_colour(fluid, temperature)
 
     # Fluid mask -- fluid-type dependent rendering
     fluidmask_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset)

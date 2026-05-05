@@ -23,6 +23,11 @@ const horizontal_grounded = RelativeElementConnections(HexFrame.NODE_Q_POS, HexF
 
 const BasicDecompChamber = DecompChamberCompBehav()
 
+const BasicBipropChamber = BipropChamberCompBehav(
+    fuel_conductance = 0.4,
+    oxid_conductance = 1.0
+)
+
 const TinyNozzle = BasicNozzleCompBehav(
     connected_node = HexFrame.NODE_Q_POS,
     throat_area = 0.2,
@@ -93,18 +98,36 @@ const TriLiquidTank = ThevininTankCompBehav(
     series_conductance = 5.0
 )
 
+const TriFuelTank = ThevininTankCompBehav(
+    LiquidTankBehavFrag, 3;
+    fluid = HexFluids.FUEL_LIQUID,
+    max_charge = 200.0 / (HexFluids.lookup_fluid_density(HexFluids.FUEL_LIQUID)::Float64),
+    max_voltage = 1,
+    initial_charge = 150.0 / (HexFluids.lookup_fluid_density(HexFluids.FUEL_LIQUID)::Float64),
+    series_conductance = 5.0
+)
+
+const TriOxidiserTank = ThevininTankCompBehav(
+    LiquidTankBehavFrag, 3;
+    fluid = HexFluids.OXIDISER_LIQUID,
+    max_charge = 200.0 / (HexFluids.lookup_fluid_density(HexFluids.OXIDISER_LIQUID)::Float64),
+    max_voltage = 1,
+    initial_charge = 150.0 / (HexFluids.lookup_fluid_density(HexFluids.OXIDISER_LIQUID)::Float64),
+    series_conductance = 5.0
+)
+
 const PressureFedLiquidTank = PressureFedTankCompBehav(
     PressureFedTankBehavFrag(
         initial_liquid_charge = 150.0 / HexFluids.lookup_fluid_density(HexFluids.MONOPROP_LIQUID),
         initial_gas_charge = 0.0,
         max_liquid_charge = 200.0 / HexFluids.lookup_fluid_density(HexFluids.MONOPROP_LIQUID),
         max_gas_pressure = 50.0,
-        gas_node = HexFrame.NODE_Q_POS
+        gas_node = HexFrame.NODE_Q_POS,
+        initial_liquid_fluid = HexFluids.MONOPROP_LIQUID
     ),
     (HexFrame.NODE_Q_NEG,),
     5.0,
     HexFluids.COLD_GAS,
-    HexFluids.MONOPROP_LIQUID,
     NoRotationBehavFrag()
 )
 
@@ -145,6 +168,7 @@ const BigPipe = BigPipeBehav()
 
 const component_list::Vector{ComponentBehavior} = ComponentBehavior[
     BasicDecompChamber,
+    BasicBipropChamber,
     TurboPump,
     ElecTurboPump,
     ElecTransferPump,
@@ -154,6 +178,8 @@ const component_list::Vector{ComponentBehavior} = ComponentBehavior[
     SwitchedTinyNozzle,
     TriGasTank,
     TriLiquidTank,
+    TriFuelTank,
+    TriOxidiserTank,
     PressureFedLiquidTank,
     LargeAdjValve,
     TinyAdjValve,
@@ -310,12 +336,12 @@ function roll_component(::Val{:PressureFedLiquidTank_comp}, point, seed)
             initial_gas_charge = 0.0,
             max_liquid_charge = max_charge,
             max_gas_pressure = pick_from_range(40.0, 60.0, point, seed),
-            gas_node = HexFrame.NODE_Q_POS
+            gas_node = HexFrame.NODE_Q_POS,
+            initial_liquid_fluid = HexFluids.MONOPROP_LIQUID
         ),
         (HexFrame.NODE_Q_NEG,),
         pick_from_range(3.0, 7.0, point, seed),
         HexFluids.COLD_GAS,
-        HexFluids.MONOPROP_LIQUID,
         NoRotationBehavFrag()
     )
 end
@@ -331,12 +357,12 @@ function roll_component(::Val{:PressureFedLiquidTank_full_comp}, point, seed)
             initial_gas_charge = 0.0,
             max_liquid_charge = max_charge,
             max_gas_pressure = pick_from_range(40.0, 60.0, point, seed),
-            gas_node = HexFrame.NODE_Q_POS
+            gas_node = HexFrame.NODE_Q_POS,
+            initial_liquid_fluid = HexFluids.MONOPROP_LIQUID
         ),
         (HexFrame.NODE_Q_NEG,),
         pick_from_range(3.0, 7.0, point, seed),
         HexFluids.COLD_GAS,
-        HexFluids.MONOPROP_LIQUID,
         NoRotationBehavFrag()
     )
 end
@@ -377,6 +403,13 @@ end
 
 function roll_component(::Val{:BasicDecompChamber_comp}, point, seed)
     return DecompChamberCompBehav()
+end
+
+function roll_component(::Val{:BasicBipropChamber_comp}, point, seed)
+    return BipropChamberCompBehav(
+        fuel_conductance = 0.4,
+        oxid_conductance = 1.0
+    )
 end
 
 # pipe roll functions

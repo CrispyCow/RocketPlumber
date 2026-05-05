@@ -25,6 +25,8 @@ export ThevininTankCompBehav, GasTankBehavFrag, LiquidTankBehavFrag
 export PressureFedTankBehavFrag, PressureFedTankCompBehav
 export SealStateBehavFrag, seal!, unseal!, is_sealed
 export TankBehavFrag, TankState, tank_is_active, tank_is_auto_empty, tank_is_auto_full
+export StoredFluidState, get_stored_fluid
+export FixedFluidBehavFrag, StoredFluidBehavFrag, set_stored_fluid!, clear_stored_fluid!
 export liquid_is_sealed, gas_is_sealed
 export pressurefed_liquid_is_auto_empty, pressurefed_liquid_is_auto_full
 export pressurefed_gas_is_auto_empty, pressurefed_gas_is_auto_full_pressure
@@ -57,7 +59,7 @@ end
 "Convert Real to TankState by wrapping in Float64"
 Base.convert(::Type{TankState}, value::Real) = TankState(Float64(value))
 
-"Flow behavior fragment for shared functionality of a tank. Missing produce_rel_elements as this is concrete tank type dependent"
+"Flow behaviour fragment for shared functionality of a tank. Missing produce_rel_elements as this is concrete tank type dependent"
 struct TankBehavFrag
     connection::RelativeElementConnections
     max_charge::Float64
@@ -233,9 +235,11 @@ Return a probe with an active copy of the tank voltage source when auto-disconne
 mid-range tanks and for manually sealed tanks.
 """
 function get_reactivation_probe(behav::T; kwargs...) where {T <: AbstractTankBehavFrag}
-    is_sealed(behav.tank.sealstate) && return nothing
-    charge = behav.tank.state.charge
-    0.0 < charge < behav.tank.max_charge && return nothing  # Active: no probe needed
+    if is_sealed(behav.tank.sealstate)
+        return nothing  # Manually sealed: no probe
+    elseif tank_is_active(behav.tank)
+        return nothing  # Active mid-range: no probe needed
+    end
 
     (rel_vsource,) = produce_rel_elements(behav)
     active_vsource = @set rel_vsource.active = true
@@ -253,13 +257,15 @@ function accept_reactivation_probe!(behav::T; tile::TileCoord, derivedmapstate::
     abs_vsource = map_element(active_vsource, tile, tank_vsource_element_index, rotation)
 
     current = abs_element_get_current(abs_vsource, derivedmapstate, mna_state)
-    isnothing(current) && return false  # Pruned from speculative solve
+    !isnothing(current) || return false  # Pruned from speculative solve
 
     probe_tol = 1e-9
-    if behav.tank.state.charge <= 0.0
+    if tank_is_auto_empty(behav.tank)
         return current > probe_tol   # Empty: accept only positive inflow
-    else
+    elseif tank_is_auto_full(behav.tank)
         return current < -probe_tol  # Full: accept only negative outflow
+    else
+        error("Tank reactivation probe reached impossible state: tank is neither sealed, active, empty, nor full")
     end
 end
 
@@ -296,14 +302,58 @@ function render_fluid!(queue::Vector{<:RenderCommand}, behav::GasTankBehavFrag, 
     return nothing
 end
 
+#= ---------- StoredFluidState & Fragments ----------- =#
+
+"Mutable holder for the runtime liquid identity of a refillable tank. `nothing` when the tank is empty."
+mutable struct StoredFluidState
+    fluid::Union{FluidType, Nothing}
+end
+
+"Fragment that owns a fixed concrete fluid identity. Used for gas tanks and pressure-fed gas sides."
+struct FixedFluidBehavFrag
+    fluid::FluidType
+end
+
+"Get the stored fluid from a fixed-fluid fragment."
+get_stored_fluid(frag::FixedFluidBehavFrag)::FluidType = frag.fluid
+
+"Fragment that owns runtime liquid identity behaviour for refillable tanks."
+struct StoredFluidBehavFrag
+    state::StoredFluidState
+end
+
+StoredFluidBehavFrag() = StoredFluidBehavFrag(StoredFluidState(nothing))
+
+"Get the stored fluid from a runtime-fluid fragment (may be `nothing` when empty)."
+get_stored_fluid(frag::StoredFluidBehavFrag)::Union{FluidType, Nothing} = frag.state.fluid
+
+"Set the stored fluid in a runtime-fluid fragment."
+function set_stored_fluid!(frag::StoredFluidBehavFrag, fluid::Union{FluidType, Nothing})
+    frag.state.fluid = fluid
+    return nothing
+end
+
+"Clear the stored fluid when tank empties."
+function clear_stored_fluid!(frag::StoredFluidBehavFrag)
+    frag.state.fluid = nothing
+    return nothing
+end
+
 #= ---------- LiquidTankBehavFrag ----------- =#
 
 "Liquid tank with a near constant voltage until charge is close to zero where it ramps down quickly"
 struct LiquidTankBehavFrag <: AbstractTankBehavFrag
     tank::TankBehavFrag
     rotation_behav::HorizontalFlipOnlyBehavFrag
+    stored_fluid::StoredFluidState  # runtime liquid identity; nothing when empty
 end
-LiquidTankBehavFrag(tank::TankBehavFrag) = LiquidTankBehavFrag(tank, HorizontalFlipOnlyBehavFrag())
+
+"Construct a liquid tank fragment with explicit initial fluid identity."
+LiquidTankBehavFrag(tank::TankBehavFrag, initial_fluid::Union{FluidType, Nothing}) =
+    LiquidTankBehavFrag(tank, HorizontalFlipOnlyBehavFrag(), StoredFluidState(initial_fluid))
+
+"Backward-compatible constructor — assumes no stored fluid (empty tank semantics)."
+LiquidTankBehavFrag(tank::TankBehavFrag) = LiquidTankBehavFrag(tank, nothing)
 
 function produce_rel_elements(behav::LiquidTankBehavFrag)::NTuple{1, RelativeElement}
     tank = behav.tank
@@ -318,8 +368,9 @@ end
 Render liquid tank fluid visualization.
 Renders the fluid-colored mask with horizontal clipping based on fill fraction,
 always oriented horizontally (Q_POS) regardless of component rotation.
+Accepts `nothing` for fluid to render as empty (uses the default empty colour).
 """
-function render_fluid!(queue::Vector{<:RenderCommand}, behav::LiquidTankBehavFrag, fluidmask::Symbol, fluid::FluidType, gameticks::Int; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0)
+function render_fluid!(queue::Vector{<:RenderCommand}, behav::LiquidTankBehavFrag, fluidmask::Symbol, fluid::Union{FluidType, Nothing}, gameticks::Int; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0)
     black = DEFAULT_EMPTY_FLUID_COLOUR
     fixed_rotation = HexFrame.Q_POS # Force horizontal for fluid rendering
     push!(queue, render_basic_tile(glmap, fluidmask, fixed_rotation, position; scale = scale, transparency = transparency, colour = black, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset), pos_offset = pos_offset))
@@ -332,6 +383,12 @@ end
 
 map_rotation(behav::LiquidTankBehavFrag, rotation::HexAxis) = map_rotation(behav.rotation_behav, rotation)
 
+"Override to create a fresh `StoredFluidState`, avoiding shared-mutable-reference aliasing on copy."
+function set_tunables(behav::LiquidTankBehavFrag, tunables::NTuple{3, T}) where {T <: Real}
+    new_tank = set_tunables(behav.tank, tunables)
+    return LiquidTankBehavFrag(new_tank, behav.rotation_behav, StoredFluidState(behav.stored_fluid.fluid))
+end
+
 #= ---------- PressureFedTankBehavFrag ----------- =#
 
 "Pressure-fed tank fragment with coupled liquid and gas charge state"
@@ -343,6 +400,7 @@ struct PressureFedTankBehavFrag
     max_liquid_charge::Float64
     max_gas_pressure::Float64
     gas_node::NodePos
+    stored_liquid::StoredFluidState       # runtime liquid identity; nothing when empty
 end
 
 function PressureFedTankBehavFrag(;
@@ -351,6 +409,7 @@ function PressureFedTankBehavFrag(;
         max_liquid_charge::Real,
         max_gas_pressure::Real,
         gas_node::NodePos,
+        initial_liquid_fluid::Union{FluidType, Nothing} = nothing,
         liquid_sealstate::SealStateBehavFrag = SealStateBehavFrag(),
         gas_sealstate::SealStateBehavFrag = SealStateBehavFrag()
     )
@@ -367,6 +426,9 @@ function PressureFedTankBehavFrag(;
         )
     )
 
+    # Seed stored liquid only when the tank starts with liquid; clear it when starting empty
+    stored_fluid = initial_liquid_charge_f > 0.0 ? initial_liquid_fluid : nothing
+
     return PressureFedTankBehavFrag(
         TankState(initial_liquid_charge_f),
         TankState(initial_gas_charge_f),
@@ -374,7 +436,8 @@ function PressureFedTankBehavFrag(;
         gas_sealstate,
         max_liquid_charge_f,
         max_gas_pressure_f,
-        gas_node
+        gas_node,
+        StoredFluidState(stored_fluid)
     )
 end
 
@@ -416,8 +479,8 @@ end
 "True when the liquid-side resistor path should be active (same gating rule as the liquid source)."
 pressurefed_liquid_path_active(tank::PressureFedTankBehavFrag) = pressurefed_liquid_source_active(tank)
 
-const pressfed_liquid_vsource_index::Int = 1
-const pressfed_gas_vsource_index::Int = 2
+const pressurefed_liquid_vsource_index::Int = 1
+const pressurefed_gas_vsource_index::Int = 2
 
 "Compute the current pressure produced by the coupled gas/liquid state"
 function compute_gas_pressure(tank::PressureFedTankBehavFrag)::Float64
@@ -445,7 +508,7 @@ function produce_rel_elements(tank::PressureFedTankBehavFrag)::NTuple{2, Relativ
     liquid_tank_pressure = liquid_pressure + gas_tank_pressure
 
     liquid_vsource = RelativeElement(
-        RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.GROUND),
+        RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND),
         liquid_tank_pressure,
         HexElements.CONST_VOLTAGE;
         active = liquid_active
@@ -483,6 +546,7 @@ function get_tunables(tank::PressureFedTankBehavFrag)::NTuple{4, TunableProps}
     return (max_liquid_props, max_gas_props, liquid_props, gas_props)
 end
 
+"Create a new fragment with updated tunables. Preserves seal state and creates a fresh `StoredFluidState` copy."
 function set_tunables(tank::PressureFedTankBehavFrag, tunables::NTuple{4, T})::PressureFedTankBehavFrag where {T <: Real}
     float_vals = Float64.(tunables)
     return PressureFedTankBehavFrag(
@@ -491,14 +555,15 @@ function set_tunables(tank::PressureFedTankBehavFrag, tunables::NTuple{4, T})::P
         max_liquid_charge = float_vals[1],
         max_gas_pressure = float_vals[2],
         gas_node = tank.gas_node,
+        initial_liquid_fluid = tank.stored_liquid.fluid,
         liquid_sealstate = tank.liquid_sealstate,
         gas_sealstate = tank.gas_sealstate
     )
 end
 
 function update_flowbehav!(tank::PressureFedTankBehavFrag; tile::TileCoord, mna_state::MNA_State, kwargs...)
-    liquid_element_id = ElementID(tile, pressfed_liquid_vsource_index)
-    gas_element_id = ElementID(tile, pressfed_gas_vsource_index)
+    liquid_element_id = ElementID(tile, pressurefed_liquid_vsource_index)
+    gas_element_id = ElementID(tile, pressurefed_gas_vsource_index)
 
     liquid_present = haskey(mna_state.vsources, liquid_element_id)
     gas_present = haskey(mna_state.vsources, gas_element_id)
@@ -589,6 +654,21 @@ end
 # Concrete Component Behaviors
 # ===============================================================
 
+#= ---------- Stored fluid helpers ----------- =#
+
+"""
+Adopt the fluid at NODE_INTERNAL_1 into `stored` when a concrete liquid is present.
+Used by liquid tank update paths to seed stored identity on refill.
+"""
+function adopt_stored_liquid_from_internal_node!(stored::StoredFluidState, tile::TileCoord, derivedmapstate::DerivedMapState)
+    internal_node = NodeCoord(tile, HexFrame.NODE_INTERNAL_1)
+    adopted = get(derivedmapstate.nodeactualfluids, internal_node, nothing)
+    if adopted isa FluidType && is_liquid(adopted)
+        stored.fluid = adopted
+    end
+    return nothing
+end
+
 #= ---------- ThevininTankCompBehav ----------- =#
 
 "Any tank with series resistor and a plain sprite"
@@ -616,28 +696,42 @@ function ThevininTankCompBehav(
     end
 
     # Tank
-    tank_connections = RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.GROUND)
-    tankfrag = T(
-        TankBehavFrag(
-            connection = tank_connections,
-            max_charge = max_charge,
-            max_voltage = max_voltage,
-            initial_charge = initial_charge
-        )
+    tank_connections = RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND)
+    tank_core = TankBehavFrag(
+        connection = tank_connections,
+        max_charge = max_charge,
+        max_voltage = max_voltage,
+        initial_charge = initial_charge
     )
+
+    # For liquid tanks, seed stored_fluid from the initial fluid if the tank is non-empty
+    tankfrag = if T === LiquidTankBehavFrag
+        initial_fluid = float(initial_charge) > 0.0 ? fluid : nothing
+        LiquidTankBehavFrag(tank_core, initial_fluid)
+    else
+        T(tank_core)
+    end
 
     # Build final component
     return ThevininTankCompBehav(tankfrag, out_nodes, float(series_conductance), fluid)
 end
 
 # Method forwarding and adapted element production
+"""
+Accessor for the runtime liquid identity of a component.
+Gas tanks always return `comp.fluid` (their fixed fluid type).
+Liquid tanks return the `stored_fluid.fluid` state (may be `nothing` when empty).
+"""
+get_stored_fluid(comp::ThevininTankCompBehav) = comp.fluid
+get_stored_fluid(comp::ThevininTankCompBehav{LiquidTankBehavFrag}) = comp.tank.stored_fluid.fluid
+
 function produce_rel_elements(comp::ThevininTankCompBehav{T, N}) where {T, N}
     tank_elem = produce_rel_elements(comp.tank) # Tank element first (tank vsource must end up in index 1)
 
     # Create N resistor RelativeElements on the fly, between INTERNAL and each out_node
     resistors = ntuple(
         i -> RelativeElement(
-            connections = RelativeElementConnections(HexFrame.NODE_INTERNAL, comp.out_nodes[i]),
+            connections = RelativeElementConnections(HexFrame.NODE_INTERNAL_1, comp.out_nodes[i]),
             value = comp.series_conductance,
             type = HexElements.CONST_RESISTOR
         ), N
@@ -656,6 +750,27 @@ function get_tunables(comp::ThevininTankCompBehav)
     return (tank_tunables..., thev_props)
 end
 
+"Liquid tank get_tunables: includes an enum tunable for the stored liquid fluid type."
+function get_tunables(comp::ThevininTankCompBehav{LiquidTankBehavFrag})
+    tank_tunables = get_tunables(comp.tank)
+    thev_props = TunableProps(
+        comp.series_conductance,
+        "Series Conductance",
+        get_unitstring(HexElements.CONST_RESISTOR)
+    )
+    stored = comp.tank.stored_fluid.fluid
+    # Fall back to comp.fluid (the construction-time fluid) as the display default when empty
+    display_fluid = !isnothing(stored) ? stored : comp.fluid
+    liquid_types = [HexFluids.MONOPROP_LIQUID, HexFluids.FUEL_LIQUID, HexFluids.OXIDISER_LIQUID]
+    fluid_props = EnumTunableProps{FluidType}(
+        display_fluid,
+        liquid_types,
+        [fluid_type_label(f) for f in liquid_types],
+        "Stored Liquid"
+    )
+    return (tank_tunables..., thev_props, fluid_props)
+end
+
 function set_tunables(comp::ThevininTankCompBehav{T, N}, tunables::NTuple{4, Tval}) where {Tval <: Real, T <: AbstractTankBehavFrag, N}
     float_vals = Float64.(tunables)
     new_tank_frag = set_tunables(comp.tank, (float_vals[1], float_vals[2], float_vals[3])) # Update underlying tank fragment (returns same fragment type T with updated .tank) - tanks have 3 tunables
@@ -663,22 +778,78 @@ function set_tunables(comp::ThevininTankCompBehav{T, N}, tunables::NTuple{4, Tva
     return ThevininTankCompBehav(new_tank_frag, comp.out_nodes, new_thev, comp.fluid)
 end
 
+"Liquid tank set_tunables: handles a 5-element tuple where position 5 is the stored FluidType."
+function set_tunables(comp::ThevininTankCompBehav{LiquidTankBehavFrag, N}, tunables::NTuple{5, Any}) where {N}
+    float_vals = (Float64(tunables[1]), Float64(tunables[2]), Float64(tunables[3]), Float64(tunables[4]))
+    new_fluid = tunables[5]::FluidType
+    # set_tunables on the fragment creates a fresh StoredFluidState (avoids aliasing)
+    new_tank_frag = set_tunables(comp.tank, (float_vals[1], float_vals[2], float_vals[3]))
+    new_tank_frag.stored_fluid.fluid = new_fluid
+    return ThevininTankCompBehav(new_tank_frag, comp.out_nodes, float_vals[4], comp.fluid)
+end
+
 function produce_rel_fluid_declarations(comp::ThevininTankCompBehav)
     temp = get_default_temperature(Val(comp.fluid))
-    temp_val = temp !== nothing ? temp : 300.0
-    return (RelativeFluidDeclaration(HexFrame.NODE_INTERNAL, FluidSource(comp.fluid, temp_val)),)
+    temp_val = !isnothing(temp) ? temp : 300.0
+    return (RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, FluidSource(comp.fluid, temp_val)),)
+end
+
+"""
+State-dependent fluid declaration for liquid tanks.
+Emits a concrete `FluidSource` when filled, or a `FluidConstraintRule(IS_LIQUID)` when empty,
+allowing any compatible liquid to refill the tank.
+"""
+function produce_rel_fluid_declarations(comp::ThevininTankCompBehav{LiquidTankBehavFrag})
+    stored = comp.tank.stored_fluid.fluid
+    if !isnothing(stored) && comp.tank.tank.state.charge > 0.0
+        temp = get_default_temperature(Val(stored))
+        temp_val = !isnothing(temp) ? temp : THERMAL_AMBIENT_TEMPERATURE_K
+        return (RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, FluidSource(stored, temp_val)),)
+    else
+        # Empty: advertise a liquid constraint so any liquid can flow in and seed refill
+        return (RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, FluidConstraintRule(HexFluids.IS_LIQUID)),)
+    end
 end
 
 "Wet mass of a tank: charge x fluid density. Returns 0.0 if the requested fluid doesn't match this tank's fluid."
 function get_component_wet_mass(comp::ThevininTankCompBehav; fluid::Union{FluidType, Nothing} = nothing, kwargs...)
-    if fluid !== nothing && fluid != comp.fluid
+    if !isnothing(fluid) && fluid != comp.fluid
         return 0.0
     end
     density = lookup_fluid_density(comp.fluid)
-    return density === nothing ? 0.0 : comp.tank.tank.state.charge * density
+    return isnothing(density) ? 0.0 : comp.tank.tank.state.charge * density
+end
+
+"Wet mass for liquid tanks: uses the runtime stored fluid, which may differ from the construction-time fluid."
+function get_component_wet_mass(comp::ThevininTankCompBehav{LiquidTankBehavFrag}; fluid::Union{FluidType, Nothing} = nothing, kwargs...)
+    stored = comp.tank.stored_fluid.fluid
+    isnothing(stored) && return 0.0  # empty tank carries no mass
+    !isnothing(fluid) && fluid != stored && return 0.0
+    density = lookup_fluid_density(stored)
+    return isnothing(density) ? 0.0 : comp.tank.tank.state.charge * density
 end
 
 update_flowbehav!(comp::ThevininTankCompBehav; kwargs...) = update_flowbehav!(comp.tank; kwargs...)
+
+"""
+Liquid tank update: runs the base charge update, then manages stored fluid identity.
+- On empty: clears stored_fluid to `nothing`.
+- On refill (was empty, now positive charge): adopts the concrete fluid from NODE_INTERNAL_1.
+"""
+function update_flowbehav!(comp::ThevininTankCompBehav{LiquidTankBehavFrag}; tile::TileCoord, derivedmapstate = nothing, kwargs...)
+    was_empty = comp.tank.tank.state.charge <= 0.0
+
+    update_flowbehav!(comp.tank; tile = tile, derivedmapstate = derivedmapstate, kwargs...)
+
+    is_empty_now = comp.tank.tank.state.charge <= 0.0
+
+    if is_empty_now && !was_empty
+        comp.tank.stored_fluid.fluid = nothing
+    elseif was_empty && !is_empty_now && derivedmapstate isa DerivedMapState
+        adopt_stored_liquid_from_internal_node!(comp.tank.stored_fluid, tile, derivedmapstate)
+    end
+    return nothing
+end
 get_actions(comp::ThevininTankCompBehav; kwargs...) = get_actions(comp.tank; kwargs...)
 do_action!(comp::ThevininTankCompBehav, action_id::Symbol; kwargs...) = do_action!(comp.tank, action_id; kwargs...)
 map_rotation(comp::ThevininTankCompBehav, rotation::HexAxis) = map_rotation(comp.tank, rotation)
@@ -699,13 +870,29 @@ indicatorsprite(::ThevininTankCompBehav{GasTankBehavFrag, 3}) = :GasTank1_indica
 indicatorsprite(::ThevininTankCompBehav{LiquidTankBehavFrag, 3}) = :LiquidTank1_indicator
 
 function render_base_elem!(queue::Vector{<:RenderCommand}, comp::ThevininTankCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, gameticks::Int64 = 0, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
-    # Render fluid
+    # Render fluid (pass stored fluid for liquid tanks, comp.fluid for gas tanks)
     render_fluid!(queue, comp.tank, fluidmask(comp), comp.fluid, gameticks; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, scale = scale, transparency = transparency, render_height_offset = render_height_offset)
 
     # Render tank base sprite (static)
     push!(queue, render_basic_tile(glmap, tanksprite(comp), rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset), pos_offset = pos_offset))
 
     # Indicator light: green = active, red = manually sealed, absent = auto-disconnected
+    tank_frag = comp.tank.tank
+    indicator_height = RENDER_HEIGHT_TANK_INDICATOR + Int32(render_height_offset)
+    if is_sealed(tank_frag.sealstate)
+        push!(queue, render_basic_tile(glmap, indicatorsprite(comp), rotation, position; scale = scale, transparency = transparency, colour = TANK_INDICATOR_RED, draw_height = indicator_height, pos_offset = pos_offset))
+    elseif tank_is_active(tank_frag)
+        push!(queue, render_basic_tile(glmap, indicatorsprite(comp), rotation, position; scale = scale, transparency = transparency, colour = TANK_INDICATOR_GREEN, draw_height = indicator_height, pos_offset = pos_offset))
+    end
+    return nothing
+end
+
+"Liquid tank render: uses stored_fluid (which may be `nothing`) for the fluid colour."
+function render_base_elem!(queue::Vector{<:RenderCommand}, comp::ThevininTankCompBehav{LiquidTankBehavFrag}; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, gameticks::Int64 = 0, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
+    render_fluid!(queue, comp.tank, fluidmask(comp), comp.tank.stored_fluid.fluid, gameticks; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, scale = scale, transparency = transparency, render_height_offset = render_height_offset)
+
+    push!(queue, render_basic_tile(glmap, tanksprite(comp), rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset), pos_offset = pos_offset))
+
     tank_frag = comp.tank.tank
     indicator_height = RENDER_HEIGHT_TANK_INDICATOR + Int32(render_height_offset)
     if is_sealed(tank_frag.sealstate)
@@ -729,7 +916,6 @@ struct PressureFedTankCompBehav{N} <: ComponentBehavior
     liquid_nodes::NTuple{N, NodePos}
     series_conductance::Float64
     gas_fluid::FluidType
-    liquid_fluid::FluidType
     rotation_behav::NoRotationBehavFrag
 end
 
@@ -738,7 +924,6 @@ function PressureFedTankCompBehav(
         liquid_nodes::NTuple{N, NodePos},
         series_conductance::Real,
         gas_fluid::FluidType,
-        liquid_fluid::FluidType,
         rotation_behav::NoRotationBehavFrag = NoRotationBehavFrag()
     ) where {N}
     return PressureFedTankCompBehav(
@@ -746,17 +931,22 @@ function PressureFedTankCompBehav(
         liquid_nodes,
         float(series_conductance),
         gas_fluid,
-        liquid_fluid,
         rotation_behav
     )
 end
+
+"""
+Runtime liquid identity of a pressure-fed tank.
+Returns the stored fluid when filled, or `nothing` when the tank is empty.
+"""
+get_stored_fluid(comp::PressureFedTankCompBehav) = comp.tank.stored_liquid.fluid
 
 function produce_rel_elements(comp::PressureFedTankCompBehav{N}) where {N}
     tank_elements = produce_rel_elements(comp.tank)
     liquid_path_active = pressurefed_liquid_path_active(comp.tank)
     resistors = ntuple(
         i -> RelativeElement(
-            RelativeElementConnections(HexFrame.NODE_INTERNAL, comp.liquid_nodes[i]),
+            RelativeElementConnections(HexFrame.NODE_INTERNAL_1, comp.liquid_nodes[i]),
             comp.series_conductance,
             HexElements.CONST_RESISTOR;
             active = liquid_path_active
@@ -765,6 +955,7 @@ function produce_rel_elements(comp::PressureFedTankCompBehav{N}) where {N}
     return (tank_elements..., resistors...)
 end
 
+"Tunables for a pressure-fed tank: max liquid, max gas pressure, liquid charge, gas charge, series conductance, stored liquid enum."
 function get_tunables(comp::PressureFedTankCompBehav)
     tank_tunables = get_tunables(comp.tank)
     series_props = TunableProps(
@@ -772,46 +963,73 @@ function get_tunables(comp::PressureFedTankCompBehav)
         "Series Conductance",
         get_unitstring(HexElements.CONST_RESISTOR)
     )
-    return (tank_tunables..., series_props)
+    stored = comp.tank.stored_liquid.fluid
+    # Fall back to monoprop as the display default when empty
+    display_fluid = !isnothing(stored) ? stored : HexFluids.MONOPROP_LIQUID
+    liquid_types = [HexFluids.MONOPROP_LIQUID, HexFluids.FUEL_LIQUID, HexFluids.OXIDISER_LIQUID]
+    fluid_props = EnumTunableProps{FluidType}(
+        display_fluid,
+        liquid_types,
+        [fluid_type_label(f) for f in liquid_types],
+        "Stored Liquid"
+    )
+    return (tank_tunables..., series_props, fluid_props)
 end
 
-function set_tunables(comp::PressureFedTankCompBehav{N}, tunables::NTuple{5, T})::PressureFedTankCompBehav{N} where {N, T <: Real}
-    float_vals = Float64.(tunables)
+"Pressure-fed set_tunables: 6-element tuple where position 6 is the stored FluidType."
+function set_tunables(comp::PressureFedTankCompBehav{N}, tunables::NTuple{6, Any}) where {N}
+    float_vals = (Float64(tunables[1]), Float64(tunables[2]), Float64(tunables[3]), Float64(tunables[4]), Float64(tunables[5]))
+    new_fluid = tunables[6]::FluidType
+    # set_tunables on the fragment creates a fresh StoredFluidState (avoids aliasing)
     new_tank = set_tunables(comp.tank, (float_vals[1], float_vals[2], float_vals[3], float_vals[4]))
+    new_tank.stored_liquid.fluid = new_fluid
     return PressureFedTankCompBehav(
         new_tank,
         comp.liquid_nodes,
         float_vals[5],
         comp.gas_fluid,
-        comp.liquid_fluid,
         comp.rotation_behav
     )
 end
 
+"""
+State-dependent fluid declarations for the pressure-fed liquid side.
+Gas side remains a concrete `FluidSource`. Liquid side emits a `FluidSource` when filled,
+or `FluidConstraintRule(IS_LIQUID)` when empty — allowing any compatible liquid to refill.
+"""
 function produce_rel_fluid_declarations(comp::PressureFedTankCompBehav)
-    gas_temp = let t = get_default_temperature(Val(comp.gas_fluid)); t !== nothing ? t : 300.0; end
-    liq_temp = let t = get_default_temperature(Val(comp.liquid_fluid)); t !== nothing ? t : 300.0; end
+    gas_temp = let t = get_default_temperature(Val(comp.gas_fluid)); !isnothing(t) ? t : 300.0; end
+    stored = comp.tank.stored_liquid.fluid
+    liq_decl = if !isnothing(stored) && comp.tank.liquid_state.charge > 0.0
+        liq_temp = let t = get_default_temperature(Val(stored)); !isnothing(t) ? t : 300.0; end
+        RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, FluidSource(stored, liq_temp))
+    else
+        RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, FluidConstraintRule(HexFluids.IS_LIQUID))
+    end
     return (
         RelativeFluidDeclaration(comp.tank.gas_node, FluidSource(comp.gas_fluid, gas_temp)),
-        RelativeFluidDeclaration(HexFrame.NODE_INTERNAL, FluidSource(comp.liquid_fluid, liq_temp)),
+        liq_decl,
     )
 end
 
-"Wet mass is the combined stored liquid and non-negative stored gas mass"
+"Wet mass is the combined stored liquid and non-negative stored gas mass. Liquid mass uses the runtime stored fluid identity."
 function get_component_wet_mass(comp::PressureFedTankCompBehav; fluid::Union{FluidType, Nothing} = nothing, kwargs...)
     liquid_mass = 0.0
     gas_mass = 0.0
 
-    if fluid === nothing || fluid == comp.liquid_fluid
-        liquid_density = lookup_fluid_density(comp.liquid_fluid)
-        if liquid_density !== nothing
-            liquid_mass = comp.tank.liquid_state.charge * liquid_density
+    stored = comp.tank.stored_liquid.fluid
+    if !isnothing(stored)
+        if isnothing(fluid) || fluid == stored
+            liquid_density = lookup_fluid_density(stored)
+            if !isnothing(liquid_density)
+                liquid_mass = comp.tank.liquid_state.charge * liquid_density
+            end
         end
     end
 
-    if fluid === nothing || fluid == comp.gas_fluid
+    if isnothing(fluid) || fluid == comp.gas_fluid
         gas_density = lookup_fluid_density(comp.gas_fluid)
-        if gas_density !== nothing
+        if !isnothing(gas_density)
             gas_mass = max(comp.tank.gas_state.charge, 0.0) * gas_density
         end
     end
@@ -819,7 +1037,26 @@ function get_component_wet_mass(comp::PressureFedTankCompBehav; fluid::Union{Flu
     return liquid_mass + gas_mass
 end
 
-update_flowbehav!(comp::PressureFedTankCompBehav; kwargs...) = update_flowbehav!(comp.tank; kwargs...)
+"""
+Pressure-fed component update: integrates charge, then manages stored liquid identity.
+- On liquid-side empty: clears stored_liquid to `nothing`.
+- On liquid-side refill (was empty, now positive): adopts the fluid at NODE_INTERNAL_1.
+"""
+function update_flowbehav!(comp::PressureFedTankCompBehav; tile::TileCoord, derivedmapstate = nothing, kwargs...)
+    was_liquid_empty = comp.tank.liquid_state.charge <= 0.0
+
+    update_flowbehav!(comp.tank; tile = tile, kwargs...)
+
+    is_liquid_empty_now = comp.tank.liquid_state.charge <= 0.0
+
+    if is_liquid_empty_now && !was_liquid_empty
+        comp.tank.stored_liquid.fluid = nothing
+    elseif was_liquid_empty && !is_liquid_empty_now && derivedmapstate isa DerivedMapState
+        adopt_stored_liquid_from_internal_node!(comp.tank.stored_liquid, tile, derivedmapstate)
+    end
+    return nothing
+end
+
 get_actions(comp::PressureFedTankCompBehav; kwargs...) = get_actions(comp.tank; kwargs...)
 do_action!(comp::PressureFedTankCompBehav, action_id::Symbol; kwargs...) = do_action!(comp.tank, action_id; kwargs...)
 map_rotation(comp::PressureFedTankCompBehav, rotation::HexAxis) = map_rotation(comp.rotation_behav, rotation)
@@ -827,14 +1064,8 @@ can_be_moved(comp::PressureFedTankCompBehav; kwargs...) = can_be_moved(comp.tank
 
 #= ---------- PressureFedTankCompBehav probe methods ----------- =#
 
-"""
-Return a probe for any automatically disconnected side that is not manually sealed.
-The probe tuple always has 2+N elements, matching the component's element ordering:
-(liquid_vsource, gas_vsource, liquid_resistors...). Only the sides being tested are set active.
-"""
-function get_reactivation_probe(comp::PressureFedTankCompBehav{N}; kwargs...) where {N}
-    tank = comp.tank
-
+"Determine which sides of a pressure-fed tank are requesting reactivation probes and their desired flow directions."
+function pressurefed_probe_sides(tank::PressureFedTankBehavFrag)
     gas_auto_full_pressure = pressurefed_gas_is_auto_full_pressure(tank)
     liq_auto_empty = pressurefed_liquid_is_auto_empty(tank)
     liq_auto_full = pressurefed_liquid_is_auto_full(tank)
@@ -843,17 +1074,29 @@ function get_reactivation_probe(comp::PressureFedTankCompBehav{N}; kwargs...) wh
     probe_liquid = (liq_auto_empty || liq_auto_full || gas_auto_full_pressure) && !liquid_is_sealed(tank)
     probe_gas = (gas_auto_empty || gas_auto_full_pressure) && !gas_is_sealed(tank)
 
-    (!probe_liquid && !probe_gas) && return nothing
+    return (; probe_liquid, probe_gas, gas_auto_full_pressure, liq_auto_empty, liq_auto_full, gas_auto_empty)
+end
+
+"""
+Return a probe for any automatically disconnected side that is not manually sealed.
+The probe tuple always has 2+N elements, matching the component's element ordering:
+(liquid_vsource, gas_vsource, liquid_resistors...). Only the sides being tested are set active.
+"""
+function get_reactivation_probe(comp::PressureFedTankCompBehav{N}; kwargs...) where {N}
+    tank = comp.tank
+    sides = pressurefed_probe_sides(tank)
+
+    (!sides.probe_liquid && !sides.probe_gas) && return nothing
 
     (frag_liquid_vsource, frag_gas_vsource) = produce_rel_elements(tank)
-    probe_liquid_vsource = @set frag_liquid_vsource.active = probe_liquid
-    probe_gas_vsource = @set frag_gas_vsource.active = probe_gas
+    probe_liquid_vsource = @set frag_liquid_vsource.active = sides.probe_liquid
+    probe_gas_vsource = @set frag_gas_vsource.active = sides.probe_gas
     probe_resistors = ntuple(
         i -> RelativeElement(
-            RelativeElementConnections(HexFrame.NODE_INTERNAL, comp.liquid_nodes[i]),
+            RelativeElementConnections(HexFrame.NODE_INTERNAL_1, comp.liquid_nodes[i]),
             comp.series_conductance,
             HexElements.CONST_RESISTOR;
-            active = probe_liquid
+            active = sides.probe_liquid
         ), N
     )
     return ReactivationProbe((probe_liquid_vsource, probe_gas_vsource, probe_resistors...))
@@ -863,7 +1106,7 @@ end
 Classify a measured current relative to the desired flow direction.
 Returns `:useful`, `:harmful`, or `:neutral`.
 """
-function pressfed_probe_current_class(current::Float64, desired_direction::Symbol; tol::Float64 = 1e-9)
+function pressurefed_probe_current_class(current::Float64, desired_direction::Symbol; tol::Float64 = 1e-9)
     if desired_direction === :positive
         current > tol  && return :useful
         current < -tol && return :harmful
@@ -880,47 +1123,40 @@ no probed side has harmful flow. Does not mutate charge or seal states.
 """
 function accept_reactivation_probe!(comp::PressureFedTankCompBehav{N}; tile::TileCoord, derivedmapstate::DerivedMapState, mna_state, rotation::HexAxis = HexFrame.Q_POS, kwargs...) where {N}
     tank = comp.tank
+    sides = pressurefed_probe_sides(tank)
 
-    gas_auto_full_pressure = pressurefed_gas_is_auto_full_pressure(tank)
-    liq_auto_empty = pressurefed_liquid_is_auto_empty(tank)
-    liq_auto_full = pressurefed_liquid_is_auto_full(tank)
-    gas_auto_empty = pressurefed_gas_is_auto_empty(tank)
-
-    probe_liquid = (liq_auto_empty || liq_auto_full || gas_auto_full_pressure) && !liquid_is_sealed(tank)
-    probe_gas = (gas_auto_empty || gas_auto_full_pressure) && !gas_is_sealed(tank)
-
-    (!probe_liquid && !probe_gas) && return false
+    (!sides.probe_liquid && !sides.probe_gas) && return false
 
     (frag_liquid_vsource, frag_gas_vsource) = produce_rel_elements(tank)
     liquid_class = :neutral
     gas_class = :neutral
 
-    if probe_liquid
+    if sides.probe_liquid
         active_vsource = @set frag_liquid_vsource.active = true
-        abs_vsource = map_element(active_vsource, tile, pressfed_liquid_vsource_index, rotation)
+        abs_vsource = map_element(active_vsource, tile, pressurefed_liquid_vsource_index, rotation)
         liquid_current = abs_element_get_current(abs_vsource, derivedmapstate, mna_state)
-        isnothing(liquid_current) && return false  # Pruned: reject
+        !isnothing(liquid_current) || return false  # Pruned: reject
 
         # Gas overpressure overrides desired direction: want liquid outflow to relieve headspace pressure
-        liquid_desired = if gas_auto_full_pressure
+        liquid_desired = if sides.gas_auto_full_pressure
             :negative
-        elseif liq_auto_full
+        elseif sides.liq_auto_full
             :negative
         else
             :positive  # auto-empty: want inflow to fill
         end
-        liquid_class = pressfed_probe_current_class(liquid_current, liquid_desired)
+        liquid_class = pressurefed_probe_current_class(liquid_current, liquid_desired)
         liquid_class === :harmful && return false
     end
 
-    if probe_gas
+    if sides.probe_gas
         active_vsource = @set frag_gas_vsource.active = true
-        abs_vsource = map_element(active_vsource, tile, pressfed_gas_vsource_index, rotation)
+        abs_vsource = map_element(active_vsource, tile, pressurefed_gas_vsource_index, rotation)
         gas_current = abs_element_get_current(abs_vsource, derivedmapstate, mna_state)
-        isnothing(gas_current) && return false  # Pruned: reject
+        !isnothing(gas_current) || return false  # Pruned: reject
 
-        gas_desired = gas_auto_empty ? :positive : :negative  # empty wants inflow, overpressure wants outflow
-        gas_class = pressfed_probe_current_class(gas_current, gas_desired)
+        gas_desired = sides.gas_auto_empty ? :positive : :negative  # empty wants inflow, overpressure wants outflow
+        gas_class = pressurefed_probe_current_class(gas_current, gas_desired)
         gas_class === :harmful && return false
     end
 
@@ -946,7 +1182,8 @@ function render_base_elem!(queue::Vector{<:RenderCommand}, comp::PressureFedTank
     gas_colour = get_fluid_colour(comp.gas_fluid)
     push!(queue, render_gas_tile(glmap, mask, HexFrame.Q_NEG, position, gameticks; scale = scale, transparency = transparency * gas_fill_frac, colour = gas_colour, x_unclipped = 1.0 - liquid_fill_frac, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 50) + height_offset, pos_offset = pos_offset))
 
-    liquid_colour = get_fluid_colour(comp.liquid_fluid)
+    # Use stored runtime liquid identity for colour; renders as empty colour when nothing
+    liquid_colour = get_fluid_colour(get_stored_fluid(comp))
     push!(queue, render_liquid_tile(glmap, mask, fixed_rotation, position, gameticks; scale = scale, transparency = transparency, colour = liquid_colour, x_unclipped = liquid_fill_frac, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 100) + height_offset, pos_offset = pos_offset))
 
     push!(queue, render_basic_tile(glmap, tanksprite(comp), fixed_rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + height_offset, pos_offset = pos_offset))

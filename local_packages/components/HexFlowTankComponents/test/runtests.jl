@@ -42,14 +42,14 @@ function make_pressurefed_tank(; liquid_charge::Float64 = 20.0, gas_charge::Floa
         initial_gas_charge = gas_charge,
         max_liquid_charge = max_liquid_charge,
         max_gas_pressure = max_gas_pressure,
-        gas_node = HexFrame.NODE_Q_POS
+        gas_node = HexFrame.NODE_Q_POS,
+        initial_liquid_fluid = HexFluids.MONOPROP_LIQUID
     )
     return PressureFedTankCompBehav(
         tank,
         (HexFrame.NODE_Q_NEG,),
         series_conductance,
         HexFluids.COLD_GAS,
-        HexFluids.MONOPROP_LIQUID,
         NoRotationBehavFrag()
     )
 end
@@ -90,19 +90,35 @@ end
     @test !liquid_is_sealed(tank)
     @test !gas_is_sealed(tank)
 
+    # Stored liquid is seeded from initial_liquid_fluid when charge is positive
+    @test tank.stored_liquid.fluid === HexFluids.MONOPROP_LIQUID
+
     # Full liquid initial charge: NOT pre-sealed, state is derived from charge
     full_tank = PressureFedTankBehavFrag(
         initial_liquid_charge = 40.0,
         initial_gas_charge = 2.0,
         max_liquid_charge = 40.0,
         max_gas_pressure = 50.0,
-        gas_node = HexFrame.NODE_Q_POS
+        gas_node = HexFrame.NODE_Q_POS,
+        initial_liquid_fluid = HexFluids.MONOPROP_LIQUID
     )
     @test !liquid_is_sealed(full_tank)
     @test !gas_is_sealed(full_tank)
     @test pressurefed_liquid_is_auto_full(full_tank)
     @test !pressurefed_liquid_is_auto_empty(full_tank)
     @test compute_gas_pressure(full_tank) ≈ 50.0
+    @test full_tank.stored_liquid.fluid === HexFluids.MONOPROP_LIQUID
+
+    # Zero liquid charge: stored_liquid is nothing even when initial_liquid_fluid is supplied
+    empty_tank = PressureFedTankBehavFrag(
+        initial_liquid_charge = 0.0,
+        initial_gas_charge = 2.0,
+        max_liquid_charge = 40.0,
+        max_gas_pressure = 50.0,
+        gas_node = HexFrame.NODE_Q_POS,
+        initial_liquid_fluid = HexFluids.MONOPROP_LIQUID
+    )
+    @test empty_tank.stored_liquid.fluid === nothing
 end
 
 @testset "Pressure-fed tank fragment: gas pressure formula" begin
@@ -284,11 +300,11 @@ end
 
     @test length(elements) == 3
     @test elements[1].type === CONST_VOLTAGE
-    @test elements[1].connections == RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.GROUND)
+    @test elements[1].connections == RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND)
     @test elements[2].type === CONST_VOLTAGE
     @test elements[2].connections == RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.GROUND)
     @test elements[3].type === CONST_RESISTOR
-    @test elements[3].connections == RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.NODE_Q_NEG)
+    @test elements[3].connections == RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.NODE_Q_NEG)
 
     expected_gas_pressure = compute_gas_pressure(comp.tank)
     expected_liquid_pressure = 0.01 * (comp.tank.liquid_state.charge / comp.tank.max_liquid_charge * comp.tank.max_gas_pressure)
@@ -323,28 +339,48 @@ end
     @test !lf_elements[3].active
 
     tunables = get_tunables(comp)
-    @test tunables isa NTuple{5, TunableProps}
-    tuned_comp = set_tunables(comp, (50.0, 70.0, 15.0, 5.0, 8.0))
+    @test length(tunables) == 6
+    @test all(tunables[1:5]) do t; t isa TunableProps; end
+    @test tunables[6] isa EnumTunableProps{HexFluids.FluidType}
+    @test tunables[6].current_val == HexFluids.MONOPROP_LIQUID  # seeded from initial_liquid_fluid
+
+    tuned_comp = set_tunables(comp, (50.0, 70.0, 15.0, 5.0, 8.0, HexFluids.FUEL_LIQUID))
     @test tuned_comp.tank.max_liquid_charge == 50.0
     @test tuned_comp.tank.max_gas_pressure == 70.0
     @test tuned_comp.tank.liquid_state.charge == 15.0
     @test tuned_comp.tank.gas_state.charge == 5.0
     @test tuned_comp.series_conductance == 8.0
+    @test tuned_comp.tank.stored_liquid.fluid === HexFluids.FUEL_LIQUID
 
+    # Filled tank emits concrete FluidSource for stored liquid
     decls = produce_rel_fluid_declarations(comp)
     @test length(decls) == 2
     @test decls[1] === RelativeFluidDeclaration(HexFrame.NODE_Q_POS, FluidSource(HexFluids.COLD_GAS, 300.0))
-    @test decls[2] === RelativeFluidDeclaration(HexFrame.NODE_INTERNAL, FluidSource(HexFluids.MONOPROP_LIQUID, 300.0))
+    @test decls[2] === RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, FluidSource(HexFluids.MONOPROP_LIQUID, 300.0))
+
+    # Empty tank emits FluidConstraintRule(IS_LIQUID) to accept any liquid
+    empty_comp = make_pressurefed_tank(liquid_charge = 0.0)
+    empty_decls = produce_rel_fluid_declarations(empty_comp)
+    @test length(empty_decls) == 2
+    @test empty_decls[1] === RelativeFluidDeclaration(HexFrame.NODE_Q_POS, FluidSource(HexFluids.COLD_GAS, 300.0))
+    @test empty_decls[2].declaration isa FluidConstraintRule
+    @test empty_decls[2].declaration.constraint === HexFluids.IS_LIQUID
 
     @test map_rotation(comp, HexFrame.R_POS) === HexFrame.Q_POS
 
     liquid_density = HexFluids.lookup_fluid_density(HexFluids.MONOPROP_LIQUID)::Float64
     gas_density = HexFluids.lookup_fluid_density(HexFluids.COLD_GAS)::Float64
+    # Wet mass uses runtime stored_liquid identity, not a fixed wrapper field
     @test get_component_wet_mass(comp) ≈ (20.0 * liquid_density + 4.0 * gas_density)
     @test get_component_wet_mass(comp; fluid = HexFluids.MONOPROP_LIQUID) ≈ 20.0 * liquid_density
     @test get_component_wet_mass(comp; fluid = HexFluids.COLD_GAS) ≈ 4.0 * gas_density
+    @test get_component_wet_mass(comp; fluid = HexFluids.FUEL_LIQUID) == 0.0  # wrong fluid returns 0
     comp.tank.gas_state.charge = -2.0
     @test get_component_wet_mass(comp; fluid = HexFluids.COLD_GAS) == 0.0
+
+    # Empty liquid side: liquid contribution is zero regardless of query fluid
+    @test get_component_wet_mass(make_pressurefed_tank(liquid_charge = 0.0); fluid = HexFluids.MONOPROP_LIQUID) == 0.0
+    @test get_component_wet_mass(make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 0.0)) == 0.0
 
     # Movement: only when both charges are zero
     @test !can_be_moved(make_pressurefed_tank(liquid_charge = 10.0, gas_charge = 0.0))[1]
@@ -524,6 +560,148 @@ end
     @test accept_reactivation_probe!(overpressure; tile = TEST_TILE, derivedmapstate = dm_op_gas, mna_state = mna_op_gas)
 end
 
+# ===============================================================
+# Pressure-Fed Liquid Switching: StoredFluidState and Fluid Adoption
+# ===============================================================
+
+@testset "Pressure-fed liquid switching: construction seeding" begin
+    # Non-empty tank is seeded with the supplied initial fluid
+    comp = make_pressurefed_tank(liquid_charge = 20.0)
+    @test get_stored_fluid(comp) === HexFluids.MONOPROP_LIQUID
+
+    # Empty tank starts with nothing regardless of initial_liquid_fluid
+    comp_empty = make_pressurefed_tank(liquid_charge = 0.0)
+    @test get_stored_fluid(comp_empty) === nothing
+
+    # Fuel and oxidiser tanks seed their respective fluid when non-empty
+    fuel_tank = PressureFedTankCompBehav(
+        PressureFedTankBehavFrag(
+            initial_liquid_charge = 20.0,
+            initial_gas_charge = 2.0,
+            max_liquid_charge = 40.0,
+            max_gas_pressure = 50.0,
+            gas_node = HexFrame.NODE_Q_POS,
+            initial_liquid_fluid = HexFluids.FUEL_LIQUID
+        ),
+        (HexFrame.NODE_Q_NEG,),
+        5.0,
+        HexFluids.COLD_GAS,
+        NoRotationBehavFrag()
+    )
+    @test get_stored_fluid(fuel_tank) === HexFluids.FUEL_LIQUID
+end
+
+@testset "Pressure-fed liquid switching: state-dependent declarations" begin
+    # Filled tank emits a concrete FluidSource for stored liquid
+    comp = make_pressurefed_tank(liquid_charge = 20.0)
+    decls = produce_rel_fluid_declarations(comp)
+    liq_decl = decls[2]
+    @test liq_decl.declaration isa FluidSource
+    @test liq_decl.declaration.fluid_type === HexFluids.MONOPROP_LIQUID
+
+    # Empty tank emits FluidConstraintRule(IS_LIQUID) to accept any compatible liquid
+    comp_empty = make_pressurefed_tank(liquid_charge = 0.0)
+    empty_decls = produce_rel_fluid_declarations(comp_empty)
+    @test empty_decls[2].declaration isa FluidConstraintRule
+    @test empty_decls[2].declaration.constraint === HexFluids.IS_LIQUID
+
+    # Gas declaration is always a concrete FluidSource, unaffected by liquid state
+    @test empty_decls[1] === RelativeFluidDeclaration(HexFrame.NODE_Q_POS, FluidSource(HexFluids.COLD_GAS, 300.0))
+
+    # Fuel-filled tank emits its stored fuel fluid
+    fuel_tank = PressureFedTankCompBehav(
+        PressureFedTankBehavFrag(
+            initial_liquid_charge = 20.0,
+            initial_gas_charge = 2.0,
+            max_liquid_charge = 40.0,
+            max_gas_pressure = 50.0,
+            gas_node = HexFrame.NODE_Q_POS,
+            initial_liquid_fluid = HexFluids.FUEL_LIQUID
+        ),
+        (HexFrame.NODE_Q_NEG,),
+        5.0,
+        HexFluids.COLD_GAS,
+        NoRotationBehavFrag()
+    )
+    fuel_decls = produce_rel_fluid_declarations(fuel_tank)
+    @test fuel_decls[2].declaration.fluid_type === HexFluids.FUEL_LIQUID
+end
+
+@testset "Pressure-fed liquid switching: set_tunables stored fluid independence" begin
+    comp = make_pressurefed_tank(liquid_charge = 20.0)
+    tuned = set_tunables(comp, (50.0, 60.0, 10.0, 3.0, 8.0, HexFluids.FUEL_LIQUID))
+
+    @test tuned.tank.max_liquid_charge == 50.0
+    @test tuned.tank.liquid_state.charge == 10.0
+    @test tuned.series_conductance == 8.0
+    @test tuned.tank.stored_liquid.fluid === HexFluids.FUEL_LIQUID
+
+    # Original component is not affected
+    @test comp.tank.stored_liquid.fluid === HexFluids.MONOPROP_LIQUID
+
+    # New and original have independent StoredFluidState objects
+    @test !==( tuned.tank.stored_liquid, comp.tank.stored_liquid)
+end
+
+@testset "Pressure-fed liquid switching: update_flowbehav! clears fluid on empty" begin
+    comp = make_pressurefed_tank(liquid_charge = 0.1, gas_charge = 2.0)
+    @test get_stored_fluid(comp) === HexFluids.MONOPROP_LIQUID
+
+    # Large outflow drains liquid to zero in one tick
+    mna = register_vsources!(MNA_State(), TEST_TILE, 1, 2)
+    mna.vsource_currents[ElementID(TEST_TILE, 1)] = -1000.0
+    mna.vsource_currents[ElementID(TEST_TILE, 2)] = 0.0
+    update_flowbehav!(comp; tile = TEST_TILE, mna_state = mna)
+
+    @test comp.tank.liquid_state.charge == 0.0
+    @test get_stored_fluid(comp) === nothing  # cleared on empty
+end
+
+@testset "Pressure-fed liquid switching: update_flowbehav! adopts fluid on refill" begin
+    comp = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 4.0)
+    @test get_stored_fluid(comp) === nothing
+
+    # Provide derivedmapstate with FUEL_LIQUID on NODE_INTERNAL_1
+    dm = DerivedMapState()
+    internal_node = NodeCoord(TEST_TILE, HexFrame.NODE_INTERNAL_1)
+    dm.nodeactualfluids[internal_node] = HexFluids.FUEL_LIQUID
+
+    mna = register_vsources!(MNA_State(), TEST_TILE, 1, 2)
+    mna.vsource_currents[ElementID(TEST_TILE, 1)] = 6.0  # inflow raises liquid charge
+    mna.vsource_currents[ElementID(TEST_TILE, 2)] = 0.0
+    update_flowbehav!(comp; tile = TEST_TILE, mna_state = mna, derivedmapstate = dm)
+
+    @test comp.tank.liquid_state.charge > 0.0
+    @test get_stored_fluid(comp) === HexFluids.FUEL_LIQUID  # adopted from NODE_INTERNAL_1
+end
+
+@testset "Pressure-fed liquid switching: no adoption without derivedmapstate" begin
+    comp = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 4.0)
+    @test get_stored_fluid(comp) === nothing
+
+    mna = register_vsources!(MNA_State(), TEST_TILE, 1, 2)
+    mna.vsource_currents[ElementID(TEST_TILE, 1)] = 6.0
+    mna.vsource_currents[ElementID(TEST_TILE, 2)] = 0.0
+    update_flowbehav!(comp; tile = TEST_TILE, mna_state = mna)  # no derivedmapstate
+
+    @test comp.tank.liquid_state.charge > 0.0
+    @test get_stored_fluid(comp) === nothing  # no adoption without derived state
+end
+
+@testset "Pressure-fed liquid switching: fragment set_tunables preserves stored liquid" begin
+    tank = make_pressurefed_tank().tank
+    @test tank.stored_liquid.fluid === HexFluids.MONOPROP_LIQUID
+
+    # set_tunables creates a fresh StoredFluidState with the same fluid (no shared reference)
+    tuned = set_tunables(tank, (50.0, 60.0, 25.0, 3.0))
+    @test tuned.stored_liquid.fluid === HexFluids.MONOPROP_LIQUID
+    @test !==( tuned.stored_liquid, tank.stored_liquid)  # independent objects
+
+    # Tuning charge to zero clears stored_liquid (consistent with empty semantics)
+    tuned_empty = set_tunables(tank, (40.0, 50.0, 0.0, 0.0))
+    @test tuned_empty.stored_liquid.fluid === nothing
+end
+
 @testset "Existing tank regression coverage" begin
     gas_comp = make_gas_tank(initial_charge = 20.0)
     gas_elements = produce_rel_elements(gas_comp)
@@ -533,7 +711,7 @@ end
     @test gas_elements[2].type === CONST_RESISTOR
     gas_decls = produce_rel_fluid_declarations(gas_comp)
     @test length(gas_decls) == 1
-    @test gas_decls[1] === RelativeFluidDeclaration(HexFrame.NODE_INTERNAL, FluidSource(HexFluids.COLD_GAS, 300.0))
+    @test gas_decls[1] === RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, FluidSource(HexFluids.COLD_GAS, 300.0))
     @test get_component_wet_mass(gas_comp) ≈ 20.0
 
     gas_mna = register_vsources!(MNA_State(), TEST_TILE, 1)
@@ -562,7 +740,7 @@ end
     @test liquid_elements[1].value > 0.0
     liq_decls = produce_rel_fluid_declarations(liquid_comp)
     @test length(liq_decls) == 1
-    @test liq_decls[1] === RelativeFluidDeclaration(HexFrame.NODE_INTERNAL, FluidSource(HexFluids.MONOPROP_LIQUID, 300.0))
+    @test liq_decls[1] === RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, FluidSource(HexFluids.MONOPROP_LIQUID, 300.0))
     @test get_component_wet_mass(liquid_comp) ≈ 100.0
     @test map_rotation(liquid_comp, HexFrame.S_POS) === HexFrame.Q_POS
     @test map_rotation(liquid_comp, HexFrame.R_NEG) === HexFrame.Q_NEG
@@ -589,7 +767,7 @@ end
 end
 
 @testset "TankBehavFrag derived state helpers" begin
-    connection = RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.GROUND)
+    connection = RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND)
 
     mid_tank = TankBehavFrag(connection = connection, max_charge = 40.0, max_voltage = 50.0, initial_charge = 20.0)
     @test tank_is_active(mid_tank)
@@ -868,12 +1046,19 @@ end
 
     gas_decls = produce_rel_fluid_declarations(gas)
     @test length(gas_decls) == 1
-    @test gas_decls[1] === RelativeFluidDeclaration(HexFrame.NODE_INTERNAL, FluidSource(HexFluids.COLD_GAS, 300.0))
+    @test gas_decls[1] === RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, FluidSource(HexFluids.COLD_GAS, 300.0))
 
+    # Liquid tank tunables: 5-element tuple, last one is EnumTunableProps{FluidType}
     liq = make_liquid_tank(initial_charge = 20.0)
+    liq_tunables = get_tunables(liq)
+    @test length(liq_tunables) == 5
+    @test all(liq_tunables[1:4]) do t; t isa TunableProps; end
+    @test liq_tunables[5] isa EnumTunableProps{HexFluids.FluidType}
+    @test liq_tunables[5].current_val == HexFluids.MONOPROP_LIQUID
+
     liq_decls = produce_rel_fluid_declarations(liq)
     @test length(liq_decls) == 1
-    @test liq_decls[1] === RelativeFluidDeclaration(HexFrame.NODE_INTERNAL, FluidSource(HexFluids.MONOPROP_LIQUID, 300.0))
+    @test liq_decls[1] === RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, FluidSource(HexFluids.MONOPROP_LIQUID, 300.0))
 
     # Wet mass
     @test get_component_wet_mass(gas) ≈ 20.0  # COLD_GAS density 1.0 kg/L
@@ -883,4 +1068,143 @@ end
     # map_rotation: liquid flips, gas does not restrict
     @test map_rotation(liq, HexFrame.S_POS) === HexFrame.Q_POS
     @test map_rotation(liq, HexFrame.R_NEG) === HexFrame.Q_NEG
+end
+
+# ===============================================================
+# Refillable Liquid Tank: StoredFluidState and Fluid Adoption
+# ===============================================================
+
+@testset "Refillable liquid tank: StoredFluidState basics" begin
+    # Non-empty tank is initialised with stored fluid from construction-time fluid
+    liq = make_liquid_tank(initial_charge = 20.0)
+    @test liq.tank.stored_fluid.fluid === HexFluids.MONOPROP_LIQUID
+
+    # Empty tank at construction has stored_fluid = nothing
+    liq_empty = make_liquid_tank(initial_charge = 0.0)
+    @test liq_empty.tank.stored_fluid.fluid === nothing
+
+    # Fuel and oxidiser tanks initialise with their respective fluids when non-empty
+    fuel_tank = ThevininTankCompBehav(
+        LiquidTankBehavFrag, 3;
+        fluid = HexFluids.FUEL_LIQUID,
+        max_charge = 40.0, max_voltage = 1.0, initial_charge = 20.0, series_conductance = 5.0
+    )
+    @test fuel_tank.tank.stored_fluid.fluid === HexFluids.FUEL_LIQUID
+
+    ox_tank = ThevininTankCompBehav(
+        LiquidTankBehavFrag, 3;
+        fluid = HexFluids.OXIDISER_LIQUID,
+        max_charge = 40.0, max_voltage = 1.0, initial_charge = 20.0, series_conductance = 5.0
+    )
+    @test ox_tank.tank.stored_fluid.fluid === HexFluids.OXIDISER_LIQUID
+end
+
+@testset "Refillable liquid tank: state-dependent declarations" begin
+    # Filled tank emits a concrete FluidSource
+    liq = make_liquid_tank(initial_charge = 20.0)
+    decls = produce_rel_fluid_declarations(liq)
+    @test length(decls) == 1
+    decl = decls[1]
+    @test decl isa RelativeFluidDeclaration
+    @test decl.declaration isa FluidSource
+    @test decl.declaration.fluid_type === HexFluids.MONOPROP_LIQUID
+
+    # Empty tank emits FluidConstraintRule(IS_LIQUID) to accept any liquid
+    liq_empty = make_liquid_tank(initial_charge = 0.0)
+    empty_decls = produce_rel_fluid_declarations(liq_empty)
+    @test length(empty_decls) == 1
+    @test empty_decls[1].declaration isa FluidConstraintRule
+    @test empty_decls[1].declaration.constraint === HexFluids.IS_LIQUID
+
+    # Fuel and oxidiser tanks emit their respective fluid when filled
+    fuel_tank = ThevininTankCompBehav(
+        LiquidTankBehavFrag, 3;
+        fluid = HexFluids.FUEL_LIQUID,
+        max_charge = 40.0, max_voltage = 1.0, initial_charge = 20.0, series_conductance = 5.0
+    )
+    fuel_decls = produce_rel_fluid_declarations(fuel_tank)
+    @test fuel_decls[1].declaration.fluid_type === HexFluids.FUEL_LIQUID
+end
+
+@testset "Refillable liquid tank: set_tunables preserves stored fluid independence" begin
+    liq = make_liquid_tank(initial_charge = 20.0)
+    # set_tunables with 5-tuple: last element is the new fluid
+    tuned = set_tunables(liq, (50.0, 1.0, 10.0, 6.0, HexFluids.FUEL_LIQUID))
+    @test tuned.tank.tank.max_charge == 50.0
+    @test tuned.tank.tank.state.charge == 10.0
+    @test tuned.series_conductance == 6.0
+    @test tuned.tank.stored_fluid.fluid === HexFluids.FUEL_LIQUID
+
+    # The original tank is not affected (set_tunables is non-mutating at component level)
+    @test liq.tank.stored_fluid.fluid === HexFluids.MONOPROP_LIQUID
+
+    # The new and old fragments have independent StoredFluidState objects
+    @test !==( tuned.tank.stored_fluid, liq.tank.stored_fluid)
+end
+
+@testset "Refillable liquid tank: wet mass uses stored fluid" begin
+    liq_density = HexFluids.lookup_fluid_density(HexFluids.MONOPROP_LIQUID)::Float64
+    fuel_density = HexFluids.lookup_fluid_density(HexFluids.FUEL_LIQUID)::Float64
+
+    # Filled monoprop tank
+    liq = make_liquid_tank(initial_charge = 20.0)
+    @test get_component_wet_mass(liq) ≈ 20.0 * liq_density
+    @test get_component_wet_mass(liq; fluid = HexFluids.MONOPROP_LIQUID) ≈ 20.0 * liq_density
+    @test get_component_wet_mass(liq; fluid = HexFluids.FUEL_LIQUID) == 0.0  # wrong fluid
+
+    # Empty tank: no wet mass regardless of query fluid
+    liq_empty = make_liquid_tank(initial_charge = 0.0)
+    @test get_component_wet_mass(liq_empty) == 0.0
+    @test get_component_wet_mass(liq_empty; fluid = HexFluids.MONOPROP_LIQUID) == 0.0
+
+    # Fuel-filled tank
+    fuel_tank = ThevininTankCompBehav(
+        LiquidTankBehavFrag, 3;
+        fluid = HexFluids.FUEL_LIQUID,
+        max_charge = 40.0, max_voltage = 1.0, initial_charge = 20.0, series_conductance = 5.0
+    )
+    @test get_component_wet_mass(fuel_tank) ≈ 20.0 * fuel_density
+    @test get_component_wet_mass(fuel_tank; fluid = HexFluids.MONOPROP_LIQUID) == 0.0
+end
+
+@testset "Refillable liquid tank: update_flowbehav! clears fluid on empty" begin
+    liq = make_liquid_tank(initial_charge = 0.1)
+    @test liq.tank.stored_fluid.fluid === HexFluids.MONOPROP_LIQUID
+
+    # Large outflow drains tank to zero in one tick
+    mna = register_vsources!(MNA_State(), TEST_TILE, 1)
+    mna.vsource_currents[ElementID(TEST_TILE, 1)] = -1000.0
+    update_flowbehav!(liq; tile = TEST_TILE, mna_state = mna)
+
+    @test liq.tank.tank.state.charge == 0.0
+    @test liq.tank.stored_fluid.fluid === nothing  # cleared on empty
+end
+
+@testset "Refillable liquid tank: update_flowbehav! adopts fluid on refill" begin
+    liq_empty = make_liquid_tank(initial_charge = 0.0)
+    @test liq_empty.tank.stored_fluid.fluid === nothing
+
+    # Provide derivedmapstate with FUEL_LIQUID on the internal node
+    dm = DerivedMapState()
+    internal_node = NodeCoord(TEST_TILE, HexFrame.NODE_INTERNAL_1)
+    dm.nodeactualfluids[internal_node] = HexFluids.FUEL_LIQUID
+
+    # Inflow: charge rises above zero
+    mna = register_vsources!(MNA_State(), TEST_TILE, 1)
+    mna.vsource_currents[ElementID(TEST_TILE, 1)] = 6.0
+    update_flowbehav!(liq_empty; tile = TEST_TILE, mna_state = mna, derivedmapstate = dm)
+
+    @test liq_empty.tank.tank.state.charge > 0.0
+    @test liq_empty.tank.stored_fluid.fluid === HexFluids.FUEL_LIQUID  # adopted
+end
+
+@testset "Refillable liquid tank: no adoption without derivedmapstate" begin
+    # Without derivedmapstate, filling a tank leaves stored_fluid as nothing (adoption deferred)
+    liq_empty = make_liquid_tank(initial_charge = 0.0)
+    mna = register_vsources!(MNA_State(), TEST_TILE, 1)
+    mna.vsource_currents[ElementID(TEST_TILE, 1)] = 6.0
+    update_flowbehav!(liq_empty; tile = TEST_TILE, mna_state = mna)  # no derivedmapstate
+
+    @test liq_empty.tank.tank.state.charge > 0.0
+    @test liq_empty.tank.stored_fluid.fluid === nothing  # no adoption without derived state
 end

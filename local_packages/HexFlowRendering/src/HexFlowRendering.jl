@@ -83,16 +83,35 @@ const RENDER_HEIGHT_COMPONENT_ANIM::Int32 = 3000      # animated effects drawn o
 const RENDER_HEIGHT_OVERLAY_BASE::Int32 = 101000      # overlays, e.g., stall overlay
 const RENDER_HEIGHT_TRACTOR_BEAM::Int32 = RENDER_HEIGHT_BACKGROUND - 100  # tractor beam visuals, deep background
 
+"RGB the fluid colour fades toward at the ambient (cold) end of the temperature scale."
+const FLUID_COLD_FLOOR_RGB::SVector{3, Float32} = SVector{3, Float32}(0.08, 0.08, 0.08)
+
 const fluid_colour_lookup = Dict{FluidType, ColourType}(
-    HexFluids.MONOPROP_LIQUID => ColourType(0.608, 0.169, 0.69, 1.0), # purple
-    HexFluids.MONOPROP_GAS => ColourType(0.737, 0.569, 0.769, 1.0), # light purple
-    HexFluids.COLD_GAS => ColourType(0.71, 0.918, 0.929, 1.0) # light blue
+    HexFluids.MONOPROP_LIQUID => ColourType(0.608, 0.169, 0.69,  1.0), # purple
+    HexFluids.MONOPROP_GAS    => ColourType(0.737, 0.569, 0.769, 1.0), # light purple
+    HexFluids.COLD_GAS        => ColourType(0.71,  0.918, 0.929, 1.0), # light blue
+    HexFluids.FUEL_LIQUID     => ColourType(0.95,  0.65,  0.1,   1.0), # orange-yellow
+    HexFluids.OXIDISER_LIQUID => ColourType(0.15,  0.55,  0.95,  1.0), # vivid medium blue
+    HexFluids.BIPROP_EXHAUST  => ColourType(1.0,   0.6,   0.1,   1.0), # orange-white flame
 )
 
 "Returns GLfloat RGBA colour from a FluidType, or default if fluid is nothing or not found."
 function get_fluid_colour(fluid::Union{FluidType, Nothing}; default::ColourType = DEFAULT_EMPTY_FLUID_COLOUR)::ColourType
     isnothing(fluid) && return default
     return get(fluid_colour_lookup, fluid, default)
+end
+
+"Temperature-aware variant: lerps between FLUID_COLD_FLOOR_RGB at ambient and the reference colour at the fluid's reference temperature. Fluids without a defined reference temperature (or whose reference equals ambient) return the unscaled colour, so callers can pass temperature unconditionally."
+function get_fluid_colour(fluid::Union{FluidType, Nothing}, temperature::Float64;
+                          default::ColourType = DEFAULT_EMPTY_FLUID_COLOUR)::ColourType
+    isnothing(fluid) && return default
+    base = get(fluid_colour_lookup, fluid, default)
+    t_ref = HexFluids.lookup_fluid_reference_temperature(fluid)
+    t_amb = HexFluids.THERMAL_AMBIENT_TEMPERATURE_K
+    (isnothing(t_ref) || t_ref <= t_amb) && return base
+    t = clamp((temperature - t_amb) / (t_ref - t_amb), 0.0, 1.0)
+    rgb = FLUID_COLD_FLOOR_RGB .+ Float32(t) .* (SVector{3, Float32}(base[1], base[2], base[3]) .- FLUID_COLD_FLOOR_RGB)
+    return ColourType(rgb[1], rgb[2], rgb[3], base[4])
 end
 
 "Loads shader source code from the shaders subdirectory."
@@ -496,8 +515,13 @@ end
 
 "Returns RenderCommands for a pipe by deriving its fluid type and colour from `derivedmapstate`."
 function render_pipe(glmap::GLObjectMap, pipe::EdgeCoord, derivedmapstate::DerivedMapState; transparency::AbstractFloat = 1.0f0, gameticks::Integer = 0)
-    fluid = get(derivedmapstate.nodeactualfluids, to_nodecoord(pipe.v1), get(derivedmapstate.nodeactualfluids, to_nodecoord(pipe.v2), nothing))
-    colour = get_fluid_colour(fluid; default = DEFAULT_PIPE_COLOUR)
+    v1_node = to_nodecoord(pipe.v1)
+    v2_node = to_nodecoord(pipe.v2)
+    fluid = get(derivedmapstate.nodeactualfluids, v1_node, get(derivedmapstate.nodeactualfluids, v2_node, nothing))
+    # Use temperature from the node where the fluid was found, or ambient as fallback
+    fluid_node = haskey(derivedmapstate.nodeactualfluids, v1_node) ? v1_node : v2_node
+    temperature = get(derivedmapstate.node_temperatures, fluid_node, HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
+    colour = get_fluid_colour(fluid, temperature; default = DEFAULT_PIPE_COLOUR)
 
     rotation_matrix = get_rotmat(pipe)'
     position = glvec(pipe)

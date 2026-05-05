@@ -39,12 +39,12 @@ function mapgen_teasership()
             initial_gas_charge = 0.0,
             max_liquid_charge = 40.0,
             max_gas_pressure = 50.0,
-            gas_node = HexFrame.NODE_Q_POS
+            gas_node = HexFrame.NODE_Q_POS,
+            initial_liquid_fluid = HexFluids.MONOPROP_LIQUID
         ),
         (HexFrame.NODE_Q_NEG,),
         5.0,
         HexFluids.COLD_GAS,
-        HexFluids.MONOPROP_LIQUID,
         NoRotationBehavFrag()
     )
     transfer_pump = ElectricPumpCompBehav(
@@ -104,13 +104,13 @@ function mapgen_teasership()
     # The save contains one armed nozzle and two partially-open valves.
     armed_switched_tiny_nozzle = SwitchedNozzleCompBehav(
         NozzleBehavFrag(
-            HexFrame.NODE_INTERNAL,
+            HexFrame.NODE_INTERNAL_1,
             0.2,
             AutoDeactivationBehavFrag(),
             OverheatLimitBehavFrag(400.0, 5.3, 5.0)
         ),
         BoolSwitchBehavFrag(SwitchBehavFrag(
-            RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_INTERNAL),
+            RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_INTERNAL_1),
             2.0,
             0.0,
             calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS),

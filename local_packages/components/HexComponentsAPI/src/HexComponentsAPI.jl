@@ -7,7 +7,7 @@ using StaticArrays, Accessors
 export BASE_UPS
 
 # General Exports
-export Sprite, Component, ComponentOnTile, TunableProps, ActionInfo
+export Sprite, Component, ComponentOnTile, TunableProps, EnumTunableProps, AnyTunableProps, ActionInfo
 
 # Tile Component Behavior Exports
 export ComponentBehavior
@@ -97,12 +97,26 @@ end
 "Convenience constructor preserving the existing 4-arg call sites."
 ActionInfo(id, label, enabled, tooltip) = ActionInfo(id, label, enabled, tooltip, nothing)
 
-"Struct to pass all needed info about a tunable component parameter to the properties panel"
+"Tunable descriptor for a scalar (Float64) component parameter."
 struct TunableProps
     current_val::Float64
     type_desc::String
     unit_desc::String
 end
+
+"""
+Tunable descriptor for an enum-backed component parameter.
+The UI presents the options as a combo/listbox and returns the selected `T` value via `set_tunables`.
+"""
+struct EnumTunableProps{T}
+    current_val::T
+    options::Vector{T}
+    option_labels::Vector{String}
+    type_desc::String
+end
+
+"Union of all tunable property descriptor types. Used for heterogeneous tunable tuples."
+const AnyTunableProps = Union{TunableProps, EnumTunableProps}
 
 "Error for concrete ComponentBehavior without required method get_tunables"
 function get_tunables(behav::T) where {T <: ComponentBehavior}
@@ -110,7 +124,7 @@ function get_tunables(behav::T) where {T <: ComponentBehavior}
 end
 
 "Error for concrete ComponentBehavior without required method set_tunables"
-function set_tunables(behav::T, tunables::NTuple{N, Real}) where {N, T <: ComponentBehavior}
+function set_tunables(behav::T, tunables::Tuple) where {T <: ComponentBehavior}
     error("Required method set_tunables not implemented for $(nameof(T))")
 end
 

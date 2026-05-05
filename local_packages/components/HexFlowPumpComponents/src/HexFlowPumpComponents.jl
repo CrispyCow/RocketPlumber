@@ -52,7 +52,7 @@ get_scaled_pump_voltage(p::PumpBehavFrag, voltage_scale::Real)::Float64 = p.pump
 function make_pump_element(p::PumpBehavFrag, voltage_scale::Real; active::Bool = true)::RelativeElement
     voltage = active ? get_scaled_pump_voltage(p, voltage_scale) : 0.0
     return RelativeElement(
-        RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.NODE_Q_POS),
+        RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.NODE_Q_POS),
         voltage,
         HexElements.CONST_VOLTAGE;
         active = active
@@ -201,13 +201,13 @@ function produce_rel_elements(comp::TurboPumpCompBehav)::NTuple{3, RelativeEleme
     pump_voltage = active ? comp.max_pump_voltage * rpm_fraction : 0.0
 
     pump_source = RelativeElement(
-        RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.NODE_Q_POS),
+        RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.NODE_Q_POS),
         pump_voltage,
         HexElements.CONST_VOLTAGE;
         active = active
     )
     series_resistor = RelativeElement(
-        RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.NODE_Q_NEG),
+        RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.NODE_Q_NEG),
         comp.series_conductance,
         HexElements.CONST_RESISTOR;
         active = active
@@ -321,13 +321,13 @@ function get_reactivation_probe(comp::TurboPumpCompBehav; kwargs...)
     is_inactive(comp.deactivation) || return nothing
     rpm_fraction = get_rpm_fraction(comp.rotor)
     pump_source = RelativeElement(
-        RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.NODE_Q_POS),
+        RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.NODE_Q_POS),
         comp.max_pump_voltage * rpm_fraction,
         HexElements.CONST_VOLTAGE;
         active = true
     )
     series_resistor = RelativeElement(
-        RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.NODE_Q_NEG),
+        RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.NODE_Q_NEG),
         comp.series_conductance,
         HexElements.CONST_RESISTOR;
         active = true
@@ -382,7 +382,8 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBeh
     # Get turbine fluid colour
     turbine_input_node = map_element(HexFrame.NODE_S_POS, position, rotation)
     fluid = get(derivedmapstate.nodeactualfluids, turbine_input_node, nothing)
-    fluidmask_colour = fluid !== nothing ? get_fluid_colour(fluid) : DEFAULT_EMPTY_FLUID_COLOUR
+    temperature = get(derivedmapstate.node_temperatures, turbine_input_node, HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
+    fluidmask_colour = fluid !== nothing ? get_fluid_colour(fluid, temperature) : DEFAULT_EMPTY_FLUID_COLOUR
 
     # get turbine state from MNA solution
     source_current = get(mna_state.vsource_currents, ElementID(position, pump_element_index), 0.0)
@@ -456,7 +457,7 @@ function ElectricPumpCompBehav(
     energyfrag = EnergyStoreBehavFrag(energystate, max_energy)
 
     # Switch connecting internal to Q_NEG (replacing old series resistor position)
-    switch_connection = RelativeElementConnections(HexFrame.NODE_INTERNAL, HexFrame.NODE_Q_NEG)
+    switch_connection = RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.NODE_Q_NEG)
     switchfrag = BoolSwitchBehavFrag(
         connection = switch_connection,
         max_conductance = max_conductance,
@@ -511,9 +512,9 @@ function produce_rel_fluid_declarations(::ElectricPumpCompBehav)
     )
 end
 
-"Updates switch behavior and consumes energy proportional to pump flow rate."
+"Updates switch behaviour and consumes energy proportional to pump flow rate."
 function update_flowbehav!(comp::ElectricPumpCompBehav; mna_state::MNA_State, tile::TileCoord, kwargs...)
-    # Delegate to switch for its behavior update
+    # Delegate to switch for its behaviour update
     update_flowbehav!(comp.switch; kwargs...)
 
     # Consume energy proportional to flow rate when pump is running
@@ -593,6 +594,7 @@ function render_static!(
         queue::Vector{<:RenderCommand}, comp::ElectricPumpCompBehav;
         glmap::GLObjectMap, rotation::HexAxis, position::TileCoord,
         fluid::Union{FluidType, Nothing} = nothing, gameticks::Int64 = 0,
+        temperature::Float64 = HexFluids.THERMAL_AMBIENT_TEMPERATURE_K,
         charge_bar_colour::ColourType = let c = get(ColorSchemes.summer, 0.0)
             ColourType(c.r, c.g, c.b, 1.0)
         end,
@@ -610,10 +612,10 @@ function render_static!(
         if fluid === nothing
             push!(queue, render_basic_tile(glmap, fluidmask_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = DEFAULT_EMPTY_FLUID_COLOUR, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
         elseif is_liquid(fluid)
-            fluidmask_colour = get_fluid_colour(fluid)
+            fluidmask_colour = get_fluid_colour(fluid, temperature)
             push!(queue, render_liquid_tile(glmap, fluidmask_sprite(comp), rotation, position, gameticks; colour = fluidmask_colour, scale = scale, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
         else
-            fluidmask_colour = get_fluid_colour(fluid)
+            fluidmask_colour = get_fluid_colour(fluid, temperature)
             push!(queue, render_basic_tile(glmap, fluidmask_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = fluidmask_colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
         end
     end

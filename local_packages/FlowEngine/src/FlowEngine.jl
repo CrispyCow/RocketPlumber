@@ -254,7 +254,7 @@ function add_pipes_abs_element!(abs_vector::Vector{AbsoluteElement}, edge::EdgeC
     return push!(abs_vector, absolute_element)
 end
 
-"Updates behaviors of all components on a single ShipMap"
+"Updates behaviours of all components on a single ShipMap"
 function update_components!(ship::ShipMap, mna_state::MNA_State, derivedmapstate::DerivedMapState)
     for (coord, data) in ship.components
         update_flowbehav!(data; tile = coord, mna_state = mna_state, derivedmapstate = derivedmapstate)
@@ -262,7 +262,7 @@ function update_components!(ship::ShipMap, mna_state::MNA_State, derivedmapstate
     return nothing
 end
 
-"Updates behaviors of all components on the GameMap by delegating to each ShipMap"
+"Updates behaviours of all components on the GameMap by delegating to each ShipMap"
 function update_components!(gamemap::GameMap, mna_state::MNA_State, derivedmapstate::DerivedMapState)
     for (_, ship) in gamemap.ships
         update_components!(ship, mna_state, derivedmapstate)
@@ -498,13 +498,13 @@ C_DEP_CURRENT) are excluded from the connection map because they do not provide
 voltage references. A node connected to ground solely through current sources has
 undetermined voltage, causing MNA singularity. 
 
-This behavior is captured in _include_ground_search_connection_element
+This behaviour is captured in _include_ground_search_connection_element
 
 Current sources whose non-ground nodes are reachable through other elements are
 still included in the output (they are valid circuit elements when their nodes
 have determined voltages from other paths).
 
-This behavior is captured in _include_ground_search_root_element
+This behaviour is captured in _include_ground_search_root_element
 """
 function ground_search!(elements::Vector{AbsoluteElement}, scratchpad::CalculatorScratchpad)::Nothing
     groundsearch_nodeconnections = scratchpad.groundsearch_nodeconnections
@@ -737,8 +737,7 @@ end
 
 "Fallback temperature when a region has no active flow"
 function _fallback_temperature(fluid::FluidType)::Float64
-    temp = get_default_temperature(Val(fluid))
-    return !isnothing(temp) ? temp : 300.0
+    return get_default_temperature(fluid, THERMAL_AMBIENT_TEMPERATURE_K)
 end
 
 "Index singly grounded elements by their non-ground node for O(1) source lookup."

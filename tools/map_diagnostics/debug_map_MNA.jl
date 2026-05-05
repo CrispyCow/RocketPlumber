@@ -331,6 +331,54 @@ end
 # Map Summary
 # ===============================================================
 
+"""
+Walk the gamemap and print introspection of activation/state flags on
+components likely to influence singular-matrix conditions: BipropChamber's
+`auto_deactivation`, NozzleBehavFrag's `deactivation`/`overheat`, switch
+states on valves. Helps surface state captured in the JLD2 snapshot that
+might persist a degenerate stamp pattern.
+"""
+function print_activation_states(gamemap::GameMap)
+    println("\n===========================================================")
+    println("ACTIVATION / STATE FLAGS (singularity-relevant)")
+    println("===========================================================")
+    for (name, ship) in gamemap.ships
+        for (coord, comp_on_tile) in ship.components
+            comp = comp_on_tile.component
+            type_name = replace(string(typeof(comp)), r"^.*\." => "")
+            flags = String[]
+
+            try
+                # BipropChamber: auto_deactivation flag
+                if hasproperty(comp, :state) && hasproperty(comp.state, :auto_deactivation)
+                    push!(flags, "auto_deactivated=$(HexFlowBasicComponents.is_inactive(comp.state.auto_deactivation))")
+                end
+                # Nozzle deactivation + overheat damage
+                if hasproperty(comp, :nozzle)
+                    noz = comp.nozzle
+                    if hasproperty(noz, :deactivation)
+                        push!(flags, "noz_inactive=$(HexFlowBasicComponents.is_inactive(noz.deactivation))")
+                    end
+                    if hasproperty(noz, :overheat) && hasproperty(noz.overheat, :damage_state)
+                        # Check the inner damage flag if accessible
+                        push!(flags, "noz_damaged=$(HexFlowNozzleComponents.is_damaged(noz))")
+                    end
+                end
+                # Switch / valve state
+                if hasproperty(comp, :switch) && hasproperty(comp.switch, :state)
+                    push!(flags, "switch_state=$(comp.switch.state)")
+                end
+            catch e
+                push!(flags, "unable to introspect: $e")
+            end
+
+            if !isempty(flags)
+                println("  $coord $type_name : ", join(flags, "  "))
+            end
+        end
+    end
+end
+
 "Print a detailed summary of the map's ships, components, and pipes."
 function print_map_summary(gamemap::GameMap)
     println("\n===========================================================")
@@ -356,23 +404,36 @@ function print_map_summary(gamemap::GameMap)
             type_name = replace(string(typeof(comp)), r"^.*\." => "")
 
             extra = ""
-            # Extract tank state when available
-            if hasproperty(comp, :tank) && hasproperty(comp.tank, :tank) && hasproperty(comp.tank.tank, :state)
-                tank = comp.tank.tank
-                charge = round(tank.state.charge, digits=2)
-                stalled = is_stalled(tank.stallstate)
-                extra = " charge=$charge stalled=$stalled"
-            elseif hasproperty(comp, :tank) && hasproperty(comp.tank, :state)
-                tank = comp.tank
-                charge = round(tank.state.charge, digits=2)
-                stalled = is_stalled(tank.stallstate)
-                extra = " charge=$charge stalled=$stalled"
-            end
-            # Extract pump energy when available
-            if hasproperty(comp, :energy)
-                energy = round(HexFlowPumpComponents.get_current_energy(comp.energy), digits=1)
-                max_e = round(HexFlowPumpComponents.get_max_energy(comp.energy), digits=1)
-                extra *= " energy=$energy/$max_e"
+            try
+                # Extract tank state when available. Tank API uses sealstate (single-fluid)
+                # or liquid_sealstate/gas_sealstate (dual-fluid). Walk into the inner tank
+                # if present (e.g. a TankComponent wraps a TankBehavFrag at .tank).
+                inner = if hasproperty(comp, :tank) && hasproperty(comp.tank, :tank) && hasproperty(comp.tank.tank, :state)
+                    comp.tank.tank
+                elseif hasproperty(comp, :tank) && hasproperty(comp.tank, :state)
+                    comp.tank
+                else
+                    nothing
+                end
+                if inner !== nothing
+                    charge = round(inner.state.charge, digits=2)
+                    seal_str = if hasproperty(inner, :sealstate)
+                        "sealed=$(is_sealed(inner.sealstate))"
+                    elseif hasproperty(inner, :liquid_sealstate) && hasproperty(inner, :gas_sealstate)
+                        "liq_sealed=$(is_sealed(inner.liquid_sealstate)) gas_sealed=$(is_sealed(inner.gas_sealstate))"
+                    else
+                        ""
+                    end
+                    extra = " charge=$charge $seal_str"
+                end
+                # Extract pump energy when available
+                if hasproperty(comp, :energy)
+                    energy = round(HexFlowPumpComponents.get_current_energy(comp.energy), digits=1)
+                    max_e = round(HexFlowPumpComponents.get_max_energy(comp.energy), digits=1)
+                    extra *= " energy=$energy/$max_e"
+                end
+            catch e
+                extra *= "  <unable to introspect: $e>"
             end
 
             println("    $coord rot=$rot : $type_name$extra")
@@ -408,7 +469,7 @@ function run_simulation_tick!(gamemap::GameMap, derived::DerivedMapState, mna::M
     # --- update_components! ---
     println("\n  Step 1: update_components!")
     try
-        update_components!(gamemap, mna)
+        update_components!(gamemap, mna, derived)
         println("  [✓] update_components! passed")
     catch e
         println("  [✗] update_components! FAILED: $e")
@@ -503,25 +564,89 @@ function main(args::Vector{String})
         return 1
     end
 
+    # Optional second arg: number of ticks to run (default 1). When > 1, only
+    # the LAST tick's full diagnostic dump is printed; intervening ticks emit
+    # one-line rank/result summaries to surface progressive state evolution.
+    n_ticks::Int = length(args) >= 2 ? parse(Int, args[2]) : 1
+
     println("===========================================================")
     println("MAP CIRCUIT DIAGNOSTIC TOOL — Rocket Plumber")
     println("===========================================================")
-    println("Map: $mappath")
+    println("Map: $mappath    Ticks: $n_ticks")
 
     # --- Load map using the game's own loadmap() ---
     println("\nLoading map...")
     gamemap = loadmap(mappath)
     print_map_summary(gamemap)
+    print_activation_states(gamemap)
 
-    # --- Run one full simulation tick ---
+    # If this is a crash dump (Work Item 3), surface the captured context
+    file = jldopen(mappath, "r")
+    try
+        if haskey(file, "exception_message")
+            println("=" ^ 60)
+            println("CRASH DUMP DETECTED")
+            println("=" ^ 60)
+            println("Exception: ", file["exception_message"])
+            if haskey(file, "pending_commands")
+                cmds = file["pending_commands"]
+                println("Pending commands at crash: ", length(cmds))
+                for (i, cmd) in enumerate(cmds)
+                    println("  [$i] ", typeof(cmd))
+                end
+            end
+            if haskey(file, "node_voltages")
+                println("Captured node_voltages entries: ", length(file["node_voltages"]))
+            end
+            if haskey(file, "vsource_currents")
+                println("Captured vsource_currents entries: ", length(file["vsource_currents"]))
+            end
+            println()
+        end
+    finally
+        close(file)
+    end
+
+    # --- Persistent state across ticks (matches live solver) ---
     derived = DerivedMapState()
     mna = MNA_State()
 
     println("\n===========================================================")
-    println("SIMULATION TICK (update_components! → update_map! → update_mna!)")
+    println("SIMULATION TICKS (update_components! → update_map! → update_mna!)")
     println("===========================================================")
 
-    success, fail_step, err = run_simulation_tick!(gamemap, derived, mna, Int64(1))
+    success = true; fail_step = ""; err = nothing
+    for tick in 1:n_ticks
+        println("\n----- Tick $tick -----")
+        success, fail_step, err = run_simulation_tick!(gamemap, derived, mna, Int64(tick))
+        if !success
+            println("CRASH on tick $tick at step $fail_step")
+            break
+        end
+        # Quick rank summary on each successful tick (cheap; full SVD only on last)
+        if tick < n_ticks && !isempty(mna.node_to_index)
+            num_nodes = length(mna.node_to_index)
+            num_vs = length(mna.vsources)
+            total = num_nodes + num_vs
+            # Skip rank check if matrix is huge — but use it for moderate sizes
+            if total > 0 && total <= 400
+                G_test = zeros(num_nodes, num_nodes)
+                for (_, e) in mna.resistors
+                    v1, v2 = e.connections.v1, e.connections.v2
+                    i1 = mna.node_to_index[v1]
+                    G_test[i1, i1] += e.value
+                    if !is_grounded(v2)
+                        i2 = mna.node_to_index[v2]
+                        G_test[i2, i2] += e.value
+                        G_test[i1, i2] -= e.value
+                        G_test[i2, i1] -= e.value
+                    end
+                end
+                # We don't reconstruct full A here for speed — just report sizes
+                println("  tick $tick: $num_nodes nodes, $num_vs vsources (total $total)")
+            end
+        end
+    end
 
     # --- Always print element listings ---
     if !isempty(derived.primaryelements)

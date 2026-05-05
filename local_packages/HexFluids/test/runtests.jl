@@ -11,9 +11,37 @@ using Base.Threads: @spawn
     @test lookup_fluid_density(HexFluids.COLD_GAS) == 1.0
     @test lookup_fluid_density(HexFluids.MONOPROP_LIQUID) == 5.0
     @test lookup_fluid_density(HexFluids.MONOPROP_GAS) == 1.0
+    @test lookup_fluid_density(HexFluids.FUEL_LIQUID) == 5.0
+    @test lookup_fluid_density(HexFluids.OXIDISER_LIQUID) == 5.0
 
     @test lookup_fluid_reference_temperature(HexFluids.COLD_GAS) == 300.0
     @test lookup_fluid_reference_temperature(HexFluids.MONOPROP_GAS) == 800.0
+end
+
+@testset "Default temperature with fallback" begin
+    # Known fluids should return their default temperature, ignoring fallback
+    @test get_default_temperature(HexFluids.COLD_GAS, 250.0) == THERMAL_AMBIENT_TEMPERATURE_K
+    @test get_default_temperature(HexFluids.MONOPROP_LIQUID, 250.0) == THERMAL_AMBIENT_TEMPERATURE_K
+    @test get_default_temperature(HexFluids.FUEL_LIQUID, 250.0) == THERMAL_AMBIENT_TEMPERATURE_K
+    @test get_default_temperature(HexFluids.OXIDISER_LIQUID, 250.0) == THERMAL_AMBIENT_TEMPERATURE_K
+
+    # Unknown fluids should return the provided fallback
+    @test get_default_temperature(HexFluids.MONOPROP_GAS, 250.0) == 250.0
+    @test get_default_temperature(HexFluids.MONOPROP_GAS, 500.0) == 500.0
+
+    # Fallback should be converted to Float64
+    @test get_default_temperature(HexFluids.MONOPROP_GAS, 250) === 250.0
+    @test isa(get_default_temperature(HexFluids.COLD_GAS, 250), Float64)
+end
+
+@testset "Biprop fluid phase classification" begin
+    @test is_liquid(HexFluids.FUEL_LIQUID)
+    @test is_liquid(HexFluids.OXIDISER_LIQUID)
+    @test !is_gas(HexFluids.FUEL_LIQUID)
+    @test !is_gas(HexFluids.OXIDISER_LIQUID)
+
+    @test fluid_type_label(HexFluids.FUEL_LIQUID) == "Fuel"
+    @test fluid_type_label(HexFluids.OXIDISER_LIQUID) == "Oxidiser"
 end
 
 @testset "Temperature-scaled exhaust velocity" begin
@@ -67,6 +95,8 @@ end
 
 @testset "Fluid labels" begin
     @test fluid_type_label(HexFluids.COLD_GAS) == "Cold Gas"
+    @test fluid_type_label(HexFluids.FUEL_LIQUID) == "Fuel"
+    @test fluid_type_label(HexFluids.OXIDISER_LIQUID) == "Oxidiser"
     @test fluid_type_label(nothing) === nothing
 end
 
