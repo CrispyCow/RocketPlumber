@@ -27,6 +27,7 @@ export sim_speed_to_ups, increase_sim_speed, decrease_sim_speed, sim_speed_label
 function set_placementmode!(inputstate, mode::PlacementModes)
     if inputstate.placementmode != mode
         inputstate.selectedcoord = nothing
+        inputstate.selected_tile_pipe_axis = nothing
         inputstate.rightclick_selectedcoord = nothing
         inputstate.rightclick_selectedship = nothing
         inputstate.action_popup = nothing
@@ -152,6 +153,8 @@ end
     pendingcomponent::ComponentBehavior
     pendingpipebehavior::PipeBehavior
     selectedcoord::Union{Nothing, TileCoord, EdgeCoord} = nothing
+    #= Only meaningful when selectedcoord isa TileCoord with MultiPipeTileCompBehav; clear when selectedcoord cleared, in set_placementmode!, after successful move =#
+    selected_tile_pipe_axis::Union{Nothing, HexAxis} = nothing
     rightclick_selectedcoord::Union{Nothing, TileCoord} = nothing
     rightclick_selectedship::Union{Nothing, Symbol} = nothing
     last_command_time::Float64 = 0.0

@@ -129,7 +129,7 @@ Organised in dependency layers (each layer depends only on those above it):
 - `HexFlowNozzleComponents` — nozzles, switched nozzles, decomp chambers with thrust calculation and particle exhaust
 - `HexFlowPumpComponents` — turbopumps (gas-driven) and electric pumps (battery-powered) with energy management
 - `HexFlowSwitchComponents` — bool switches, stepped adjustable valves, and on/off valves in two sizes (`LargeValve`, `TinyValve`)
-- `HexFlowPipeComponents` — tile-based pipe components (`ScrapTilePipeCompBehav`, `BigTilePipeCompBehav`)
+- `HexFlowPipeComponents` — tile-based multi-pipe component fragments and container (`MultiPipeTileCompBehav`, `ScrapTilePipeBehavFrag`, `BigTilePipeBehavFrag`)
 - `HexFlowBasicPipes` — edge-based pipe behaviours (`ScrapPipeBehav`, `BigPipeBehav`)
 
 ### Tools

@@ -4,6 +4,10 @@
 
 using FlowMap
 
+# ===============================================================
+# Keyboard Input Polling
+# ===============================================================
+
 "Poll raw key state and mutate only ViewState (movement + zoom)"
 function poll_keys!(viewstate::ViewState, window::GLFW.Window)
     # Skip on first frame (last_update_time not yet initialized)
@@ -504,6 +508,79 @@ function point_to_segment_distance(p::CartesianCoord, a::CartesianCoord, b::Cart
 end
 
 # ===============================================================
+# Tile-Pipe Axis Helpers
+# ===============================================================
+
+"Get the nearest tile-pipe axis (canonical) from cursor position relative to tile centre"
+function nearest_tile_pipe_axis(cursor_cart::CartesianCoord, tile_cart::CartesianCoord)::HexAxis
+    # Compute relative position in axial space
+    dir_axial = to_axial(cursor_cart) - to_axial(tile_cart)
+
+    # Find nearest of the 6 hex directions
+    axis = nearest_hex_axis(dir_axial)
+
+    # Canonicalise to Q/R/S
+    normalise_tile_pipe_axis(axis)
+end
+
+"Get the existing multi-pipe tile component on a tile, or nothing."
+function get_multipipe_tile(ship::ShipMap, tile::TileCoord)::Union{Nothing, MultiPipeTileCompBehav}
+    comp = get_component(ship, tile)
+    if !isnothing(comp)
+        behav = comp.component
+        if isa(behav, MultiPipeTileCompBehav)
+            return behav
+        end
+    end
+    return nothing
+end
+
+"Get the hovered tile-pipe axis for the current cursor position on a tile."
+function hovered_tile_pipe_axis(inputstate::InputState, tile::TileCoord)::HexAxis
+    cursor_pos = CartesianCoord(inputstate.cursor_x, inputstate.cursor_y)
+    tile_centre = to_cartesian(tile)
+    return nearest_tile_pipe_axis(cursor_pos, tile_centre)
+end
+
+"Get the tile-pipe fragment equivalent for the currently selected pending pipe behaviour."
+get_pending_tile_pipe_frag(inputstate::InputState) = get_tile_pipe_equivalent_frag(inputstate.pendingpipebehavior)
+
+"Get the tile-pipe fragment on a tile axis across all ships, or nothing when no multi-pipe exists there."
+function get_tile_pipe_frag_any_ship(gamemap::GameMap, tile::TileCoord, axis::HexAxis)
+    ship_name = find_ship_with_component(gamemap, tile)
+    ship_name === nothing && return nothing
+
+    multi_pipe = get_multipipe_tile(get_ship(gamemap, ship_name), tile)
+    multi_pipe === nothing && return nothing
+    return get_tile_pipe(multi_pipe, axis)
+end
+
+"Return whether tile-pipe commands can target this tile without hitting a non-pipe component."
+function can_modify_tile_pipe(gamemap::GameMap, tile::TileCoord)::Bool
+    ship_name = find_ship_for_tile_pipe(gamemap, tile)
+    isnothing(ship_name) && return false
+    comp = get_component(gamemap, tile; ship_name = ship_name)
+    isnothing(comp) && return true   # surface tile with no component is fine
+    return isa(comp.component, MultiPipeTileCompBehav)
+end
+
+"Return whether a tile-pipe move can target the destination tile-axis."
+function can_move_tile_pipe_to(gamemap::GameMap, tile::TileCoord, axis::HexAxis)::Bool
+    can_modify_tile_pipe(gamemap, tile) || return false
+
+    existing_frag = get_tile_pipe_frag_any_ship(gamemap, tile, axis)
+    return isnothing(existing_frag) || isempty(existing_frag)
+end
+
+"Render a single tile-pipe fragment ghost aligned to its axis."
+function render_tile_pipe_frag_ghost!(queue::Vector{<:RenderCommand}, glmap::GLObjectMap, tile::TileCoord, axis::HexAxis, frag; transparency::Float64 = 0.5, colour = GHOST_COLOUR_VALID, render_height_offset::Integer = 0)
+    isempty(frag) && return nothing
+
+    render_base_elem!(queue, frag; glmap = glmap, rotation = normalise_tile_pipe_axis(axis), position = tile, transparency = transparency, colour = colour, render_height_offset = Int32(render_height_offset))
+    return nothing
+end
+
+# ===============================================================
 # Pending Component Updates
 # ===============================================================
 
@@ -613,12 +690,17 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
             end
         elseif element isa TileCoord
             tilecoord::TileCoord = element
-            component = get_tile_pipe_equivalent(inputstate.pendingpipebehavior)
-            if !isnothing(component)
-                rotation = map_rotation(component, inputstate.toolrotation)
-                target_ship = find_valid_ship_for_placement(component, tilecoord, gamemap; rotation = rotation)
-                ghost_colour = isnothing(target_ship) ? GHOST_COLOUR_INVALID : GHOST_COLOUR_VALID
-                render_base_elem!(queue, component; glmap = glmap, rotation = rotation, position = tilecoord, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000))
+            axis = hovered_tile_pipe_axis(inputstate, tilecoord)
+            existing_frag = get_tile_pipe_frag_any_ship(gamemap, tilecoord, axis)
+
+            if !isnothing(existing_frag) && !isempty(existing_frag)
+                render_tile_pipe_frag_ghost!(queue, glmap, tilecoord, axis, existing_frag; transparency = 0.5, colour = GHOST_COLOUR_INVALID, render_height_offset = 100000)
+            else
+                frag = get_pending_tile_pipe_frag(inputstate)
+                if !isnothing(frag)
+                    ghost_colour = can_modify_tile_pipe(gamemap, tilecoord) ? GHOST_COLOUR_VALID : GHOST_COLOUR_INVALID
+                    render_tile_pipe_frag_ghost!(queue, glmap, tilecoord, axis, frag; transparency = 0.5, colour = ghost_colour, render_height_offset = 100000)
+                end
             end
         end
     end
@@ -633,10 +715,19 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
             if element isa TileCoord
                 found, _ = has_component_any_ship(gamemap, element)
                 if found
-                    hover_target = element
                     tilecomp, _ = get_component_any_ship(gamemap, element)
                     can_move_result, _ = can_be_moved(tilecomp)
                     can_move = can_move_result
+                    if tilecomp.component isa MultiPipeTileCompBehav
+                        axis = hovered_tile_pipe_axis(inputstate, element)
+                        frag = get_tile_pipe(tilecomp.component, axis)
+                        if !isempty(frag)
+                            move_colour = can_move ? SVector{4, Float32}(1.0, 0.9, 0.2, 0.75) : SVector{4, Float32}(1.0, 0.4, 0.4, 0.75)
+                            render_tile_pipe_frag_ghost!(queue, glmap, element, axis, frag; transparency = 0.7, colour = move_colour, render_height_offset = 100100)
+                        end
+                    else
+                        hover_target = element
+                    end
                 end
             elseif element isa EdgeCoord
                 foundp, _ = has_pipe_any_ship(gamemap, element)
@@ -666,12 +757,27 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
             # Search for component in any ship
             source_ship = find_ship_with_component(gamemap, inputstate.selectedcoord)
             if !isnothing(source_ship)
-                coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
                 tilecomp = get_component(gamemap, inputstate.selectedcoord; ship_name = source_ship)
-                rotation = map_rotation(tilecomp, rotate(tilecomp.rotation, inputstate.toolrotation))
-                target_ship = find_valid_ship_for_placement(tilecomp.component, coord, gamemap; rotation = rotation)
-                ghost_colour = isnothing(target_ship) ? GHOST_COLOUR_INVALID : GHOST_COLOUR_VALID
-                render_base_elem!(queue, tilecomp; glmap = glmap, rotation = rotation, position = coord, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000))
+                if inputstate.selected_tile_pipe_axis !== nothing && tilecomp.component isa MultiPipeTileCompBehav
+                    src_axis = inputstate.selected_tile_pipe_axis
+                    src_frag = get_tile_pipe(tilecomp.component, src_axis)
+                    if !isempty(src_frag)
+                        render_tile_pipe_frag_ghost!(queue, glmap, inputstate.selectedcoord, src_axis, src_frag; transparency = 0.95, colour = SVector{4, Float32}(0.95, 0.85, 0.2, 0.9), render_height_offset = 100120)
+
+                        coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
+                        dst_axis = hovered_tile_pipe_axis(inputstate, coord)
+                        if !(coord == inputstate.selectedcoord && dst_axis == src_axis)
+                            ghost_colour = can_move_tile_pipe_to(gamemap, coord, dst_axis) ? GHOST_COLOUR_VALID : GHOST_COLOUR_INVALID
+                            render_tile_pipe_frag_ghost!(queue, glmap, coord, dst_axis, src_frag; transparency = 0.5, colour = ghost_colour, render_height_offset = 100000)
+                        end
+                    end
+                else
+                    coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
+                    rotation = map_rotation(tilecomp, rotate(tilecomp.rotation, inputstate.toolrotation))
+                    target_ship = find_valid_ship_for_placement(tilecomp.component, coord, gamemap; rotation = rotation)
+                    ghost_colour = isnothing(target_ship) ? GHOST_COLOUR_INVALID : GHOST_COLOUR_VALID
+                    render_base_elem!(queue, tilecomp; glmap = glmap, rotation = rotation, position = coord, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000))
+                end
             end
         end
 
@@ -711,12 +817,14 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
         # Move arrow (start circle, end arrowhead, animated dashes)
         if !isnothing(inputstate.selectedcoord)
             startcoord = inputstate.selectedcoord
-            push!(
-                queue, render_basic_sprite(
-                    glmap, :MoveArrow_arrow_start, rotmat_2D(0.0), startcoord;
-                    colour = SVector{4, Float32}(0.8, 0.8, 0.2, 1.0), draw_height = Int32(100200)
+            if !(inputstate.selectedcoord isa TileCoord && inputstate.selected_tile_pipe_axis !== nothing)
+                push!(
+                    queue, render_basic_sprite(
+                        glmap, :MoveArrow_arrow_start, rotmat_2D(0.0), startcoord;
+                        colour = SVector{4, Float32}(0.8, 0.8, 0.2, 1.0), draw_height = Int32(100200)
+                    )
                 )
-            )
+            end
 
             # Determine end coordinate based on selected type
             if inputstate.selectedcoord isa TileCoord
@@ -1010,7 +1118,6 @@ function flowcalc_pipeplacer!(
         edge::EdgeCoord = element
         existing, _ = has_pipe_any_ship(gamemap, edge)
         if existing
-
             # Delete existing pipe (toggle behaviour)
             command = create_delete_command(command_queue, edge)
         else
@@ -1019,14 +1126,28 @@ function flowcalc_pipeplacer!(
         end
     elseif element isa TileCoord
         tilecoord::TileCoord = element
-        pipecomp = get_tile_pipe_equivalent(inputstate.pendingpipebehavior)
-        if pipecomp === nothing
-            return
+        axis = hovered_tile_pipe_axis(inputstate, tilecoord)
+        existing_frag = get_tile_pipe_frag_any_ship(gamemap, tilecoord, axis)
+
+        frag = if !isnothing(existing_frag) && !isempty(existing_frag)
+            NoPipeBehavFrag()
+        else
+            get_pending_tile_pipe_frag(inputstate)
         end
-        command = create_set_tile_command(command_queue, tilecoord, pipecomp, inputstate.toolrotation)
+        frag === nothing && return nothing
+
+        command = HexFlowCalculator.ModifyTilePipeCommand(
+            id = command_queue.next_command_id(),
+            tile = tilecoord,
+            axis = axis,
+            frag = frag,
+            response_channel = nothing
+        )
+    else
+        return nothing
     end
 
-    enqueue_if_not_duplicates!(command_queue, command, threadsafe_console_push, inputstate)
+    try_enqueue_command!(command_queue, command, threadsafe_console_push)
     return nothing
 end
 
@@ -1075,8 +1196,23 @@ function flowcalc_moveplacer!(
                 threadsafe_console_push("Cannot select component at $(element): $reason")
                 return
             end
+
+            if tilecomp.component isa MultiPipeTileCompBehav
+                axis = hovered_tile_pipe_axis(inputstate, element)
+                frag = get_tile_pipe(tilecomp.component, axis)
+                if isempty(frag)
+                    threadsafe_console_push("No tile pipe found on axis $(axis) at $(element)")
+                    return
+                end
+
+                inputstate.selectedcoord = element
+                inputstate.selected_tile_pipe_axis = axis
+                inputstate.toolrotation = HexFrame.Q_POS # Reset delta rotation so ghost matches source
+                threadsafe_console_push("Selected axis $(axis) on multi-pipe at $(element)")
+                return
+            end
         elseif element isa EdgeCoord
-            foundp, shipp = has_pipe_any_ship(gamemap, element)
+            foundp, _ = has_pipe_any_ship(gamemap, element)
             if !foundp
                 threadsafe_console_push("No pipe found at $(element)")
                 return
@@ -1084,6 +1220,7 @@ function flowcalc_moveplacer!(
         end
 
         inputstate.selectedcoord = element
+        inputstate.selected_tile_pipe_axis = nothing
         inputstate.toolrotation = HexFrame.Q_POS # Reset delta rotation so ghost matches source
         threadsafe_console_push("Selected $(element) for moving")
         return
@@ -1091,9 +1228,39 @@ function flowcalc_moveplacer!(
 
     # Handle deselection or move
     selected = inputstate.selectedcoord
+
+    if selected isa TileCoord && inputstate.selected_tile_pipe_axis !== nothing
+        src_axis = inputstate.selected_tile_pipe_axis
+        dst_tile = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
+        dst_axis = hovered_tile_pipe_axis(inputstate, dst_tile)
+
+        if dst_tile == selected && dst_axis == src_axis
+            inputstate.selectedcoord = nothing
+            inputstate.selected_tile_pipe_axis = nothing
+            threadsafe_console_push("Deselected multi-pipe axis")
+            return
+        end
+
+        command = HexFlowCalculator.MoveTilePipeCommand(
+            id = command_queue.next_command_id(),
+            src_tile = selected,
+            src_axis = src_axis,
+            dst_tile = dst_tile,
+            dst_axis = dst_axis,
+            response_channel = nothing
+        )
+        try_enqueue_command!(command_queue, command, threadsafe_console_push)
+
+        inputstate.selectedcoord = nothing
+        inputstate.selected_tile_pipe_axis = nothing
+        return
+    end
+
+    # Generic tile/edge move logic (non-multi-pipe or edge pipes)
     if selected == element && selected isa EdgeCoord
         # Pipes have no rotation — same-edge click is a no-op, deselect
         inputstate.selectedcoord = nothing
+        inputstate.selected_tile_pipe_axis = nothing
         threadsafe_console_push("Deselected $(element)")
         return
     end
@@ -1109,6 +1276,7 @@ function flowcalc_moveplacer!(
     try_enqueue_command!(command_queue, command, threadsafe_console_push)
 
     inputstate.selectedcoord = nothing
+    inputstate.selected_tile_pipe_axis = nothing
     return nothing
 end
 

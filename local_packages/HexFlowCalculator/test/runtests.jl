@@ -9,6 +9,7 @@ using FlowEngine
 using HexElements
 using HexFlowProcGen
 using HexFluids
+using HexFlowPipeComponents
 using StaticArrays
 using LinearAlgebra
 
@@ -67,7 +68,7 @@ HexComponentsAPI.get_tunables(::DerivedStateCompBehav) = ()
 HexComponentsAPI.set_tunables(::DerivedStateCompBehav, ::NTuple{0, Real}) = DerivedStateCompBehav()
 HexComponentsAPI.render_base_elem!(queue, ::DerivedStateCompBehav; kwargs...) = nothing
 function HexComponentsAPI.update_flowbehav!(::DerivedStateCompBehav; tile::TileCoord, derivedmapstate::DerivedMapState, kwargs...)
-    derivedmapstate.nodeactualfluids[NodeCoord(tile, HexFrame.NODE_INTERNAL)] = HexFluids.COLD_GAS
+    derivedmapstate.nodeactualfluids[NodeCoord(tile, HexFrame.NODE_INTERNAL_1)] = HexFluids.COLD_GAS
     return nothing
 end
 
@@ -173,6 +174,9 @@ function make_two_ship_map()
     offset_ship!(asteroid, TileCoord(20, 0))
     return GameMap(ships = Dict(:primary => primary, :asteroid => asteroid))
 end
+
+"Build a rectangular tile set for surface setup in tests."
+surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q, r) for q in qmin:qmax for r in rmin:rmax)
 
 # ===============================================================
 # Tests
@@ -1043,6 +1047,312 @@ end
 
         final_status = FlowMap.get_docking_status(gm, :asteroid)
         @test final_status isa FlowMap.ConnectedDockStat
+    end
+end
+
+#= ---------- ModifyTilePipeCommand ----------- =#
+
+@testset "ModifyTilePipeCommand" begin
+    cq = create_command_queue(16)
+    
+    @testset "place new axis on empty surface tile" begin
+        gm = GameMap()
+        ship = get_ship(gm, :primary)
+        set_surface_tile!(ship, surface_rect_tiles(0, -1, 2, 1))
+        
+        cmd = HexFlowCalculator.ModifyTilePipeCommand(
+            1,
+            TileCoord(0, -1),
+            HexFrame.Q_POS,
+            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
+            nothing
+        )
+        logs = process_and_log!(cmd, gm)
+        
+        comp = get_component(gm, TileCoord(0, -1); ship_name = :primary)
+        @test !isnothing(comp)
+        @test isa(comp.component, HexFlowPipeComponents.MultiPipeTileCompBehav)
+        @test any(contains(l, "modified") || contains(l, "Modified") for l in logs)
+    end
+    
+    @testset "add second axis to existing multi-pipe" begin
+        gm = GameMap()
+        ship = get_ship(gm, :primary)
+        set_surface_tile!(ship, surface_rect_tiles(0, -1, 2, 1))
+        
+        cmd1 = HexFlowCalculator.ModifyTilePipeCommand(
+            1,
+            TileCoord(0, -1),
+            HexFrame.Q_POS,
+            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
+            nothing
+        )
+        process_and_log!(cmd1, gm)
+        
+        cmd2 = HexFlowCalculator.ModifyTilePipeCommand(
+            2,
+            TileCoord(0, -1),
+            HexFrame.R_POS,
+            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
+            nothing
+        )
+        process_and_log!(cmd2, gm)
+        
+        comp = get_component(gm, TileCoord(0, -1); ship_name = :primary)
+        behav = comp.component
+        @test !isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.Q_POS))
+        @test !isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.R_POS))
+    end
+    
+    @testset "delete targeted axis only" begin
+        gm = GameMap()
+        ship = get_ship(gm, :primary)
+        set_surface_tile!(ship, surface_rect_tiles(0, -1, 2, 1))
+        
+        cmd1 = HexFlowCalculator.ModifyTilePipeCommand(
+            1,
+            TileCoord(0, -1),
+            HexFrame.Q_POS,
+            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
+            nothing
+        )
+        process_and_log!(cmd1, gm)
+        
+        cmd2 = HexFlowCalculator.ModifyTilePipeCommand(
+            2,
+            TileCoord(0, -1),
+            HexFrame.R_POS,
+            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
+            nothing
+        )
+        process_and_log!(cmd2, gm)
+        
+        cmd3 = HexFlowCalculator.ModifyTilePipeCommand(
+            3,
+            TileCoord(0, -1),
+            HexFrame.Q_POS,
+            HexFlowPipeComponents.NoPipeBehavFrag(),
+            nothing
+        )
+        process_and_log!(cmd3, gm)
+        
+        comp = get_component(gm, TileCoord(0, -1); ship_name = :primary)
+        behav = comp.component
+        @test isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.Q_POS))
+        @test !isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.R_POS))
+    end
+    
+    @testset "delete last axis removes component" begin
+        gm = GameMap()
+        ship = get_ship(gm, :primary)
+        set_surface_tile!(ship, surface_rect_tiles(0, -1, 2, 1))
+        
+        cmd1 = HexFlowCalculator.ModifyTilePipeCommand(
+            1,
+            TileCoord(0, -1),
+            HexFrame.R_POS,
+            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
+            nothing
+        )
+        process_and_log!(cmd1, gm)
+        
+        cmd2 = HexFlowCalculator.ModifyTilePipeCommand(
+            2,
+            TileCoord(0, -1),
+            HexFrame.R_POS,
+            HexFlowPipeComponents.NoPipeBehavFrag(),
+            nothing
+        )
+        process_and_log!(cmd2, gm)
+        
+        comp = get_component(gm, TileCoord(0, -1); ship_name = :primary)
+        @test isnothing(comp)
+    end
+end
+
+#= ---------- MoveTilePipeCommand ----------- =#
+
+@testset "MoveTilePipeCommand" begin
+    cq = create_command_queue(16)
+    
+    @testset "move to empty tile" begin
+        gm = GameMap()
+        ship = get_ship(gm, :primary)
+        set_surface_tile!(ship, surface_rect_tiles(0, -2, 3, 1))
+        
+        cmd_init = HexFlowCalculator.ModifyTilePipeCommand(
+            10,
+            TileCoord(0, -2),
+            HexFrame.Q_POS,
+            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
+            nothing
+        )
+        process_and_log!(cmd_init, gm)
+        
+        cmd_move = HexFlowCalculator.MoveTilePipeCommand(
+            11,
+            TileCoord(0, -2),
+            HexFrame.Q_POS,
+            TileCoord(1, -2),
+            HexFrame.Q_POS,
+            nothing
+        )
+        logs = process_and_log!(cmd_move, gm)
+        
+        @test isnothing(get_component(gm, TileCoord(0, -2); ship_name = :primary))
+        comp = get_component(gm, TileCoord(1, -2); ship_name = :primary)
+        @test !isempty(HexFlowPipeComponents.get_tile_pipe(comp.component, HexFrame.Q_POS))
+        @test any(contains(l, "moved") || contains(l, "Moved") for l in logs)
+    end
+    
+    @testset "merge onto existing multi-pipe" begin
+        gm = GameMap()
+        ship = get_ship(gm, :primary)
+        set_surface_tile!(ship, surface_rect_tiles(0, -2, 3, 1))
+        
+        # Create pipes on three tiles
+        cmd_init1 = HexFlowCalculator.ModifyTilePipeCommand(
+            10,
+            TileCoord(0, -2),
+            HexFrame.Q_POS,
+            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
+            nothing
+        )
+        process_and_log!(cmd_init1, gm)
+        
+        cmd_init2 = HexFlowCalculator.ModifyTilePipeCommand(
+            11,
+            TileCoord(1, -2),
+            HexFrame.R_POS,
+            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
+            nothing
+        )
+        process_and_log!(cmd_init2, gm)
+        
+        cmd_init3 = HexFlowCalculator.ModifyTilePipeCommand(
+            12,
+            TileCoord(2, -2),
+            HexFrame.Q_POS,
+            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
+            nothing
+        )
+        process_and_log!(cmd_init3, gm)
+        
+        # Move from tile 2 to tile 1 on a different axis
+        cmd_move = HexFlowCalculator.MoveTilePipeCommand(
+            13,
+            TileCoord(2, -2),
+            HexFrame.Q_POS,
+            TileCoord(1, -2),
+            HexFrame.S_POS,
+            nothing
+        )
+        logs = process_and_log!(cmd_move, gm)
+        
+        @test isnothing(get_component(gm, TileCoord(2, -2); ship_name = :primary))
+        comp = get_component(gm, TileCoord(1, -2); ship_name = :primary)
+        behav = comp.component
+        @test isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.Q_POS))
+        @test !isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.R_POS))
+        @test !isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.S_POS))
+    end
+    
+    @testset "rejects move from empty source axis" begin
+        gm = GameMap()
+        ship = get_ship(gm, :primary)
+        set_surface_tile!(ship, surface_rect_tiles(0, -2, 3, 1))
+        
+        cmd_init = HexFlowCalculator.ModifyTilePipeCommand(
+            10,
+            TileCoord(0, -2),
+            HexFrame.Q_POS,
+            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
+            nothing
+        )
+        process_and_log!(cmd_init, gm)
+        
+        # Try to move from an empty axis
+        cmd_move = HexFlowCalculator.MoveTilePipeCommand(
+            11,
+            TileCoord(0, -2),
+            HexFrame.R_POS,
+            TileCoord(1, -2),
+            HexFrame.Q_POS,
+            nothing
+        )
+        logs = process_and_log!(cmd_move, gm)
+        
+        @test any(contains(l, "empty") || contains(l, "Empty") for l in logs)
+    end
+    
+    @testset "rejects move to occupied destination axis" begin
+        gm = GameMap()
+        ship = get_ship(gm, :primary)
+        set_surface_tile!(ship, surface_rect_tiles(0, -2, 3, 1))
+        
+        # Create two pipes on the same tile, different axes
+        cmd_init1 = HexFlowCalculator.ModifyTilePipeCommand(
+            10,
+            TileCoord(0, -2),
+            HexFrame.Q_POS,
+            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
+            nothing
+        )
+        process_and_log!(cmd_init1, gm)
+        
+        cmd_init2 = HexFlowCalculator.ModifyTilePipeCommand(
+            11,
+            TileCoord(0, -2),
+            HexFrame.R_POS,
+            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
+            nothing
+        )
+        process_and_log!(cmd_init2, gm)
+        
+        # Try to move Q_POS to R_POS (which is already occupied)
+        cmd_move = HexFlowCalculator.MoveTilePipeCommand(
+            12,
+            TileCoord(0, -2),
+            HexFrame.Q_POS,
+            TileCoord(0, -2),
+            HexFrame.R_POS,
+            nothing
+        )
+        logs = process_and_log!(cmd_move, gm)
+        
+        @test any(contains(l, "occupied") || contains(l, "Occupied") for l in logs)
+    end
+
+    @testset "retargets within the same tile without duplication" begin
+        gm = GameMap()
+        ship = get_ship(gm, :primary)
+        set_surface_tile!(ship, surface_rect_tiles(0, -2, 3, 1))
+
+        cmd_init = HexFlowCalculator.ModifyTilePipeCommand(
+            20,
+            TileCoord(0, -2),
+            HexFrame.Q_POS,
+            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
+            nothing
+        )
+        process_and_log!(cmd_init, gm)
+
+        cmd_move = HexFlowCalculator.MoveTilePipeCommand(
+            21,
+            TileCoord(0, -2),
+            HexFrame.Q_POS,
+            TileCoord(0, -2),
+            HexFrame.S_POS,
+            nothing
+        )
+        logs = process_and_log!(cmd_move, gm)
+
+        comp = get_component(gm, TileCoord(0, -2); ship_name = :primary)
+        behav = comp.component
+        @test isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.Q_POS))
+        @test isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.R_POS))
+        @test !isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.S_POS))
+        @test any(contains(l, "moved") || contains(l, "Moved") for l in logs)
     end
 end
 

@@ -33,7 +33,7 @@ export has_component_any_ship, get_component_any_ship, has_pipe_any_ship, get_pi
 export can_place_component_at, can_place_pipe_at, can_remove_surface_at, is_node_on_ship_surface
 export get_all_surfaces_combined, find_ship_surface_edgetiles!, expand_tileset
 export get_axial_bounds, get_cartesian_bounds, get_surface_centroid
-export find_ship_for_surface, find_ships_adjacent_to_coord, would_bridge_ships, find_valid_ship_for_placement, find_ship_with_component, find_ship_with_pipe
+export find_ship_for_surface, find_ships_adjacent_to_coord, would_bridge_ships, find_valid_ship_for_placement, find_ship_with_component, find_ship_with_pipe, find_ship_for_tile_pipe
 export find_ship_for_node
 
 #= ---------- Learning System Exports ----------- =#
@@ -1152,6 +1152,13 @@ function find_ship_with_pipe(gamemap::GameMap, coord::EdgeCoord)::Union{Symbol, 
         end
     end
     return nothing
+end
+
+"Find which ship a tile-pipe edit should target — component owner if present, else surface owner."
+function find_ship_for_tile_pipe(gamemap::GameMap, coord::TileCoord)::Union{Symbol, Nothing}
+    ship_name = find_ship_with_component(gamemap, coord)
+    isnothing(ship_name) || return ship_name
+    return find_ship_for_surface(gamemap, coord)
 end
 
 # ===============================================================

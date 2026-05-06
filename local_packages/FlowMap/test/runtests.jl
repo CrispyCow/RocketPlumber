@@ -1,7 +1,7 @@
 using Test
 using FlowMap
 using HexFrame
-using HexFrame: Q_POS, Q_NEG, R_POS, R_NEG, S_POS, S_NEG, NODE_INTERNAL, GROUND
+using HexFrame: Q_POS, Q_NEG, R_POS, R_NEG, S_POS, S_NEG, GROUND
 using HexComponentsAPI
 using HexFluids
 using StaticArrays

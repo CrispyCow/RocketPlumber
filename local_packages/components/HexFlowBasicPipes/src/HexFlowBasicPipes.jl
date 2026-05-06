@@ -8,7 +8,7 @@ using HexFlowPipeComponents
 # PipeBehavior Mandatories
 import HexComponentsAPI: get_conductance, get_pipe_tunables, set_pipe_tunables, render_pipe_base!
 # PipeBehavior Optional
-import HexComponentsAPI: render_pipe_map!, can_pipe_be_moved, produce_abs_elements, get_tile_pipe_equivalent
+import HexComponentsAPI: render_pipe_map!, can_pipe_be_moved, produce_abs_elements, get_tile_pipe_equivalent_frag
 
 # Concrete Pipe Behavior Exports
 export ScrapPipeBehav, BigPipeBehav
@@ -43,7 +43,7 @@ get_conductance(behav::ScrapPipeBehav) = behav.conductance
 get_pipe_tunables(behav::ScrapPipeBehav) = (TunableProps(behav.conductance, "Conductance", "S"),)
 set_pipe_tunables(behav::ScrapPipeBehav, tunables::NTuple{1, Real}) = ScrapPipeBehav(Float64(tunables[1]))
 
-get_tile_pipe_equivalent(behav::ScrapPipeBehav) = ScrapTilePipeCompBehav(get_conductance(behav))
+get_tile_pipe_equivalent_frag(behav::ScrapPipeBehav) = ScrapTilePipeBehavFrag(get_conductance(behav))
 
 function render_pipe_base!(queue::AbstractVector, behav::ScrapPipeBehav; glmap::GLObjectMap, rotation::HexAxis, position::EdgeCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     base_height = Int32(HexFlowRendering.RENDER_HEIGHT_PIPE) + Int32(render_height_offset)
@@ -67,7 +67,7 @@ get_conductance(behav::BigPipeBehav) = behav.conductance
 get_pipe_tunables(behav::BigPipeBehav) = (TunableProps(behav.conductance, "Conductance", "S"),)
 set_pipe_tunables(behav::BigPipeBehav, tunables::NTuple{1, Real}) = BigPipeBehav(Float64(tunables[1]))
 
-get_tile_pipe_equivalent(behav::BigPipeBehav) = BigTilePipeCompBehav(get_conductance(behav))
+get_tile_pipe_equivalent_frag(behav::BigPipeBehav) = BigTilePipeBehavFrag(get_conductance(behav))
 
 function render_pipe_base!(queue::AbstractVector, behav::BigPipeBehav; glmap::GLObjectMap, rotation::HexAxis, position::EdgeCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     # Render black fluidmask at pipe-base height, then pipe sprite at pipe height

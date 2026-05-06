@@ -325,7 +325,7 @@ function mapgen_teasership()
 
     components[TileCoord(-4, 0)] = ComponentOnTile(DecompChamberCompBehav(), HexFrame.Q_POS)
     components[TileCoord(-4, 3)] = ComponentOnTile(DecompChamberCompBehav(), HexFrame.Q_POS)
-    components[TileCoord(-3, -1)] = ComponentOnTile(ScrapTilePipeCompBehav(), HexFrame.S_POS)
+    components[TileCoord(-3, -1)] = single_tile_pipe_on_tile(HexFrame.S_POS, ScrapTilePipeBehavFrag())
     components[TileCoord(-3, 0)] = ComponentOnTile(deepcopy(turbo_pump), HexFrame.S_NEG)
     components[TileCoord(-2, 2)] = ComponentOnTile(deepcopy(turbo_pump), HexFrame.Q_POS)
     components[TileCoord(-4, -1)] = ComponentOnTile(deepcopy(tiny_on_off_valve), HexFrame.Q_POS)

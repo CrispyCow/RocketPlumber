@@ -238,7 +238,7 @@ map.components[TileCoord(2, 0)] = ComponentOnTile(deepcopy(nozzle_template), Hex
    - Edge-based pipes use `PipeBehavior` types like `ScrapPipeBehav()` or `BigPipeBehav()`
    - Default constructors use standard conductance values (ScrapPipeBehav = 2.0 S, BigPipeBehav = 10.0 S)
    - Custom conductance: `ScrapPipeBehav(5.0)` or `BigPipeBehav(15.0)`
-   - Tile-based pipe components also exist (e.g., `ScrapTilePipeCompBehav`)
+   - Tile-based multi-pipe components also exist (for example `single_tile_pipe(HexFrame.Q_POS, ScrapTilePipeBehavFrag())`)
 
 6. **Ship Surface**:
    - The `ship_tiles` field defines where components can be placed
@@ -354,8 +354,8 @@ Based on the project structure, you'll likely encounter:
 - **TurboPumpCompBehav**: Gas-driven turbopumps with voltage, turbine, and inertia parameters. Const instance: `TurboPump`
 - **ElectricPumpCompBehav**: Electric pumps (turbopump or transfer pump variants) with energy storage. Const instances: `ElecTurboPump`, `ElecTransferPump`
 - **StandardValveCompBehav**: Parameterised valves. Takes a switch fragment type (`SteppedSwitchBehavFrag` for adjustable, `BoolSwitchBehavFrag` for on/off) and a valve size type (`LargeValve` or `TinyValve`). Const instances: `LargeAdjValve`, `TinyAdjValve`, `LargeOnOffValve`, `TinyOnOffValve`
-- **ScrapTilePipeCompBehav**: Tile-based pipe connectors (can be placed on tiles)
-- **BigTilePipeCompBehav**: Tile-based high-flow pipe connectors
+- **MultiPipeTileCompBehav**: Tile-based multi-pipe container holding up to one straight-through fragment on each Q/R/S axis
+- **ScrapTilePipeBehavFrag / BigTilePipeBehavFrag**: Tile-pipe fragments inserted into `MultiPipeTileCompBehav` via `single_tile_pipe` or `set_tile_pipe`
 
 **Edge-Based Pipes (PipeBehavior):**
 - **ScrapPipeBehav**: Low conductance pipe (2.0 S default)

@@ -6,7 +6,7 @@ using TimerOutputs, StaticArrays
 # Custom Packages
 using HexFrame, HexElements, HexFluids, HexFlowTelemetry
 using FlowEngine, FlowMap, HexComponentsAPI, HexFlowControl
-using HexFlowProcGen
+using HexFlowProcGen, HexFlowPipeComponents
 
 # Type exports - Data Structures
 export FlowCalculatorSnapshot, FlowCalculatorSharedState, FlowCalculatorIPC, TimingState
@@ -16,6 +16,7 @@ export CommandStatus, APPLIED, REJECTED, QUEUED_FAILED
 export MapEditCommand, SetTileCommand, SetPipeBehaviorCommand, MoveCommand
 export DeleteAtCommand, ClickTileCommand, DoActionCommand, AddShipSurfaceCommand, RemoveShipSurfaceCommand
 export MapOverrideCommand, AddEncounterShipCommand, RedockShipCommand
+export ModifyTilePipeCommand, MoveTilePipeCommand
 export CommandQueue
 
 # Function exports - Setup
@@ -257,6 +258,27 @@ end
     response_channel::Union{Nothing, Channel{CommandStatus}}
 end
 @struct_hash_equal RedockShipCommand
+
+"Modify a single tile pipe at a given axis, adding, replacing, or deleting the fragment."
+@kwdef struct ModifyTilePipeCommand <: MapEditCommand
+    id::UInt64
+    tile::TileCoord
+    axis::HexFrame.HexAxis
+    frag::TilePipeFrag
+    response_channel::Union{Nothing, Channel{CommandStatus}}
+end
+@struct_hash_equal ModifyTilePipeCommand
+
+"Move a tile pipe fragment from one location/axis to another."
+@kwdef struct MoveTilePipeCommand <: MapEditCommand
+    id::UInt64
+    src_tile::TileCoord
+    src_axis::HexFrame.HexAxis
+    dst_tile::TileCoord
+    dst_axis::HexFrame.HexAxis
+    response_channel::Union{Nothing, Channel{CommandStatus}}
+end
+@struct_hash_equal MoveTilePipeCommand
 
 # ===============================================================
 # Snapshot Refill Methods
@@ -936,6 +958,132 @@ function apply_mapedit_command!(
 
     ship.docking_status = ApproachingDockStat(anim_offset, target_offset, step)
     threadsafe_console_push("Ship $(command.ship_name) relocated")
+
+    return nothing
+end
+
+"Modify a single tile pipe at a specified axis, adding, replacing, or deleting the fragment."
+function apply_mapedit_command!(
+        gamemap::GameMap,
+        command::ModifyTilePipeCommand,
+        threadsafe_console_push::Function
+    )
+    # Canonicalise axis
+    axis = normalise_tile_pipe_axis(command.axis)
+    
+    # Resolve ownership
+    ship = find_ship_for_tile_pipe(gamemap, command.tile)
+    
+    if isnothing(ship)
+        threadsafe_console_push("Tile not on any ship surface")
+        return nothing
+    end
+    
+    # Get existing component at tile, or start with empty
+    existing_comp = get_component(gamemap, command.tile; ship_name = ship)
+    current_behav = if !isnothing(existing_comp)
+        existing_comp.component
+    else
+        MultiPipeTileCompBehav()
+    end
+    
+    # Reject if not a multi-pipe component
+    if !isa(current_behav, MultiPipeTileCompBehav)
+        threadsafe_console_push("Tile occupied by non-pipe component")
+        return nothing
+    end
+    
+    # Update with new fragment at axis
+    updated_behav = set_tile_pipe(current_behav, axis, command.frag)
+    
+    # Apply changes
+    if isempty(updated_behav)
+        delete_component!(gamemap, command.tile; ship_name = ship)
+        threadsafe_console_push("Tile pipe removed at $(command.tile)")
+    else
+        set_component!(gamemap, command.tile, ComponentOnTile(updated_behav, HexFrame.Q_POS); ship_name = ship)
+        threadsafe_console_push("Tile pipe modified at $(command.tile)")
+    end
+    
+    return nothing
+end
+
+"Move a tile pipe fragment from one location/axis to another."
+function apply_mapedit_command!(
+        gamemap::GameMap,
+        command::MoveTilePipeCommand,
+        threadsafe_console_push::Function
+    )
+    # Canonicalise both axes
+    src_axis = normalise_tile_pipe_axis(command.src_axis)
+    dst_axis = normalise_tile_pipe_axis(command.dst_axis)
+    
+    # Resolve source ship
+    src_ship = find_ship_for_tile_pipe(gamemap, command.src_tile)
+    
+    if isnothing(src_ship)
+        threadsafe_console_push("Source tile not on any ship")
+        return nothing
+    end
+    
+    src_comp = get_component(gamemap, command.src_tile; ship_name = src_ship)
+    if isnothing(src_comp) || !isa(src_comp.component, MultiPipeTileCompBehav)
+        threadsafe_console_push("Source tile has no multi-pipe component")
+        return nothing
+    end
+    
+    src_behav = src_comp.component
+    src_frag = get_tile_pipe(src_behav, src_axis)
+    if isempty(src_frag)
+        threadsafe_console_push("Source axis is empty")
+        return nothing
+    end
+    
+    # Resolve destination ship
+    dst_ship = find_ship_for_tile_pipe(gamemap, command.dst_tile)
+    
+    if isnothing(dst_ship)
+        threadsafe_console_push("Destination tile not on any ship")
+        return nothing
+    end
+    
+    # Get or create destination component
+    dst_comp = get_component(gamemap, command.dst_tile; ship_name = dst_ship)
+    dst_behav = if isnothing(dst_comp)
+        MultiPipeTileCompBehav()
+    else
+        dst_comp.component
+    end
+    
+    if !isa(dst_behav, MultiPipeTileCompBehav)
+        threadsafe_console_push("Destination occupied by non-pipe component")
+        return nothing
+    end
+    
+    # Check destination axis is empty
+    if !isempty(get_tile_pipe(dst_behav, dst_axis))
+        threadsafe_console_push("Destination axis already occupied")
+        return nothing
+    end
+
+    if command.src_tile == command.dst_tile && src_ship == dst_ship
+        updated_behav = set_tile_pipe(set_tile_pipe(src_behav, src_axis, NoPipeBehavFrag()), dst_axis, src_frag)
+        set_component!(gamemap, command.src_tile, ComponentOnTile(updated_behav, HexFrame.Q_POS); ship_name = src_ship)
+    else
+        # Apply move: remove from source, add to destination
+        updated_src = set_tile_pipe(src_behav, src_axis, NoPipeBehavFrag())
+        updated_dst = set_tile_pipe(dst_behav, dst_axis, src_frag)
+
+        if isempty(updated_src)
+            delete_component!(gamemap, command.src_tile; ship_name = src_ship)
+        else
+            set_component!(gamemap, command.src_tile, ComponentOnTile(updated_src, HexFrame.Q_POS); ship_name = src_ship)
+        end
+
+        set_component!(gamemap, command.dst_tile, ComponentOnTile(updated_dst, HexFrame.Q_POS); ship_name = dst_ship)
+    end
+
+    threadsafe_console_push("Tile pipe moved from $(command.src_tile) to $(command.dst_tile)")
 
     return nothing
 end

@@ -23,7 +23,7 @@ export ReactivationProbe, get_reactivation_probe, accept_reactivation_probe!
 # Pipe Behavior Exports
 export PipeBehavior
 export get_conductance, get_pipe_tunables, set_pipe_tunables, render_pipe_base!, render_pipe_map!
-export can_pipe_be_moved, get_tile_pipe_equivalent
+export can_pipe_be_moved, get_tile_pipe_equivalent_frag
 
 
 # ===============================================================
@@ -313,7 +313,7 @@ OPTIONAL METHODS:
     render_pipe_map!(queue::AbstractVector, behav::T; glmap, rotation, position, kwargs...)::Nothing
     can_pipe_be_moved(behav::T; kwargs...)::(Bool, String)
     produce_abs_elements(behav::T, edge::EdgeCoord)::NTuple{N, AbsoluteElement}
-    get_tile_pipe_equivalent(behav::T)::Union{ComponentBehavior, Nothing}
+    get_tile_pipe_equivalent_frag(behav::T)::Union{TilePipeFrag, Nothing}
 
 """
 abstract type PipeBehavior end
@@ -362,7 +362,7 @@ end
 "Convenience wrapper allowing set_tunables to be called on PipeBehavior"
 set_tunables(behav::T, tunables::NTuple{N, Real}) where {N, T <: PipeBehavior} = set_pipe_tunables(behav, tunables)
 
-"Default get_tile_pipe_equivalent returns nothing, indicating no tile equivalent"
-get_tile_pipe_equivalent(behav::T) where {T <: PipeBehavior} = nothing
+"Default get_tile_pipe_equivalent_frag returns nothing, indicating no tile fragment equivalent"
+get_tile_pipe_equivalent_frag(behav::T) where {T <: PipeBehavior} = nothing
 
 end # module HexComponentsAPI

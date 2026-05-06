@@ -5,7 +5,7 @@ Advanced plumbing tutorial demonstrating high-flow pipe systems.
 
 This map teaches:
 - Using BigPipeBehav for high-conductance edge-based pipes (10.0 S)
-- Tile-based pipe components (BigTilePipeCompBehav) for hex tile connections
+- Tile-based multi-pipe components for hex tile connections
 - Multiple gas tanks feeding into a common pipe network
 - Complex pipe routing with both edge-based and tile-based pipes
 """
@@ -31,9 +31,8 @@ function mapgen_bigpipeplumbing()
     components[TileCoord(3, -2)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG)
     components[TileCoord(4, -2)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG)
 
-    # Place a tile-based big pipe component
-    big_tile_pipe = BigTilePipeCompBehav()
-    components[TileCoord(0, -1)] = ComponentOnTile(big_tile_pipe, HexFrame.Q_NEG)
+    # Place a tile-based big pipe component on Q axis
+    components[TileCoord(0, -1)] = single_tile_pipe_on_tile(HexFrame.Q_POS, BigTilePipeBehavFrag(10.0))
 
     # Create a nozzle for thrust output
     nozzle = BasicNozzleCompBehav(
