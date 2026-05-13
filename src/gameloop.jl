@@ -247,7 +247,7 @@ end
 
 "Enter the main game loop with a map loaded from a file path (String), a pre-generated GameMap, or an empty map (nothing)."
 function enter_gameloop(window::GLFW.Window;
-        map_source::Union{Nothing, String, GameMap, ShipMap} = nothing,
+        map_source::Union{Nothing, String, GameMap, ShipState} = nothing,
         initial_active_tutorial_id::Union{Nothing, Symbol} = nothing,
     )::GameLoopResult
     #= Loop Setup =#

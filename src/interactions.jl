@@ -523,14 +523,13 @@ function nearest_tile_pipe_axis(cursor_cart::CartesianCoord, tile_cart::Cartesia
     normalise_tile_pipe_axis(axis)
 end
 
-"Get the existing multi-pipe tile component on a tile, or nothing."
-function get_multipipe_tile(ship::ShipMap, tile::TileCoord)::Union{Nothing, MultiPipeTileCompBehav}
-    comp = get_component(ship, tile)
-    if !isnothing(comp)
-        behav = comp.component
-        if isa(behav, MultiPipeTileCompBehav)
-            return behav
-        end
+"Get the tile-pipe fragment at a coordinate, or `nothing` if there is no `MultiPipeTileCompBehav` there."
+function get_multipipe_tile(gamemap::GameMap, tile::TileCoord)::Union{Nothing, MultiPipeTileCompBehav}
+    comp = get_component(gamemap, tile)
+    isnothing(comp) && return nothing
+    behav = comp.component
+    if isa(behav, MultiPipeTileCompBehav)
+        return behav
     end
     return nothing
 end
@@ -547,19 +546,16 @@ get_pending_tile_pipe_frag(inputstate::InputState) = get_tile_pipe_equivalent_fr
 
 "Get the tile-pipe fragment on a tile axis across all ships, or nothing when no multi-pipe exists there."
 function get_tile_pipe_frag_any_ship(gamemap::GameMap, tile::TileCoord, axis::HexAxis)
-    ship_name = find_ship_with_component(gamemap, tile)
-    ship_name === nothing && return nothing
-
-    multi_pipe = get_multipipe_tile(get_ship(gamemap, ship_name), tile)
+    multi_pipe = get_multipipe_tile(gamemap, tile)
     multi_pipe === nothing && return nothing
     return get_tile_pipe(multi_pipe, axis)
 end
 
 "Return whether tile-pipe commands can target this tile without hitting a non-pipe component."
 function can_modify_tile_pipe(gamemap::GameMap, tile::TileCoord)::Bool
-    ship_name = find_ship_for_tile_pipe(gamemap, tile)
+    ship_name = find_tile_pipe_host_ship(gamemap, tile)
     isnothing(ship_name) && return false
-    comp = get_component(gamemap, tile; ship_name = ship_name)
+    comp = get_component(gamemap, tile)
     isnothing(comp) && return true   # surface tile with no component is fine
     return isa(comp.component, MultiPipeTileCompBehav)
 end
@@ -636,7 +632,7 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
         coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
         component = component_list[inputstate.toolbar]
         rotation = map_rotation(component, inputstate.toolrotation)
-        target_ship = find_valid_ship_for_placement(component, coord, gamemap; rotation = rotation)
+        target_ship = find_ship_for_placement(component, coord, gamemap; rotation = rotation)
         ghost_colour = isnothing(target_ship) ? GHOST_COLOUR_INVALID : GHOST_COLOUR_VALID
         render_base_elem!(queue, component; glmap = glmap, rotation = rotation, position = coord, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000))
     end
@@ -650,11 +646,11 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
 
         if element isa EdgeCoord
             edge::EdgeCoord = element
-            existing_pipe, _ = has_pipe_any_ship(gamemap, edge)
+            pipe_behav = get_pipe(gamemap, edge)
+            existing_pipe = !isnothing(pipe_behav)
 
             if existing_pipe
                 # Hovering over existing pipe — red delete indicator overlay
-                pipe_behav, _ = get_pipe_any_ship(gamemap, edge)
                 render_pipe_base!(
                     queue, pipe_behav; glmap = glmap, rotation = HexFrame.Q_POS,
                     position = edge, transparency = 0.5, colour = GHOST_COLOUR_INVALID, render_height_offset = Int32(100000)
@@ -664,20 +660,8 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
                 pipe_behav = inputstate.pendingpipebehavior
                 rotation = HexFrame.Q_POS
 
-                # Check if both nodes are on valid ship surfaces (allows on-ship placement)
-                v1_node = to_nodecoord(edge.v1)
-                v2_node = to_nodecoord(edge.v2)
-                valid_placement = false
-                for (ship_name, _) in gamemap.ships
-                    v1_valid = is_node_on_ship_surface(v1_node, gamemap; ship_name = ship_name)
-                    v2_valid = is_node_on_ship_surface(v2_node, gamemap; ship_name = ship_name)
-                    if v1_valid && v2_valid
-                        valid_placement = true
-                        break
-                    end
-                end
-
-                # If not both nodes are on valid surfaces, allow placement if pipe can be placed off-ship (e.g. for external connections)
+                # Check if both nodes are on valid ship surfaces, or allow off-ship placement
+                valid_placement = !isnothing(find_ship_containing_edge(gamemap, edge))
                 if !valid_placement
                     can_place, _, _ = can_place_pipe_offship(edge, gamemap)
                     valid_placement = can_place
@@ -713,9 +697,8 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
             can_move = false
 
             if element isa TileCoord
-                found, _ = has_component_any_ship(gamemap, element)
-                if found
-                    tilecomp, _ = get_component_any_ship(gamemap, element)
+                tilecomp = get_component(gamemap, element)
+                if !isnothing(tilecomp)
                     can_move_result, _ = can_be_moved(tilecomp)
                     can_move = can_move_result
                     if tilecomp.component isa MultiPipeTileCompBehav
@@ -730,10 +713,9 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
                     end
                 end
             elseif element isa EdgeCoord
-                foundp, _ = has_pipe_any_ship(gamemap, element)
-                if foundp
+                pipe_behav = get_pipe(gamemap, element)
+                if !isnothing(pipe_behav)
                     hover_target = element
-                    pipe_behav, _ = get_pipe_any_ship(gamemap, element)
                     can_move_result, _ = can_pipe_be_moved(pipe_behav)
                     can_move = can_move_result
                 end
@@ -754,10 +736,8 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
 
         # Tile move ghost
         if inputstate.selectedcoord isa TileCoord
-            # Search for component in any ship
-            source_ship = find_ship_with_component(gamemap, inputstate.selectedcoord)
-            if !isnothing(source_ship)
-                tilecomp = get_component(gamemap, inputstate.selectedcoord; ship_name = source_ship)
+            tilecomp = get_component(gamemap, inputstate.selectedcoord)
+            if !isnothing(tilecomp)
                 if inputstate.selected_tile_pipe_axis !== nothing && tilecomp.component isa MultiPipeTileCompBehav
                     src_axis = inputstate.selected_tile_pipe_axis
                     src_frag = get_tile_pipe(tilecomp.component, src_axis)
@@ -774,7 +754,7 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
                 else
                     coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
                     rotation = map_rotation(tilecomp, rotate(tilecomp.rotation, inputstate.toolrotation))
-                    target_ship = find_valid_ship_for_placement(tilecomp.component, coord, gamemap; rotation = rotation)
+                    target_ship = find_ship_for_placement(tilecomp.component, coord, gamemap; rotation = rotation)
                     ghost_colour = isnothing(target_ship) ? GHOST_COLOUR_INVALID : GHOST_COLOUR_VALID
                     render_base_elem!(queue, tilecomp; glmap = glmap, rotation = rotation, position = coord, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000))
                 end
@@ -783,24 +763,12 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
 
         # Pipe move ghost, uses actual pipe behaviour for correct sprite
         if inputstate.selectedcoord isa EdgeCoord
-            source_ship = find_ship_with_pipe(gamemap, inputstate.selectedcoord)
-            if !isnothing(source_ship)
-                actual_pipe = get_pipe(get_ship(gamemap, source_ship), inputstate.selectedcoord)
+            actual_pipe = get_pipe(gamemap, inputstate.selectedcoord)
+            if !isnothing(actual_pipe)
                 ghost_edge = round_to_edge(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
 
-                v1_node = to_nodecoord(ghost_edge.v1)
-                v2_node = to_nodecoord(ghost_edge.v2)
-                valid_dest = false
-                for (ship_name, _) in gamemap.ships
-                    v1_valid = is_node_on_ship_surface(v1_node, gamemap; ship_name = ship_name)
-                    v2_valid = is_node_on_ship_surface(v2_node, gamemap; ship_name = ship_name)
-                    if v1_valid && v2_valid
-                        valid_dest = true
-                        break
-                    end
-                end
-
-                # Check if valid off-ship placement
+                # Check if both nodes are on valid ship surfaces, or allow off-ship placement
+                valid_dest = !isnothing(find_ship_containing_edge(gamemap, ghost_edge))
                 if !valid_dest
                     can_place, _, _ = can_place_pipe_offship(ghost_edge, gamemap)
                     valid_dest = can_place
@@ -879,7 +847,7 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
         coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
 
         # Check which ship owns this surface, or which ship it would be added to
-        existing_ship = find_ship_for_surface(gamemap, coord)
+        existing_ship = get_surface_shiptag(gamemap, coord)
         if !isnothing(existing_ship)
             # Surface exists - show removal ghost
             colour = SVector{4, Float32}(1.0, 0.3, 0.3, 0.5) # Red for removal
@@ -910,12 +878,12 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
 
         if element isa TileCoord
             # Search all ships for component
-            if !isnothing(find_ship_with_component(gamemap, element))
+            if has_component(gamemap, element)
                 indicator_position = element
             end
         elseif element isa EdgeCoord
             # Search all ships for pipe
-            if !isnothing(find_ship_with_pipe(gamemap, element))
+            if has_pipe(gamemap, element)
                 indicator_position = element
             end
         end
@@ -942,13 +910,13 @@ end
 function render_docking_beams!(queue::Vector{<:RenderCommand}, glmap::GLObjectMap, gamemap::GameMap, gameticks::Int64)
     primary_centroid = get_surface_centroid(gamemap, :primary)
     primary_centroid === nothing && return nothing
-    primary_offset = get_render_offset(get_ship(gamemap, :primary))
+    primary_offset = get_ship_render_offset(gamemap, :primary)
     primary_pos = primary_centroid + primary_offset
 
     for (ship_name, ship) in gamemap.ships
         ship_name == :primary && continue
 
-        ship_centroid = get_surface_centroid(ship)
+        ship_centroid = get_surface_centroid(gamemap, ship_name)
         ship_centroid === nothing && continue
         ship_pos = ship_centroid + get_render_offset(ship)
 
@@ -1004,10 +972,10 @@ end
 function is_on_offset_ship(coord, gamemap::GameMap)::Bool
     if coord isa TileCoord
         # Check if tile is on a ship with offset
-        ship_name = find_ship_for_surface(gamemap, coord)
+        ship_name = get_surface_shiptag(gamemap, coord)
         if isnothing(ship_name)
             # Check if there's a component at this coord
-            ship_name = find_ship_with_component(gamemap, coord)
+            ship_name = get_component_shiptag(gamemap, coord)
         end
         if !isnothing(ship_name)
             offset = get_ship_render_offset(gamemap, ship_name)
@@ -1015,7 +983,7 @@ function is_on_offset_ship(coord, gamemap::GameMap)::Bool
         end
     elseif coord isa EdgeCoord
         # Check if pipe is on a ship with offset
-        ship_name = find_ship_with_pipe(gamemap, coord)
+        ship_name = get_pipe_shiptag(gamemap, coord)
         if !isnothing(ship_name)
             offset = get_ship_render_offset(gamemap, ship_name)
             return offset != AxialCoord(0.0, 0.0)
@@ -1116,7 +1084,7 @@ function flowcalc_pipeplacer!(
 
     if element isa EdgeCoord
         edge::EdgeCoord = element
-        existing, _ = has_pipe_any_ship(gamemap, edge)
+        existing = has_pipe(gamemap, edge)
         if existing
             # Delete existing pipe (toggle behaviour)
             command = create_delete_command(command_queue, edge)
@@ -1185,12 +1153,11 @@ function flowcalc_moveplacer!(
         # Check if something is present at the coordinate
         # NOTE: checks not authoritative here as gamemap may change before command is processed
         if element isa TileCoord
-            found, _ = has_component_any_ship(gamemap, element)
-            if !found
+            tilecomp = get_component(gamemap, element)
+            if isnothing(tilecomp)
                 threadsafe_console_push("No component found at $(element)")
                 return
             end
-            tilecomp, _ = get_component_any_ship(gamemap, element)
             can_move, reason = can_be_moved(tilecomp)
             if !can_move
                 threadsafe_console_push("Cannot select component at $(element): $reason")
@@ -1212,8 +1179,7 @@ function flowcalc_moveplacer!(
                 return
             end
         elseif element isa EdgeCoord
-            foundp, _ = has_pipe_any_ship(gamemap, element)
-            if !foundp
+            if !has_pipe(gamemap, element)
                 threadsafe_console_push("No pipe found at $(element)")
                 return
             end
@@ -1390,9 +1356,8 @@ function flowcalc_rightclick_action!(inputstate::InputState, gamemap::GameMap, w
     #= ---------- Component target ----------- =#
     if element isa TileCoord
         is_on_offset_ship(element, gamemap) && return nothing
-        found, _ = has_component_any_ship(gamemap, element)
-        if found
-            tilecomp, _ = get_component_any_ship(gamemap, element)
+        tilecomp = get_component(gamemap, element)
+        if !isnothing(tilecomp)
             actions = get_actions(tilecomp)
             inputstate.rightclick_selectedcoord = element
             inputstate.action_popup = ActionPopupState(
@@ -1407,7 +1372,7 @@ function flowcalc_rightclick_action!(inputstate::InputState, gamemap::GameMap, w
 
     #= ---------- Ship target (non-component surface) ----------- =#
     tile = round_to_tile(cursor_cart)
-    ship_name = find_ship_for_surface(gamemap, tile)
+    ship_name = get_surface_shiptag(gamemap, tile)
     isnothing(ship_name) && return nothing
     is_on_offset_ship(tile, gamemap) && return nothing
 
@@ -1545,25 +1510,21 @@ end
 "Enter the interactive redock placement mode, caching tile/node sets for fast per-frame validation."
 function _enter_redock_mode!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, ship_name::Symbol)
     gamemap = flowcalc_ipc.get_snapshot().gamemap
-    ship = get_ship(gamemap, ship_name)
-    status = get_docking_status(gamemap, ship_name)
+    core_tiles = collect_surface_tiles!(Set{TileCoord}(), gamemap; ship_name = ship_name)
+    ring1 = expand_tileset!(Set{TileCoord}(), core_tiles)
+    ring2 = expand_tileset!(Set{TileCoord}(), ring1)
 
-    core_tiles = copy(ship.ship_tiles)
-    ring1 = expand_tileset(core_tiles)
-    ring2 = expand_tileset(ring1)
-
-    ship_elems = FlowEngine.list_elements(ship)
+    ship_elems = FlowEngine.list_elements(gamemap; ship_name = ship_name)
     ship_nodes = Set(keys(FlowEngine.list_nodes(ship_elems)))
 
-    other_tiles = Set{TileCoord}()
+    other_tiles = collect_surface_tiles!(Set{TileCoord}(), gamemap; exclude_ship = ship_name)
     other_nodes = Set{NodeCoord}()
-    for (name, other_ship) in gamemap.ships
+    for name in get_all_ship_names(gamemap)
         name === ship_name && continue
-        union!(other_tiles, other_ship.ship_tiles)
-        union!(other_nodes, keys(FlowEngine.list_nodes(FlowEngine.list_elements(other_ship))))
+        union!(other_nodes, keys(FlowEngine.list_nodes(FlowEngine.list_elements(gamemap; ship_name = name))))
     end
 
-    centroid = get_surface_centroid(ship)
+    centroid = get_surface_centroid(gamemap, ship_name)
     original_centre = isnothing(centroid) ? TileCoord(0, 0) : round_to_tile(centroid)
 
     set_placementmode!(inputstate, REDOCK)

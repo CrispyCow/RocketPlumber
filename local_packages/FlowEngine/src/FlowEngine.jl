@@ -2,7 +2,7 @@ module FlowEngine
 
 using HexFrame, HexElements, HexFluids, HexComponentsAPI
 using FlowMap
-import FlowMap: find_ship_surface_edgetiles!
+import FlowMap: collect_surface_edge_tiles!
 
 using SparseArrays, LinearAlgebra, KLU, SmallCollections, StructEquality
 
@@ -201,9 +201,9 @@ get_all_ship_edge_coords(derivedmapstate::DerivedMapState)::Set{TileCoord} = der
 "Get the number of ship surface edge tiles"
 count_edge_tiles(derivedmapstate::DerivedMapState)::Int = length(derivedmapstate.ship_surface_edge)
 
-"Update the ship_surface_edge set in DerivedMapState with tiles that are on the boundary of the ship."
-function find_ship_surface_edgetiles!(derivedmapstate::DerivedMapState, gamemap::GameMap)
-    find_ship_surface_edgetiles!(derivedmapstate.ship_surface_edge, gamemap)
+"Update the ship_surface_edge set in DerivedMapState with boundary tiles from the surface owner index."
+function collect_surface_edge_tiles!(derivedmapstate::DerivedMapState, gamemap::GameMap)
+    collect_surface_edge_tiles!(derivedmapstate.ship_surface_edge, gamemap)
     return nothing
 end
 
@@ -254,18 +254,12 @@ function add_pipes_abs_element!(abs_vector::Vector{AbsoluteElement}, edge::EdgeC
     return push!(abs_vector, absolute_element)
 end
 
-"Updates behaviours of all components on a single ShipMap"
-function update_components!(ship::ShipMap, mna_state::MNA_State, derivedmapstate::DerivedMapState)
-    for (coord, data) in ship.components
-        update_flowbehav!(data; tile = coord, mna_state = mna_state, derivedmapstate = derivedmapstate)
-    end
-    return nothing
-end
-
-"Updates behaviours of all components on the GameMap by delegating to each ShipMap"
+"""
+Update behaviours of all components on the GameMap.
+"""
 function update_components!(gamemap::GameMap, mna_state::MNA_State, derivedmapstate::DerivedMapState)
-    for (_, ship) in gamemap.ships
-        update_components!(ship, mna_state, derivedmapstate)
+    for (coord, comp) in gamemap.components
+        update_flowbehav!(comp; tile = coord, mna_state, derivedmapstate)
     end
     return nothing
 end
@@ -279,51 +273,39 @@ function push_mapped_elements!(out::Vector{AbsoluteElement}, tilecomp::Component
 end
 
 "Push the single pipe resistor element directly into the output vector."
-function push_pipe_element!(out::Vector{AbsoluteElement}, pipe_behav::PipeBehavior, edge::EdgeCoord)
+function push_pipe_element!(out::Vector{AbsoluteElement}, pipe::PipeOnEdge, edge::EdgeCoord)
     connections = AbsoluteElementConnections(to_nodecoord(edge.v1), to_nodecoord(edge.v2))
-    conductance = get_conductance(pipe_behav)
-    push!(out, AbsoluteElement(connections, conductance, CONST_RESISTOR, ElementID(edge)))
+    push!(out, AbsoluteElement(connections, get_conductance(pipe), CONST_RESISTOR, ElementID(edge)))
     return nothing
 end
 
-"Collect all electrical elements for a single ship into `out` (appends, caller should empty! first)."
-function list_elements!(out::Vector{AbsoluteElement}, ship::ShipMap)
-    for (coord, data) in ship.components
-        push_mapped_elements!(out, data, coord)
-    end
-    for (edge, pipe_behav) in ship.pipe_behaviors
-        push_pipe_element!(out, pipe_behav, edge)
-    end
-    return nothing
-end
-
-"Collect all electrical elements in the GameMap into `out` (empties first, then fills)."
-function list_elements!(out::Vector{AbsoluteElement}, gamemap::GameMap)
+"""
+Collect electrical elements in the GameMap into `out` (empties first, then fills).
+If `ship_name` is provided, only elements belonging to that ship are included.
+"""
+function list_elements!(out::Vector{AbsoluteElement}, gamemap::GameMap;
+        ship_name::Union{Symbol, Nothing} = nothing)
     empty!(out)
-    sizehint!(out, 16)
-
-    for (_, ship) in gamemap.ships
-        list_elements!(out, ship)
+    sizehint!(out, length(gamemap.components) * 2 + length(gamemap.pipe_behaviors))
+    for (coord, comp) in gamemap.components
+        (isnothing(ship_name) || comp.ship === ship_name) || continue
+        push_mapped_elements!(out, comp, coord)
     end
-
+    for (edge, pipe) in gamemap.pipe_behaviors
+        (isnothing(ship_name) || pipe.ship === ship_name) || continue
+        push_pipe_element!(out, pipe, edge)
+    end
     return nothing
 end
 
-"List all electrical elements for a single ship (allocating convenience wrapper)."
-function list_elements(ship::ShipMap)
-    elements_present = Vector{AbsoluteElement}()
-    tiles = ship.components
-    pipe_behaviors = ship.pipe_behaviors
-    sizehint!(elements_present, (length(tiles) + length(pipe_behaviors)) * 2)
-    list_elements!(elements_present, ship)
-    return elements_present
-end
-
-"List all electrical elements in the GameMap (allocating convenience wrapper)."
-function list_elements(gamemap::GameMap)
-    all_elements = Vector{AbsoluteElement}()
-    list_elements!(all_elements, gamemap)
-    return all_elements
+"""
+List all electrical elements in the GameMap (allocating convenience wrapper).
+If `ship_name` is provided, only elements belonging to that ship are returned.
+"""
+function list_elements(gamemap::GameMap; ship_name::Union{Symbol, Nothing} = nothing)
+    out = Vector{AbsoluteElement}()
+    list_elements!(out, gamemap; ship_name = ship_name)
+    return out
 end
 
 "Populate `node_count` with connection counts per non-ground node (empties first)."
@@ -639,20 +621,16 @@ function push_mapped_declarations!(out::Vector{AbsFluidDecl}, tilecomp::Componen
     return nothing
 end
 
-"Collect all fluid declarations from a single ship"
-function list_fluid_declarations!(out::Vector{AbsFluidDecl}, ship::ShipMap)
-    for (coord, data) in ship.components
-        push_mapped_declarations!(out, data, coord)
-    end
-end
-
-"Collect all fluid declarations from all ships"
+"""
+Collect all fluid declarations from the GameMap.
+"""
 function list_fluid_declarations!(out::Vector{AbsFluidDecl}, gamemap::GameMap)
     empty!(out)
     sizehint!(out, 16)
-    for ship_name in get_all_ship_names(gamemap)
-        list_fluid_declarations!(out, get_ship(gamemap, ship_name))
+    for (coord, comp) in gamemap.components
+        push_mapped_declarations!(out, comp, coord)
     end
+    return nothing
 end
 
 """

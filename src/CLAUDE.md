@@ -24,13 +24,22 @@
 
 ### Game Map (Multi-Ship)
 
-- **`GameMap`** (in `FlowMap`): top-level container with `ships::Dict{Symbol, ShipMap}` (always has `:primary`), `space_map::AbstractSpaceMap`, `learning_system::AbstractLearningSystem`
-- **`ShipMap`**: per-ship data with `components`, `pipe_behaviors`, `ship_tiles`, `docking_status`
+- **`GameMap`** (in `FlowMap`): top-level container with:
+	- `ships::Dict{Symbol, ShipState}` — always has `:primary`. Each `ShipState` carries `ship_tiles`, `docking_status`, and render offset state. It is a lightweight container — it does **not** own components or pipes.
+	- `components::Dict{TileCoord, ComponentOnTile}` — global components dict for the whole gamemap. Ownership is encoded on the value: `ComponentOnTile.ship::Symbol`.
+	- `pipe_behaviors::Dict{EdgeCoord, PipeOnEdge}` — global pipes dict. Ownership is encoded on the value: `PipeOnEdge.ship::Symbol`.
+	- `space_map::AbstractSpaceMap`, `learning_system::AbstractLearningSystem`.
+- **`ShipBlueprint`**: detached construction payload used to build encounter ships, demo maps, and tile-by-tile generation. Carries its own `components` / `pipe_behaviors` dicts plus `ship_tiles`. Merged into a `GameMap` via `merge_ship!`.
 
-Ship management: `add_ship!`, `remove_ship!`, `get_all_ship_names`, `has_ship`, `get_ship`, `offset_ship!`
-Multi-ship queries: `has_component_any_ship`, `get_component_any_ship`, `find_ship_for_surface`, `find_valid_ship_for_placement`, `find_ship_with_component`, `find_ship_with_pipe`, `find_ship_for_node`, `would_bridge_ships`
+Ship management: `add_ship!`, `remove_ship!`, `get_all_ship_names`, `has_ship`, `get_ship_state`, `merge_ship!`, `swap_primary!`, `get_ship_blueprint`, `offset_ship!`.
 
-Note: `get_all_components(gamemap; ship_name=:primary)` only returns components for one named ship. For cross-ship scans, loop `get_all_ship_names(gamemap)`.
+Cross-ship queries: `find_ship_for_surface`, `find_ship_containing_edge`, `find_ship_for_placement`, `get_shiptag`, `find_tile_pipe_host_ship`, `find_ship_surface_containing_node`, `find_ship_pipes_containing_node`, `find_ship_for_node`, `is_on_surface_tile_any_ship`.
+
+Component / pipe access (all routed off the global dicts; ownership is encoded on the value's `.ship` field):
+
+- Single-coord: `get_component`, `has_component`, `set_component!`, `delete_component!`, and pipe equivalents. None take a `ship_name` kwarg — to filter by ship, read `.ship` on the returned `ComponentOnTile` / `PipeOnEdge`. To set with a specific ship, construct the wrapper with that ship: `ComponentOnTile(behav, rot, ship)` / `PipeOnEdge(behav, ship)`.
+- Bulk: `get_components(gamemap)` and `get_pipes(gamemap)` return the underlying shared dicts. `count_components(gamemap; ship_name=...)` and `count_pipes(gamemap; ship_name=...)` provide zero-allocation counts and still accept `ship_name` as a filter.
+- Lazy iteration: `each_component_of_ship(gamemap, ship_name)` / `each_pipe_of_ship(gamemap, ship_name)` for per-ship values, `each_component_of_type(gamemap, SomeBehav)` / `each_pipe_of_type(gamemap, SomePipeBehav)` for per-type values. If you need coords as well, filter `get_components(gamemap)` or `get_pipes(gamemap)` pairs rather than reaching into the backing fields directly.
 
 ### Coordinate System (HexFrame)
 

@@ -144,8 +144,7 @@ function mapgen_teasership()
     # ===============================================================
 
     #= ---------- Ship :##Ship AV-551#655 ----------- =#
-    ship_av_551 = ShipMap()
-    components = Dict{TileCoord, ComponentOnTile}()
+    blueprint_av_551 = ShipBlueprint()
 
     # Cold-gas tank cluster
     for tile in [
@@ -160,18 +159,14 @@ function mapgen_teasership()
         TileCoord(3, -12),
         TileCoord(2, -14),
     ]
-        components[tile] = ComponentOnTile(deepcopy(av_gas_tank), HexFrame.Q_POS)
+        blueprint_av_551.components[tile] = ComponentOnTile(deepcopy(av_gas_tank), HexFrame.Q_POS, :_blueprint)
     end
 
     # Two nozzles start closed; one preserves the armed save-state.
     for tile in [TileCoord(0, -12), TileCoord(0, -11)]
-        components[tile] = ComponentOnTile(deepcopy(switched_tiny_nozzle), HexFrame.Q_POS)
+        blueprint_av_551.components[tile] = ComponentOnTile(deepcopy(switched_tiny_nozzle), HexFrame.Q_POS, :_blueprint)
     end
-    components[TileCoord(1, -14)] = ComponentOnTile(deepcopy(armed_switched_tiny_nozzle), HexFrame.S_NEG)
-
-    set_component!(ship_av_551, components)
-
-    pipes = Dict{EdgeCoord, PipeBehavior}()
+    blueprint_av_551.components[TileCoord(1, -14)] = ComponentOnTile(deepcopy(armed_switched_tiny_nozzle), HexFrame.S_NEG, :_blueprint)
     for (tile_a, axis_a, tile_b, axis_b) in [
         (TileCoord(3, -14), HexFrame.Q_NEG, TileCoord(2, -14), HexFrame.Q_POS),
         (TileCoord(4, -14), HexFrame.Q_NEG, TileCoord(3, -13), HexFrame.Q_POS),
@@ -194,11 +189,10 @@ function mapgen_teasership()
         (TileCoord(0, -11), HexFrame.Q_POS, TileCoord(2, -12), HexFrame.Q_NEG),
         (TileCoord(3, -14), HexFrame.Q_NEG, TileCoord(2, -13), HexFrame.Q_POS),
     ]
-        pipes[EdgeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = scrap_pipe
+        blueprint_av_551.pipe_behaviors[EdgeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = scrap_pipe
     end
-    set_pipe!(ship_av_551, pipes)
 
-    ship_av_551.ship_tiles = Set{TileCoord}([
+    union!(blueprint_av_551.ship_tiles, Set{TileCoord}([
         TileCoord(2, -12),
         TileCoord(3, -14),
         TileCoord(3, -13),
@@ -209,18 +203,15 @@ function mapgen_teasership()
         TileCoord(1, -11),
         TileCoord(2, -13),
         TileCoord(2, -14),
-    ])
-    map.ships[Symbol("##Ship AV-551#655")] = ship_av_551
-
+    ]))
     #= ---------- Ship :primary ----------- =#
-    ship_primary = ShipMap()
-    components = Dict{TileCoord, ComponentOnTile}()
+    blueprint_primary = ShipBlueprint()
 
     for (tile, rotation) in [
         (TileCoord(4, -6), HexFrame.R_NEG),
         (TileCoord(1, -5), HexFrame.Q_POS),
     ]
-        components[tile] = ComponentOnTile(deepcopy(transfer_pump), rotation)
+        blueprint_primary.components[tile] = ComponentOnTile(deepcopy(transfer_pump), rotation, :_blueprint)
     end
 
     for tile in [
@@ -233,12 +224,8 @@ function mapgen_teasership()
         TileCoord(4, -7),
         TileCoord(2, -7),
     ]
-        components[tile] = ComponentOnTile(deepcopy(transfer_liquid_tank), HexFrame.Q_NEG)
+        blueprint_primary.components[tile] = ComponentOnTile(deepcopy(transfer_liquid_tank), HexFrame.Q_NEG, :_blueprint)
     end
-
-    set_component!(ship_primary, components)
-
-    pipes = Dict{EdgeCoord, PipeBehavior}()
     for (tile_a, axis_a, tile_b, axis_b) in [
         (TileCoord(1, -5), HexFrame.Q_POS, TileCoord(3, -6), HexFrame.Q_NEG),
         (TileCoord(4, -8), HexFrame.Q_NEG, TileCoord(3, -7), HexFrame.Q_POS),
@@ -270,11 +257,10 @@ function mapgen_teasership()
         (TileCoord(-1, -5), HexFrame.Q_NEG, TileCoord(-2, -4), HexFrame.Q_POS),
         (TileCoord(3, -6), HexFrame.Q_POS, TileCoord(5, -7), HexFrame.Q_NEG),
     ]
-        pipes[EdgeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = scrap_pipe
+        blueprint_primary.pipe_behaviors[EdgeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = scrap_pipe
     end
-    set_pipe!(ship_primary, pipes)
 
-    ship_primary.ship_tiles = Set{TileCoord}([
+    union!(blueprint_primary.ship_tiles, Set{TileCoord}([
         TileCoord(4, -8),
         TileCoord(3, -7),
         TileCoord(4, -9),
@@ -292,12 +278,12 @@ function mapgen_teasership()
         TileCoord(2, -5),
         TileCoord(2, -7),
         TileCoord(3, -6),
-    ])
-    map.ships[:primary] = ship_primary
+    ]))
+    map = GameMap(blueprint_primary)
+    merge_ship!(map, Symbol("##Ship AV-551#655"), blueprint_av_551)
 
     #= ---------- Ship :##old_primary#664 ----------- =#
-    ship_old_primary = ShipMap()
-    components = Dict{TileCoord, ComponentOnTile}()
+    blueprint_old_primary = ShipBlueprint()
 
     for tile in [
         TileCoord(3, -3),
@@ -316,25 +302,21 @@ function mapgen_teasership()
         TileCoord(2, -1),
         TileCoord(1, -2),
     ]
-        components[tile] = ComponentOnTile(deepcopy(legacy_liquid_tank), HexFrame.Q_POS)
+        blueprint_old_primary.components[tile] = ComponentOnTile(deepcopy(legacy_liquid_tank), HexFrame.Q_POS, :_blueprint)
     end
 
     for tile in [TileCoord(-5, -1), TileCoord(-5, 0), TileCoord(-5, 1)]
-        components[tile] = ComponentOnTile(deepcopy(small_nozzle), HexFrame.Q_POS)
+        blueprint_old_primary.components[tile] = ComponentOnTile(deepcopy(small_nozzle), HexFrame.Q_POS, :_blueprint)
     end
 
-    components[TileCoord(-4, 0)] = ComponentOnTile(DecompChamberCompBehav(), HexFrame.Q_POS)
-    components[TileCoord(-4, 3)] = ComponentOnTile(DecompChamberCompBehav(), HexFrame.Q_POS)
-    components[TileCoord(-3, -1)] = single_tile_pipe_on_tile(HexFrame.S_POS, ScrapTilePipeBehavFrag())
-    components[TileCoord(-3, 0)] = ComponentOnTile(deepcopy(turbo_pump), HexFrame.S_NEG)
-    components[TileCoord(-2, 2)] = ComponentOnTile(deepcopy(turbo_pump), HexFrame.Q_POS)
-    components[TileCoord(-4, -1)] = ComponentOnTile(deepcopy(tiny_on_off_valve), HexFrame.Q_POS)
-    components[TileCoord(-3, 2)] = ComponentOnTile(deepcopy(partially_open_legacy_valve), HexFrame.Q_POS)
-    components[TileCoord(-6, 4)] = ComponentOnTile(deepcopy(medium_nozzle), HexFrame.Q_POS)
-
-    set_component!(ship_old_primary, components)
-
-    pipes = Dict{EdgeCoord, PipeBehavior}()
+    blueprint_old_primary.components[TileCoord(-4, 0)] = ComponentOnTile(DecompChamberCompBehav(), HexFrame.Q_POS, :_blueprint)
+    blueprint_old_primary.components[TileCoord(-4, 3)] = ComponentOnTile(DecompChamberCompBehav(), HexFrame.Q_POS, :_blueprint)
+    blueprint_old_primary.components[TileCoord(-3, -1)] = single_tile_pipe_on_tile(HexFrame.S_POS, ScrapTilePipeBehavFrag())
+    blueprint_old_primary.components[TileCoord(-3, 0)] = ComponentOnTile(deepcopy(turbo_pump), HexFrame.S_NEG, :_blueprint)
+    blueprint_old_primary.components[TileCoord(-2, 2)] = ComponentOnTile(deepcopy(turbo_pump), HexFrame.Q_POS, :_blueprint)
+    blueprint_old_primary.components[TileCoord(-4, -1)] = ComponentOnTile(deepcopy(tiny_on_off_valve), HexFrame.Q_POS, :_blueprint)
+    blueprint_old_primary.components[TileCoord(-3, 2)] = ComponentOnTile(deepcopy(partially_open_legacy_valve), HexFrame.Q_POS, :_blueprint)
+    blueprint_old_primary.components[TileCoord(-6, 4)] = ComponentOnTile(deepcopy(medium_nozzle), HexFrame.Q_POS, :_blueprint)
     for (tile_a, axis_a, tile_b, axis_b, behaviour) in [
         (TileCoord(1, -2), HexFrame.Q_NEG, TileCoord(0, -2), HexFrame.Q_POS, scrap_pipe),
         (TileCoord(-1, 0), HexFrame.Q_NEG, TileCoord(-2, 1), HexFrame.Q_POS, scrap_pipe),
@@ -366,11 +348,10 @@ function mapgen_teasership()
         (TileCoord(1, -2), HexFrame.Q_POS, TileCoord(3, -3), HexFrame.Q_NEG, scrap_pipe),
         (TileCoord(-4, 0), HexFrame.Q_NEG, TileCoord(-5, 0), HexFrame.Q_POS, big_pipe),
     ]
-        pipes[EdgeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = behaviour
+        blueprint_old_primary.pipe_behaviors[EdgeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = behaviour
     end
-    set_pipe!(ship_old_primary, pipes)
 
-    ship_old_primary.ship_tiles = Set{TileCoord}([
+    union!(blueprint_old_primary.ship_tiles, Set{TileCoord}([
         TileCoord(3, -3),
         TileCoord(2, 0),
         TileCoord(-4, 0),
@@ -404,12 +385,11 @@ function mapgen_teasership()
         TileCoord(-4, -1),
         TileCoord(-5, 4),
         TileCoord(1, -2),
-    ])
-    map.ships[Symbol("##old_primary#664")] = ship_old_primary
+    ]))
+    merge_ship!(map, Symbol("##old_primary#664"), blueprint_old_primary)
 
     #= ---------- Ship :##Platform BS-301#663 ----------- =#
-    ship_platform_bs_301 = ShipMap()
-    components = Dict{TileCoord, ComponentOnTile}()
+    blueprint_platform_bs_301 = ShipBlueprint()
 
     for tile in [
         TileCoord(-4, -5),
@@ -419,11 +399,11 @@ function mapgen_teasership()
         TileCoord(-5, -5),
         TileCoord(-4, -6),
     ]
-        components[tile] = ComponentOnTile(deepcopy(pressure_fed_tank), HexFrame.Q_POS)
+        blueprint_platform_bs_301.components[tile] = ComponentOnTile(deepcopy(pressure_fed_tank), HexFrame.Q_POS, :_blueprint)
     end
 
     for tile in [TileCoord(-2, -7), TileCoord(-2, -8)]
-        components[tile] = ComponentOnTile(deepcopy(av_gas_tank), HexFrame.R_POS)
+        blueprint_platform_bs_301.components[tile] = ComponentOnTile(deepcopy(av_gas_tank), HexFrame.R_POS, :_blueprint)
     end
 
     for (tile, rotation) in [
@@ -435,18 +415,14 @@ function mapgen_teasership()
         (TileCoord(-3, -8), HexFrame.Q_NEG),
         (TileCoord(-3, -9), HexFrame.Q_NEG),
     ]
-        components[tile] = ComponentOnTile(deepcopy(tiny_nozzle), rotation)
+        blueprint_platform_bs_301.components[tile] = ComponentOnTile(deepcopy(tiny_nozzle), rotation, :_blueprint)
     end
 
-    components[TileCoord(-6, -6)] = ComponentOnTile(DecompChamberCompBehav(), HexFrame.Q_POS)
-    components[TileCoord(-4, -8)] = ComponentOnTile(DecompChamberCompBehav(), HexFrame.Q_NEG)
-    components[TileCoord(-3, -7)] = ComponentOnTile(deepcopy(open_tiny_on_off_valve), HexFrame.Q_POS)
-    components[TileCoord(-5, -6)] = ComponentOnTile(deepcopy(partially_open_platform_valve), HexFrame.S_NEG)
-    components[TileCoord(-5, -7)] = ComponentOnTile(deepcopy(tiny_adjustable_valve), HexFrame.S_NEG)
-
-    set_component!(ship_platform_bs_301, components)
-
-    pipes = Dict{EdgeCoord, PipeBehavior}()
+    blueprint_platform_bs_301.components[TileCoord(-6, -6)] = ComponentOnTile(DecompChamberCompBehav(), HexFrame.Q_POS, :_blueprint)
+    blueprint_platform_bs_301.components[TileCoord(-4, -8)] = ComponentOnTile(DecompChamberCompBehav(), HexFrame.Q_NEG, :_blueprint)
+    blueprint_platform_bs_301.components[TileCoord(-3, -7)] = ComponentOnTile(deepcopy(open_tiny_on_off_valve), HexFrame.Q_POS, :_blueprint)
+    blueprint_platform_bs_301.components[TileCoord(-5, -6)] = ComponentOnTile(deepcopy(partially_open_platform_valve), HexFrame.S_NEG, :_blueprint)
+    blueprint_platform_bs_301.components[TileCoord(-5, -7)] = ComponentOnTile(deepcopy(tiny_adjustable_valve), HexFrame.S_NEG, :_blueprint)
     for (tile_a, axis_a, tile_b, axis_b, behaviour) in [
         (TileCoord(-3, -5), HexFrame.Q_NEG, TileCoord(-4, -5), HexFrame.Q_POS, scrap_pipe),
         (TileCoord(-6, -6), HexFrame.Q_NEG, TileCoord(-7, -5), HexFrame.Q_POS, big_pipe),
@@ -493,11 +469,10 @@ function mapgen_teasership()
         (TileCoord(-5, -5), HexFrame.Q_NEG, TileCoord(-6, -5), HexFrame.Q_POS, scrap_pipe),
         (TileCoord(-4, -4), HexFrame.Q_NEG, TileCoord(-5, -3), HexFrame.Q_POS, scrap_pipe),
     ]
-        pipes[EdgeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = behaviour
+        blueprint_platform_bs_301.pipe_behaviors[EdgeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = behaviour
     end
-    set_pipe!(ship_platform_bs_301, pipes)
 
-    ship_platform_bs_301.ship_tiles = Set{TileCoord}([
+    union!(blueprint_platform_bs_301.ship_tiles, Set{TileCoord}([
         TileCoord(-4, -5),
         TileCoord(-4, -7),
         TileCoord(-2, -7),
@@ -515,8 +490,8 @@ function mapgen_teasership()
         TileCoord(-5, -5),
         TileCoord(-5, -7),
         TileCoord(-4, -6),
-    ])
-    map.ships[Symbol("##Platform BS-301#663")] = ship_platform_bs_301
+    ]))
+    merge_ship!(map, Symbol("##Platform BS-301#663"), blueprint_platform_bs_301)
 
     return map
 end

@@ -231,7 +231,7 @@ end
 
     @test get_component_temperature(basic) === get_component_temperature(basic.nozzle)
 
-    tile_component = ComponentOnTile(basic, TEST_ROTATION)
+    tile_component = ComponentOnTile(basic, TEST_ROTATION, :primary)
     @test get_component_temperature(tile_component) === get_component_temperature(basic)
 
     switched = make_switched_nozzle()

@@ -161,14 +161,14 @@ function inspect_ui!(tile::TileCoord, gamemap::GameMap, derivedmapstate::Derived
         end
     end
 
-    found_comp, comp_ship = has_component_any_ship(gamemap, tile)
-    if found_comp
-        tilecomp, _ = get_component_any_ship(gamemap, tile)
+    comp = get_component(gamemap, tile)
+    if !isnothing(comp)
+        tilecomp = comp
         component_temperature = get_component_temperature(tilecomp)
         temperature_str = isnothing(component_temperature) ? "None" : "$(format_value(component_temperature)) K"
         CImGui.Text("Temperature: $(temperature_str)")
         CImGui.Text("Type: $(String(nameof(typeof(tilecomp.component))))")
-        CImGui.Text("Ship: $(comp_ship)")
+        CImGui.Text("Ship: $(tilecomp.ship)")
 
         # Component Values
         CImGui.Text("\nValues:")
@@ -242,11 +242,11 @@ function inspect_ui!(edge::EdgeCoord, gamemap::GameMap, derivedmapstate::Derived
     CImGui.Text("$(coord_description(edge.v1)) and $(coord_description(edge.v2))")
 
     # Check for pipe behaviours
-    found_pipe, pipe_ship = has_pipe_any_ship(gamemap, edge)
-    if found_pipe
-        pipe_behav, _ = get_pipe_any_ship(gamemap, edge)
-        CImGui.Text("Type: $(nameof(typeof(pipe_behav)))")
-        CImGui.Text("Ship: $(pipe_ship)")
+    pipe = get_pipe(gamemap, edge)
+    if !isnothing(pipe)
+        pipe_behav = pipe
+        CImGui.Text("Type: $(nameof(typeof(pipe_behav.pipe)))")
+        CImGui.Text("Ship: $(pipe_behav.ship)")
 
         # Pipe Values
         CImGui.Text("\nPipe Values:")
@@ -747,12 +747,12 @@ function ui_propertybox_render!(
             CImGui.Separator()
             CImGui.NewLine()
 
-            found_comp, comp_ship = has_component_any_ship(gamemap, selected)
-            if found_comp
-                tilecomp, _ = get_component_any_ship(gamemap, selected)
+            comp = get_component(gamemap, selected)
+            if !isnothing(comp)
+                tilecomp = comp
                 CImGui.Text("Hex Tile at $(coord_description(selected))")
                 CImGui.Text("Type: $(String(nameof(typeof(tilecomp.component))))")
-                CImGui.Text("Ship: $(comp_ship)")
+                CImGui.Text("Ship: $(tilecomp.ship)")
 
                 # Values section (read-only — actions are in the popup)
                 CImGui.NewLine()

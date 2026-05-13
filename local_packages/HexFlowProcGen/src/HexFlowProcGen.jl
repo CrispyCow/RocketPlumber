@@ -162,18 +162,19 @@ end
 
 "Place all components from `shipset` onto the map. Returns `(success, message)`."
 function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::Tuple{Bool, String}
-    existing_components::Set{TileCoord} = Set(keys(get_all_components(map)))
+    existing_components::Set{TileCoord} = Set(keys(get_components(map)))
 
     ship_surface_edge::Set{TileCoord} = Set{TileCoord}()
-    find_ship_surface_edgetiles!(ship_surface_edge, map)
+    collect_surface_edge_tiles!(ship_surface_edge, map)
     all_tiles_adjacent_to_edgetiles::Set{TileCoord} = Set{TileCoord}()
     for edge_tile in ship_surface_edge
         union!(all_tiles_adjacent_to_edgetiles, get_adjacent_tiles_for_tile(edge_tile))
     end
+    all_surface_tiles = collect_surface_tiles!(Set{TileCoord}(), map)
     # Tiles adjacent to the edge but not on the ship surface are valid for nozzles
-    available_nozzle_tiles = setdiff(all_tiles_adjacent_to_edgetiles, get_all_surface_tiles(map))
+    available_nozzle_tiles = setdiff(all_tiles_adjacent_to_edgetiles, all_surface_tiles)
     # All surface tiles are valid for everything else
-    available_ship_surface::Set{TileCoord} = Set(get_all_surface_tiles(map))
+    available_ship_surface::Set{TileCoord} = copy(all_surface_tiles)
     # Clear all tiles adjacent to existing components
     for coord in existing_components
         clear_tiles_around_component!(available_nozzle_tiles, coord)
@@ -258,7 +259,7 @@ function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::
             # Clustered: identical components, assumes all rotations can be mapped to a valid one
             comp_behav = roll_component(spawn_option.kind, first(component_location_list), seed)
             comp_rotation = map_rotation(comp_behav, pick_element_from_rng(instances(HexFrame.HexAxis), prng))
-            tilecomp = ComponentOnTile(comp_behav, comp_rotation)
+            tilecomp = ComponentOnTile(comp_behav, comp_rotation, :primary)
 
             for selected_coord in component_location_list
                 set_component!(map, selected_coord, deepcopy(tilecomp))
@@ -269,7 +270,7 @@ function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::
             for selected_coord in component_location_list
                 comp_behav = roll_component(spawn_option.kind, selected_coord, seed)
                 comp_rotation = map_rotation(comp_behav, pick_element_from_rng(instances(HexFrame.HexAxis), prng))
-                tilecomp = ComponentOnTile(comp_behav, comp_rotation)
+                tilecomp = ComponentOnTile(comp_behav, comp_rotation, :primary)
 
                 set_component!(map, selected_coord, deepcopy(tilecomp))
             end
@@ -288,7 +289,7 @@ function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::
                     # Check if placement is valid
                     valid_pick, reason = placement_valid(comp_behav, selected_coord, map; rotation = chosen_axis)
                     if valid_pick
-                        set_component!(map, selected_coord, ComponentOnTile(comp_behav, chosen_axis))
+                        set_component!(map, selected_coord, ComponentOnTile(comp_behav, chosen_axis, :primary))
                         break
                     end
                 end
@@ -379,7 +380,7 @@ end
 
 "Place pipes on candidate edges connecting to exactly one existing node, filtered by `pipe_density`."
 function place_connected_pipes!(map::GameMap, pipe_kind::Symbol, seed::UInt32; pipe_density)
-    ship_tiles = deepcopy(get_all_surface_tiles(map))
+    ship_tiles = collect_surface_tiles!(Set{TileCoord}(), map)
     available_edgecoords = get_all_edgecoords_of_tiles(ship_tiles)
     # all_nodes covers component AND pipe-endpoint nodes (via list_elements), preventing a
     # second pipe-placement call from bridging through an existing-pipe vertex.
@@ -401,7 +402,7 @@ function place_connected_pipes!(map::GameMap, pipe_kind::Symbol, seed::UInt32; p
     # Place surviving edges
     for edgecoord in available_edgecoords
         pipe_behav = roll_pipe(pipe_kind, hash_pipe_edge(edgecoord, pipe_kind), seed)
-        set_pipe!(map, edgecoord, pipe_behav)
+        set_pipe!(map, edgecoord, pipe_behav; ship_name = :primary)
     end
 
     return nothing
@@ -409,7 +410,7 @@ end
 
 "Place pipes on candidate edges that do not bridge two existing nodes, filtered by `pipe_density`."
 function place_random_pipes!(map::GameMap, pipe_kind::Symbol, seed::UInt32; pipe_density)
-    ship_tiles = deepcopy(get_all_surface_tiles(map))
+    ship_tiles = collect_surface_tiles!(Set{TileCoord}(), map)
     available_edgecoords = get_all_edgecoords_of_tiles(ship_tiles)
     # all_nodes covers component AND pipe-endpoint nodes (via list_elements), preventing a
     # second pipe-placement call from bridging through an existing-pipe vertex.
@@ -432,7 +433,7 @@ function place_random_pipes!(map::GameMap, pipe_kind::Symbol, seed::UInt32; pipe
     # Place surviving edges
     for edgecoord in available_edgecoords
         pipe_behav = roll_pipe(pipe_kind, hash_pipe_edge(edgecoord, pipe_kind), seed)
-        set_pipe!(map, edgecoord, pipe_behav)
+        set_pipe!(map, edgecoord, pipe_behav; ship_name = :primary)
     end
 
     return nothing
@@ -641,44 +642,42 @@ function generate_encounter_name(seed::UInt32, encounter_class::EncounterClass):
     return @sprintf("%s %c%c-%03d", prefix, l1, l2, num)
 end
 
-"Generate an encounter's ShipMap from config data."
+"Generate an encounter's ShipBlueprint from config data."
 function generate_encounter(
         encounter_class::EncounterClass, fuel_tag::Union{FluidType, Nothing},
         richness::Float64, seed::UInt32, class_config::EncounterClassConfig
-    )::ShipMap
+    )::ShipBlueprint
     steps, stacks = compute_hull_size(class_config.hull_size, richness)
-    shipmap = ShipMap()
-    stacked_random_tile_walk!(get_all_surface_tiles(shipmap), TileCoord(0, 0), steps, stacks, seed)
+
+    # Build a temporary GameMap to drive place_shipset! / place_pipeset!
+    temp_gm = GameMap()
+    temp_tiles = Set{TileCoord}()
+    stacked_random_tile_walk!(temp_tiles, TileCoord(0, 0), steps, stacks, seed)
+    set_surface_tile!(temp_gm, temp_tiles; ship_name = :primary)
 
     target_count = compute_target_components(class_config.target_components, richness)
-    gamemap = GameMap(shipmap)
     draw_seed = seed
-    max_iterations = target_count + 10
-
     fuel_config = !isnothing(fuel_tag) ? get(class_config.fuel_configs, fuel_tag, nothing) : nothing
     if !isnothing(fuel_config)
-        for iteration in 1:max_iterations
-            current_count = count_components(gamemap)
-            current_count >= target_count && break
-
+        for iteration in 1:target_count + 10
+            count_components(temp_gm) >= target_count && break
             pool = evaluate_component_pool(fuel_config.component_pool, richness)
             isempty(pool) && break
-
             draw_seed = get_noise(UInt32(iteration), draw_seed)
             chosen_set = weighted_roll_noise(pool, iteration, draw_seed)
-
-            success, _ = place_shipset!(gamemap, chosen_set, draw_seed)
+            success, _ = place_shipset!(temp_gm, chosen_set, draw_seed)
             !success && break
         end
     end
+    place_pipeset!(temp_gm, class_config.pipe_options, seed)
 
-    place_pipeset!(gamemap, class_config.pipe_options, seed)
-    return shipmap
+    blueprint = get_ship_blueprint(temp_gm, :primary)
+    return blueprint
 end
 
-"Check whether `shipmap`'s tiles are too close to any existing surfaces in `gamemap` (within MIN_SPACING)."
-function _is_ship_too_close(ship::ShipMap, expanded_other_tiles::Set{TileCoord})::Bool
-    return any(t -> t in expanded_other_tiles, get_all_surface_tiles(ship))
+"Check whether `ship`'s tiles are too close to any existing surfaces in `gamemap` (within MIN_SPACING)."
+function _is_ship_too_close(ship::ShipBlueprint, expanded_other_tiles::Set{TileCoord})::Bool
+    return any(t -> t in expanded_other_tiles, ship.ship_tiles)
 end
 
 "Check whether two axis-aligned bounding rectangles overlap."
@@ -724,22 +723,17 @@ Offset `ship` along `dir` until it clears all existing surfaces by at least `MIN
 tiles in every direction. Uses tile-set expansion to enforce a true isotropic gap.
 Mutates `ship` in place. Returns the total number of tile-steps moved.
 """
-function _offset_ship_until_clear!(gamemap::GameMap, ship::ShipMap, dir::HexFrame.HexAxis)::Int
+function _offset_ship_until_clear!(gamemap::GameMap, ship::ShipBlueprint, dir::HexFrame.HexAxis)::Int
     step = HexFrame.hex_neighbour_tiles[dir]
     steps = 0
     max_steps = 500
-
-    # Pre-expand other ships' tiles by MIN_SPACING once (they don't move during the loop)
-    all_other_tiles = get_all_surfaces_combined(gamemap)
+    all_other_tiles = collect_surface_tiles!(Set{TileCoord}(), gamemap)  # gamemap does not yet include ship
     expanded_others = expand_tileset(all_other_tiles, MIN_SPACING)
-
     while _is_ship_too_close(ship, expanded_others) && steps < max_steps
-        offset_ship!(ship, step)
+        offset_ship!(ship, step)  # mutates the ShipBlueprint in-place
         steps += 1
     end
-    if steps >= max_steps
-        @warn "Hit safety limit in _offset_ship_until_clear!" dir steps
-    end
+    steps >= max_steps && @warn "Hit safety limit in _offset_ship_until_clear!" dir steps
     return steps
 end
 
@@ -749,36 +743,29 @@ The ship is offset from the primary ship along direction `dir` until clear,
 then approaches from that direction.
 """
 function encounter_ship!(
-        gamemap::GameMap, newship::ShipMap, ship_name_base::String, seed::UInt32, dir::HexFrame.HexAxis;
+        gamemap::GameMap, blueprint::ShipBlueprint, ship_name_base::String, seed::UInt32, dir::HexFrame.HexAxis;
         max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing
     )
-
     newship_name = gensym(ship_name_base)
 
-    # Offset ship until no surface overlap, starting from primary centroid
-    ship_centroid = get_surface_centroid(gamemap, :primary)
-    offset_newship = deepcopy(newship)
-    offset_ship!(offset_newship, round_to_tile(ship_centroid))
-    _offset_ship_until_clear!(gamemap, offset_newship, dir)
+    # Deep-copy input blueprint to preserve caller's original
+    offset_blueprint = deepcopy(blueprint)
 
-    # Calculate approach animation parameters
+    ship_centroid = get_surface_centroid(gamemap, :primary)
+    offset_ship!(offset_blueprint, round_to_tile(ship_centroid))
+    _offset_ship_until_clear!(gamemap, offset_blueprint, dir)
+
     APPROACH_DISTANCE_TILES = 20.0
     direction_vec = HexFrame.hex_vert_vecs[dir]
-
-    # If bounds provided, ensure start point is off-screen
     if !isnothing(max_view_bounds)
         APPROACH_DISTANCE_TILES = _ensure_offscreen_distance(
-            get_cartesian_bounds(offset_newship), direction_vec, APPROACH_DISTANCE_TILES, max_view_bounds
+            get_cartesian_bounds(offset_blueprint), direction_vec, APPROACH_DISTANCE_TILES, max_view_bounds
         )
     end
-
     start_offset, target_offset, offset_step = _compute_docking_offsets(direction_vec, APPROACH_DISTANCE_TILES)
 
-    # Set docking status to approaching on the new ship
-    set_docking_status!(offset_newship, ApproachingDockStat(start_offset, target_offset, offset_step))
-
-    # Add to gamemap
-    add_ship!(gamemap, newship_name, offset_newship)
+    merge_ship!(gamemap, newship_name, offset_blueprint;
+        docking_status = ApproachingDockStat(start_offset, target_offset, offset_step))
 
     return nothing
 end
@@ -792,28 +779,23 @@ and picks the direction with the shortest distance. Ties are broken deterministi
 using the encounter seed. Delegates to `encounter_ship!` for the actual placement.
 """
 function encounter_ship_optimal_dir!(
-        gamemap::GameMap, newship::ShipMap, ship_name_base::String, seed::UInt32;
+        gamemap::GameMap, blueprint::ShipBlueprint, ship_name_base::String, seed::UInt32;
         max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing
     )
-
     ship_centroid = get_surface_centroid(gamemap, :primary)
     if isnothing(ship_centroid)
-        # Fallback: pick randomly if primary has no surface
         dir = pick_element_from_noise(collect(instances(HexFrame.HexAxis)), 42, seed)
-        encounter_ship!(gamemap, newship, ship_name_base, seed, dir; max_view_bounds)
+        encounter_ship!(gamemap, blueprint, ship_name_base, seed, dir; max_view_bounds)
         return nothing
     end
     centroid_tile = round_to_tile(ship_centroid)
 
-    # Measure offset distance required for each direction
     best_dist = typemax(Int)
     best_dirs = HexFrame.HexAxis[]
-
     for dir in instances(HexFrame.HexAxis)
-        trial_ship = deepcopy(newship)
-        offset_ship!(trial_ship, centroid_tile)
-        dist = _offset_ship_until_clear!(gamemap, trial_ship, dir)
-
+        trial = deepcopy(blueprint)           # trial copy — discarded if not best
+        offset_ship!(trial, centroid_tile)
+        dist = _offset_ship_until_clear!(gamemap, trial, dir)
         if dist < best_dist
             best_dist = dist
             best_dirs = HexFrame.HexAxis[dir]
@@ -822,14 +804,8 @@ function encounter_ship_optimal_dir!(
         end
     end
 
-    # Pick among tied directions — deterministic from seed
-    chosen_dir = if length(best_dirs) == 1
-        best_dirs[1]
-    else
-        pick_from_options(best_dirs, 42, seed)
-    end
-
-    encounter_ship!(gamemap, newship, ship_name_base, seed, chosen_dir; max_view_bounds)
+    chosen_dir = length(best_dirs) == 1 ? best_dirs[1] : pick_from_options(best_dirs, 42, seed)
+    encounter_ship!(gamemap, blueprint, ship_name_base, seed, chosen_dir; max_view_bounds)
     return nothing
 end
 
@@ -842,16 +818,11 @@ ship's surface.
 Returns `(can_depart::Bool, reason::String)`.
 """
 function check_departure_pipe_connections(gamemap::GameMap, ship_name::Symbol)::Tuple{Bool, String}
-    # Collect off-surface pipe edges relative to the departing ship (from all ships)
     offship_edges = Set{EdgeCoord}()
-    for (_, ship) in gamemap.ships
-        for (edge, _) in ship.pipe_behaviors
-            v1_on = is_node_on_ship_surface(to_nodecoord(edge.v1), gamemap; ship_name = ship_name)
-            v2_on = is_node_on_ship_surface(to_nodecoord(edge.v2), gamemap; ship_name = ship_name)
-            if !(v1_on && v2_on)
-                push!(offship_edges, edge)
-            end
-        end
+    for (edge, _) in gamemap.pipe_behaviors
+        v1_on = is_node_on_ship_surface(to_nodecoord(edge.v1), gamemap; ship_name)
+        v2_on = is_node_on_ship_surface(to_nodecoord(edge.v2), gamemap; ship_name)
+        !(v1_on && v2_on) && push!(offship_edges, edge)
     end
 
     isempty(offship_edges) && return (true, "")

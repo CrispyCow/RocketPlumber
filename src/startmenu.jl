@@ -378,8 +378,8 @@ function _create_session_for_action(state::StartMenuState, action::StartMenuActi
         learning_enabled = Bool(get(state.menu_inputs, :explorer_learning_enabled, true))
         @info "Generating explorer mode map with seed=$seed"
 
-        ship = generate_starter_ship(seed)
-        gamemap = GameMap(ships = Dict(:primary => ship))
+        blueprint = generate_starter_ship(seed)
+        gamemap = GameMap(blueprint)
         initialise_spacemap!(gamemap, seed, encounter_system_config)
         initialise_encounter_system!(gamemap.space_map)
         learning_system = learning_enabled ? LearningProgress(get_explorer_learning_entry_ids()) : NoLearningSystem()

@@ -325,30 +325,24 @@ function compare_maps(original_map::GameMap, generated_map::GameMap; tolerance=1
     # Flatten components and pipes across ships, keyed by (ship, coord)
     function flatten_components(map::GameMap)
         comps = Dict{Tuple{Symbol, TileCoord}, ComponentOnTile}()
-        for (s, ship) in map.ships
-            for (coord, comp) in ship.components
-                comps[(s, coord)] = comp
-            end
+        for (coord, comp) in map.components
+            comps[(comp.ship, coord)] = comp
         end
         return comps
     end
 
     function flatten_pipes(map::GameMap)
-        pipes = Dict{Tuple{Symbol, EdgeCoord}, PipeBehavior}()
-        for (s, ship) in map.ships
-            for (edge, pipe) in ship.pipe_behaviors
-                pipes[(s, edge)] = pipe
-            end
+        pipes = Dict{Tuple{Symbol, EdgeCoord}, PipeOnEdge}()
+        for (edge, pipe) in map.pipe_behaviors
+            pipes[(pipe.ship, edge)] = pipe
         end
         return pipes
     end
 
     function flatten_surfaces(map::GameMap)
         tiles = Set{Tuple{Symbol, TileCoord}}()
-        for (s, ship) in map.ships
-            for coord in ship.ship_tiles
-                push!(tiles, (s, coord))
-            end
+        for (coord, ship_name) in each_surface_owner(map)
+            push!(tiles, (ship_name, coord))
         end
         return tiles
     end

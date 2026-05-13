@@ -7,8 +7,7 @@ This map teaches the relationship between pressurising gas, liquid fuel storage,
 valves, and a decomposition chamber feeding a larger nozzle.
 """
 function mapgen_pressurefedintro()
-    ship = ShipMap()
-    components = Dict{TileCoord, ComponentOnTile}()
+    blueprint = ShipBlueprint()
 
     # Liquid supply tanks feeding the pressure-fed tanks.
     liquid_tank_template = ThevininTankCompBehav(
@@ -20,10 +19,10 @@ function mapgen_pressurefedintro()
         series_conductance = 5.0
     )
 
-    components[TileCoord(-2, 3)] = ComponentOnTile(deepcopy(liquid_tank_template), HexFrame.Q_POS)
-    components[TileCoord(-1, 2)] = ComponentOnTile(deepcopy(liquid_tank_template), HexFrame.Q_POS)
-    components[TileCoord(-1, 3)] = ComponentOnTile(deepcopy(liquid_tank_template), HexFrame.Q_POS)
-    components[TileCoord(-2, 2)] = ComponentOnTile(deepcopy(liquid_tank_template), HexFrame.Q_POS)
+    blueprint.components[TileCoord(-2, 3)] = ComponentOnTile(deepcopy(liquid_tank_template), HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(-1, 2)] = ComponentOnTile(deepcopy(liquid_tank_template), HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(-1, 3)] = ComponentOnTile(deepcopy(liquid_tank_template), HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(-2, 2)] = ComponentOnTile(deepcopy(liquid_tank_template), HexFrame.Q_POS, :_blueprint)
 
     # Pressure-fed liquid tanks start with fuel loaded but no pressurising gas.
     pressure_fed_tank_template = PressureFedTankCompBehav(
@@ -41,11 +40,11 @@ function mapgen_pressurefedintro()
         NoRotationBehavFrag()
     )
 
-    components[TileCoord(0, -1)] = ComponentOnTile(deepcopy(pressure_fed_tank_template), HexFrame.Q_POS)
-    components[TileCoord(0, 0)] = ComponentOnTile(deepcopy(pressure_fed_tank_template), HexFrame.Q_POS)
+    blueprint.components[TileCoord(0, -1)] = ComponentOnTile(deepcopy(pressure_fed_tank_template), HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(0, 0)] = ComponentOnTile(deepcopy(pressure_fed_tank_template), HexFrame.Q_POS, :_blueprint)
 
     # Cold-gas pressurant source.
-    components[TileCoord(3, -4)] = ComponentOnTile(
+    blueprint.components[TileCoord(3, -4)] = ComponentOnTile(
         ThevininTankCompBehav(
             GasTankBehavFrag, 3;
             fluid = HexFluids.COLD_GAS,
@@ -54,11 +53,12 @@ function mapgen_pressurefedintro()
             initial_charge = 90.0,
             series_conductance = 5.0
         ),
-        HexFrame.Q_POS
+        HexFrame.Q_POS,
+        :_blueprint
     )
 
     # Feed control and reaction hardware.
-    components[TileCoord(-2, 0)] = ComponentOnTile(
+    blueprint.components[TileCoord(-2, 0)] = ComponentOnTile(
         StandardValveCompBehav(BoolSwitchBehavFrag, TinyValve;
             max_conductance = 1.0,
             min_conductance = 0.0,
@@ -66,70 +66,34 @@ function mapgen_pressurefedintro()
             target_conductance = 0.0,
             current_conductance = 0.0
         ),
-        HexFrame.Q_POS
+        HexFrame.Q_POS,
+        :_blueprint
     )
-    components[TileCoord(-4, 0)] = ComponentOnTile(BasicDecompChamber, HexFrame.Q_POS)
-    components[TileCoord(-6, 2)] = ComponentOnTile(
+    blueprint.components[TileCoord(-4, 0)] = ComponentOnTile(BasicDecompChamber, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(-6, 2)] = ComponentOnTile(
         BasicNozzleCompBehav(
             connected_node = HexFrame.NODE_Q_POS,
             throat_area = 0.5,
             sprite = :AllNozzles_SmallNozzle
         ),
-        HexFrame.Q_POS
+        HexFrame.Q_POS,
+        :_blueprint
     )
-
-    set_component!(ship, components)
 
     # Liquid feed plumbing from the tanks through the valve and decomposition chamber.
-    set_pipe!(
-        ship,
-        EdgeCoord(VertexCoord(TileCoord(-4, 1), HexFrame.Q_POS), VertexCoord(TileCoord(-2, 0), HexFrame.Q_NEG)),
-        ScrapPipeBehav()
-    )
-    set_pipe!(
-        ship,
-        EdgeCoord(VertexCoord(TileCoord(0, -1), HexFrame.Q_NEG), VertexCoord(TileCoord(-1, 0), HexFrame.Q_POS)),
-        ScrapPipeBehav()
-    )
-    set_pipe!(
-        ship,
-        EdgeCoord(VertexCoord(TileCoord(-2, 0), HexFrame.Q_POS), VertexCoord(TileCoord(0, -1), HexFrame.Q_NEG)),
-        ScrapPipeBehav()
-    )
-    set_pipe!(
-        ship,
-        EdgeCoord(VertexCoord(TileCoord(0, 0), HexFrame.Q_NEG), VertexCoord(TileCoord(-1, 0), HexFrame.Q_POS)),
-        ScrapPipeBehav()
-    )
-    set_pipe!(
-        ship,
-        EdgeCoord(VertexCoord(TileCoord(-6, 2), HexFrame.Q_POS), VertexCoord(TileCoord(-4, 1), HexFrame.Q_NEG)),
-        BigPipeBehav()
-    )
+    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(-4, 1), HexFrame.Q_POS), VertexCoord(TileCoord(-2, 0), HexFrame.Q_NEG))] = ScrapPipeBehav()
+    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(0, -1), HexFrame.Q_NEG), VertexCoord(TileCoord(-1, 0), HexFrame.Q_POS))] = ScrapPipeBehav()
+    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(-2, 0), HexFrame.Q_POS), VertexCoord(TileCoord(0, -1), HexFrame.Q_NEG))] = ScrapPipeBehav()
+    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(0, 0), HexFrame.Q_NEG), VertexCoord(TileCoord(-1, 0), HexFrame.Q_POS))] = ScrapPipeBehav()
+    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(-6, 2), HexFrame.Q_POS), VertexCoord(TileCoord(-4, 1), HexFrame.Q_NEG))] = BigPipeBehav()
 
     # Cold-gas pressurant plumbing feeding the pressure-fed tanks.
-    set_pipe!(
-        ship,
-        EdgeCoord(VertexCoord(TileCoord(3, -3), HexFrame.Q_NEG), VertexCoord(TileCoord(2, -3), HexFrame.Q_POS)),
-        ScrapPipeBehav()
-    )
-    set_pipe!(
-        ship,
-        EdgeCoord(VertexCoord(TileCoord(1, -1), HexFrame.Q_NEG), VertexCoord(TileCoord(0, 0), HexFrame.Q_POS)),
-        ScrapPipeBehav()
-    )
-    set_pipe!(
-        ship,
-        EdgeCoord(VertexCoord(TileCoord(1, -1), HexFrame.Q_NEG), VertexCoord(TileCoord(0, -1), HexFrame.Q_POS)),
-        ScrapPipeBehav()
-    )
-    set_pipe!(
-        ship,
-        EdgeCoord(VertexCoord(TileCoord(0, -1), HexFrame.Q_POS), VertexCoord(TileCoord(2, -2), HexFrame.Q_NEG)),
-        ScrapPipeBehav()
-    )
+    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(3, -3), HexFrame.Q_NEG), VertexCoord(TileCoord(2, -3), HexFrame.Q_POS))] = ScrapPipeBehav()
+    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(1, -1), HexFrame.Q_NEG), VertexCoord(TileCoord(0, 0), HexFrame.Q_POS))] = ScrapPipeBehav()
+    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(1, -1), HexFrame.Q_NEG), VertexCoord(TileCoord(0, -1), HexFrame.Q_POS))] = ScrapPipeBehav()
+    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(0, -1), HexFrame.Q_POS), VertexCoord(TileCoord(2, -2), HexFrame.Q_NEG))] = ScrapPipeBehav()
 
-    ship.ship_tiles = Set([
+    union!(blueprint.ship_tiles, Set([
         TileCoord(3, -3),
         TileCoord(2, -4),
         TileCoord(-2, 3),
@@ -163,7 +127,8 @@ function mapgen_pressurefedintro()
         TileCoord(-4, -1),
         TileCoord(1, -2),
         TileCoord(4, -4),
-    ])
+    ]))
 
-    return GameMap(ship)
+    gamemap = GameMap(blueprint)
+    return gamemap
 end

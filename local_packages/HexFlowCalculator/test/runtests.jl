@@ -166,13 +166,54 @@ function make_test_ipc(; shared_state::FlowCalculatorSharedState = FlowCalculato
     )
 end
 
+"Create a basic game map with a primary surface tile at the origin."
+function make_gamemap()
+    gm = GameMap()
+    set_surface_tile!(gm, TileCoord(0, 0); ship_name = :primary)
+    return gm
+end
+
 "Create a two-ship GameMap for multi-ship routing tests.
 :primary has surface at (0,0); :asteroid has surface at (20,0)."
 function make_two_ship_map()
-    primary = ShipMap()
-    asteroid = ShipMap()
-    offset_ship!(asteroid, TileCoord(20, 0))
-    return GameMap(ships = Dict(:primary => primary, :asteroid => asteroid))
+    gm = make_gamemap()
+    add_ship!(gm, :asteroid, ShipState())
+    set_surface_tile!(gm, Set(TileCoord(20, r) for r in -1:1); ship_name = :asteroid)
+    return gm
+end
+
+"Build a minimal encounter blueprint for AddEncounterShipCommand tests."
+function make_encounter_test_blueprint(; include_component::Bool = true, include_pipe::Bool = true)
+    blueprint = ShipBlueprint(ship_tiles = Set([TileCoord(0, 0), TileCoord(1, 0)]))
+
+    if include_component
+        blueprint.components[TileCoord(0, 0)] = ComponentOnTile(MockCompBehav(), Q_POS, :_blueprint)
+    end
+
+    if include_pipe
+        edge = EdgeCoord(VertexCoord(TileCoord(0, 0), Q_POS), VertexCoord(TileCoord(1, 0), HexFrame.Q_NEG))
+        blueprint.pipe_behaviors[edge] = MockPipeBehav()
+    end
+
+    return blueprint
+end
+
+"Assert that exactly one new ship was added and that its merged contents match the blueprint counts."
+function assert_encounter_ship_added!(gamemap::GameMap, blueprint::ShipBlueprint, before_ships::Set{Symbol})
+    after_ships = Set(get_all_ship_names(gamemap))
+    new_ships = setdiff(after_ships, before_ships)
+
+    @test length(after_ships) == length(before_ships) + 1
+    @test length(new_ships) == 1
+
+    new_ship = only(new_ships)
+    @test count_surface_tiles(gamemap; ship_name = new_ship) == length(blueprint.ship_tiles)
+    @test count_components(gamemap; ship_name = new_ship) == length(blueprint.components)
+    @test count_pipes(gamemap; ship_name = new_ship) == length(blueprint.pipe_behaviors)
+    @test all(c -> c.ship == new_ship, each_component_of_ship(gamemap, new_ship))
+    @test all(p -> p.ship == new_ship, each_pipe_of_ship(gamemap, new_ship))
+
+    return new_ship
 end
 
 "Build a rectangular tile set for surface setup in tests."
@@ -187,17 +228,17 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 
     #= ---------- SetTileCommand ----------- =#
     @testset "SetTileCommand" begin
-        gamemap = GameMap()
+        gamemap = make_gamemap()
         coord = TileCoord(0, 0)  # on :primary surface by default
 
         cmd = create_set_tile_command(cq, coord, MockCompBehav(), Q_POS)
         logs = process_and_log!(cmd, gamemap)
 
-        @test !isnothing(get_component(gamemap, coord; ship_name = :primary))
+        @test !isnothing(get_component(gamemap, coord))
     end
 
     @testset "SetTileCommand — supports derived-state-aware updates" begin
-        gamemap = GameMap()
+        gamemap = make_gamemap()
         coord = TileCoord(0, 0)
 
         logs = process_and_log!(
@@ -205,7 +246,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
             gamemap
         )
 
-        @test !isnothing(get_component(gamemap, coord; ship_name = :primary))
+        @test !isnothing(get_component(gamemap, coord))
         @test !any(contains(log, "Invalid map edit") for log in logs)
     end
 
@@ -218,7 +259,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
             gamemap
         )
 
-        @test isnothing(get_component(gamemap, off_surface; ship_name = :primary))
+        @test isnothing(get_component(gamemap, off_surface))
     end
 
     @testset "SetTileCommand — routes to correct ship" begin
@@ -231,24 +272,25 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         )
 
         # Should land on :asteroid (the only ship with that surface tile)
-        @test isnothing(get_component(gamemap, TileCoord(1, 0); ship_name = :primary))
-        @test !isnothing(get_component(gamemap, TileCoord(1, 0); ship_name = :asteroid))
+        placed = get_component(gamemap, TileCoord(1, 0))
+        @test !isnothing(placed)
+        @test placed.ship === :asteroid
     end
 
     #= ---------- SetPipeBehaviorCommand ----------- =#
     @testset "SetPipeBehaviorCommand" begin
-        gamemap = GameMap()
+        gamemap = make_gamemap()
         edge = get_edges(TileCoord(0, 0))[1]
 
         cmd = create_set_pipe_behavior_command(cq, edge, MockPipeBehav())
         process_and_log!(cmd, gamemap)
 
-        @test !isnothing(get_pipe(gamemap, edge; ship_name = :primary))
+        @test !isnothing(get_pipe(gamemap, edge))
     end
 
     #= ---------- MoveCommand{TileCoord} ----------- =#
     @testset "MoveCommand{TileCoord}" begin
-        gamemap = GameMap()
+        gamemap = make_gamemap()
         src = TileCoord(0, 0)
         dst = TileCoord(0, 1)
         set_surface_tile!(gamemap, dst; ship_name = :primary)
@@ -258,14 +300,14 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
             create_set_tile_command(cq, src, MockCompBehav(), Q_POS),
             gamemap
         )
-        @test !isnothing(get_component(gamemap, src; ship_name = :primary))
+        @test !isnothing(get_component(gamemap, src))
 
         # Move it
         cmd = create_move_command(cq, src, dst, Q_POS)
         process_and_log!(cmd, gamemap)
 
-        @test isnothing(get_component(gamemap, src; ship_name = :primary))
-        @test !isnothing(get_component(gamemap, dst; ship_name = :primary))
+        @test isnothing(get_component(gamemap, src))
+        @test !isnothing(get_component(gamemap, dst))
     end
 
     @testset "MoveCommand{TileCoord} — rejects missing source" begin
@@ -278,11 +320,11 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         )
 
         # No component at source — destination should remain empty
-        @test isnothing(get_component(gamemap, TileCoord(0, 1); ship_name = :primary))
+        @test isnothing(get_component(gamemap, TileCoord(0, 1)))
     end
 
     @testset "MoveCommand{TileCoord} — rejects invalid in-place rotation" begin
-        gamemap = GameMap()
+        gamemap = make_gamemap()
         coord = TileCoord(0, 0)
 
         process_and_log!(
@@ -295,14 +337,14 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
             gamemap
         )
 
-        placed = get_component(gamemap, coord; ship_name = :primary)
+        placed = get_component(gamemap, coord)
         @test !isnothing(placed)
         @test placed.rotation == Q_POS
         @test any(contains(l, "Cannot rotate in place") || contains(l, "Rotation invalid") for l in logs)
     end
 
     @testset "MoveCommand{TileCoord} — allows valid in-place rotation" begin
-        gamemap = GameMap()
+        gamemap = make_gamemap()
         coord = TileCoord(0, 0)
 
         process_and_log!(
@@ -315,15 +357,35 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
             gamemap
         )
 
-        placed = get_component(gamemap, coord; ship_name = :primary)
+        placed = get_component(gamemap, coord)
         @test !isnothing(placed)
         @test placed.rotation == HexFrame.R_POS
         @test any(contains(l, "rotated in place") for l in logs)
     end
 
+    @testset "MoveCommand{TileCoord} — reports occupier ship in collision log" begin
+        gamemap = make_two_ship_map()
+        src = TileCoord(0, 0)
+        dst = TileCoord(0, 1)
+        set_surface_tile!(gamemap, dst; ship_name = :primary)
+
+        process_and_log!(
+            create_set_tile_command(cq, src, MockCompBehav(), Q_POS),
+            gamemap
+        )
+        set_component!(gamemap, dst, ComponentOnTile(MockCompBehav(), Q_POS, :asteroid))
+
+        logs = process_and_log!(
+            create_move_command(cq, src, dst, Q_POS),
+            gamemap
+        )
+
+        @test any(contains(l, "occupied on asteroid") for l in logs)
+    end
+
     #= ---------- MoveCommand{EdgeCoord} ----------- =#
     @testset "MoveCommand{EdgeCoord}" begin
-        gamemap = GameMap()
+        gamemap = make_gamemap()
         set_surface_tile!(gamemap, TileCoord(0, 1); ship_name = :primary)
 
         src_edge = get_edges(TileCoord(0, 0))[1]
@@ -334,19 +396,47 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
             create_set_pipe_behavior_command(cq, src_edge, MockPipeBehav()),
             gamemap
         )
-        @test !isnothing(get_pipe(gamemap, src_edge; ship_name = :primary))
+        @test !isnothing(get_pipe(gamemap, src_edge))
 
         # Move it
         cmd = create_move_command(cq, src_edge, dst_edge, Q_POS)
         process_and_log!(cmd, gamemap)
 
-        @test isnothing(get_pipe(gamemap, src_edge; ship_name = :primary))
-        @test !isnothing(get_pipe(gamemap, dst_edge; ship_name = :primary))
+        @test isnothing(get_pipe(gamemap, src_edge))
+        @test !isnothing(get_pipe(gamemap, dst_edge))
+
+    end
+
+    @testset "MoveCommand{EdgeCoord} — re-tags pipe on cross-ship move" begin
+        gamemap = make_two_ship_map()
+
+        src_edge = get_edges(TileCoord(0, 0))[1]
+        dst_edge = get_edges(TileCoord(20, 0))[1]
+
+        process_and_log!(
+            create_set_pipe_behavior_command(cq, src_edge, MockPipeBehav()),
+            gamemap
+        )
+
+        source_pipe = get_pipe(gamemap, src_edge)
+        @test !isnothing(source_pipe)
+        @test source_pipe.ship === :primary
+
+        logs = process_and_log!(
+            create_move_command(cq, src_edge, dst_edge, Q_POS),
+            gamemap
+        )
+
+        moved_pipe = get_pipe(gamemap, dst_edge)
+        @test isnothing(get_pipe(gamemap, src_edge))
+        @test !isnothing(moved_pipe)
+        @test moved_pipe.ship === :asteroid
+        @test any(contains(l, "Pipe moved") for l in logs)
     end
 
     #= ---------- DeleteAtCommand{TileCoord} ----------- =#
     @testset "DeleteAtCommand{TileCoord}" begin
-        gamemap = GameMap()
+        gamemap = make_gamemap()
         coord = TileCoord(0, 0)
 
         # Place then delete
@@ -354,29 +444,30 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
             create_set_tile_command(cq, coord, MockCompBehav(), Q_POS),
             gamemap
         )
-        @test !isnothing(get_component(gamemap, coord; ship_name = :primary))
+        @test !isnothing(get_component(gamemap, coord))
 
         cmd = create_delete_command(cq, coord)
         @test cmd isa DeleteAtCommand{TileCoord}
 
         logs = process_and_log!(cmd, gamemap)
-        @test isnothing(get_component(gamemap, coord; ship_name = :primary))
+        @test isnothing(get_component(gamemap, coord))
         @test any(contains(l, "deleted") || contains(l, "Deleted") for l in logs)
+        @test any(contains(l, "from primary") for l in logs)
     end
 
     #= ---------- DoActionCommand tests ----------- =#
 
     @testset "DoActionCommand" begin
-        gamemap = GameMap()
+        gamemap = make_gamemap()
         coord = TileCoord(0, 0)
 
         # place the action component
         process_and_log!(create_set_tile_command(cq, coord, ActionCompBehav(), Q_POS), gamemap)
-        @test !isnothing(get_component(gamemap, coord; ship_name = :primary))  # ensure placement succeeded
+        @test !isnothing(get_component(gamemap, coord))  # ensure placement succeeded
         @test action_count[] == 0
 
         # sanity check: manual invocation should work
-        wrapped = get_component(gamemap, coord; ship_name = :primary)
+        wrapped = get_component(gamemap, coord)
         do_action!(wrapped, :flip)
         @test action_count[] == 1
         # reset for command test
@@ -406,22 +497,23 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 
     #= ---------- DeleteAtCommand{EdgeCoord} ----------- =#
     @testset "DeleteAtCommand{EdgeCoord}" begin
-        gamemap = GameMap()
-        edge = get_edges(TileCoord(0, 0))[1]
+        gamemap = make_two_ship_map()
+        edge = get_edges(TileCoord(20, 0))[1]
 
         # Place then delete
         process_and_log!(
             create_set_pipe_behavior_command(cq, edge, MockPipeBehav()),
             gamemap
         )
-        @test !isnothing(get_pipe(gamemap, edge; ship_name = :primary))
+        @test !isnothing(get_pipe(gamemap, edge))
 
         cmd = create_delete_command(cq, edge)
         @test cmd isa DeleteAtCommand{EdgeCoord}
 
         logs = process_and_log!(cmd, gamemap)
-        @test isnothing(get_pipe(gamemap, edge; ship_name = :primary))
+        @test isnothing(get_pipe(gamemap, edge))
         @test any(contains(l, "deleted") || contains(l, "Deleted") for l in logs)
+        @test any(contains(l, "from asteroid") for l in logs)
     end
 
     @testset "DeleteAtCommand{EdgeCoord} — missing pipe" begin
@@ -451,8 +543,8 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 
     #= ---------- ClickTileCommand ----------- =#
     @testset "ClickTileCommand" begin
-        gamemap = GameMap()
-        coord = TileCoord(0, 0)
+        gamemap = make_two_ship_map()
+        coord = TileCoord(20, 0)
 
         # Place a component to click on
         process_and_log!(
@@ -465,6 +557,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 
         # MockCompBehav.on_click! does nothing, so no error expected
         @test !any(contains(l, "error") || contains(l, "Error") for l in logs)
+        @test any(contains(l, "on asteroid") for l in logs)
     end
 
     @testset "ClickTileCommand — missing component" begin
@@ -480,7 +573,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 
     #= ---------- AddShipSurfaceCommand ----------- =#
     @testset "AddShipSurfaceCommand" begin
-        gamemap = GameMap()
+        gamemap = make_gamemap()
         coord = TileCoord(0, 1)  # adjacent to default (0,0) surface
 
         cmd = create_add_ship_surface_command(cq, coord)
@@ -491,7 +584,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 
     #= ---------- RemoveShipSurfaceCommand ----------- =#
     @testset "RemoveShipSurfaceCommand" begin
-        gamemap = GameMap()
+        gamemap = make_gamemap()
         coord = TileCoord(0, 1)
 
         # Add then remove
@@ -516,6 +609,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 
         # After override, gamemap should have the :asteroid ship
         @test haskey(gamemap.ships, :asteroid)
+        @test count_surface_tiles(gamemap) == count_surface_tiles(new_map)
     end
 
     #= ---------- Multi-Ship Routing ----------- =#
@@ -529,8 +623,9 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
             gamemap
         )
 
-        @test isnothing(get_component(gamemap, TileCoord(1, 0); ship_name = :primary))
-        @test !isnothing(get_component(gamemap, TileCoord(1, 0); ship_name = :asteroid))
+        placed = get_component(gamemap, TileCoord(1, 0))
+        @test !isnothing(placed)
+        @test placed.ship === :asteroid
 
         # Move within :asteroid
         set_surface_tile!(gamemap, TileCoord(2, 0); ship_name = :asteroid)
@@ -539,8 +634,10 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
             gamemap
         )
 
-        @test isnothing(get_component(gamemap, TileCoord(1, 0); ship_name = :asteroid))
-        @test !isnothing(get_component(gamemap, TileCoord(2, 0); ship_name = :asteroid))
+        @test isnothing(get_component(gamemap, TileCoord(1, 0)))
+        moved = get_component(gamemap, TileCoord(2, 0))
+        @test !isnothing(moved)
+        @test moved.ship === :asteroid
 
         # Delete from :asteroid
         process_and_log!(
@@ -548,7 +645,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
             gamemap
         )
 
-        @test isnothing(get_component(gamemap, TileCoord(2, 0); ship_name = :asteroid))
+        @test isnothing(get_component(gamemap, TileCoord(2, 0)))
     end
 
     #= ---------- Command ID Generation ----------- =#
@@ -984,18 +1081,16 @@ end
     cq = create_command_queue(16)
 
     @testset "valid redock moves ship and starts animation" begin
-        gm = GameMap()
-        sec = ShipMap()
-        offset_ship!(sec, TileCoord(10, 0))
-        sec.docking_status = FlowMap.ConnectedDockStat()
-        add_ship!(gm, :asteroid, sec)
+        gm = make_gamemap()
+        add_ship!(gm, :asteroid, ShipState(docking_status = FlowMap.ConnectedDockStat()))
+        set_surface_tile!(gm, Set(TileCoord(10, r) for r in -1:1); ship_name = :asteroid)
 
         delta = TileCoord(-3, 0)
         cmd = create_redock_ship_command(cq, :asteroid, delta)
         logs = process_and_log!(cmd, gm)
 
         # Ship should now be offset by delta (originally at 10,0 → 7,0)
-        new_tiles = get_all_surface_tiles(get_ship(gm, :asteroid))
+        new_tiles = collect_surface_tiles!(Set{TileCoord}(), gm; ship_name = :asteroid)
         @test TileCoord(7, 0) in new_tiles
 
         # Should be in approaching state (animating)
@@ -1004,20 +1099,18 @@ end
     end
 
     @testset "rejects placement too close to another ship" begin
-        gm = GameMap()
-        sec = ShipMap()
-        offset_ship!(sec, TileCoord(5, 0))
-        sec.docking_status = FlowMap.ConnectedDockStat()
-        add_ship!(gm, :asteroid, sec)
+        gm = make_gamemap()
+        add_ship!(gm, :asteroid, ShipState(docking_status = FlowMap.ConnectedDockStat()))
+        set_surface_tile!(gm, Set(TileCoord(5, r) for r in -1:1); ship_name = :asteroid)
 
         # Try to move directly on top of primary ship at (0,0)
         delta = TileCoord(-5, 0)
         cmd = create_redock_ship_command(cq, :asteroid, delta)
 
         # Should not mutate the map (rejected via console message)
-        original_tiles = copy(get_all_surface_tiles(get_ship(gm, :asteroid)))
+        original_tiles = collect_surface_tiles!(Set{TileCoord}(), gm; ship_name = :asteroid)
         process_and_log!(cmd, gm)
-        @test get_all_surface_tiles(get_ship(gm, :asteroid)) == original_tiles
+        @test collect_surface_tiles!(Set{TileCoord}(), gm; ship_name = :asteroid) == original_tiles
     end
 
     @testset "rejects redock of nonexistent ship" begin
@@ -1028,11 +1121,9 @@ end
     end
 
     @testset "animation completes after redock" begin
-        gm = GameMap()
-        sec = ShipMap()
-        offset_ship!(sec, TileCoord(10, 0))
-        sec.docking_status = FlowMap.ConnectedDockStat()
-        add_ship!(gm, :asteroid, sec)
+        gm = make_gamemap()
+        add_ship!(gm, :asteroid, ShipState(docking_status = FlowMap.ConnectedDockStat()))
+        set_surface_tile!(gm, Set(TileCoord(10, r) for r in -1:1); ship_name = :asteroid)
 
         delta = TileCoord(-3, 0)
         cmd = create_redock_ship_command(cq, :asteroid, delta)
@@ -1050,6 +1141,138 @@ end
     end
 end
 
+# ===============================================================
+# Tests — AddEncounterShipCommand
+# ===============================================================
+
+@testset "AddEncounterShipCommand" begin
+    cq = create_command_queue(16)
+
+    @testset "explicit direction adds ship with merged blueprint contents" begin
+        gm = make_gamemap()
+        blueprint = make_encounter_test_blueprint()
+        before_ships = Set(get_all_ship_names(gm))
+
+        cmd = create_add_encounter_ship_command(
+            cq, blueprint, "test_enc", UInt32(42);
+            dir = HexFrame.Q_POS,
+            target_encounter_index = nothing,
+            max_view_bounds = nothing
+        )
+
+        # Verify command was created
+        @test cmd isa AddEncounterShipCommand
+        @test cmd.blueprint.ship_tiles == blueprint.ship_tiles
+        @test cmd.dir === HexFrame.Q_POS
+        @test cmd.target_encounter_index === nothing
+
+        # Apply the command
+        logs = process_and_log!(cmd, gm)
+        new_ship = assert_encounter_ship_added!(gm, blueprint, before_ships)
+        status = get_docking_status(gm, new_ship)
+
+        @test status isa ApproachingDockStat
+        @test get_render_offset(status) isa AxialCoord
+        only_comp = only(each_component_of_ship(gm, new_ship))
+        @test only_comp.component isa MockCompBehav
+        @test only_comp.rotation == Q_POS
+
+        @test !any(contains(log, "Invalid map edit") for log in logs)
+    end
+
+    @testset "optimal direction adds ship with approaching dock status" begin
+        gm = make_gamemap()
+        blueprint = make_encounter_test_blueprint()
+        before_ships = Set(get_all_ship_names(gm))
+
+        cmd = create_add_encounter_ship_command(
+            cq, blueprint, "test_enc2", UInt32(43);
+            dir = nothing,  # Trigger optimal direction
+            target_encounter_index = nothing,
+            max_view_bounds = nothing
+        )
+
+        # Verify command structure
+        @test cmd isa AddEncounterShipCommand
+        @test cmd.dir === nothing  # Should request optimal direction
+
+        logs = process_and_log!(cmd, gm)
+        new_ship = assert_encounter_ship_added!(gm, blueprint, before_ships)
+        status = get_docking_status(gm, new_ship)
+
+        @test status isa ApproachingDockStat
+        @test get_render_offset(status) isa AxialCoord
+        @test !any(contains(log, "Invalid map edit") for log in logs)
+    end
+
+    @testset "tile-only blueprint still creates a ship" begin
+        gm = make_gamemap()
+        blueprint = ShipBlueprint(ship_tiles = Set([TileCoord(0, 0)]))
+        before_ships = Set(get_all_ship_names(gm))
+
+        cmd = create_add_encounter_ship_command(
+            cq, blueprint, "minimal_ship", UInt32(44);
+            dir = HexFrame.Q_POS,
+            target_encounter_index = nothing,
+            max_view_bounds = nothing
+        )
+
+        logs = process_and_log!(cmd, gm)
+        new_ship = assert_encounter_ship_added!(gm, blueprint, before_ships)
+
+        @test get_docking_status(gm, new_ship) isa ApproachingDockStat
+        @test count_components(gm; ship_name = new_ship) == 0
+        @test count_pipes(gm; ship_name = new_ship) == 0
+        @test !any(contains(log, "Invalid map edit") for log in logs)
+    end
+
+    @testset "command creation preserves blueprint data" begin
+        blueprint = make_encounter_test_blueprint()
+
+        cmd = create_add_encounter_ship_command(
+            cq, blueprint, "data_test", UInt32(45)
+        )
+
+        @test cmd.blueprint !== blueprint
+        @test cmd.blueprint.ship_tiles == blueprint.ship_tiles
+        @test keys(cmd.blueprint.components) == keys(blueprint.components)
+        @test keys(cmd.blueprint.pipe_behaviors) == keys(blueprint.pipe_behaviors)
+        @test only(values(cmd.blueprint.components)).ship == :_blueprint
+    end
+
+    @testset "live encounter recycles encounter point and clears manoeuvre" begin
+        gm = make_gamemap()
+        blueprint = make_encounter_test_blueprint(include_pipe = false)
+        before_ships = Set(get_all_ship_names(gm))
+        initialise_spacemap!(gm, UInt32(42), make_trigger_test_encounter_config())
+        push!(get_encounter_points(gm), make_trigger_test_encounter_point())
+        set_time_years!(gm, 5.0)
+
+        man = ManoeuvreData(
+            approach_burn_dv = SVector(1.0, 0.0),
+            capture_burn_dv = SVector(-1.0, 0.0),
+            target_encounter_index = 1,
+        )
+        set_active_manoeuvre!(gm, man)
+
+        cmd = create_add_encounter_ship_command(
+            cq, blueprint, "live_encounter", UInt32(46);
+            dir = HexFrame.Q_POS,
+            target_encounter_index = 1,
+        )
+
+        logs = process_and_log!(cmd, gm)
+        new_ship = assert_encounter_ship_added!(gm, blueprint, before_ships)
+        encounter_point = only(get_encounter_points(gm))
+
+        @test get_docking_status(gm, new_ship) isa ApproachingDockStat
+        @test !has_active_manoeuvre(gm)
+        @test encounter_point.spawn_time == 5.0
+        @test any(contains(log, "Encounter triggered: live_encounter") for log in logs)
+        @test !any(contains(log, "Invalid map edit") for log in logs)
+    end
+end
+
 #= ---------- ModifyTilePipeCommand ----------- =#
 
 @testset "ModifyTilePipeCommand" begin
@@ -1057,8 +1280,7 @@ end
     
     @testset "place new axis on empty surface tile" begin
         gm = GameMap()
-        ship = get_ship(gm, :primary)
-        set_surface_tile!(ship, surface_rect_tiles(0, -1, 2, 1))
+        set_surface_tile!(gm, surface_rect_tiles(0, -1, 2, 1))
         
         cmd = HexFlowCalculator.ModifyTilePipeCommand(
             1,
@@ -1069,7 +1291,7 @@ end
         )
         logs = process_and_log!(cmd, gm)
         
-        comp = get_component(gm, TileCoord(0, -1); ship_name = :primary)
+        comp = get_component(gm, TileCoord(0, -1))
         @test !isnothing(comp)
         @test isa(comp.component, HexFlowPipeComponents.MultiPipeTileCompBehav)
         @test any(contains(l, "modified") || contains(l, "Modified") for l in logs)
@@ -1077,8 +1299,7 @@ end
     
     @testset "add second axis to existing multi-pipe" begin
         gm = GameMap()
-        ship = get_ship(gm, :primary)
-        set_surface_tile!(ship, surface_rect_tiles(0, -1, 2, 1))
+        set_surface_tile!(gm, surface_rect_tiles(0, -1, 2, 1))
         
         cmd1 = HexFlowCalculator.ModifyTilePipeCommand(
             1,
@@ -1098,7 +1319,7 @@ end
         )
         process_and_log!(cmd2, gm)
         
-        comp = get_component(gm, TileCoord(0, -1); ship_name = :primary)
+        comp = get_component(gm, TileCoord(0, -1))
         behav = comp.component
         @test !isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.Q_POS))
         @test !isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.R_POS))
@@ -1106,8 +1327,7 @@ end
     
     @testset "delete targeted axis only" begin
         gm = GameMap()
-        ship = get_ship(gm, :primary)
-        set_surface_tile!(ship, surface_rect_tiles(0, -1, 2, 1))
+        set_surface_tile!(gm, surface_rect_tiles(0, -1, 2, 1))
         
         cmd1 = HexFlowCalculator.ModifyTilePipeCommand(
             1,
@@ -1136,7 +1356,7 @@ end
         )
         process_and_log!(cmd3, gm)
         
-        comp = get_component(gm, TileCoord(0, -1); ship_name = :primary)
+        comp = get_component(gm, TileCoord(0, -1))
         behav = comp.component
         @test isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.Q_POS))
         @test !isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.R_POS))
@@ -1144,8 +1364,7 @@ end
     
     @testset "delete last axis removes component" begin
         gm = GameMap()
-        ship = get_ship(gm, :primary)
-        set_surface_tile!(ship, surface_rect_tiles(0, -1, 2, 1))
+        set_surface_tile!(gm, surface_rect_tiles(0, -1, 2, 1))
         
         cmd1 = HexFlowCalculator.ModifyTilePipeCommand(
             1,
@@ -1165,7 +1384,7 @@ end
         )
         process_and_log!(cmd2, gm)
         
-        comp = get_component(gm, TileCoord(0, -1); ship_name = :primary)
+        comp = get_component(gm, TileCoord(0, -1))
         @test isnothing(comp)
     end
 end
@@ -1177,8 +1396,7 @@ end
     
     @testset "move to empty tile" begin
         gm = GameMap()
-        ship = get_ship(gm, :primary)
-        set_surface_tile!(ship, surface_rect_tiles(0, -2, 3, 1))
+        set_surface_tile!(gm, surface_rect_tiles(0, -2, 3, 1))
         
         cmd_init = HexFlowCalculator.ModifyTilePipeCommand(
             10,
@@ -1199,16 +1417,15 @@ end
         )
         logs = process_and_log!(cmd_move, gm)
         
-        @test isnothing(get_component(gm, TileCoord(0, -2); ship_name = :primary))
-        comp = get_component(gm, TileCoord(1, -2); ship_name = :primary)
+        @test isnothing(get_component(gm, TileCoord(0, -2)))
+        comp = get_component(gm, TileCoord(1, -2))
         @test !isempty(HexFlowPipeComponents.get_tile_pipe(comp.component, HexFrame.Q_POS))
         @test any(contains(l, "moved") || contains(l, "Moved") for l in logs)
     end
     
     @testset "merge onto existing multi-pipe" begin
         gm = GameMap()
-        ship = get_ship(gm, :primary)
-        set_surface_tile!(ship, surface_rect_tiles(0, -2, 3, 1))
+        set_surface_tile!(gm, surface_rect_tiles(0, -2, 3, 1))
         
         # Create pipes on three tiles
         cmd_init1 = HexFlowCalculator.ModifyTilePipeCommand(
@@ -1249,8 +1466,8 @@ end
         )
         logs = process_and_log!(cmd_move, gm)
         
-        @test isnothing(get_component(gm, TileCoord(2, -2); ship_name = :primary))
-        comp = get_component(gm, TileCoord(1, -2); ship_name = :primary)
+        @test isnothing(get_component(gm, TileCoord(2, -2)))
+        comp = get_component(gm, TileCoord(1, -2))
         behav = comp.component
         @test isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.Q_POS))
         @test !isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.R_POS))
@@ -1259,8 +1476,7 @@ end
     
     @testset "rejects move from empty source axis" begin
         gm = GameMap()
-        ship = get_ship(gm, :primary)
-        set_surface_tile!(ship, surface_rect_tiles(0, -2, 3, 1))
+        set_surface_tile!(gm, surface_rect_tiles(0, -2, 3, 1))
         
         cmd_init = HexFlowCalculator.ModifyTilePipeCommand(
             10,
@@ -1287,8 +1503,7 @@ end
     
     @testset "rejects move to occupied destination axis" begin
         gm = GameMap()
-        ship = get_ship(gm, :primary)
-        set_surface_tile!(ship, surface_rect_tiles(0, -2, 3, 1))
+        set_surface_tile!(gm, surface_rect_tiles(0, -2, 3, 1))
         
         # Create two pipes on the same tile, different axes
         cmd_init1 = HexFlowCalculator.ModifyTilePipeCommand(
@@ -1325,8 +1540,7 @@ end
 
     @testset "retargets within the same tile without duplication" begin
         gm = GameMap()
-        ship = get_ship(gm, :primary)
-        set_surface_tile!(ship, surface_rect_tiles(0, -2, 3, 1))
+        set_surface_tile!(gm, surface_rect_tiles(0, -2, 3, 1))
 
         cmd_init = HexFlowCalculator.ModifyTilePipeCommand(
             20,
@@ -1347,12 +1561,30 @@ end
         )
         logs = process_and_log!(cmd_move, gm)
 
-        comp = get_component(gm, TileCoord(0, -2); ship_name = :primary)
+        comp = get_component(gm, TileCoord(0, -2))
         behav = comp.component
         @test isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.Q_POS))
         @test isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.R_POS))
         @test !isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.S_POS))
         @test any(contains(l, "moved") || contains(l, "Moved") for l in logs)
+    end
+
+    @testset "rejects non-multi-pipe source with precise message" begin
+        gm = GameMap()
+        set_surface_tile!(gm, surface_rect_tiles(0, -2, 3, 1))
+        set_component!(gm, TileCoord(0, -2), ComponentOnTile(MockCompBehav(), HexFrame.Q_POS, :primary))
+
+        cmd_move = HexFlowCalculator.MoveTilePipeCommand(
+            22,
+            TileCoord(0, -2),
+            HexFrame.Q_POS,
+            TileCoord(1, -2),
+            HexFrame.Q_POS,
+            nothing
+        )
+        logs = process_and_log!(cmd_move, gm)
+
+        @test any(contains(l, "Source tile has no multi-pipe component") for l in logs)
     end
 end
 
@@ -1573,7 +1805,7 @@ end
 @testset "replace_by_mutation!" begin
     src = GameMap()
     set_surface_tile!(src, TileCoord(5, 5))
-    set_component!(src, TileCoord(0, 0), ComponentOnTile(MockCompBehav(), Q_POS))
+    set_component!(src, TileCoord(0, 0), ComponentOnTile(MockCompBehav(), Q_POS, :primary))
 
     dest = GameMap()
     @test !is_on_surface_tile(TileCoord(5, 5), dest)

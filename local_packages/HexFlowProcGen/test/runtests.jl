@@ -55,11 +55,13 @@ HexFlowProcGen.roll_pipe(::Val{:MockPipe}, point, seed) = MockPipeBehav()
 
 "Creates a GameMap with a single ship having the given surface tiles."
 function make_test_gamemap(tiles::Set{TileCoord})
-    sm = ShipMap()
-    empty!(sm.ship_tiles)
-    union!(sm.ship_tiles, tiles)
-    return GameMap(sm)
+    gm = GameMap()
+    set_surface_tile!(gm, tiles; ship_name = :primary)
+    return gm
 end
+
+"Creates a GameMap with a single primary surface tile at the origin."
+make_origin_gamemap() = make_test_gamemap(Set([TileCoord(0, 0)]))
 
 "Creates a small hex blob surface for testing (7 tiles: centre + 6 neighbours)."
 function make_small_surface()
@@ -81,12 +83,11 @@ function make_pipe_test_surface()
     return tiles
 end
 
-"Creates a bare ShipMap with a small random-walk surface for encounter testing."
-function make_bare_shipmap(seed::UInt32)
-    ship = ShipMap()
-    empty!(ship.ship_tiles)
-    stacked_random_tile_walk!(ship.ship_tiles, TileCoord(0, 0), 2, 2, seed)
-    return ship
+"Creates a bare ShipBlueprint with a small random-walk surface for encounter testing."
+function make_bare_blueprint(seed::UInt32)
+    bp = ShipBlueprint()
+    stacked_random_tile_walk!(bp.ship_tiles, TileCoord(0, 0), 2, 2, seed)
+    return bp
 end
 
 
@@ -299,7 +300,7 @@ end
         success, msg = place_shipset!(gm, shipset, UInt32(0x1234))
         @test success == true
 
-        comps = get_all_components(gm)
+        comps = get_components(gm)
         @test length(comps) >= 1
         @test all(cot.component isa MockCompBehav for (_, cot) in comps)
     end
@@ -314,7 +315,7 @@ end
 
         success, msg = place_shipset!(gm, shipset, UInt32(0x5678))
         @test success == true
-        @test length(get_all_components(gm)) >= 1
+        @test length(get_components(gm)) >= 1
     end
 end
 
@@ -336,13 +337,13 @@ end
     @testset "place_random_pipes!" begin
         surface = make_pipe_test_surface()
         gm = make_test_gamemap(surface)
-        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS))
+        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
 
         place_random_pipes!(gm, :MockPipe, UInt32(0xAAAA); pipe_density = 0.3)
 
-        pipes = get_ship(gm, :primary).pipe_behaviors
+        pipes = gm.pipe_behaviors
         @test !isempty(pipes)
-        @test all(p isa MockPipeBehav for (_, p) in pipes)
+        @test all(p.pipe isa MockPipeBehav for (_, p) in pipes)
 
         # Verify no two placed pipes share a vertex
         placed_edges = collect(keys(pipes))
@@ -355,13 +356,13 @@ end
     @testset "place_connected_pipes!" begin
         surface = make_pipe_test_surface()
         gm = make_test_gamemap(surface)
-        set_component!(gm, TileCoord(-2, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS))
-        set_component!(gm, TileCoord(2, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS))
+        set_component!(gm, TileCoord(-2, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
+        set_component!(gm, TileCoord(2, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
 
         place_connected_pipes!(gm, :MockPipe, UInt32(0xBBBB); pipe_density = 0.2)
 
         # Verify the mutual-connection invariant: no two placed pipes share a vertex
-        pipes = get_ship(gm, :primary).pipe_behaviors
+        pipes = gm.pipe_behaviors
         placed_edges = collect(keys(pipes))
         for i in eachindex(placed_edges), j in (i+1):length(placed_edges)
             a, b = placed_edges[i], placed_edges[j]
@@ -372,33 +373,33 @@ end
     @testset "place_pipeset! single" begin
         surface = make_pipe_test_surface()
         gm = make_test_gamemap(surface)
-        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS))
+        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
 
         opts = PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES, 0.3)
         place_pipeset!(gm, opts, UInt32(0xCCCC))
-        @test !isempty(get_ship(gm, :primary).pipe_behaviors)
+        @test !isempty(gm.pipe_behaviors)
     end
 
     @testset "place_pipeset! vector" begin
         surface = make_small_surface()
         gm = make_test_gamemap(surface)
-        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS))
+        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
 
         opts_vec = [
             PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES, 0.5),
             PipeSpawnOptions(:MockPipe, HexFlowProcGen.ONE_CONNECT_PIPES, 0.5),
         ]
         place_pipeset!(gm, opts_vec, UInt32(0xDDDD))
-        @test !isempty(get_ship(gm, :primary).pipe_behaviors)
+        @test !isempty(gm.pipe_behaviors)
     end
 
     @testset "zero density places no pipes" begin
         surface = make_small_surface()
         gm = make_test_gamemap(surface)
-        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS))
+        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
 
         place_random_pipes!(gm, :MockPipe, UInt32(0xEEEE); pipe_density = 0.0)
-        @test isempty(get_ship(gm, :primary).pipe_behaviors)
+        @test isempty(gm.pipe_behaviors)
     end
 end
 
@@ -481,29 +482,25 @@ const mock_pipe_opts = [PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES,
     end
 
     @testset "generate_encounter places surface and components" begin
-        ship = generate_encounter(ENCOUNTER_SHIP, HexFluids.COLD_GAS, 2.0,
+        blueprint = generate_encounter(ENCOUNTER_SHIP, HexFluids.COLD_GAS, 2.0,
             UInt32(0x2222), mock_class_config)
 
-        @test ship isa ShipMap
-        @test !isempty(ship.ship_tiles)
-        @test !isempty(ship.components)
+        @test blueprint isa ShipBlueprint
+        @test !isempty(blueprint.ship_tiles)
+        @test !isempty(blueprint.components)
     end
 
     @testset "_is_ship_too_close" begin
         tiles = make_small_surface()
         gm = make_test_gamemap(tiles)
-        expanded = FlowMap.expand_tileset(FlowMap.get_all_surfaces_combined(gm), HexFlowProcGen.MIN_SPACING)
+        expanded = FlowMap.expand_tileset(collect_surface_tiles!(Set{TileCoord}(), gm), HexFlowProcGen.MIN_SPACING)
 
         # Ship at origin is within MIN_SPACING of primary
-        close_ship = ShipMap()
-        empty!(close_ship.ship_tiles)
-        push!(close_ship.ship_tiles, TileCoord(0, 0))
+        close_ship = ShipBlueprint(ship_tiles = Set([TileCoord(0, 0)]))
         @test HexFlowProcGen._is_ship_too_close(close_ship, expanded) == true
 
         # Ship far away is not
-        remote_ship = ShipMap()
-        empty!(remote_ship.ship_tiles)
-        push!(remote_ship.ship_tiles, TileCoord(100, 100))
+        remote_ship = ShipBlueprint(ship_tiles = Set([TileCoord(100, 100)]))
         @test HexFlowProcGen._is_ship_too_close(remote_ship, expanded) == false
     end
 
@@ -529,11 +526,11 @@ end
 @testset "encounter_ship! and depart_ship!" begin
 
     @testset "encounter_ship! adds a ship with ApproachingDockStat" begin
-        gm = GameMap()
-        newship = make_bare_shipmap(UInt32(0x12345678))
+        gm = make_origin_gamemap()
+        bp = make_bare_blueprint(UInt32(0x12345678))
 
         before = Set(keys(gm.ships))
-        encounter_ship!(gm, newship, "encounter_test", UInt32(0x12345678), HexFrame.Q_POS)
+        encounter_ship!(gm, bp, "encounter_test", UInt32(0x12345678), HexFrame.Q_POS)
         after = Set(keys(gm.ships))
 
         new_ships = collect(setdiff(after, before))
@@ -545,20 +542,20 @@ end
 
     @testset "encounter_ship! works with all hex axes" begin
         for axis in instances(HexFrame.HexAxis)
-            gm = GameMap()
-            newship = make_bare_shipmap(UInt32(0xAAAA))
+            gm = make_origin_gamemap()
+            bp = make_bare_blueprint(UInt32(0xAAAA))
 
-            encounter_ship!(gm, newship, "axis_$(axis)", UInt32(0xAAAA), axis)
+            encounter_ship!(gm, bp, "axis_$(axis)", UInt32(0xAAAA), axis)
             @test length(gm.ships) == 2  # :primary + new ship
         end
     end
 
     @testset "encounter -> connect -> depart end-to-end" begin
-        gm = GameMap()
-        newship = make_bare_shipmap(UInt32(0x12345678))
+        gm = make_origin_gamemap()
+        bp = make_bare_blueprint(UInt32(0x12345678))
 
         before = Set(keys(gm.ships))
-        encounter_ship!(gm, newship, "e2e_test", UInt32(0x12345678), HexFrame.R_POS)
+        encounter_ship!(gm, bp, "e2e_test", UInt32(0x12345678), HexFrame.R_POS)
         after = Set(keys(gm.ships))
         newship = only(setdiff(after, before))
 
@@ -586,15 +583,15 @@ end
     end
 
     @testset "depart_ship! error cases" begin
-        gm = GameMap()
-        newship = make_bare_shipmap(UInt32(0x9999))
+        gm = make_origin_gamemap()
+        bp = make_bare_blueprint(UInt32(0x9999))
 
         # Can't depart a ship that doesn't exist
         success, _ = depart_ship!(gm, :nonexistent)
         @test success == false
 
         # Can't depart a ship that is still approaching
-        encounter_ship!(gm, newship, "depart_errs", UInt32(0x9999), HexFrame.Q_POS)
+        encounter_ship!(gm, bp, "depart_errs", UInt32(0x9999), HexFrame.Q_POS)
         newship = only(setdiff(keys(gm.ships), [:primary]))
         success2, _ = depart_ship!(gm, newship)
         @test success2 == false
@@ -636,18 +633,11 @@ end
     Secondary has a ConnectedDockStat so it can depart.
     """
     function make_two_ship_gamemap()
-        gm = GameMap()
-
-        # Primary ship: single tile at origin
-        empty!(gm.ships[:primary].ship_tiles)
-        push!(gm.ships[:primary].ship_tiles, TileCoord(0, 0))
+        gm = make_origin_gamemap()
 
         # Secondary ship: single tile at (3,-1), separated from primary
-        sm = ShipMap()
-        empty!(sm.ship_tiles)
-        push!(sm.ship_tiles, TileCoord(3, -1))
-        sm.docking_status = FlowMap.ConnectedDockStat()
-        add_ship!(gm, :secondary, sm)
+        add_ship!(gm, :secondary, ShipState(docking_status = FlowMap.ConnectedDockStat()))
+        set_surface_tile!(gm, Set([TileCoord(3, -1)]); ship_name = :secondary)
 
         return gm
     end
@@ -663,7 +653,7 @@ end
     @testset "can_place_pipe_offship — connected via existing pipe" begin
         gm = make_two_ship_gamemap()
         # Place E1 on primary, then E2 should connect through E1
-        set_pipe!(gm, ISP_E1, MockPipeBehav(); ship_name = :primary)
+        set_pipe!(gm, ISP_E1, PipeOnEdge(MockPipeBehav(), :primary))
         valid, target, _ = can_place_pipe_offship(ISP_E2, gm)
         @test valid == true
         @test target == :primary
@@ -680,9 +670,9 @@ end
     @testset "validate_offship_pipe_deletion — middle of chain" begin
         gm = make_two_ship_gamemap()
         # Full bridge chain stored on their respective ships
-        set_pipe!(gm, ISP_E1, MockPipeBehav(); ship_name = :primary)
-        set_pipe!(gm, ISP_E2, MockPipeBehav(); ship_name = :primary)
-        set_pipe!(gm, ISP_E3, MockPipeBehav(); ship_name = :secondary)
+        set_pipe!(gm, ISP_E1, PipeOnEdge(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E2, PipeOnEdge(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E3, PipeOnEdge(MockPipeBehav(), :secondary))
 
         # Deleting E2 (middle) splits into E1 (reaches primary via V1) and E3 (reaches secondary
         # via V4). Both components still connect to a ship → valid deletion.
@@ -692,8 +682,8 @@ end
     @testset "validate_offship_pipe_deletion — would orphan" begin
         gm = make_two_ship_gamemap()
         # E1 (on primary) → E2 (floating, stored on primary)
-        set_pipe!(gm, ISP_E1, MockPipeBehav(); ship_name = :primary)
-        set_pipe!(gm, ISP_E2, MockPipeBehav(); ship_name = :primary)
+        set_pipe!(gm, ISP_E1, PipeOnEdge(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E2, PipeOnEdge(MockPipeBehav(), :primary))
 
         # Deleting E1 would orphan E2 (E2's vertices touch no ship surface)
         @test validate_offship_pipe_deletion(ISP_E1, gm) == false
@@ -704,20 +694,23 @@ end
     @testset "reassign_pipe_ownership! — chain split" begin
         gm = make_two_ship_gamemap()
         # Full chain all stored on primary
-        set_pipe!(gm, ISP_E1, MockPipeBehav(); ship_name = :primary)
-        set_pipe!(gm, ISP_E2, MockPipeBehav(); ship_name = :primary)
-        set_pipe!(gm, ISP_E3, MockPipeBehav(2.0); ship_name = :primary)
+        set_pipe!(gm, ISP_E1, PipeOnEdge(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E2, PipeOnEdge(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E3, PipeOnEdge(MockPipeBehav(2.0), :primary))
 
         # Delete E2 to split the chain
-        delete_pipe!(gm, ISP_E2; ship_name = :primary)
+        delete_pipe!(gm, ISP_E2)
         reassign_pipe_ownership!(ISP_E2, gm)
 
         # E1 should stay on primary (V1 is on primary's surface)
-        @test has_pipe(gm.ships[:primary], ISP_E1)
+        e1 = get_pipe(gm, ISP_E1)
+        @test !isnothing(e1) && e1.ship === :primary
         # E3 should have moved to secondary (V4 is on secondary's surface)
-        @test has_pipe(gm.ships[:secondary], ISP_E3)
-        @test !has_pipe(gm.ships[:primary], ISP_E3)
-        @test get_conductance(get_pipe(gm.ships[:secondary], ISP_E3)) ≈ 2.0
+        e3 = get_pipe(gm, ISP_E3)
+        @test !isnothing(e3) && e3.ship === :secondary
+        pipe_on_edge = e3
+        @test !isnothing(pipe_on_edge)
+        @test get_conductance(pipe_on_edge.pipe) ≈ 2.0
     end
 
     @testset "check_departure_pipe_connections — no off-surface pipes" begin
@@ -729,9 +722,9 @@ end
     @testset "check_departure_pipe_connections — pipe bridge blocks departure" begin
         gm = make_two_ship_gamemap()
         # Full chain bridging primary ↔ secondary
-        set_pipe!(gm, ISP_E1, MockPipeBehav(); ship_name = :primary)
-        set_pipe!(gm, ISP_E2, MockPipeBehav(); ship_name = :primary)
-        set_pipe!(gm, ISP_E3, MockPipeBehav(); ship_name = :secondary)
+        set_pipe!(gm, ISP_E1, PipeOnEdge(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E2, PipeOnEdge(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E3, PipeOnEdge(MockPipeBehav(), :secondary))
 
         can_depart, reason = check_departure_pipe_connections(gm, :secondary)
         @test can_depart == false
@@ -741,7 +734,7 @@ end
     @testset "check_departure_pipe_connections — pipe only on departing ship" begin
         gm = make_two_ship_gamemap()
         # E3 only touches secondary, stored on secondary
-        set_pipe!(gm, ISP_E3, MockPipeBehav(); ship_name = :secondary)
+        set_pipe!(gm, ISP_E3, PipeOnEdge(MockPipeBehav(), :secondary))
 
         can_depart, _ = check_departure_pipe_connections(gm, :secondary)
         @test can_depart == true
@@ -749,30 +742,34 @@ end
 
     @testset "depart_ship! blocked by pipe bridge" begin
         gm = make_two_ship_gamemap()
-        set_pipe!(gm, ISP_E1, MockPipeBehav(); ship_name = :primary)
-        set_pipe!(gm, ISP_E2, MockPipeBehav(); ship_name = :primary)
-        set_pipe!(gm, ISP_E3, MockPipeBehav(); ship_name = :secondary)
+        set_pipe!(gm, ISP_E1, PipeOnEdge(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E2, PipeOnEdge(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E3, PipeOnEdge(MockPipeBehav(), :secondary))
 
         success, reason = depart_ship!(gm, :secondary)
         @test success == false
         @test occursin("pipes still connect", reason)
 
         # All pipes should still be present
-        @test has_pipe(gm.ships[:primary], ISP_E1)
-        @test has_pipe(gm.ships[:primary], ISP_E2)
-        @test has_pipe(gm.ships[:secondary], ISP_E3)
+        e1 = get_pipe(gm, ISP_E1)
+        e2 = get_pipe(gm, ISP_E2)
+        e3 = get_pipe(gm, ISP_E3)
+        @test !isnothing(e1) && e1.ship === :primary
+        @test !isnothing(e2) && e2.ship === :primary
+        @test !isnothing(e3) && e3.ship === :secondary
     end
 
     @testset "depart_ship! succeeds without pipe bridge" begin
         gm = make_two_ship_gamemap()
         # Pipe only on secondary, no bridge
-        set_pipe!(gm, ISP_E3, MockPipeBehav(); ship_name = :secondary)
+        set_pipe!(gm, ISP_E3, PipeOnEdge(MockPipeBehav(), :secondary))
 
         success, _ = depart_ship!(gm, :secondary)
         @test success == true
         @test FlowMap.get_docking_status(gm, :secondary) isa FlowMap.DepartingDockStat
         # Pipe stays with secondary
-        @test has_pipe(gm.ships[:secondary], ISP_E3)
+        e3 = get_pipe(gm, ISP_E3)
+        @test !isnothing(e3) && e3.ship === :secondary
     end
 
     @testset "depart_ship! with no pipes works as before" begin
@@ -1071,54 +1068,44 @@ end
 @testset "_offset_ship_until_clear!" begin
 
     @testset "steps outward until no overlap" begin
-        gm = GameMap()
+        gm = make_origin_gamemap()
         # Ship placed at primary's location (origin) — overlaps
-        trial = ShipMap()
-        empty!(trial.ship_tiles)
-        push!(trial.ship_tiles, TileCoord(0, 0))
+        trial = ShipBlueprint(ship_tiles = Set([TileCoord(0, 0)]))
 
         steps = HexFlowProcGen._offset_ship_until_clear!(gm, trial, HexFrame.Q_POS)
         @test steps >= 3  # at least distance 3 to clear the 2-ring exclusion zone
 
         # Ship should no longer be within the exclusion zone
-        expanded = FlowMap.expand_tileset(FlowMap.get_all_surfaces_combined(gm), HexFlowProcGen.MIN_SPACING)
+        expanded = FlowMap.expand_tileset(collect_surface_tiles!(Set{TileCoord}(), gm), HexFlowProcGen.MIN_SPACING)
         @test HexFlowProcGen._is_ship_too_close(trial, expanded) == false
     end
 
     @testset "no overlap from start — zero steps" begin
-        gm = GameMap()
-        trial = ShipMap()
-        empty!(trial.ship_tiles)
-        push!(trial.ship_tiles, TileCoord(50, 50))  # far from primary
+        gm = make_origin_gamemap()
+        trial = ShipBlueprint(ship_tiles = Set([TileCoord(50, 50)]))
 
         steps = HexFlowProcGen._offset_ship_until_clear!(gm, trial, HexFrame.Q_POS)
         @test steps == 0  # already outside the exclusion zone
     end
 
     @testset "works with all 6 directions" begin
-        gm = GameMap()
+        gm = make_origin_gamemap()
         for dir in instances(HexFrame.HexAxis)
-            trial = ShipMap()
-            empty!(trial.ship_tiles)
-            push!(trial.ship_tiles, TileCoord(0, 0))
+            trial = ShipBlueprint(ship_tiles = Set([TileCoord(0, 0)]))
 
             steps = HexFlowProcGen._offset_ship_until_clear!(gm, trial, dir)
             @test steps >= 3
-            expanded = FlowMap.expand_tileset(FlowMap.get_all_surfaces_combined(gm), HexFlowProcGen.MIN_SPACING)
+            expanded = FlowMap.expand_tileset(collect_surface_tiles!(Set{TileCoord}(), gm), HexFlowProcGen.MIN_SPACING)
             @test HexFlowProcGen._is_ship_too_close(trial, expanded) == false
         end
     end
 
     @testset "returns consistent result for same setup" begin
-        gm = GameMap()
-        trial1 = ShipMap()
-        empty!(trial1.ship_tiles)
-        push!(trial1.ship_tiles, TileCoord(0, 0))
+        gm = make_origin_gamemap()
+        trial1 = ShipBlueprint(ship_tiles = Set([TileCoord(0, 0)]))
         steps1 = HexFlowProcGen._offset_ship_until_clear!(gm, trial1, HexFrame.R_NEG)
 
-        trial2 = ShipMap()
-        empty!(trial2.ship_tiles)
-        push!(trial2.ship_tiles, TileCoord(0, 0))
+        trial2 = ShipBlueprint(ship_tiles = Set([TileCoord(0, 0)]))
         steps2 = HexFlowProcGen._offset_ship_until_clear!(gm, trial2, HexFrame.R_NEG)
 
         @test steps1 == steps2
@@ -1132,11 +1119,11 @@ end
 @testset "encounter_ship_optimal_dir!" begin
 
     @testset "adds a ship with ApproachingDockStat" begin
-        gm = GameMap()
-        newship = make_bare_shipmap(UInt32(0xAAAA))
+        gm = make_origin_gamemap()
+        bp = make_bare_blueprint(UInt32(0xAAAA))
 
         before = Set(keys(gm.ships))
-        encounter_ship_optimal_dir!(gm, newship, "opt_test", UInt32(0xAAAA))
+        encounter_ship_optimal_dir!(gm, bp, "opt_test", UInt32(0xAAAA))
         after = Set(keys(gm.ships))
 
         new_ships = collect(setdiff(after, before))
@@ -1151,14 +1138,9 @@ end
         # S_NEG/S_POS walk along the line and require many steps;
         # perpendicular directions (Q_POS, R_NEG, etc.) clear in one step.
         gm = GameMap()
-        empty!(gm.ships[:primary].ship_tiles)
-        for q in Int16(-5):Int16(5)
-            push!(gm.ships[:primary].ship_tiles, TileCoord(q, Int16(0)))
-        end
+        set_surface_tile!(gm, Set(TileCoord(q, 0) for q in -5:5); ship_name = :primary)
 
-        newship = ShipMap()
-        empty!(newship.ship_tiles)
-        push!(newship.ship_tiles, TileCoord(0, 0))
+        newship = ShipBlueprint(ship_tiles = Set([TileCoord(0, 0)]))
 
         # Measure distances for each direction
         centroid_tile = HexFrame.round_to_tile(get_surface_centroid(gm, :primary))
@@ -1176,12 +1158,12 @@ end
     end
 
     @testset "deterministic for same seed" begin
-        gm1 = GameMap()
-        gm2 = GameMap()
-        newship = make_bare_shipmap(UInt32(0xBBBB))
+        gm1 = make_origin_gamemap()
+        gm2 = make_origin_gamemap()
+        bp = make_bare_blueprint(UInt32(0xBBBB))
 
-        encounter_ship_optimal_dir!(gm1, deepcopy(newship), "det_test", UInt32(0xBBBB))
-        encounter_ship_optimal_dir!(gm2, deepcopy(newship), "det_test", UInt32(0xBBBB))
+        encounter_ship_optimal_dir!(gm1, deepcopy(bp), "det_test", UInt32(0xBBBB))
+        encounter_ship_optimal_dir!(gm2, deepcopy(bp), "det_test", UInt32(0xBBBB))
 
         key1 = only(setdiff(keys(gm1.ships), [:primary]))
         key2 = only(setdiff(keys(gm2.ships), [:primary]))
@@ -1192,14 +1174,14 @@ end
     end
 
     @testset "spreads ships around when multiple docked" begin
-        gm = GameMap()
+        gm = make_origin_gamemap()
 
         # Dock 3 ships in sequence — they should spread out rather than stack
         centroids = HexFrame.AxialCoord[]
         for i in 1:3
-            newship = make_bare_shipmap(UInt32(0x1000 + i))
+            bp = make_bare_blueprint(UInt32(0x1000 + i))
             before = Set(keys(gm.ships))
-            encounter_ship_optimal_dir!(gm, newship, "spread_$(i)", UInt32(0x1000 + i))
+            encounter_ship_optimal_dir!(gm, bp, "spread_$(i)", UInt32(0x1000 + i))
             after = Set(keys(gm.ships))
             new_name = only(setdiff(after, before))
 
@@ -1211,7 +1193,7 @@ end
                 end
             end
 
-            push!(centroids, FlowMap.get_surface_centroid(get_ship(gm, new_name)))
+            push!(centroids, FlowMap.get_surface_centroid(gm, new_name))
         end
 
         # With 3 ships, we should have at least 2 unique centroid positions

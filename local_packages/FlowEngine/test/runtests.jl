@@ -68,18 +68,18 @@ nc(q, r, dir) = NodeCoord(TileCoord(q, r), dir)
     # Multi-ship element collection
     gm = GameMap()
     edge1 = EdgeCoord(VertexCoord(TileCoord(1,0), HexFrame.Q_POS), VertexCoord(TileCoord(2,0), HexFrame.Q_POS))
-    set_pipe!(gm, edge1, TestPipe())
-    sec = ShipMap()
+    set_pipe!(gm, edge1, PipeOnEdge(TestPipe(), :primary))
+    sec = ShipState()
     add_ship!(gm, :sec, sec)
     edge2 = EdgeCoord(VertexCoord(TileCoord(5,0), HexFrame.Q_POS), VertexCoord(TileCoord(6,0), HexFrame.Q_POS))
-    set_pipe!(gm, edge2, TestPipe(); ship_name = :sec)
+    set_pipe!(gm, edge2, PipeOnEdge(TestPipe(), :sec))
     els = list_elements(gm)
     ids = Set(e.id for e in els)
     @test HexElements.ElementID(edge1) in ids
     @test HexElements.ElementID(edge2) in ids
 
     # Per-ship should only include that ship's elements
-    els_sec = list_elements(get_ship(gm, :sec))
+    els_sec = list_elements(gm; ship_name = :sec)
     ids_sec = Set(e.id for e in els_sec)
     @test HexElements.ElementID(edge2) in ids_sec
     @test !(HexElements.ElementID(edge1) in ids_sec)
@@ -88,10 +88,10 @@ end
 @testset "update_components!" begin
     # Per-GameMap: calls update_flowbehav! on all ships
     gm = GameMap()
-    set_component!(gm, TileCoord(0,0), ComponentOnTile(DummyCompUpdate(), HexFrame.Q_POS))
-    sec = ShipMap()
+    set_component!(gm, TileCoord(0,0), ComponentOnTile(DummyCompUpdate(), HexFrame.Q_POS, :primary))
+    sec = ShipState()
     add_ship!(gm, :two, sec)
-    set_component!(gm, TileCoord(5,5), ComponentOnTile(DummyCompUpdate(), HexFrame.Q_POS); ship_name = :two)
+    set_component!(gm, TileCoord(5,5), ComponentOnTile(DummyCompUpdate(), HexFrame.Q_POS, :two))
     ms = MNA_State()
     derived = DerivedMapState(
         nodeactualfluids = Dict(
@@ -104,39 +104,19 @@ end
     @test NodeCoord(TileCoord(5,5), HexFrame.NODE_INTERNAL_1) in keys(ms.node_voltages)
     @test ms.node_voltages[NodeCoord(TileCoord(0,0), HexFrame.NODE_INTERNAL_1)] ≈ 3.21
     @test ms.node_voltages[NodeCoord(TileCoord(5,5), HexFrame.NODE_INTERNAL_1)] ≈ 3.21
-
-    # Per-Ship
-    ship_single = ShipMap()
-    set_component!(ship_single, TileCoord(7,7), ComponentOnTile(DummyCompUpdate(), HexFrame.Q_POS))
-    ms2 = MNA_State()
-    derived2 = DerivedMapState(
-        nodeactualfluids = Dict(
-            NodeCoord(TileCoord(7,7), HexFrame.NODE_INTERNAL_1) => HexFluids.COLD_GAS,
-        )
-    )
-    update_components!(ship_single, ms2, derived2)
-    @test NodeCoord(TileCoord(7,7), HexFrame.NODE_INTERNAL_1) in keys(ms2.node_voltages)
-    @test ms2.node_voltages[NodeCoord(TileCoord(7,7), HexFrame.NODE_INTERNAL_1)] ≈ 3.21
 end
 
 @testset "fluid declarations" begin
     gm = GameMap()
-    sec = ShipMap()
+    sec = ShipState()
     add_ship!(gm, :two, sec)
-    set_component!(gm, TileCoord(10,10), ComponentOnTile(DummyFluidComp(), HexFrame.Q_POS); ship_name = :two)
+    set_component!(gm, TileCoord(10,10), ComponentOnTile(DummyFluidComp(), HexFrame.Q_POS, :two))
     derived = DerivedMapState()
     list_fluid_declarations!(derived.primary_fluid_declarations, gm)
     @test length(derived.primary_fluid_declarations) == 1
     decl = derived.primary_fluid_declarations[1]
     @test decl.declaration isa HexFluids.FluidSource
     @test decl.declaration.fluid_type === HexFluids.COLD_GAS
-
-    # Per-ship
-    ship_fluid = ShipMap()
-    set_component!(ship_fluid, TileCoord(20,20), ComponentOnTile(DummyFluidComp(), HexFrame.Q_POS))
-    derived2 = DerivedMapState()
-    list_fluid_declarations!(derived2.primary_fluid_declarations, ship_fluid)
-    @test length(derived2.primary_fluid_declarations) == 1
 end
 
 @testset "propagate_fluid_types! rejects incompatible traversed declarations" begin

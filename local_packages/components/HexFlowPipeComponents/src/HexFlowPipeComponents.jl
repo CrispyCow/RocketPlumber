@@ -142,13 +142,13 @@ function single_tile_pipe(axis::HexAxis, frag::TilePipeFrag)::MultiPipeTileCompB
 end
 
 """
-    single_tile_pipe_on_tile(axis::HexAxis, frag::TilePipeFrag)::ComponentOnTile
+    single_tile_pipe_on_tile(axis::HexAxis, frag::TilePipeFrag; ship::Symbol = :_blueprint)::ComponentOnTile
 
 Build a `ComponentOnTile` wrapping a single-axis multi-pipe. `MultiPipeTileCompBehav` is
 rotationless, so the wrapping rotation is always `Q_POS`.
 """
-single_tile_pipe_on_tile(axis::HexAxis, frag::TilePipeFrag)::ComponentOnTile =
-    ComponentOnTile(single_tile_pipe(axis, frag), HexFrame.Q_POS)
+single_tile_pipe_on_tile(axis::HexAxis, frag::TilePipeFrag; ship::Symbol = :_blueprint)::ComponentOnTile =
+    ComponentOnTile(single_tile_pipe(axis, frag), HexFrame.Q_POS, ship)
 
 # ===============================================================
 # Fragment Helpers

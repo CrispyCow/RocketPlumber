@@ -237,14 +237,13 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             if !isnothing(selected) && CImGui.Button("Save Ship...", (button_width, button_height))
                 save_path = save_file(absolute(Path(joinpath(dirname(@__FILE__), "..", "maps"))); filterlist = "jld2")
                 if !isnothing(save_path)
-                    exported_ship = deepcopy(get_ship(current_gamemap, selected))
-                    # Centre the ship so its surface centroid lands on (0,0)
-                    centroid = get_surface_centroid(exported_ship)
+                    blueprint = get_ship_blueprint(current_gamemap, selected)
+                    centroid = get_surface_centroid(current_gamemap, selected)
                     if !isnothing(centroid)
-                        offset_ship!(exported_ship, TileCoord(-round_to_tile(centroid)))
+                        offset_ship!(blueprint, TileCoord(-round_to_tile(centroid)))
                     end
-                    exported_map = GameMap(exported_ship)
-                    savemap(exported_map, "$save_path")
+                    new_gm = GameMap(blueprint)
+                    savemap(new_gm, "$save_path")
                     @info "Exported ship :$(selected) to $(save_path)"
                 end
             end
@@ -503,6 +502,8 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
                 display_name = generate_encounter_name(enc_seed, enc_class)
                 cmd = create_add_encounter_ship_command(
                     flowcalc_ipc.command_queue, new_shipmap, display_name, enc_seed;
+                    dir = nothing,
+                    target_encounter_index = nothing,
                     max_view_bounds = max_view_bounds
                 )
                 try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
@@ -510,11 +511,11 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             end
 
             if CImGui.Button("Generate (No Dock)", ImVec2(-1, 30)) && fuel_valid
-                new_shipmap = generate_encounter(
+                blueprint = generate_encounter(
                     enc_class, enc_fuel, enc_richness,
                     enc_seed, class_config
                 )
-                new_gamemap = GameMap(ships = Dict(:primary => new_shipmap))
+                new_gamemap = GameMap(blueprint)
                 enqueue_map_override!(flowcalc_ipc, new_gamemap)
                 @info "Dev: generated standalone encounter" class = enc_class richness = enc_richness
             end

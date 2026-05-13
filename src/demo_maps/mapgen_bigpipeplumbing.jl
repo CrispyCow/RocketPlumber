@@ -10,9 +10,7 @@ This map teaches:
 - Complex pipe routing with both edge-based and tile-based pipes
 """
 function mapgen_bigpipeplumbing()
-    ship = ShipMap()
-    components = Dict{TileCoord, ComponentOnTile}()
-    pipes = Dict{EdgeCoord, PipeBehavior}()
+    blueprint = ShipBlueprint()
 
     # Create multiple gas tanks
     # Using deepcopy for identical tanks to avoid shared state
@@ -26,38 +24,38 @@ function mapgen_bigpipeplumbing()
     )
 
     # Place four separate tank instances
-    components[TileCoord(2, -1)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG)
-    components[TileCoord(3, -1)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG)
-    components[TileCoord(3, -2)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG)
-    components[TileCoord(4, -2)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG)
+    blueprint.components[TileCoord(2, -1)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(3, -1)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(3, -2)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(4, -2)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
 
     # Place a tile-based big pipe component on Q axis
-    components[TileCoord(0, -1)] = single_tile_pipe_on_tile(HexFrame.Q_POS, BigTilePipeBehavFrag(10.0))
+    blueprint.components[TileCoord(0, -1)] = single_tile_pipe_on_tile(HexFrame.Q_POS, BigTilePipeBehavFrag(10.0))
 
     # Create a nozzle for thrust output
     nozzle = BasicNozzleCompBehav(
         connected_node = HexFrame.NODE_Q_POS,
-        throat_area = Float64(0.3f0),  # Float32 -> Float64 to match saved precision
+        throat_area = Float64(0.3f0),
         sprite = Symbol("AllNozzles_SmallNozzle")
     )
-    components[TileCoord(2, -3)] = ComponentOnTile(nozzle, HexFrame.R_POS)
+    blueprint.components[TileCoord(2, -3)] = ComponentOnTile(nozzle, HexFrame.R_POS, :_blueprint)
 
     # Add edge-based big pipes for high flow connections
-    pipes[
+    blueprint.pipe_behaviors[
         EdgeCoord(
             VertexCoord(TileCoord(0, 1), HexFrame.Q_NEG),
             VertexCoord(TileCoord(-1, 1), HexFrame.Q_POS)
         ),
     ] = BigPipeBehav(10.0)
 
-    pipes[
+    blueprint.pipe_behaviors[
         EdgeCoord(
             VertexCoord(TileCoord(2, 0), HexFrame.Q_NEG),
             VertexCoord(TileCoord(1, 1), HexFrame.Q_POS)
         ),
     ] = BigPipeBehav(10.0)
 
-    pipes[
+    blueprint.pipe_behaviors[
         EdgeCoord(
             VertexCoord(TileCoord(2, -2), HexFrame.Q_NEG),
             VertexCoord(TileCoord(1, -1), HexFrame.Q_POS)
@@ -65,29 +63,24 @@ function mapgen_bigpipeplumbing()
     ] = BigPipeBehav(10.0)
 
     # Define ship surface
-    surface = Set(
-        [
-            TileCoord(1, -2),
-            TileCoord(4, -2),
-            TileCoord(2, 0),
-            TileCoord(-1, 0),
-            TileCoord(1, 1),
-            TileCoord(0, 1),
-            TileCoord(2, -2),
-            TileCoord(-1, 1),
-            TileCoord(3, -2),
-            TileCoord(1, -1),
-            TileCoord(0, -1),
-            TileCoord(2, -1),
-            TileCoord(1, 0),
-            TileCoord(0, 0),
-            TileCoord(3, -1),
-        ]
-    )
+    union!(blueprint.ship_tiles, Set([
+        TileCoord(1, -2),
+        TileCoord(4, -2),
+        TileCoord(2, 0),
+        TileCoord(-1, 0),
+        TileCoord(1, 1),
+        TileCoord(0, 1),
+        TileCoord(2, -2),
+        TileCoord(-1, 1),
+        TileCoord(3, -2),
+        TileCoord(1, -1),
+        TileCoord(0, -1),
+        TileCoord(2, -1),
+        TileCoord(1, 0),
+        TileCoord(0, 0),
+        TileCoord(3, -1),
+    ]))
 
-    set_component!(ship, components)
-    set_pipe!(ship, pipes)
-    set_surface_tile!(ship, surface)
-
-    return GameMap(ship)
+    gamemap = GameMap(blueprint)
+    return gamemap
 end

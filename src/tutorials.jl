@@ -42,38 +42,17 @@ end
 # Tutorial Helper Functions
 # ===============================================================
 
-function has_component_on_tile_matching(gamemap::GameMap, predicate::Function)::Bool
-    for ship_name in get_all_ship_names(gamemap)
-        for component_on_tile in values(get_all_components(gamemap; ship_name = ship_name))
-            predicate(component_on_tile) && return true
-        end
-    end
-    return false
-end
+"True if any component on the gamemap satisfies `predicate(component_on_tile)`."
+has_component_on_tile_matching(gamemap::GameMap, predicate::Function)::Bool =
+    any(predicate, values(get_components(gamemap)))
 
-function has_component_matching(gamemap::GameMap, predicate::Function)::Bool
-    for ship_name in get_all_ship_names(gamemap)
-        for component_on_tile in values(get_all_components(gamemap; ship_name = ship_name))
-            predicate(component_on_tile.component) && return true
-        end
-    end
-    return false
-end
+"True if any component on the gamemap has a component behaviour satisfying `predicate(behaviour)`."
+has_component_matching(gamemap::GameMap, predicate::Function)::Bool =
+    any(c -> predicate(c.component), values(get_components(gamemap)))
 
-has_component_type(gamemap::GameMap, ::Type{T}) where {T} = has_component_matching(gamemap, component -> component isa T)
-
-function get_components_of_type(gamemap::GameMap, ::Type{T}) where {T}
-    matches = Pair{TileCoord, ComponentOnTile}[]
-
-    for ship_name in get_all_ship_names(gamemap)
-        for (coord, component_on_tile) in get_all_components(gamemap; ship_name = ship_name)
-            component_on_tile.component isa T || continue
-            push!(matches, coord => component_on_tile)
-        end
-    end
-
-    return matches
-end
+"True if any component on the gamemap has a component behaviour of type `T`."
+has_component_type(gamemap::GameMap, ::Type{T}) where {T} =
+    has_component_matching(gamemap, component -> component isa T)
 
 # ===============================================================
 # Learning Entry Definitions
@@ -812,12 +791,11 @@ function get_entry_fluid_transfer()::LearningEntry
                             ),
                             step_blocker = function(inputs::LearningInputs)
                                 # The transfer pump must be moved from the debris hulk onto the tanker, with its output facing left toward the primary ship.
-                                pump_in_place = any(get_components_of_type(inputs.gamemap, ElectricPumpCompBehav{ElectricTransferPump})) do entry
-                                    coord, component_on_tile = entry
-                                    ship_name = find_ship_with_component(inputs.gamemap, coord)
-                                    isnothing(ship_name) && return false
+                                pump_in_place = any(each_component_of_type(inputs.gamemap, ElectricPumpCompBehav{ElectricTransferPump})) do component_on_tile
+                                    ship_name = component_on_tile.ship
+                                    ship_name === :primary && return false
 
-                                    is_on_tanker = ship_name != :primary && any(values(get_all_components(inputs.gamemap; ship_name = ship_name))) do ship_component
+                                    is_on_tanker = any(each_component_of_ship(inputs.gamemap, ship_name)) do ship_component
                                         ship_component.component isa ThevininTankCompBehav{LiquidTankBehavFrag}
                                     end
                                     faces_left = component_on_tile.rotation in (HexFrame.S_NEG, HexFrame.Q_POS, HexFrame.R_NEG)
@@ -838,8 +816,10 @@ function get_entry_fluid_transfer()::LearningEntry
                             ),
                             step_blocker = function(inputs::LearningInputs)
                                 # The plumbing is complete once both transfer-pump ports are connected into the monoprop liquid network.
-                                pump_is_plumbed = any(get_components_of_type(inputs.gamemap, ElectricPumpCompBehav{ElectricTransferPump})) do entry
+                                pump_is_plumbed = any(get_components(inputs.gamemap)) do entry
                                     coord, component_on_tile = entry
+                                    component_on_tile.component isa ElectricPumpCompBehav{ElectricTransferPump} || return false
+
                                     pump_input_node = map_element(HexFrame.NODE_Q_NEG, coord, component_on_tile.rotation)
                                     pump_output_node = map_element(HexFrame.NODE_Q_POS, coord, component_on_tile.rotation)
                                     input_fluid = get(inputs.derivedmapstate.nodeactualfluids, pump_input_node, nothing)
@@ -862,7 +842,7 @@ function get_entry_fluid_transfer()::LearningEntry
                             ),
                             step_blocker = function(inputs::LearningInputs)
                                 # Finish only when the primary ship's liquid tanks are effectively full and the transfer pump has been switched back off.
-                                primary_tanks_full = all(values(get_all_components(inputs.gamemap; ship_name = :primary))) do component_on_tile
+                                primary_tanks_full = all(each_component_of_ship(inputs.gamemap, :primary)) do component_on_tile
                                     component = component_on_tile.component
                                     component isa ThevininTankCompBehav || return true
                                     component.tank isa LiquidTankBehavFrag || return true
@@ -870,8 +850,7 @@ function get_entry_fluid_transfer()::LearningEntry
                                     return component.tank.tank.state.charge >= 0.99 * component.tank.tank.max_charge
                                 end
 
-                                pump_is_off = any(get_components_of_type(inputs.gamemap, ElectricPumpCompBehav{ElectricTransferPump})) do entry
-                                    _, component_on_tile = entry
+                                pump_is_off = any(each_component_of_type(inputs.gamemap, ElectricPumpCompBehav{ElectricTransferPump})) do component_on_tile
                                     return get_target_percentage(component_on_tile.component.switch) ≈ 0.0
                                 end
 
@@ -919,10 +898,11 @@ function get_entry_pressure_fed_intro()::LearningEntry
                                 For decomposition chambers, the wider end is the output, so make sure that is facing towards the nozzle!"
                             ),
                             step_blocker = function(inputs::LearningInputs)
-                                decomp_in_position = any(get_components_of_type(inputs.gamemap, typeof(BasicDecompChamber))) do entry
-                                    coord, component_on_tile = entry
-                                    return coord == TileCoord(-4, 1) && component_on_tile.rotation == HexFrame.Q_POS
-                                end
+                                target_coord = TileCoord(-4, 1)
+                                component_on_tile = get_component(inputs.gamemap, target_coord)
+                                decomp_in_position = !isnothing(component_on_tile) &&
+                                    component_on_tile.component isa typeof(BasicDecompChamber) &&
+                                    component_on_tile.rotation == HexFrame.Q_POS
 
                                 decomp_in_position && return nothing
                                 return "Move the decomposition chamber into position (-4, 1) with the wider end facing the nozzle."
@@ -968,10 +948,10 @@ function get_entry_pressure_fed_intro()::LearningEntry
                                 You can unstall it easily as we will see in the next step."
                             ),
                             step_blocker = function(inputs::LearningInputs)
-                                pressure_fed_tanks = Dict(get_components_of_type(inputs.gamemap, PressureFedTankCompBehav))
                                 tanks_empty = all((TileCoord(0, -1), TileCoord(0, 0))) do coord
-                                    component_on_tile = get(pressure_fed_tanks, coord, nothing)
+                                    component_on_tile = get(get_components(inputs.gamemap), coord, nothing)
                                     !isnothing(component_on_tile) || return false
+                                    component_on_tile.component isa PressureFedTankCompBehav || return false
                                     return component_on_tile.component.tank.liquid_state.charge <= 0.0
                                 end
 
@@ -993,10 +973,10 @@ function get_entry_pressure_fed_intro()::LearningEntry
                                 Allow the tanks to refill completely."
                             ),
                             step_blocker = function(inputs::LearningInputs)
-                                pressure_fed_tanks = Dict(get_components_of_type(inputs.gamemap, PressureFedTankCompBehav))
                                 tanks_refilled = all((TileCoord(0, -1), TileCoord(0, 0))) do coord
-                                    component_on_tile = get(pressure_fed_tanks, coord, nothing)
+                                    component_on_tile = get(get_components(inputs.gamemap), coord, nothing)
                                     !isnothing(component_on_tile) || return false
+                                    component_on_tile.component isa PressureFedTankCompBehav || return false
 
                                     tank = component_on_tile.component.tank
                                     return tank.liquid_state.charge >= 0.98 * tank.max_liquid_charge
@@ -1067,7 +1047,7 @@ function get_entry_turbo_pump_intro()::LearningEntry
                             ),
                             step_blocker = function(inputs::LearningInputs)
                                 # if the valve has monoprop gas in its input, then the tap-off cycle is plumbed up correctly
-                                valve_input_has_monoprop_gas = any(get_components_of_type(inputs.gamemap, StandardValveCompBehav)) do entry
+                                valve_input_has_monoprop_gas = any(get_components(inputs.gamemap)) do entry
                                     coord, component_on_tile = entry
                                     component_on_tile.component isa StandardValveCompBehav{SteppedSwitchBehavFrag} || return false
 

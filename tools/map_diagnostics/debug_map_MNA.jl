@@ -390,15 +390,16 @@ function print_map_summary(gamemap::GameMap)
     println("Space map type: $(typeof(gamemap.space_map))")
 
     for (name, ship) in gamemap.ships
-        n_comps = length(ship.components)
-        n_pipes = length(ship.pipe_behaviors)
-        n_tiles = length(ship.ship_tiles)
+        n_comps = count_components(gamemap; ship_name = name)
+        n_pipes = count_pipes(gamemap; ship_name = name)
+        n_tiles = count_surface_tiles(gamemap; ship_name = name)
         println("\n  --- Ship :$name ---")
         println("  Surface tiles: $n_tiles    Components: $n_comps    Pipes: $n_pipes")
         println("  Docking status: $(typeof(ship.docking_status))")
 
         # List components with type, rotation, and key state info
-        for (coord, comp_on_tile) in ship.components
+        for (coord, comp_on_tile) in gamemap.components
+            comp_on_tile.ship === name || continue
             comp = comp_on_tile.component
             rot = comp_on_tile.rotation
             type_name = replace(string(typeof(comp)), r"^.*\." => "")
@@ -441,7 +442,8 @@ function print_map_summary(gamemap::GameMap)
 
         # Pipe type summary
         pipe_types = Dict{String, Int}()
-        for (_, pipe) in ship.pipe_behaviors
+        for (_, pipe) in gamemap.pipe_behaviors
+            pipe.ship === name || continue
             t = replace(string(typeof(pipe)), r"^.*\." => "")
             pipe_types[t] = get(pipe_types, t, 0) + 1
         end
@@ -479,7 +481,7 @@ function run_simulation_tick!(gamemap::GameMap, derived::DerivedMapState, mna::M
     # --- update_map! (broken into sub-steps for diagnostics) ---
     println("  Step 2: update_map!")
     try
-        find_ship_surface_edgetiles!(derived, gamemap)
+        collect_surface_edge_tiles!(derived, gamemap)
 
         list_elements!(derived.primaryelements, gamemap)
         list_nodes!(derived.primarynodes, derived.primaryelements)

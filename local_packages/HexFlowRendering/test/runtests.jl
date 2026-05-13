@@ -18,11 +18,11 @@ end
 # Test combined surface retrieval
 gm = GameMap()
 set_surface_tile!(gm, TileCoord(0, 0))
-sec = ShipMap()
-set_surface_tile!(sec, TileCoord(5, 0))
+sec = ShipState()
 add_ship!(gm, :sec, sec)
+set_surface_tile!(gm, TileCoord(5, 0); ship_name = :sec)
 
-combined = get_all_surfaces_combined(gm)
+combined = collect_surface_tiles!(Set{TileCoord}(), gm)
 @test TileCoord(0,0) in combined
 @test TileCoord(5,0) in combined
 
@@ -43,9 +43,9 @@ end
 
 pm = ParticleManager()
 # Primary
-set_component!(gm, TileCoord(10,0), ComponentOnTile(DummyParticleComp(), HexFrame.Q_POS))
+set_component!(gm, TileCoord(10,0), ComponentOnTile(DummyParticleComp(), HexFrame.Q_POS, :primary))
 # Secondary
-set_component!(gm, TileCoord(20,0), ComponentOnTile(DummyParticleComp(), HexFrame.Q_POS); ship_name = :sec)
+set_component!(gm, TileCoord(20,0), ComponentOnTile(DummyParticleComp(), HexFrame.Q_POS, :sec))
 
 using HexFlowControl
 
@@ -110,7 +110,7 @@ end
 gm2 = GameMap()
 set_surface_tile!(gm2, TileCoord(0,0))
 # Set docking status so the ship has a fractional render offset for rendering tests
-FlowMap.set_docking_status!(get_ship(gm2, :primary), FlowMap.ApproachingDockStat(HexFrame.AxialCoord(0.3, 0.0), HexFrame.AxialCoord(0.3, 0.0), 1.0))
+FlowMap.set_docking_status!(gm2, :primary, FlowMap.ApproachingDockStat(HexFrame.AxialCoord(0.3, 0.0), HexFrame.AxialCoord(0.3, 0.0), 1.0))
 
 pm = ParticleManager()
 colour = SVector{4, Float32}(1.0f0, 1.0f0, 1.0f0, 1.0f0)
@@ -124,7 +124,17 @@ bottom_left = SVector(-1000.0f0, -1000.0f0)
 top_right = SVector(1000.0f0, 1000.0f0)
 
 visible = HexFlowRendering.cull_particles_to_buffer!(pm, group, bottom_left, top_right, time(), BASE_UPS, gm2)
-@test visible == 0  # Particle should be culled as it's behind the visually-offset ship
+@test visible == 1  # Moving ships no longer cull background particles
+
+# Spawn a particle at a stationary ship tile; it should be culled
+gm3 = GameMap()
+set_surface_tile!(gm3, TileCoord(0,0))
+pm_stationary = ParticleManager()
+stationary_pos = glvec(TileCoord(0,0))
+spawn_particles!(pm_stationary, [stationary_pos], [SVector{2, Float64}(0.0,0.0)], 0, 10; colour = colour)
+group_stationary = pm_stationary.groups[colour]
+visible_stationary = HexFlowRendering.cull_particles_to_buffer!(pm_stationary, group_stationary, bottom_left, top_right, time(), BASE_UPS, gm3)
+@test visible_stationary == 0
 
 # Spawn a particle at a distant tile; it should NOT be culled
 pm2 = ParticleManager()
@@ -133,6 +143,32 @@ spawn_particles!(pm2, [pos2], [SVector{2, Float64}(0.0,0.0)], 0, 10; colour = co
 group2 = pm2.groups[colour]
 visible2 = HexFlowRendering.cull_particles_to_buffer!(pm2, group2, bottom_left, top_right, time(), BASE_UPS, gm2)
 @test visible2 == 1
+
+# Multi-ship: stationary tiles cull, moving tiles do not
+gm4 = GameMap()
+set_surface_tile!(gm4, TileCoord(0,0))
+add_ship!(gm4, :moving, ShipState(docking_status = FlowMap.ApproachingDockStat(HexFrame.AxialCoord(0.2, 0.0), HexFrame.AxialCoord(0.2, 0.0), 1.0)))
+set_surface_tile!(gm4, TileCoord(5,0); ship_name = :moving)
+
+pm4 = ParticleManager()
+spawn_particles!(pm4, [glvec(TileCoord(0,0)), glvec(TileCoord(5,0))], [SVector{2, Float64}(0.0,0.0), SVector{2, Float64}(0.0,0.0)], 0, 10; colour = colour)
+group4 = pm4.groups[colour]
+visible4 = HexFlowRendering.cull_particles_to_buffer!(pm4, group4, bottom_left, top_right, time(), BASE_UPS, gm4)
+@test visible4 == 1
+
+@testset "thrust_dust_particle_effect! spawns on multiple ships" begin
+    gm_dust = GameMap()
+    set_surface_tile!(gm_dust, TileCoord(0, 0))
+    add_ship!(gm_dust, :sec, ShipState())
+    set_surface_tile!(gm_dust, TileCoord(5, 0); ship_name = :sec)
+
+    pm_dust = ParticleManager()
+    dust_state = HexFlowControl.GameState(ticks = 7)
+    thrust_dust_particle_effect!(pm_dust, dust_state, gm_dust; num_particles_per_tile = 1)
+
+    total_dust = sum(length(g.particles) for g in values(pm_dust.groups))
+    @test total_dust == 2
+end
 
 println("HexFlowRendering fractional offset culling tests passed")
 
@@ -144,7 +180,7 @@ println("HexFlowRendering fractional offset culling tests passed")
     # Build a minimal map with one DummyParticleComp on a single-tile ship
     gm_catchup = GameMap()
     set_surface_tile!(gm_catchup, TileCoord(0, 0))
-    set_component!(gm_catchup, TileCoord(0, 0), ComponentOnTile(DummyParticleComp(), HexFrame.Q_POS))
+    set_component!(gm_catchup, TileCoord(0, 0), ComponentOnTile(DummyParticleComp(), HexFrame.Q_POS, :primary))
 
     pm_catchup = ParticleManager()
 

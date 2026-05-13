@@ -642,23 +642,26 @@ const encounter_system_config = EncounterSystemConfig(
 
 const STARTER_SHIP_REROLL_SALT::Int32 = Int32(0x53544152)
 
-"Starter ships must include at least one nozzle and one cold-gas tank so the player can immediately fly."
-function starter_ship_is_playable(shipmap::ShipMap)::Bool
-    has_nozzle = false
-    has_gas_tank = false
+"Starter ships must include at least one thruster and one tank (tank with COLD_GAS) so the player can immediately fly."
+function starter_ship_is_playable(blueprint::ShipBlueprint)::Bool
+    has_thruster = false
+    has_tank = false
 
-    for (_, component_on_tile) in get_all_components(shipmap)
+    for (_, component_on_tile) in blueprint.components
         component = component_on_tile.component
 
-        if component isa SwitchedNozzleCompBehav
-            has_nozzle = true
+        # Check for thruster components (nozzles)
+        if component isa BasicNozzleCompBehav || component isa SwitchedNozzleCompBehav || component isa DecompChamberCompBehav
+            has_thruster = true
         end
 
-        if get_component_wet_mass(component; fluid = HexFluids.COLD_GAS) > 0.0
-            has_gas_tank = true
+        # Check for tank components with COLD_GAS
+        if (component isa ThevininTankCompBehav || component isa PressureFedTankCompBehav) &&
+           get_component_wet_mass(component; fluid = HexFluids.COLD_GAS) > 0.0
+            has_tank = true
         end
 
-        if has_nozzle && has_gas_tank
+        if has_thruster && has_tank
             return true
         end
     end
@@ -667,22 +670,26 @@ function starter_ship_is_playable(shipmap::ShipMap)::Bool
 end
 
 "Generate the player's starting ship for explorer mode."
-function generate_starter_ship(seed::UInt32)::ShipMap
+function generate_starter_ship(seed::UInt32)::ShipBlueprint
     current_seed = seed
 
     while true
-        shipmap = ShipMap()
-        stacked_random_tile_walk!(get_all_surface_tiles(shipmap), TileCoord(0, 0), 2, 6, current_seed)
+        temp_tiles = Set{TileCoord}()
+        stacked_random_tile_walk!(temp_tiles, TileCoord(0, 0), 2, 6, current_seed)
 
-        gamemap = GameMap(shipmap)
-        success, message = place_shipset!(gamemap, shipset_starter, current_seed)
+        temp_gm = GameMap()
+        set_surface_tile!(temp_gm, temp_tiles; ship_name = :primary)
+        success, message = place_shipset!(temp_gm, shipset_starter, current_seed)
         if !success
             @warn "Starter ship generation incomplete: $message"
         end
 
-        place_pipeset!(gamemap, standard_pipeoptions, current_seed)
-        if starter_ship_is_playable(shipmap)
-            return shipmap
+        place_pipeset!(temp_gm, standard_pipeoptions, current_seed)
+
+        blueprint = get_ship_blueprint(temp_gm, :primary)
+
+        if starter_ship_is_playable(blueprint)
+            return blueprint
         end
 
         current_seed = get_noise((STARTER_SHIP_REROLL_SALT,), current_seed)

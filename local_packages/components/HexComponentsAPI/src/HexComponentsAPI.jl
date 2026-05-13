@@ -7,7 +7,7 @@ using StaticArrays, Accessors
 export BASE_UPS
 
 # General Exports
-export Sprite, Component, ComponentOnTile, TunableProps, EnumTunableProps, AnyTunableProps, ActionInfo
+export Sprite, Component, ComponentOnTile, PipeOnEdge, TunableProps, EnumTunableProps, AnyTunableProps, ActionInfo
 
 # Tile Component Behavior Exports
 export ComponentBehavior
@@ -232,12 +232,14 @@ accept_reactivation_probe!(behav::T; kwargs...) where {T <: ComponentBehavior} =
 # ===============================================================
 """
 A wrapper struct for a component that has been placed on the map.
-Includes shared placement information, currently only the rotation.
+Includes shared placement information: the placed rotation and the owning `ship` tag.
+`ship` records which ship in a unified `GameMap` owns the component.
 All behavioural methods are delegated to the component.
 """
 struct ComponentOnTile{T <: ComponentBehavior}
     component::T
     rotation::HexAxis
+    ship::Symbol
 end
 
 # ComponentBehavior Method Delegation
@@ -317,6 +319,31 @@ OPTIONAL METHODS:
 
 """
 abstract type PipeBehavior end
+
+# ===============================================================
+# PipeOnEdge Wrapper
+# ===============================================================
+
+"""
+A `PipeBehavior` placed on the map. Carries the owning ship's `Symbol` tag.
+All behavioural methods delegate to the inner pipe.
+"""
+struct PipeOnEdge{T <: PipeBehavior}
+    pipe::T
+    ship::Symbol
+end
+
+get_conductance(p::PipeOnEdge) = get_conductance(p.pipe)
+get_pipe_tunables(p::PipeOnEdge) = get_pipe_tunables(p.pipe)
+"Return a new `PipeOnEdge` with updated tunables; preserves the ship tag."
+set_pipe_tunables(p::PipeOnEdge, tunables::NTuple{N, Real}) where {N} =
+    PipeOnEdge(set_pipe_tunables(p.pipe, tunables), p.ship)
+render_pipe_base!(queue, p::PipeOnEdge; kwargs...) = render_pipe_base!(queue, p.pipe; kwargs...)
+render_pipe_map!(queue, p::PipeOnEdge; kwargs...) = render_pipe_map!(queue, p.pipe; kwargs...)
+can_pipe_be_moved(p::PipeOnEdge; kwargs...) = can_pipe_be_moved(p.pipe; kwargs...)
+produce_abs_elements(p::PipeOnEdge, edge::EdgeCoord) = produce_abs_elements(p.pipe, edge)
+produce_rel_fluid_declarations(p::PipeOnEdge) = produce_rel_fluid_declarations(p.pipe)
+get_tile_pipe_equivalent_frag(p::PipeOnEdge) = get_tile_pipe_equivalent_frag(p.pipe)
 
 # Mandatory Methods Errors
 

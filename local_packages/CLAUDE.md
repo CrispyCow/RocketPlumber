@@ -10,7 +10,7 @@
 
 **Core Logic:**
 - `HexComponentsAPI` — abstract interfaces for `ComponentBehavior` and `PipeBehavior`, `ComponentOnTile` wrapper, `TunableProps`, `ActionInfo`
-- `FlowMap` — data model (`GameMap`, `ShipMap`), ship management, docking system, space map, encounter/manoeuvre types, placement validation, bounds/geometry
+- `FlowMap` — data model (`GameMap` with global component/pipe dicts, `ShipState`, `ShipBlueprint`), ship management, docking system, space map, encounter/manoeuvre types, placement validation, bounds/geometry
 - `FlowEngine` — MNA circuit solver, `DerivedMapState`, `MNA_State`, graph pruning, fluid type propagation, region temperature computation. Depends on `FlowMap` (does not re-export it)
 
 **Application State:**

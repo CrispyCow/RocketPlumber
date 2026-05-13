@@ -608,30 +608,35 @@ end
 const ANIMATING_SHIP_RENDER_HEIGHT_OFFSET = Int32(1_500_000_000)
 
 "Return the per-ship render height offset: non-zero only while the ship is in a transitional docking state."
-function _ship_render_height_offset(ship::ShipMap)::Int32
+function _ship_render_height_offset(ship::ShipState)::Int32
     status = get_docking_status(ship)
     return (status isa ConnectedDockStat) ? Int32(0) : ANIMATING_SHIP_RENDER_HEIGHT_OFFSET
 end
 
 "Map a base draw height into the correct per-ship layer."
-_ship_draw_height(ship::ShipMap, base_height::Integer)::Int32 = Int32(base_height) + _ship_render_height_offset(ship)
+_ship_draw_height(ship::ShipState, base_height::Integer)::Int32 = Int32(base_height) + _ship_render_height_offset(ship)
 
 "Map a base draw height into the correct per-ship layer when only the owning ship name is available."
 function _ship_draw_height(gamemap::GameMap, ship_name::Union{Nothing, Symbol}, base_height::Integer)::Int32
     isnothing(ship_name) && return Int32(base_height)
-    return _ship_draw_height(get_ship(gamemap, ship_name), base_height)
+    return _ship_draw_height(get_ship_state(gamemap, ship_name), base_height)
 end
 
-"Renders all tile components in the gamemap by delegating to `render_map_elem!` on each component. This implementation iterates each ShipMap and calls the per-ship components, keeping ship-local helper functions intact."
-function tile_queued_render!(queue::Vector{<:RenderCommand}, map::GLObjectMap, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot, gamestate::GameState)
+"Renders all tile components in the gamemap by iterating the global components dict with per-ship offset/height lookup."
+function tile_queued_render!(queue::Vector{<:RenderCommand}, map::GLObjectMap,
+        gamemap::GameMap, derivedmapstate::DerivedMapState,
+        mna_state::MNA_StateSnapshot, gamestate::GameState)
     isempty(gamemap.ships) && return nothing
 
-    for (ship_name, ship) in gamemap.ships
-        ship_offset = get_render_offset(ship)
-        height_offset = _ship_render_height_offset(ship)
-        for (coord, tilecomp) in get_all_components(ship)
-            render_map_elem!(queue, tilecomp; glmap = map, mna_state = mna_state, derivedmapstate = derivedmapstate, gameticks = gamestate.ticks, position = coord, pos_offset = ship_offset, render_height_offset = height_offset)
-        end
+    for (coord, tilecomp) in gamemap.components
+        ship_state = get_ship_state(gamemap, tilecomp.ship)
+        render_map_elem!(
+            queue, tilecomp;
+            glmap = map, mna_state, derivedmapstate,
+            gameticks = gamestate.ticks, position = coord,
+            pos_offset = get_render_offset(ship_state),
+            render_height_offset = _ship_render_height_offset(ship_state),
+        )
     end
     return nothing
 end
@@ -688,29 +693,21 @@ function node_queued_render!(queue::Vector{<:RenderCommand}, map::GLObjectMap, g
     return nothing
 end
 
-"Renders all pipe behaviors in the gamemap by delegating to `render_pipe_map!` on each pipe. Iterates each ShipMap." 
-function pipe_queued_render!(queue::Vector{<:RenderCommand}, map::GLObjectMap, gamemap::GameMap, derivedmapstate::DerivedMapState, gamestate::GameState)
+"Renders all pipe behaviors in the gamemap by iterating the global pipes dict with per-ship offset/height lookup."
+function pipe_queued_render!(queue::Vector{<:RenderCommand}, map::GLObjectMap,
+        gamemap::GameMap, derivedmapstate::DerivedMapState, gamestate::GameState)
     isempty(gamemap.ships) && return nothing
 
-    for (ship_name, ship) in gamemap.ships
-        ship_offset = get_render_offset(ship)
-        height_offset = _ship_render_height_offset(ship)
-        for (edge, pipe_behav) in get_all_pipes(ship)
-            rotation = HexFrame.Q_POS  # Default rotation, edge orientation handled by render_pipe_map!
-            render_pipe_map!(
-                queue, pipe_behav;
-                glmap = map,
-                rotation = rotation,
-                position = edge,
-                transparency = 1.0,
-                derivedmapstate = derivedmapstate,
-                gameticks = gamestate.ticks,
-                pos_offset = ship_offset,
-                render_height_offset = height_offset
-            )
-        end
+    for (edge, pipe) in gamemap.pipe_behaviors
+        ship_state = get_ship_state(gamemap, pipe.ship)
+        render_pipe_map!(
+            queue, pipe;
+            glmap = map, rotation = HexFrame.Q_POS, position = edge, transparency = 1.0,
+            derivedmapstate, gameticks = gamestate.ticks,
+            pos_offset = get_render_offset(ship_state),
+            render_height_offset = _ship_render_height_offset(ship_state),
+        )
     end
-
     return nothing
 end
 
@@ -721,24 +718,23 @@ function ship_surface_queued_render!(
     )
     isempty(gamemap.ships) && return nothing
 
-    for (ship_name, ship) in gamemap.ships
+    for (coord, ship_name) in each_surface_owner(gamemap)
+        ship = get_ship_state(gamemap, ship_name)
         ship_offset = get_render_offset(ship)
         ship_colour = (ship_name === selected_ship ? SHIP_SELECTED_TINT : get_ship_surface_colour(ship_name))
 
-        for coord in get_all_surface_tiles(ship)
-            push!(
-                queue, render_basic_tile(
-                    map,
-                    :ShipSurface_basic,
-                    HexFrame.Q_POS,
-                    coord;
-                    colour = ship_colour,
-                    transparency = 1.0,
-                    draw_height = _ship_draw_height(ship, RENDER_HEIGHT_BACKGROUND),
-                    pos_offset = ship_offset
-                )
+        push!(
+            queue, render_basic_tile(
+                map,
+                :ShipSurface_basic,
+                HexFrame.Q_POS,
+                coord;
+                colour = ship_colour,
+                transparency = 1.0,
+                draw_height = _ship_draw_height(ship, RENDER_HEIGHT_BACKGROUND),
+                pos_offset = ship_offset
             )
-        end
+        )
     end
     return nothing
 end
@@ -1050,22 +1046,17 @@ function cull_particles_to_buffer!(
         # Surface filter (manual write-pointer + inlined rounding avoids all closure and FieldVector allocations)
         if gamemap !== nothing
             @timeit render_loop_timer "filter_surface" begin
-                for (ship_name, ship) in gamemap.ships
-                    ship_offset_vec = glvec(get_render_offset(ship))
-                    ox, oy = Float64(ship_offset_vec[1]), Float64(ship_offset_vec[2])
-                    surface_tiles = ship.ship_tiles
-
-                    write_idx = 0
-                    for i in eachindex(manager.cull_buffer)
-                        pos = @inbounds manager.cull_buffer[i]
-                        tile = round_to_tile_cartesian(Float64(pos[1]) - ox, Float64(pos[2]) - oy)
-                        if !(tile in surface_tiles)
-                            write_idx += 1
-                            @inbounds manager.cull_buffer[write_idx] = pos
-                        end
+                write_idx = 0
+                for i in eachindex(manager.cull_buffer)
+                    pos = @inbounds manager.cull_buffer[i]
+                    tile = round_to_tile_cartesian(Float64(pos[1]), Float64(pos[2]))
+                    owner = get_surface_shiptag(gamemap, tile)
+                    if isnothing(owner) || is_ship_moving(gamemap, owner)
+                        write_idx += 1
+                        @inbounds manager.cull_buffer[write_idx] = pos
                     end
-                    resize!(manager.cull_buffer, write_idx)
                 end
+                resize!(manager.cull_buffer, write_idx)
             end
         end
 
@@ -1117,51 +1108,56 @@ function thrust_dust_particle_effect!(
         ticks_to_spawn = 1 + missed_ticks # current tick + back-fill
 
         @timeit render_loop_timer "generate_particles" begin
-            for (ship_name, ship) in gamemap.ships
-                ship_offset = get_render_offset(ship)
-                offset_vec = glvec(ship_offset)
+            edge_tiles = collect_surface_edge_tiles!(Set{TileCoord}(), gamemap)
+            total_particles_per_tick = length(edge_tiles) * num_particles_per_tile
+            total_particles_per_tick == 0 && return nothing
 
-                edge_tiles = Set{TileCoord}()
-                find_ship_surface_edgetiles!(edge_tiles, ship)
+            group = get!(manager.groups, colour) do
+                create_particle_group(colour, manager.size)
+            end
 
-                total_particles_per_tick = length(edge_tiles) * num_particles_per_tile
-                total_particles_per_tick == 0 && continue
+            positions = Vector{SVector{2, Float32}}(undef, total_particles_per_tick)
+            velocities = Vector{SVector{2, Float64}}(undef, total_particles_per_tick)
 
-                # Retrieve the target group for pre-advancement tracking
-                group = get!(manager.groups, colour) do
-                    create_particle_group(colour, manager.size)
+            for tick_offset in 0:(ticks_to_spawn - 1)
+                resize!(positions, total_particles_per_tick)
+                resize!(velocities, total_particles_per_tick)
+
+                spawn_tick = current_tick - tick_offset
+
+                idx = 1
+                for tile_coord in edge_tiles
+                    ship_name = get_surface_shiptag(gamemap, tile_coord)
+                    isnothing(ship_name) && continue
+
+                    offset_vec = glvec(get_ship_render_offset(gamemap, ship_name))
+                    tile_pos = glvec(tile_coord) .+ offset_vec
+                    for _ in 1:num_particles_per_tile
+                        positions[idx] = tile_pos
+                        velocities[idx] = SVector{2, Float64}(
+                            (rand() - 0.5) * PARTICLE_VELOCITY_RANGE,
+                            (rand() - 0.5) * PARTICLE_VELOCITY_RANGE)
+                        idx += 1
+                    end
                 end
 
-                # Pre-allocate once and reuse across all tick_offset iterations
-                positions = Vector{SVector{2, Float32}}(undef, total_particles_per_tick)
-                velocities = Vector{SVector{2, Float64}}(undef, total_particles_per_tick)
+                actual_count = idx - 1
+                actual_count == 0 && continue
 
-                for tick_offset in 0:(ticks_to_spawn - 1)
-                    spawn_tick = current_tick - tick_offset
+                # Reuse the scratch buffers at their logical length to avoid slice-copy allocations.
+                resize!(positions, actual_count)
+                resize!(velocities, actual_count)
 
-                    idx = 1
-                    for tile_coord in edge_tiles
-                        tile_pos = glvec(tile_coord) .+ offset_vec
-                        for _ in 1:num_particles_per_tile
-                            positions[idx] = tile_pos
-                            velocities[idx] = SVector{2, Float64}(
-                                (rand() - 0.5) * PARTICLE_VELOCITY_RANGE,
-                                (rand() - 0.5) * PARTICLE_VELOCITY_RANGE)
-                            idx += 1
-                        end
-                    end
+                prev_len = length(group.particles)
+                spawn_particles!(manager, positions, velocities,
+                    spawn_tick, spawn_tick + PARTICLE_LIFETIME_TICKS; colour = colour)
 
-                    prev_len = length(group.particles)
-                    spawn_particles!(manager, positions, velocities,
-                        spawn_tick, spawn_tick + PARTICLE_LIFETIME_TICKS; colour = colour)
-
-                    # Pre-advance catch-up particles to correct trail position (skip current tick)
-                    if tick_offset > 0
-                        pos_col = group.particles.position::Vector{SVector{2, Float32}}
-                        vel_col = group.particles.velocity::Vector{SVector{2, Float64}}
-                        @inbounds for i in (prev_len + 1):length(group.particles)
-                            pos_col[i] = _advance_pos(pos_col[i], vel_col[i], tick_offset)
-                        end
+                # Pre-advance catch-up particles to correct trail position (skip current tick)
+                if tick_offset > 0
+                    pos_col = group.particles.position::Vector{SVector{2, Float32}}
+                    vel_col = group.particles.velocity::Vector{SVector{2, Float64}}
+                    @inbounds for i in (prev_len + 1):length(group.particles)
+                        pos_col[i] = _advance_pos(pos_col[i], vel_col[i], tick_offset)
                     end
                 end
             end
@@ -1295,39 +1291,38 @@ function tile_particle_spawn!(
     prev_counts = Dict{SVector{4, Float32}, Int}()
     sizehint!(prev_counts, length(manager.groups))
 
-    for (ship_name, ship) in gamemap.ships
-        ship_offset = get_render_offset(ship)
-        components = get_all_components(ship)
+    # Pass 1: Spawn current tick's particles for all components
+    for (coord, tilecomp) in gamemap.components
+        ship_state = get_ship_state(gamemap, tilecomp.ship)
+        collect_effect_particles!(
+            manager, tilecomp;
+            glmap = glmap, mna_state = mna_state, derivedmapstate = derivedmapstate,
+            gameticks = current_tick, position = coord, tile = coord,
+            pos_offset = get_render_offset(ship_state)
+        )
+    end
 
-        # Pass 1: Spawn current tick's particles for all components
-        for (coord, tilecomp) in components
+    # Pass 2: Back-fill missed ticks with pre-advanced particles (one snapshot per tick)
+    for t in 1:missed_ticks
+        backdate_tick = current_tick - t
+
+        # Snapshot group lengths once for all components this tick
+        empty!(prev_counts)
+        for (colour, group) in manager.groups
+            prev_counts[colour] = length(group.particles)
+        end
+
+        for (coord, tilecomp) in gamemap.components
+            ship_state = get_ship_state(gamemap, tilecomp.ship)
             collect_effect_particles!(
                 manager, tilecomp;
                 glmap = glmap, mna_state = mna_state, derivedmapstate = derivedmapstate,
-                gameticks = current_tick, position = coord, tile = coord, pos_offset = ship_offset
+                gameticks = backdate_tick, position = coord, tile = coord,
+                pos_offset = get_render_offset(ship_state)
             )
         end
 
-        # Pass 2: Back-fill missed ticks with pre-advanced particles (one snapshot per tick)
-        for t in 1:missed_ticks
-            backdate_tick = current_tick - t
-
-            # Snapshot group lengths once for all components this tick
-            empty!(prev_counts)
-            for (colour, group) in manager.groups
-                prev_counts[colour] = length(group.particles)
-            end
-
-            for (coord, tilecomp) in components
-                collect_effect_particles!(
-                    manager, tilecomp;
-                    glmap = glmap, mna_state = mna_state, derivedmapstate = derivedmapstate,
-                    gameticks = backdate_tick, position = coord, tile = coord, pos_offset = ship_offset
-                )
-            end
-
-            _pre_advance_catchup_particles!(manager, prev_counts, t)
-        end
+        _pre_advance_catchup_particles!(manager, prev_counts, t)
     end
     return nothing
 end

@@ -9,8 +9,7 @@ This map teaches:
 - Simple ship surface definition
 """
 function mapgen_basicplumbing()
-    ship = ShipMap()
-    components = Dict{TileCoord, ComponentOnTile}()
+    blueprint = ShipBlueprint()
 
     # Create a tri-gas tank with cold gas
     gas_tank = ThevininTankCompBehav(
@@ -25,31 +24,27 @@ function mapgen_basicplumbing()
     # Create a small nozzle for thrust
     nozzle = BasicNozzleCompBehav(
         connected_node = HexFrame.NODE_Q_POS,
-        throat_area = Float64(0.3f0),  # Float32 -> Float64 to match saved precision
+        throat_area = Float64(0.3f0),
         sprite = Symbol("AllNozzles_SmallNozzle")
     )
 
-    # Place components on ship
-    components[TileCoord(2, -1)] = ComponentOnTile(gas_tank, HexFrame.R_NEG)
-    components[TileCoord(-4, 2)] = ComponentOnTile(nozzle, HexFrame.Q_POS)
+    # Place components on blueprint
+    blueprint.components[TileCoord(2, -1)] = ComponentOnTile(gas_tank, HexFrame.R_NEG, :_blueprint)
+    blueprint.components[TileCoord(-4, 2)] = ComponentOnTile(nozzle, HexFrame.Q_POS, :_blueprint)
 
     # Define ship surface
-    surface = Set(
-        [
-            TileCoord(1, -1),
-            TileCoord(-1, 0),
-            TileCoord(2, -1),
-            TileCoord(-1, 1),
-            TileCoord(-3, 2),
-            TileCoord(1, 0),
-            TileCoord(-3, 1),
-            TileCoord(-2, 1),
-            TileCoord(0, 0),
-        ]
-    )
+    union!(blueprint.ship_tiles, Set([
+        TileCoord(1, -1),
+        TileCoord(-1, 0),
+        TileCoord(2, -1),
+        TileCoord(-1, 1),
+        TileCoord(-3, 2),
+        TileCoord(1, 0),
+        TileCoord(-3, 1),
+        TileCoord(-2, 1),
+        TileCoord(0, 0),
+    ]))
 
-    set_component!(ship, components)
-    set_surface_tile!(ship, surface)
-
-    return GameMap(ship)
+    gamemap = GameMap(blueprint)
+    return gamemap
 end

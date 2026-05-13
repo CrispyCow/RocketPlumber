@@ -5,14 +5,6 @@ Fluid transfer sandbox map with three separate ships: the stranded primary craft
 a nearby tanker full of monopropellant, and a small debris hulk carrying a transfer pump.
 """
 function mapgen_liquidtransfer()
-    primary_ship = ShipMap()
-    tanker_ship = ShipMap()
-    pump_holder_ship = ShipMap()
-
-    primary_components = Dict{TileCoord, ComponentOnTile}()
-    tanker_components = Dict{TileCoord, ComponentOnTile}()
-    pump_holder_components = Dict{TileCoord, ComponentOnTile}()
-
     empty_liquid_tank_template = ThevininTankCompBehav(
         LiquidTankBehavFrag, 3;
         fluid = HexFluids.MONOPROP_LIQUID,
@@ -50,6 +42,7 @@ function mapgen_liquidtransfer()
     )
 
     # Primary ship: empty monopropellant tanks and cold gas thrusters for manoeuvring.
+    primary_blueprint = ShipBlueprint()
     for coord in (
             TileCoord(1, -2),
             TileCoord(-1, 0),
@@ -60,19 +53,18 @@ function mapgen_liquidtransfer()
             TileCoord(0, 0),
             TileCoord(1, 0),
         )
-        primary_components[coord] = ComponentOnTile(deepcopy(empty_liquid_tank_template), HexFrame.Q_POS)
+        primary_blueprint.components[coord] = ComponentOnTile(deepcopy(empty_liquid_tank_template), HexFrame.Q_POS, :_blueprint)
     end
 
     for coord in (TileCoord(-3, 2), TileCoord(-3, 1), TileCoord(-4, 2))
-        primary_components[coord] = ComponentOnTile(deepcopy(gas_tank_template), HexFrame.S_POS)
+        primary_blueprint.components[coord] = ComponentOnTile(deepcopy(gas_tank_template), HexFrame.S_POS, :_blueprint)
     end
 
     for coord in (TileCoord(-4, 3), TileCoord(-4, 1))
-        primary_components[coord] = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_POS)
+        primary_blueprint.components[coord] = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_POS, :_blueprint)
     end
 
-    primary_ship.components = primary_components
-    primary_ship.ship_tiles = Set{TileCoord}([
+    union!(primary_blueprint.ship_tiles, Set{TileCoord}([
         TileCoord(1, -2),
         TileCoord(-1, 0),
         TileCoord(0, 1),
@@ -85,9 +77,10 @@ function mapgen_liquidtransfer()
         TileCoord(-4, 2),
         TileCoord(-3, 1),
         TileCoord(0, 0),
-    ])
+    ]))
 
     # Tanker: a separate hull carrying the monopropellant reserve.
+    tanker_blueprint = ShipBlueprint()
     for coord in (
             TileCoord(7, -6),
             TileCoord(6, -8),
@@ -99,11 +92,10 @@ function mapgen_liquidtransfer()
             TileCoord(6, -5),
             TileCoord(6, -7),
         )
-        tanker_components[coord] = ComponentOnTile(deepcopy(full_liquid_tank_template), HexFrame.Q_POS)
+        tanker_blueprint.components[coord] = ComponentOnTile(deepcopy(full_liquid_tank_template), HexFrame.Q_POS, :_blueprint)
     end
 
-    tanker_ship.components = tanker_components
-    tanker_ship.ship_tiles = Set{TileCoord}([
+    union!(tanker_blueprint.ship_tiles, Set{TileCoord}([
         TileCoord(5, -6),
         TileCoord(7, -6),
         TileCoord(6, -8),
@@ -115,10 +107,11 @@ function mapgen_liquidtransfer()
         TileCoord(7, -8),
         TileCoord(6, -5),
         TileCoord(6, -7),
-    ])
+    ]))
 
     # Debris hulk: contains the transfer pump needed to move propellant across the gap.
-    pump_holder_components[TileCoord(-1, -4)] = ComponentOnTile(
+    pump_holder_blueprint = ShipBlueprint()
+    pump_holder_blueprint.components[TileCoord(-1, -4)] = ComponentOnTile(
         ElectricPumpCompBehav(
             ElectricTransferPump;
             pump_voltage = 2.0,
@@ -128,19 +121,18 @@ function mapgen_liquidtransfer()
             min_conductance = 0.0,
             growth_factor = calculate_growth_factor(0.5, 0.0, 0.4 / BASE_UPS)
         ),
-        HexFrame.Q_NEG
+        HexFrame.Q_NEG,
+        :_blueprint
     )
 
-    pump_holder_ship.components = pump_holder_components
-    pump_holder_ship.ship_tiles = Set{TileCoord}([
+    union!(pump_holder_blueprint.ship_tiles, Set{TileCoord}([
         TileCoord(-1, -4),
         TileCoord(-1, -3),
         TileCoord(0, -4),
-    ])
+    ]))
 
-    map = GameMap()
-    map.ships[:primary] = primary_ship
-    map.ships[Symbol("##Hull SW-326#631")] = tanker_ship
-    map.ships[Symbol("##Debris SW-326#633")] = pump_holder_ship
-    return map
+    gamemap = GameMap(primary_blueprint)
+    merge_ship!(gamemap, Symbol("##Hull SW-326#631"), tanker_blueprint)
+    merge_ship!(gamemap, Symbol("##Debris SW-326#633"), pump_holder_blueprint)
+    return gamemap
 end

@@ -163,13 +163,14 @@ Organised in dependency layers (each layer depends only on those above it):
 
 ### Game Map (Multi-Ship)
 
-- **`GameMap`** (in `FlowMap`): top-level container with `ships::Dict{Symbol, ShipMap}` (always has `:primary`), `space_map::AbstractSpaceMap`, and `learning_system::AbstractLearningSystem`
-- **`ShipMap`**: per-ship data with `components`, `pipe_behaviors`, `ship_tiles`, `docking_status`
+- **`GameMap`** (in `FlowMap`): top-level container with global `components::Dict{TileCoord, ComponentOnTile}`, `pipe_behaviors::Dict{EdgeCoord, PipeOnEdge}`, `surface_shiptags::Dict{TileCoord, Symbol}`, `ships::Dict{Symbol, ShipState}` (always containing `:primary`), plus `space_map::AbstractSpaceMap` and `learning_system::AbstractLearningSystem`
+- **`ShipState`**: per-ship metadata and docking animation state. Component, pipe, and surface ownership now lives in the shared `GameMap` stores rather than inside per-ship submaps
 
-Ship management: `add_ship!`, `remove_ship!`, `get_all_ship_names`, `has_ship`, `get_ship`, `offset_ship!`.
-Multi-ship queries: `has_component_any_ship`, `get_component_any_ship`, `find_ship_for_surface`, `find_valid_ship_for_placement`, `find_ship_with_component`, `find_ship_with_pipe`, `find_ship_for_node`, `would_bridge_ships`.
+Ship management: `add_ship!`, `remove_ship!`, `get_all_ship_names`, `has_ship`, `get_ship_state`, `offset_ship!`.
+Ownership and iteration: `get_component` / `get_pipe` return wrappers tagged via `.ship`; use `get_components` / `get_pipes` for whole-map stores, `each_component_of_ship` / `each_pipe_of_ship` for per-ship iteration, and `count_components`, `count_pipes`, `count_surface_tiles`, `collect_surface_tiles!`, and `each_surface_owner` for filtered counts and surface scans.
+Surface ownership: `surface_shiptags` and `get_surface_shiptag` map each surface tile to its owning ship.
 
-Note: `get_all_components(gamemap; ship_name=:primary)` only returns components for one named ship. For cross-ship scans, loop `get_all_ship_names(gamemap)`.
+Note: the `count_*` helpers default to whole-map totals when `ship_name = nothing`; pass `ship_name` to focus on one ship, or use helpers like `collect_surface_tiles!(dest, gamemap; ship_name = ...)` for filtered collections.
 
 ### Coordinate System (HexFrame)
 

@@ -5,8 +5,7 @@ Cold gas control tutorial. Demonstrates a simple RCS layout with switched nozzle
 and multiple gas tanks, teaching players how to control thrust direction.
 """
 function mapgen_controllingcoldgas()
-    ship = ShipMap()
-    components = Dict{TileCoord, ComponentOnTile}()
+    blueprint = ShipBlueprint()
 
     # Gas tanks -- 6 identical cold gas tanks with separate instances
     tank_template = ThevininTankCompBehav(
@@ -17,12 +16,12 @@ function mapgen_controllingcoldgas()
         initial_charge = 40.0,
         series_conductance = 5.0
     )
-    components[TileCoord(-1, 0)]  = ComponentOnTile(deepcopy(tank_template), HexFrame.R_NEG)
-    components[TileCoord(-2, 0)]  = ComponentOnTile(deepcopy(tank_template), HexFrame.R_NEG)
-    components[TileCoord(-1, 1)]  = ComponentOnTile(deepcopy(tank_template), HexFrame.R_NEG)
-    components[TileCoord(-2, 1)]  = ComponentOnTile(deepcopy(tank_template), HexFrame.R_NEG)
-    components[TileCoord(0, 0)]   = ComponentOnTile(deepcopy(tank_template), HexFrame.R_NEG)
-    components[TileCoord(-2, 2)]  = ComponentOnTile(deepcopy(tank_template), HexFrame.R_NEG)
+    blueprint.components[TileCoord(-1, 0)]  = ComponentOnTile(deepcopy(tank_template), HexFrame.R_NEG, :_blueprint)
+    blueprint.components[TileCoord(-2, 0)]  = ComponentOnTile(deepcopy(tank_template), HexFrame.R_NEG, :_blueprint)
+    blueprint.components[TileCoord(-1, 1)]  = ComponentOnTile(deepcopy(tank_template), HexFrame.R_NEG, :_blueprint)
+    blueprint.components[TileCoord(-2, 1)]  = ComponentOnTile(deepcopy(tank_template), HexFrame.R_NEG, :_blueprint)
+    blueprint.components[TileCoord(0, 0)]   = ComponentOnTile(deepcopy(tank_template), HexFrame.R_NEG, :_blueprint)
+    blueprint.components[TileCoord(-2, 2)]  = ComponentOnTile(deepcopy(tank_template), HexFrame.R_NEG, :_blueprint)
 
     # Switched nozzles -- 5 identical nozzles with separate instances
     nozzle_template = SwitchedNozzleCompBehav(
@@ -33,19 +32,19 @@ function mapgen_controllingcoldgas()
         growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS),
         limit_temperature_k = 400.0
     )
-    components[TileCoord(-4, 3)]  = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_POS)
-    components[TileCoord(-4, 1)]  = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_POS)
-    components[TileCoord(-4, 2)]  = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_POS)
-    components[TileCoord(1, -1)]  = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_NEG)
-    components[TileCoord(1, 0)]   = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_NEG)
+    blueprint.components[TileCoord(-4, 3)]  = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(-4, 1)]  = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(-4, 2)]  = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(1, -1)]  = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(1, 0)]   = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_NEG, :_blueprint)
 
     # Pipes -- connect left-side nozzles to tanks
-    set_pipe!(ship, EdgeCoord(VertexCoord(TileCoord(-4, 3), HexFrame.Q_POS), VertexCoord(TileCoord(-2, 2), HexFrame.Q_NEG)), ScrapPipeBehav())
-    set_pipe!(ship, EdgeCoord(VertexCoord(TileCoord(-4, 1), HexFrame.Q_POS), VertexCoord(TileCoord(-2, 0), HexFrame.Q_NEG)), ScrapPipeBehav())
-    set_pipe!(ship, EdgeCoord(VertexCoord(TileCoord(-4, 2), HexFrame.Q_POS), VertexCoord(TileCoord(-2, 1), HexFrame.Q_NEG)), ScrapPipeBehav())
+    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(-4, 3), HexFrame.Q_POS), VertexCoord(TileCoord(-2, 2), HexFrame.Q_NEG))] = ScrapPipeBehav()
+    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(-4, 1), HexFrame.Q_POS), VertexCoord(TileCoord(-2, 0), HexFrame.Q_NEG))] = ScrapPipeBehav()
+    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(-4, 2), HexFrame.Q_POS), VertexCoord(TileCoord(-2, 1), HexFrame.Q_NEG))] = ScrapPipeBehav()
 
     # Ship surface
-    surface = Set([
+    union!(blueprint.ship_tiles, Set([
         TileCoord(-1, 0),
         TileCoord(-1, 1),
         TileCoord(-2, 0),
@@ -54,10 +53,8 @@ function mapgen_controllingcoldgas()
         TileCoord(-3, 1),
         TileCoord(0, 0),
         TileCoord(-2, 1),
-    ])
+    ]))
 
-    set_component!(ship, components)
-    ship.ship_tiles = surface
-
-    return GameMap(ship)
+    gamemap = GameMap(blueprint)
+    return gamemap
 end
