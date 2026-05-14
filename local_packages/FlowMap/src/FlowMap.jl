@@ -369,11 +369,11 @@ end
 end
 
 
-"Top-level game map. Global component/pipe dicts tagged by ship; per-ship metadata in `ships`."
+"Top-level game map. Global component/pipe dicts tagged by ship; per-ship metadata in `ships`. Initialises with a single surface tile at (0,0) for the primary ship to enable tile placement."
 @kwdef mutable struct GameMap
     components::Dict{TileCoord, ComponentOnTile} = Dict{TileCoord, ComponentOnTile}()
     pipe_behaviors::Dict{EdgeCoord, PipeOnEdge} = Dict{EdgeCoord, PipeOnEdge}()
-    surface_shiptags::Dict{TileCoord, Symbol} = Dict{TileCoord, Symbol}()
+    surface_shiptags::Dict{TileCoord, Symbol} = Dict{TileCoord, Symbol}(TileCoord(0, 0) => :primary)
     ships::Dict{Symbol, ShipState} = Dict(:primary => ShipState())
     space_map::AbstractSpaceMap = SpaceMapEmpty()
     learning_system::AbstractLearningSystem = NoLearningSystem()
@@ -385,9 +385,9 @@ function GameMap(state::ShipState)
     return GameMap(ships = Dict(:primary => state))
 end
 
-"Construct a game map whose primary ship is populated from `blueprint`."
+"Construct a game map whose primary ship is populated from `blueprint`. Skips default surface tile initialization since blueprint will provide its own tiles."
 function GameMap(blueprint::ShipBlueprint)
-    gamemap = GameMap(ships = Dict{Symbol, ShipState}())
+    gamemap = GameMap(ships = Dict{Symbol, ShipState}(), surface_shiptags = Dict{TileCoord, Symbol}())
     merge_ship!(gamemap, :primary, blueprint)
     return gamemap
 end

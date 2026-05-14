@@ -28,9 +28,7 @@ HexComponentsAPI.render_pipe_base!(queue, ::MockPipeBehav; kwargs...) = nothing
 
 "Create a basic single-ship GameMap with a surface tile at (0,0)."
 function make_gamemap()
-    gm = GameMap()
-    set_surface_tile!(gm, TileCoord(0, 0); ship_name = :primary)
-    return gm
+    return GameMap()
 end
 
 "Create a GameMap with a larger surface area around the origin"
@@ -179,7 +177,8 @@ end
         all_tiles = collect_surface_tiles!(Set{TileCoord}(), gm)
         @test all_tiles == tiles
 
-        # Delete all
+        # Before delete_all, we have 3 tiles: (0,0), (1,0), (0,1)
+        @test count_surface_tiles(gm; ship_name = :primary) == 3
         delete_all_surface_tiles!(gm; ship_name = :primary)
         @test count_surface_tiles(gm; ship_name = :primary) == 0
         @test count_surface_tiles(gm) == 0
@@ -195,6 +194,7 @@ end
         @test get_components(gm) === gm.components
         @test count(_ -> true, each_component_of_ship(gm, :primary)) == 2
         @test count(_ -> true, each_component_of_type(gm, MockCompBehav)) == 2
+        @test count_surface_tiles(gm; ship_name = :primary) == 1  # Default origin tile
 
         edge = get_edges(TileCoord(0, 0))[1]
         set_pipe!(gm, edge, PipeOnEdge(MockPipeBehav(), :primary))
@@ -243,7 +243,7 @@ end
         ship = ShipState(docking_status = ApproachingDockStat(AxialCoord(1.0, 0.0), AxialCoord(0.0, 0.0), 0.5))
         gm = GameMap(ship)
         @test has_ship(gm, :primary)
-        @test count_surface_tiles(gm) == 0
+        @test count_surface_tiles(gm) == 1  # Default tile at origin
         @test get_docking_status(gm, :primary) isa ApproachingDockStat
     end
 
@@ -256,7 +256,7 @@ end
 
         @test has_ship(gm, :primary)
         @test is_on_surface_tile(TileCoord(1, 0), gm; ship_name = :primary)
-        @test count_surface_tiles(gm; ship_name = :primary) == 2
+        @test count_surface_tiles(gm; ship_name = :primary) == 2  # Blueprint tiles + default gets deduplicated
         @test count_components(gm; ship_name = :primary) == 1
         @test count_pipes(gm; ship_name = :primary) == 1
         @test only(each_component_of_ship(gm, :primary)).ship == :primary
