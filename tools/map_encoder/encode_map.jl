@@ -139,7 +139,7 @@ function emit_ship_contents_blueprint!(lines::Vector{String}, var::String, gamem
     if !isempty(ship_components)
         push!(lines, "    # Components")
         for (coord, cot) in ship_components
-            push!(lines, "    $var.components[$(format_coord(coord))] = ComponentOnTile($(repr(cot.component)), HexFrame.$(cot.rotation), :_blueprint)")
+            push!(lines, "    $var.components[$(format_coord(coord))] = ComponentOnTile($(repr(cot.component)), HexFrame.$(cot.rotation), $(cot.mirrored), :_blueprint)")
         end
     end
 

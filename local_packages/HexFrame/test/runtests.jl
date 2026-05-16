@@ -170,5 +170,24 @@ using HexFrame
         @test rotate(HexFrame.S_NEG, HexFrame.Q_NEG) == HexFrame.S_POS
     end
 
+    @testset "mirror_q_axis" begin
+        @test mirror_q_axis(HexFrame.Q_POS) == HexFrame.Q_POS
+        @test mirror_q_axis(HexFrame.R_NEG) == HexFrame.S_NEG
+        @test mirror_q_axis(HexFrame.S_POS) == HexFrame.R_POS
+        @test mirror_q_axis(HexFrame.Q_NEG) == HexFrame.Q_NEG
+        @test mirror_q_axis(HexFrame.R_POS) == HexFrame.S_POS
+        @test mirror_q_axis(HexFrame.S_NEG) == HexFrame.R_NEG
+    end
+
+    @testset "transform_tile_axis" begin
+        @test transform_tile_axis(HexFrame.R_NEG, HexFrame.Q_POS, true) == HexFrame.S_NEG
+        @test transform_tile_axis(HexFrame.S_POS, HexFrame.R_POS, true) == HexFrame.S_POS
+        @test transform_tile_axis(HexFrame.S_NEG, HexFrame.R_NEG, false) == rotate(HexFrame.S_NEG, HexFrame.R_NEG)
+    end
+
+    @testset "tile_orientation_matrix" begin
+        @test tile_orientation_matrix(HexFrame.Q_POS, true) == HexFrame.mirror_q_mat
+    end
+
 
 end

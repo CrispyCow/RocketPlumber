@@ -17,7 +17,10 @@
       "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\chris\\\\Repos\\\\RocketPlumberPrivate\" -Recurse -Directory -ErrorAction SilentlyContinue)",
       "Bash(Select-Object -ExpandProperty FullName)",
       "Bash(gh pr *)",
-      "PowerShell(gh pr list)"
+      "PowerShell(gh pr list)",
+      "PowerShell(julia --project=local_packages\\\\HexFrame -e \"using Pkg; Pkg.test\\(\\)\")",
+      "PowerShell(julia --project=local_packages\\\\FlowEngine -e \"using Pkg; Pkg.test\\(\\)\")",
+      "PowerShell(julia --project=local_packages\\\\HexFlowCalculator -e \"using Pkg; Pkg.test\\(\\)\")"
     ]
   }
 }

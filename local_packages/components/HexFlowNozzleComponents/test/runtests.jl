@@ -12,8 +12,9 @@ const TEST_TILE = TileCoord(3, -2)
 const TEST_ROTATION = HexFrame.Q_POS
 
 "Set a node voltage in the mock MNA state."
-function set_node_voltage!(mna_state::MNA_State, tile::TileCoord, node, voltage::Float64; rotation::HexAxis = TEST_ROTATION)
-    mna_state.node_voltages[map_element(node, tile, rotation)] = voltage
+function set_node_voltage!(mna_state::MNA_State, tile::TileCoord, node, voltage::Float64;
+        rotation::HexAxis = TEST_ROTATION, mirrored::Bool = false)
+    mna_state.node_voltages[map_element(node, tile, rotation, mirrored)] = voltage
     return mna_state
 end
 
@@ -56,6 +57,16 @@ function make_nozzle_state(nozzle::NozzleBehavFrag; tile::TileCoord = TEST_TILE,
     )
 
     return mna_state, derivedmapstate
+end
+
+@testset "Biprop chamber mirroring" begin
+    comp = BipropChamberCompBehav()
+    @test map_mirroring(comp, true)
+
+    mirrored = ComponentOnTile(comp, TEST_ROTATION, true, :primary)
+    abs_elements = produce_abs_elements(mirrored, TEST_TILE)
+    @test abs_elements[5].connections.v1 == map_element(HexFrame.NODE_S_NEG, TEST_TILE, TEST_ROTATION)
+    @test abs_elements[6].connections.v1 == map_element(HexFrame.NODE_R_NEG, TEST_TILE, TEST_ROTATION)
 end
 
 @testset "Nozzle fragment overheat" begin

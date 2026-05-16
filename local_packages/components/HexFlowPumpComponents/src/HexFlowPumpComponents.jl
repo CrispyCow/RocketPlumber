@@ -17,7 +17,7 @@ using HexFlowBasicComponents, HexFlowSwitchComponents
 # ComponentBehavior Mandatories
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional
-import HexComponentsAPI: on_click!, update_flowbehav!, render_map_elem!, get_actions, do_action!, produce_rel_fluid_declarations
+import HexComponentsAPI: on_click!, update_flowbehav!, render_map_elem!, get_actions, do_action!, produce_rel_fluid_declarations, map_mirroring
 import HexComponentsAPI: get_reactivation_probe, accept_reactivation_probe!
 # Behavior Fragment Dependencies
 import HexFlowBasicComponents: deactivate!, reactivate!, is_inactive
@@ -258,12 +258,15 @@ function produce_rel_fluid_declarations(::TurboPumpCompBehav)
     )
 end
 
+"Enable map mirroring for TurboPumpCompBehav"
+map_mirroring(::TurboPumpCompBehav, mirrored::Bool) = mirrored
+
 # No on_click! override needed; auto-deactivation requires no manual reset.
 on_click!(comp::TurboPumpCompBehav; kwargs...) = nothing
 get_actions(comp::TurboPumpCompBehav; kwargs...) = ()
 
 "Updates rotor RPM from the previous tick's MNA solution and deactivates on harmful turbine reversal."
-function update_flowbehav!(comp::TurboPumpCompBehav; mna_state::MNA_State, tile::TileCoord, rotation::HexAxis, derivedmapstate::DerivedMapState, kwargs...)
+function update_flowbehav!(comp::TurboPumpCompBehav; mna_state::MNA_State, tile::TileCoord, rotation::HexAxis, mirrored::Bool = false, derivedmapstate::DerivedMapState, kwargs...)
     applied_inertia = comp.rotor.rotor_inertia * TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
     friction_power = comp.rotor.friction_coefficient * (get_current_rpm(comp.rotor) + 200.0) # adds 'static' friction to help rpm get to zero
 
@@ -276,7 +279,7 @@ function update_flowbehav!(comp::TurboPumpCompBehav; mna_state::MNA_State, tile:
 
     # Read turbine shunt current (signed) to detect harmful reverse flow.
     # Turbine element: NODE_S_POS → GROUND, current = V_s_pos × G_turbine.
-    s_pos_node = map_element(HexFrame.NODE_S_POS, tile, rotation)
+    s_pos_node = map_element(HexFrame.NODE_S_POS, tile, rotation, mirrored)
     s_pos_voltage = get(mna_state.node_voltages, s_pos_node, 0.0)
     turbine_g = effective_turbine_conductance(comp)
     turbine_current = s_pos_voltage * turbine_g  # signed; negative means reverse flow into S_POS
@@ -346,14 +349,14 @@ Accept reactivation when the speculative turbine shunt current is not harmfully 
 Reactivation is allowed for both useful and neutral turbine flow; only harmful reverse flow
 through the turbine sink blocks reactivation. Returns `false` if turbine element was pruned.
 """
-function accept_reactivation_probe!(comp::TurboPumpCompBehav; tile::TileCoord, rotation::HexAxis, derivedmapstate::DerivedMapState, mna_state, kwargs...)
+function accept_reactivation_probe!(comp::TurboPumpCompBehav; tile::TileCoord, rotation::HexAxis, mirrored::Bool = false, derivedmapstate::DerivedMapState, mna_state, kwargs...)
     turbine_rel_elem = RelativeElement(
         RelativeElementConnections(HexFrame.NODE_S_POS, HexFrame.GROUND),
         effective_turbine_conductance(comp),
         HexElements.CONST_RESISTOR;
         active = true
     )
-    turbine_abs_elem = map_element(turbine_rel_elem, tile, turbine_element_index, rotation)
+    turbine_abs_elem = map_element(turbine_rel_elem, tile, turbine_element_index, rotation, mirrored)
     turbine_current = abs_element_get_current(turbine_abs_elem, derivedmapstate, mna_state)
     isnothing(turbine_current) && return false
     turbine_current < -pump_probe_tol && return false
@@ -362,25 +365,25 @@ function accept_reactivation_probe!(comp::TurboPumpCompBehav; tile::TileCoord, r
 end
 
 "Renders static turbopump elements: fluid mask, rotor, and static parts."
-function render_base_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, mirrored::Bool = false, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     fluidmask_colour = DEFAULT_EMPTY_FLUID_COLOUR
 
     # Fluid mask.
-    push!(queue, render_basic_tile(glmap, :TurboPump1_fluidmask, rotation, position; scale = scale, colour = fluidmask_colour, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :TurboPump1_fluidmask, rotation, position; mirrored = mirrored, scale = scale, colour = fluidmask_colour, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
     # Rotor.
-    push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 10 + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; mirrored = mirrored, scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 10 + render_height_offset), pos_offset = pos_offset))
     # Static housing.
-    push!(queue, render_basic_tile(glmap, :TurboPump1_static, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :TurboPump1_static, rotation, position; mirrored = mirrored, scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset), pos_offset = pos_offset))
     # Vibrating pipework.
-    push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + 10 + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; mirrored = mirrored, scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + 10 + render_height_offset), pos_offset = pos_offset))
 
     return nothing
 end
 
 "Renders turbopump with animations when active: spinning rotor, vibration, and smoke effects."
-function render_map_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
+function render_map_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot, gameticks::Int64, rotation::HexAxis, mirrored::Bool = false, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     # Get turbine fluid colour
-    turbine_input_node = map_element(HexFrame.NODE_S_POS, position, rotation)
+    turbine_input_node = map_element(HexFrame.NODE_S_POS, position, rotation, mirrored)
     fluid = get(derivedmapstate.nodeactualfluids, turbine_input_node, nothing)
     temperature = get(derivedmapstate.node_temperatures, turbine_input_node, HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
     fluidmask_colour = fluid !== nothing ? get_fluid_colour(fluid, temperature) : DEFAULT_EMPTY_FLUID_COLOUR
@@ -398,32 +401,32 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBeh
     smoke_sprites = (:TurboPump1_smoke_1, :TurboPump1_smoke_2, :TurboPump1_smoke_3)
 
     # Fluid mask.
-    push!(queue, render_basic_tile(glmap, :TurboPump1_fluidmask, rotation, position; colour = fluidmask_colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :TurboPump1_fluidmask, rotation, position; mirrored = mirrored, colour = fluidmask_colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
 
     # Rotor.
     if rpm_fraction > 0.0
         rotor_rotation = animation_rotate(gameticks, TURBOPUMP_RENDER_MAX_ROTATION_SPEED * rpm_fraction)
-        push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100 + render_height_offset), pos_offset = pos_offset, sprite_rotation_tweak_mat = rotor_rotation))
+        push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; mirrored = mirrored, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100 + render_height_offset), pos_offset = pos_offset, sprite_rotation_tweak_mat = rotor_rotation))
     else
-        push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100 + render_height_offset), pos_offset = pos_offset))
+        push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; mirrored = mirrored, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100 + render_height_offset), pos_offset = pos_offset))
     end
 
     # Static housing.
-    push!(queue, render_basic_tile(glmap, :TurboPump1_static, rotation, position; draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :TurboPump1_static, rotation, position; mirrored = mirrored, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset), pos_offset = pos_offset))
 
     # Vibrating pipework.
     if pump_flow_fraction > 0.0
         vibe_offset = animation_vibe_offset(gameticks; magnitude = 2.0 * pump_flow_fraction)
         vibe_offset_vec = SVector{2, Float32}(Float32.(vibe_offset)...)
-        push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + render_height_offset), pos_offset = pos_offset, sprite_offset_tweak_px = vibe_offset_vec))
+        push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; mirrored = mirrored, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + render_height_offset), pos_offset = pos_offset, sprite_offset_tweak_px = vibe_offset_vec))
     else
-        push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + render_height_offset), pos_offset = pos_offset))
+        push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; mirrored = mirrored, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + render_height_offset), pos_offset = pos_offset))
     end
 
     # Turbine exhaust smoke.
     if turbine_current > TURBOPUMP_SMOKE_CURRENT_THRESHOLD
         smoke_sprite = animation_sprite_picker(smoke_sprites, gameticks, 4)
-        push!(queue, render_basic_tile(glmap, smoke_sprite, rotation, position; colour = fluidmask_colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM) + Int32(10) + Int32(render_height_offset), pos_offset = pos_offset))
+        push!(queue, render_basic_tile(glmap, smoke_sprite, rotation, position; mirrored = mirrored, colour = fluidmask_colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM) + Int32(10) + Int32(render_height_offset), pos_offset = pos_offset))
     end
 
     return nothing

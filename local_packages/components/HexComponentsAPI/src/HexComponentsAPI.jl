@@ -13,7 +13,7 @@ export Sprite, Component, ComponentOnTile, PipeOnEdge, TunableProps, EnumTunable
 export ComponentBehavior
 export produce_rel_elements, produce_abs_elements, produce_rel_fluid_declarations
 export get_tunables, set_tunables, render_base_elem!, render_map_elem!
-export update_flowbehav!, on_click!, get_thrust, get_component_temperature, get_component_mass, map_rotation, can_be_moved, placement_valid
+export update_flowbehav!, on_click!, get_thrust, get_component_temperature, get_component_mass, map_rotation, map_mirroring, can_be_moved, placement_valid
 export get_component_dry_mass, get_component_wet_mass
 export collect_effect_particles!
 export get_actions, do_action!
@@ -189,6 +189,9 @@ collect_effect_particles!(manager, behav::T; kwargs...) where {T <: ComponentBeh
 "Default map_rotation does not modify rotation"
 map_rotation(behav::T, rotation::HexAxis) where {T <: ComponentBehavior} = rotation
 
+"Default map_mirroring opts components out of functional mirroring."
+map_mirroring(behav::T, mirrored::Bool) where {T <: ComponentBehavior} = false
+
 "Default can_be_moved returns true with empty reason, indicating component can be moved"
 can_be_moved(behav::T; kwargs...) where {T <: ComponentBehavior} = (true, "")
 
@@ -232,53 +235,57 @@ accept_reactivation_probe!(behav::T; kwargs...) where {T <: ComponentBehavior} =
 # ===============================================================
 """
 A wrapper struct for a component that has been placed on the map.
-Includes shared placement information: the placed rotation and the owning `ship` tag.
+Includes shared placement information: the placed rotation, mirror state, and the owning `ship` tag.
 `ship` records which ship in a unified `GameMap` owns the component.
 All behavioural methods are delegated to the component.
 """
 struct ComponentOnTile{T <: ComponentBehavior}
     component::T
     rotation::HexAxis
+    mirrored::Bool
     ship::Symbol
 end
+
+ComponentOnTile(component::T, rotation::HexAxis, ship::Symbol) where {T <: ComponentBehavior} = ComponentOnTile(component, rotation, false, ship)
 
 # ComponentBehavior Method Delegation
 produce_rel_elements(comp::ComponentOnTile) = produce_rel_elements(comp.component)
 produce_rel_fluid_declarations(comp::ComponentOnTile) = produce_rel_fluid_declarations(comp.component)
 get_tunables(comp::ComponentOnTile) = get_tunables(comp.component)
 set_tunables(comp::ComponentOnTile, tunables::NTuple{N, Real}) where {N} = set_tunables(comp.component, tunables)
-render_map_elem!(queue::AbstractVector, comp::ComponentOnTile; kwargs...) = render_map_elem!(queue, comp.component; rotation = comp.rotation, kwargs...)
-render_base_elem!(queue::AbstractVector, comp::ComponentOnTile; kwargs...) = render_base_elem!(queue, comp.component; rotation = comp.rotation, kwargs...)
-collect_effect_particles!(manager, comp::ComponentOnTile; kwargs...) = collect_effect_particles!(manager, comp.component; rotation = comp.rotation, kwargs...)
-update_flowbehav!(comp::ComponentOnTile; kwargs...) = update_flowbehav!(comp.component; rotation = comp.rotation, kwargs...)
+render_map_elem!(queue::AbstractVector, comp::ComponentOnTile; kwargs...) = render_map_elem!(queue, comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
+render_base_elem!(queue::AbstractVector, comp::ComponentOnTile; kwargs...) = render_base_elem!(queue, comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
+collect_effect_particles!(manager, comp::ComponentOnTile; kwargs...) = collect_effect_particles!(manager, comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
+update_flowbehav!(comp::ComponentOnTile; kwargs...) = update_flowbehav!(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
 function on_click!(comp::ComponentOnTile; unrotated_clicksite = nothing, kwargs...)
     if unrotated_clicksite !== nothing
-        relative_clicksite = hex_rotmats[comp.rotation] * unrotated_clicksite # Transform to tile's local coordinate system
+        relative_clicksite = tile_orientation_matrix(comp.rotation, comp.mirrored) * unrotated_clicksite
         on_click!(comp.component; relative_clicksite = relative_clicksite, kwargs...) # Forward with the rotated click site
     else
         on_click!(comp.component; kwargs...) # No click site info, just forward everything
     end
     return nothing
 end
-get_thrust(comp::ComponentOnTile; kwargs...) = get_thrust(comp.component; rotation = comp.rotation, kwargs...)
+get_thrust(comp::ComponentOnTile; kwargs...) = get_thrust(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
 get_component_temperature(comp::ComponentOnTile; kwargs...) = get_component_temperature(comp.component; kwargs...)
 get_component_mass(comp::ComponentOnTile; kwargs...) = get_component_mass(comp.component; kwargs...)
 get_component_dry_mass(comp::ComponentOnTile; kwargs...) = get_component_dry_mass(comp.component; kwargs...)
 get_component_wet_mass(comp::ComponentOnTile; kwargs...) = get_component_wet_mass(comp.component; kwargs...)
 map_rotation(comp::ComponentOnTile, rotation::HexAxis) = map_rotation(comp.component, rotation)
+map_mirroring(comp::ComponentOnTile, mirrored::Bool) = map_mirroring(comp.component, mirrored)
 can_be_moved(comp::ComponentOnTile; kwargs...) = can_be_moved(comp.component; kwargs...)
-placement_valid(comp::ComponentOnTile, coord, surface; kwargs...) = placement_valid(comp.component, coord, surface; rotation = comp.rotation, kwargs...)
+placement_valid(comp::ComponentOnTile, coord, surface; kwargs...) = placement_valid(comp.component, coord, surface; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
 get_actions(comp::ComponentOnTile; kwargs...) = get_actions(comp.component; kwargs...)
 do_action!(comp::ComponentOnTile, action_id::Symbol; kwargs...) = do_action!(comp.component, action_id; kwargs...)
-get_reactivation_probe(comp::ComponentOnTile; kwargs...) = get_reactivation_probe(comp.component; rotation = comp.rotation, kwargs...)
-accept_reactivation_probe!(comp::ComponentOnTile; kwargs...) = accept_reactivation_probe!(comp.component; rotation = comp.rotation, kwargs...)
+get_reactivation_probe(comp::ComponentOnTile; kwargs...) = get_reactivation_probe(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
+accept_reactivation_probe!(comp::ComponentOnTile; kwargs...) = accept_reactivation_probe!(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
 
 "General implementation which leverages the existing ComponentBehavior produce_rel_elements function"
 function produce_abs_elements(tilecomp::ComponentOnTile, tile::TileCoord)
     rel_elements = produce_rel_elements(tilecomp.component)
     # Maps AbsoluteElement from each RelativeElement in the Component
     # Returns an NTuple to preserve previous API: handles variable-length tuples including zero-length
-    return ntuple(i -> map_element(rel_elements[i], tile, i, tilecomp.rotation), length(rel_elements))
+    return ntuple(i -> map_element(rel_elements[i], tile, i, tilecomp.rotation, tilecomp.mirrored), length(rel_elements))
 end
 
 # ===============================================================

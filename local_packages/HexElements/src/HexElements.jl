@@ -136,27 +136,27 @@ end
 # ===============================================================
 
 "Map a relative node position to an absolute NodeCoord."
-function map_element(relative_pos::NodePos, tile::TileCoord, rotation::HexAxis)::NodeCoord
+function map_element(relative_pos::NodePos, tile::TileCoord, rotation::HexAxis, mirrored::Bool = false)::NodeCoord
     if !is_axis(relative_pos)
         return NodeCoord(tile, relative_pos)
     end
 
     relative_axis = to_hexaxis(relative_pos)
-    absolute_axis = rotate(relative_axis, rotation)
+    absolute_axis = transform_tile_axis(relative_axis, rotation, mirrored)
     absolute_vertex = VertexCoord(tile, absolute_axis)
     return to_nodecoord(absolute_vertex)
 end
 
 "Map relative element connections to absolute connections."
-function map_element(relative_element_connections::RelativeElementConnections, tile::TileCoord, rotation::HexAxis)::AbsoluteElementConnections
-    v1 = map_element(relative_element_connections.v1, tile, rotation)
-    v2 = map_element(relative_element_connections.v2, tile, rotation)
+function map_element(relative_element_connections::RelativeElementConnections, tile::TileCoord, rotation::HexAxis, mirrored::Bool = false)::AbsoluteElementConnections
+    v1 = map_element(relative_element_connections.v1, tile, rotation, mirrored)
+    v2 = map_element(relative_element_connections.v2, tile, rotation, mirrored)
     return AbsoluteElementConnections(v1, v2)
 end
 
 "Map a relative element to an absolute element."
-function map_element(relative_element::RelativeElement, tile::TileCoord, index::Integer, rotation::HexAxis)::AbsoluteElement
-    absolute_connections = map_element(relative_element.connections, tile, rotation)
+function map_element(relative_element::RelativeElement, tile::TileCoord, index::Integer, rotation::HexAxis, mirrored::Bool = false)::AbsoluteElement
+    absolute_connections = map_element(relative_element.connections, tile, rotation, mirrored)
     return AbsoluteElement(
         connections = absolute_connections,
         value = relative_element.value,

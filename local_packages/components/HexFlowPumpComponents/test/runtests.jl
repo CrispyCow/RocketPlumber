@@ -33,8 +33,9 @@ function register_vsources!(mna_state::MNA_State, tile::TileCoord, indices::Vara
 end
 
 "Write a node voltage into the mock MNA state."
-function set_node_voltage!(mna_state::MNA_State, tile::TileCoord, node, voltage::Float64; rotation::HexAxis = TEST_ROTATION)
-    mna_state.node_voltages[map_element(node, tile, rotation)] = voltage
+function set_node_voltage!(mna_state::MNA_State, tile::TileCoord, node, voltage::Float64;
+        rotation::HexAxis = TEST_ROTATION, mirrored::Bool = false)
+    mna_state.node_voltages[map_element(node, tile, rotation, mirrored)] = voltage
     return mna_state
 end
 
@@ -42,10 +43,11 @@ end
 function make_derived_state(
         tile::TileCoord = TEST_TILE;
         rotation::HexAxis = TEST_ROTATION,
+        mirrored::Bool = false,
         fluid::HexFluids.FluidType = HexFluids.COLD_GAS,
         temperature_k::Float64 = HexFluids.THERMAL_AMBIENT_TEMPERATURE_K
     )
-    turbine_input_node = map_element(HexFrame.NODE_S_POS, tile, rotation)
+    turbine_input_node = map_element(HexFrame.NODE_S_POS, tile, rotation, mirrored)
     nodeactualfluids = Dict{NodeCoord, HexFluids.FluidType}(turbine_input_node => fluid)
     node_temperatures = Dict{NodeCoord, Float64}(turbine_input_node => temperature_k)
     return DerivedMapState(nodeactualfluids = nodeactualfluids, node_temperatures = node_temperatures)
@@ -197,6 +199,19 @@ end
     @test get_actions(comp) == ()
     on_click!(comp)
     @test !is_inactive(comp.deactivation)
+end
+
+@testset "Turbo pump mirroring" begin
+    comp = make_turbopump()
+    @test map_mirroring(comp, true)
+
+    mirrored = ComponentOnTile(comp, TEST_ROTATION, true, :primary)
+    abs_elements = produce_abs_elements(mirrored, TEST_TILE)
+    @test abs_elements[3].connections.v1 == map_element(HexFrame.NODE_R_POS, TEST_TILE, TEST_ROTATION)
+
+    mirrored_state = make_derived_state(; mirrored = true)
+    mirrored_node = only(keys(mirrored_state.nodeactualfluids))
+    @test mirrored_node == map_element(HexFrame.NODE_R_POS, TEST_TILE, TEST_ROTATION)
 end
 
 @testset "Turbo pump RPM updates" begin

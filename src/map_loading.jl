@@ -32,8 +32,9 @@ function rconvert(::Type{HexComponentsAPI.ComponentOnTile}, nt::NamedTuple)
     component = get(nt, :component, nothing)
     isnothing(component) && error("Stored ComponentOnTile is missing :component")
     rotation = get(nt, :rotation, HexFrame.Q_POS)
+    mirrored = get(nt, :mirrored, false)
     ship = get(nt, :ship, :primary)
-    return HexComponentsAPI.ComponentOnTile(component, rotation, ship)
+    return HexComponentsAPI.ComponentOnTile(component, rotation, mirrored, ship)
 end
 
 function rconvert(::Type{HexComponentsAPI.PipeOnEdge}, nt::NamedTuple)

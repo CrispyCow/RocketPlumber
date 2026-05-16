@@ -14,7 +14,7 @@ export glvec, to_cartesian, to_axial, round_to_tile, round_to_tile_cartesian, ne
 export get_rotmat, is_proper, is_axis, is_grounded, to_proper, to_vertex, to_nodecoord
 export to_hexaxis, to_nodepos, get_edges, round_to_edge, get_vertexes, rotate, rotate_reverse
 export get_tiles, get_adjacent_tiles_for_node, get_adjacent_tiles_for_tile
-export nearest_hex_axis
+export nearest_hex_axis, mirror_q_axis, transform_tile_axis, tile_orientation_matrix
 
 # Lookups
 export hex_rotmats
@@ -109,6 +109,12 @@ const hex_rotmats = Dict(
     R_POS => rotmat_2D(120),
     S_NEG => rotmat_2D(60)
 )
+
+"Reflection matrix across the local Q axis."
+const mirror_q_mat = @SMatrix Float32[
+    1 0
+    0 -1
+]
 
 # ===============================================================
 # Derived Coordinate Types
@@ -419,6 +425,31 @@ function rotate_reverse(rotation::T)::T where {T <: Enum}
     reverse_int = (num_values - Int(rotation)) % num_values
     return T(reverse_int)
 end
+
+"Reflect a hex axis across the local Q axis."
+function mirror_q_axis(axis::HexAxis)::HexAxis
+    if axis === Q_POS
+        return Q_POS
+    elseif axis === R_NEG
+        return S_NEG
+    elseif axis === S_POS
+        return R_POS
+    elseif axis === Q_NEG
+        return Q_NEG
+    elseif axis === R_POS
+        return S_POS
+    elseif axis === S_NEG
+        return R_NEG
+    else
+        error("invalid hexaxis")
+    end
+end
+
+"Transform a tile-local axis into world orientation, applying mirroring before rotation."
+transform_tile_axis(axis::HexAxis, rotation::HexAxis, mirrored::Bool)::HexAxis = rotate(mirrored ? mirror_q_axis(axis) : axis, rotation)
+
+"Return the tile orientation matrix used by render helpers and click-space conversion."
+tile_orientation_matrix(rotation::HexAxis, mirrored::Bool) = mirrored ? (mirror_q_mat * hex_rotmats[rotation]) : hex_rotmats[rotation]
 
 """
 Return the `HexAxis` whose vertex direction is closest to the given axial direction vector.

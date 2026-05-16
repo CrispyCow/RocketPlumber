@@ -386,10 +386,11 @@ end
 "Returns a RenderCommand for a basic tile sprite at the given position and rotation."
 function render_basic_tile(
         glmap::GLObjectMap, sprite::Symbol, rotation::HexAxis, position::TileCoord;
+        mirrored::Bool = false,
         pos_offset = nothing,
         kwargs...
     )::RenderCommand
-    return render_basic_sprite(glmap, sprite, hex_rotmats[rotation], position; pos_offset = pos_offset, kwargs...)
+    return render_basic_sprite(glmap, sprite, tile_orientation_matrix(rotation, mirrored), position; pos_offset = pos_offset, kwargs...)
 end
 
 "Returns a RenderCommand for a basic pipe sprite at the given edge position and rotation."
@@ -479,19 +480,21 @@ end
 "Returns a RenderCommand for a basic tile sprite with animated liquid effect."
 function render_liquid_tile(
         glmap::GLObjectMap, sprite::Symbol, rotation::HexAxis, position::AbstractBasicCoordSystem, gameticks::Integer;
+        mirrored::Bool = false,
         pos_offset = nothing,
         kwargs...
     )::RenderCommand
-    return render_liquid_sprite(glmap, sprite, hex_rotmats[rotation], position; pos_offset = pos_offset, gameticks = gameticks, kwargs...)
+    return render_liquid_sprite(glmap, sprite, tile_orientation_matrix(rotation, mirrored), position; pos_offset = pos_offset, gameticks = gameticks, kwargs...)
 end
 
 "Returns a RenderCommand for a basic tile sprite with animated gas effect."
 function render_gas_tile(
         glmap::GLObjectMap, sprite::Symbol, rotation::HexAxis, position::AbstractBasicCoordSystem, gameticks::Integer;
+        mirrored::Bool = false,
         pos_offset = nothing,
         kwargs...
     )::RenderCommand
-    return render_gas_sprite(glmap, sprite, hex_rotmats[rotation], position; pos_offset = pos_offset, gameticks = gameticks, kwargs...)
+    return render_gas_sprite(glmap, sprite, tile_orientation_matrix(rotation, mirrored), position; pos_offset = pos_offset, gameticks = gameticks, kwargs...)
 end
 
 "Returns RenderCommands for a pipe using sprite-based rendering with base pipe and fluid effects."

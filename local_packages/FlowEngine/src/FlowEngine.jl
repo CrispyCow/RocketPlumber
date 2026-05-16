@@ -65,9 +65,9 @@ const AbsFluidDecl = Union{
     AbsoluteFluidDeclaration{FluidConstraintRule},
 }
 
-"Map a relative fluid declaration to absolute using tile position and rotation"
-function map_declaration(decl::RelativeFluidDeclaration, tile::TileCoord, rotation::HexAxis)
-    node_coord = map_element(decl.node_pos, tile, rotation)
+"Map a relative fluid declaration to absolute using tile position, rotation, and mirroring."
+function map_declaration(decl::RelativeFluidDeclaration, tile::TileCoord, rotation::HexAxis, mirrored::Bool = false)
+    node_coord = map_element(decl.node_pos, tile, rotation, mirrored)
     return AbsoluteFluidDeclaration(node_coord, decl.declaration)
 end
 
@@ -615,8 +615,9 @@ end
 function push_mapped_declarations!(out::Vector{AbsFluidDecl}, tilecomp::ComponentOnTile, tile::TileCoord)
     rel_decls = produce_rel_fluid_declarations(tilecomp.component)
     rot = tilecomp.rotation
+    mirrored = tilecomp.mirrored
     for rel in rel_decls
-        push!(out, map_declaration(rel, tile, rot))
+        push!(out, map_declaration(rel, tile, rot, mirrored))
     end
     return nothing
 end

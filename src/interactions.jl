@@ -208,6 +208,11 @@ function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedSt
     # R key for tool rotation
     get_inrising!(inputstate, GLFW.KEY_R, window) && (inputstate.toolrotation = next_enum_val(inputstate.toolrotation))
 
+    # F key for tile-component mirroring
+    if inputstate.placementmode == TILE || inputstate.placementmode == MOVE
+        get_inrising!(inputstate, GLFW.KEY_F, window) && (inputstate.toolmirrored = !inputstate.toolmirrored)
+    end
+
     # ESC key — cancel redock > dismiss action popup > cancel time warp > close space map > clear selection > exit to inspect mode > toggle pause menu
     if get_inrising!(inputstate, GLFW.KEY_ESCAPE, window)
         if inputstate.placementmode == REDOCK
@@ -632,9 +637,10 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
         coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
         component = component_list[inputstate.toolbar]
         rotation = map_rotation(component, inputstate.toolrotation)
-        target_ship = find_ship_for_placement(component, coord, gamemap; rotation = rotation)
+        mirrored = map_mirroring(component, inputstate.toolmirrored)
+        target_ship = find_ship_for_placement(component, coord, gamemap; rotation = rotation, mirrored = mirrored)
         ghost_colour = isnothing(target_ship) ? GHOST_COLOUR_INVALID : GHOST_COLOUR_VALID
-        render_base_elem!(queue, component; glmap = glmap, rotation = rotation, position = coord, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000))
+        render_base_elem!(queue, component; glmap = glmap, rotation = rotation, mirrored = mirrored, position = coord, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000))
     end
 
     if inputstate.placementmode == PIPE
@@ -754,9 +760,11 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
                 else
                     coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
                     rotation = map_rotation(tilecomp, rotate(tilecomp.rotation, inputstate.toolrotation))
-                    target_ship = find_ship_for_placement(tilecomp.component, coord, gamemap; rotation = rotation)
+                    requested_mirror = xor(tilecomp.mirrored, inputstate.toolmirrored)
+                    mirrored = map_mirroring(tilecomp, requested_mirror)
+                    target_ship = find_ship_for_placement(tilecomp.component, coord, gamemap; rotation = rotation, mirrored = mirrored)
                     ghost_colour = isnothing(target_ship) ? GHOST_COLOUR_INVALID : GHOST_COLOUR_VALID
-                    render_base_elem!(queue, tilecomp; glmap = glmap, rotation = rotation, position = coord, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000))
+                    render_base_elem!(queue, tilecomp; glmap = glmap, rotation = rotation, mirrored = mirrored, position = coord, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000))
                 end
             end
         end
@@ -1052,7 +1060,7 @@ function flowcalc_tileplacer!(
         return
     end
 
-    command = create_set_tile_command(command_queue, coord, inputstate.pendingcomponent, inputstate.toolrotation)
+    command = create_set_tile_command(command_queue, coord, inputstate.pendingcomponent, inputstate.toolrotation, inputstate.toolmirrored)
     try_enqueue_command!(command_queue, command, threadsafe_console_push)
     return nothing
 end
@@ -1175,6 +1183,7 @@ function flowcalc_moveplacer!(
                 inputstate.selectedcoord = element
                 inputstate.selected_tile_pipe_axis = axis
                 inputstate.toolrotation = HexFrame.Q_POS # Reset delta rotation so ghost matches source
+                inputstate.toolmirrored = false
                 threadsafe_console_push("Selected axis $(axis) on multi-pipe at $(element)")
                 return
             end
@@ -1188,6 +1197,7 @@ function flowcalc_moveplacer!(
         inputstate.selectedcoord = element
         inputstate.selected_tile_pipe_axis = nothing
         inputstate.toolrotation = HexFrame.Q_POS # Reset delta rotation so ghost matches source
+        inputstate.toolmirrored = false
         threadsafe_console_push("Selected $(element) for moving")
         return
     end
@@ -1238,7 +1248,7 @@ function flowcalc_moveplacer!(
     elseif source isa EdgeCoord
         destination = round_to_edge(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
     end
-    command = create_move_command(command_queue, source, destination, inputstate.toolrotation)
+    command = create_move_command(command_queue, source, destination, inputstate.toolrotation, inputstate.toolmirrored)
     try_enqueue_command!(command_queue, command, threadsafe_console_push)
 
     inputstate.selectedcoord = nothing

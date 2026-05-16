@@ -164,6 +164,7 @@ end
     coord::TileCoord
     component::ComponentBehavior
     rotation::HexAxis
+    mirrored::Bool
     response_channel::Union{Nothing, Channel{CommandStatus}}
 end
 @struct_hash_equal SetTileCommand
@@ -183,6 +184,7 @@ end
     source_coord::T
     dest_coord::T
     delta_rotation::HexAxis
+    delta_mirror::Bool
     response_channel::Union{Nothing, Channel{CommandStatus}}
 end
 @struct_hash_equal MoveCommand
@@ -512,9 +514,10 @@ function apply_mapedit_command!(
     )
     # Determine which ship this component belongs to via placement_valid on each ship
     mapped_rotation = map_rotation(command.component, command.rotation)
+    mapped_mirror = map_mirroring(command.component, command.mirrored)
     target_ship = find_ship_for_placement(
         command.component, command.coord, gamemap;
-        rotation = mapped_rotation
+        rotation = mapped_rotation, mirrored = mapped_mirror
     )
 
     if isnothing(target_ship)
@@ -529,7 +532,7 @@ function apply_mapedit_command!(
         return nothing
     end
 
-    set_component!(gamemap, command.coord, ComponentOnTile(deepcopy(command.component), mapped_rotation, target_ship))
+    set_component!(gamemap, command.coord, ComponentOnTile(deepcopy(command.component), mapped_rotation, mapped_mirror, target_ship))
     threadsafe_console_push("Component placed at $(command.coord) on $(target_ship)")
     return nothing
 end
@@ -589,10 +592,12 @@ function apply_mapedit_command!(
 
     # Calculate new rotation
     new_rotation = map_rotation(source_comptile.component, rotate(source_comptile.rotation, command.delta_rotation))
+    requested_mirror = xor(source_comptile.mirrored, command.delta_mirror)
+    new_mirrored = map_mirroring(source_comptile, requested_mirror)
 
     # Same-coord move: rotate component in place
     if command.source_coord == command.dest_coord
-        rotated_comptile = ComponentOnTile(source_comptile.component, new_rotation, source_ship)
+        rotated_comptile = ComponentOnTile(source_comptile.component, new_rotation, new_mirrored, source_ship)
         is_valid, reason = placement_valid(rotated_comptile, command.source_coord, gamemap; ship_name = source_ship)
         if !is_valid
             threadsafe_console_push("Cannot rotate in place: $reason")
@@ -607,7 +612,7 @@ function apply_mapedit_command!(
     # Determine destination ship via placement_valid
     dest_ship = find_ship_for_placement(
         source_comptile.component, command.dest_coord, gamemap;
-        rotation = new_rotation
+        rotation = new_rotation, mirrored = new_mirrored
     )
 
     if isnothing(dest_ship)
@@ -623,7 +628,7 @@ function apply_mapedit_command!(
     end
 
     # Perform move (potentially cross-ship)
-    dest_comptile = ComponentOnTile(source_comptile.component, new_rotation, dest_ship)
+    dest_comptile = ComponentOnTile(source_comptile.component, new_rotation, new_mirrored, dest_ship)
     set_component!(gamemap, command.dest_coord, dest_comptile)
     delete_component!(gamemap, command.source_coord)
 
@@ -1134,7 +1139,8 @@ function create_set_tile_command(
         cq::CommandQueue,
         coord::TileCoord,
         component::ComponentBehavior,
-        rotation::HexAxis;
+        rotation::HexAxis,
+        mirrored::Bool = false;
         response_channel::Union{Nothing, Channel} = nothing
     )::SetTileCommand
     return SetTileCommand(
@@ -1142,6 +1148,7 @@ function create_set_tile_command(
         coord = coord,
         component = component,
         rotation = rotation,
+        mirrored = mirrored,
         response_channel = response_channel
     )
 end
@@ -1166,7 +1173,8 @@ function create_move_command(
         cq::CommandQueue,
         source_coord::T,
         dest_coord::T,
-        delta_rotation::HexAxis;
+        delta_rotation::HexAxis,
+        delta_mirror::Bool = false;
         response_channel::Union{Nothing, Channel} = nothing
     ) where {T <: Union{TileCoord, EdgeCoord}}
     return MoveCommand{T}(
@@ -1174,6 +1182,7 @@ function create_move_command(
         source_coord = source_coord,
         dest_coord = dest_coord,
         delta_rotation = delta_rotation,
+        delta_mirror = delta_mirror,
         response_channel = response_channel
     )
 end
@@ -1374,12 +1383,12 @@ function load_reactivation_probe!(
     # matching the component's own element indexing — ElementID(coord, i) refers to the same slot.
     empty!(scheduler.probe_elements)
     for (i, rel_elem) in pairs(probe.rel_elements)
-        push!(scheduler.probe_elements, map_element(rel_elem, coord, i, comp.rotation))
+        push!(scheduler.probe_elements, map_element(rel_elem, coord, i, comp.rotation, comp.mirrored))
     end
 
     empty!(scheduler.probe_declarations)
     for rel_decl in probe.rel_fluid_declarations
-        push!(scheduler.probe_declarations, map_declaration(rel_decl, coord, comp.rotation))
+        push!(scheduler.probe_declarations, map_declaration(rel_decl, coord, comp.rotation, comp.mirrored))
     end
 
     return nothing

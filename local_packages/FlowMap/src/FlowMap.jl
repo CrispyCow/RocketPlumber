@@ -431,7 +431,7 @@ function merge_ship!(gamemap::GameMap, ship_name::Symbol, blueprint::ShipBluepri
 
     # Safe to merge after validation passes
     for (coord, comp) in blueprint.components
-        gamemap.components[coord] = ComponentOnTile(comp.component, comp.rotation, ship_name)
+        gamemap.components[coord] = ComponentOnTile(comp.component, comp.rotation, comp.mirrored, ship_name)
     end
     for (edge, pipe) in blueprint.pipe_behaviors
         gamemap.pipe_behaviors[edge] = PipeOnEdge(pipe, ship_name)
@@ -970,9 +970,9 @@ function find_ships_adjacent_to_coord(gamemap::GameMap, coord::TileCoord)::Vecto
 end
 
 "Find the first ship whose `placement_valid` accepts `(component, coord)`. Current placement rules are expected to make the match unique."
-function find_ship_for_placement(component::ComponentBehavior, coord::TileCoord, gamemap::GameMap; rotation::HexAxis)::Union{Symbol, Nothing}
+function find_ship_for_placement(component::ComponentBehavior, coord::TileCoord, gamemap::GameMap; rotation::HexAxis, mirrored::Bool = false)::Union{Symbol, Nothing}
     for (ship_name, _) in gamemap.ships
-        is_valid, _ = placement_valid(component, coord, gamemap; rotation, ship_name)
+        is_valid, _ = placement_valid(component, coord, gamemap; rotation, mirrored, ship_name)
         is_valid && return ship_name
     end
     return nothing
@@ -1291,7 +1291,7 @@ function swap_primary!(gamemap::GameMap, new_primary_name::Symbol)::Tuple{Bool, 
     for coord in collect(keys(gamemap.components))
         c = gamemap.components[coord]
         haskey(rename_to, c.ship) || continue
-        gamemap.components[coord] = ComponentOnTile(c.component, c.rotation, rename_to[c.ship])
+        gamemap.components[coord] = ComponentOnTile(c.component, c.rotation, c.mirrored, rename_to[c.ship])
     end
     for edge in collect(keys(gamemap.pipe_behaviors))
         p = gamemap.pipe_behaviors[edge]

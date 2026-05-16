@@ -20,7 +20,7 @@ using HexFlowSwitchComponents
 # ComponentBehavior Mandatories
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional
-import HexComponentsAPI: on_click!, get_thrust, get_component_temperature, update_flowbehav!, render_map_elem!, placement_valid, collect_effect_particles!, get_actions, do_action!, produce_rel_fluid_declarations
+import HexComponentsAPI: on_click!, get_thrust, get_component_temperature, update_flowbehav!, render_map_elem!, placement_valid, collect_effect_particles!, get_actions, do_action!, produce_rel_fluid_declarations, map_mirroring
 import HexComponentsAPI: get_reactivation_probe, accept_reactivation_probe!
 # Behavior Fragment Dependencies
 import HexFlowBasicComponents: deactivate!, reactivate!, is_inactive, damage!, undamage!, is_damaged, get_overheat_percentage, get_overheat_tint, update_overheat_state!
@@ -875,6 +875,9 @@ function get_reactivation_probe(comp::BipropChamberCompBehav; kwargs...)
     return ReactivationProbe(_build_biprop_elements(comp, true))
 end
 
+"Enable map mirroring for BipropChamberCompBehav"
+map_mirroring(::BipropChamberCompBehav, mirrored::Bool) = mirrored
+
 """
 Accept reactivation only when the speculative solve shows both fuel and oxidiser
 flowing forward through the chamber's VCVS sources.
@@ -903,19 +906,19 @@ function accept_reactivation_probe!(comp::BipropChamberCompBehav;
     return true
 end
 
-function render_base_elem!(queue::Vector{<:RenderCommand}, comp::BipropChamberCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::Vector{<:RenderCommand}, comp::BipropChamberCompBehav; glmap::GLObjectMap, rotation::HexAxis, mirrored::Bool = false, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     # Render gas fluidmask as black background
     gas_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :CombustionChamber1_gas_fluidmask, rotation, position; colour = DEFAULT_EMPTY_FLUID_COLOUR, scale = scale, transparency = transparency, draw_height = gas_height, pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :CombustionChamber1_gas_fluidmask, rotation, position; mirrored = mirrored, colour = DEFAULT_EMPTY_FLUID_COLOUR, scale = scale, transparency = transparency, draw_height = gas_height, pos_offset = pos_offset))
 
     # Render frame on top
     frame_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :CombustionChamber1_frame, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = frame_height, pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :CombustionChamber1_frame, rotation, position; mirrored = mirrored, scale = scale, transparency = transparency, colour = colour, draw_height = frame_height, pos_offset = pos_offset))
 
     return nothing
 end
 
-function render_map_elem!(queue::Vector{<:RenderCommand}, comp::BipropChamberCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
+function render_map_elem!(queue::Vector{<:RenderCommand}, comp::BipropChamberCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot, gameticks::Int64, rotation::HexAxis, mirrored::Bool = false, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, kwargs...)
     # Detect current flow through both VCVS elements
     fuel_current = get(mna_state.vsource_currents, ElementID(position, biprop_fuel_vcvs_index), 0.0)
     oxid_current = get(mna_state.vsource_currents, ElementID(position, biprop_oxid_vcvs_index), 0.0)
@@ -923,32 +926,32 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::BipropChamberCom
     non_trivial_oxid_current = abs(oxid_current) > backflow_tolerance
 
     # Get output gas colour from NODE_Q_NEG
-    output_node = map_element(HexFrame.NODE_Q_NEG, position, rotation)
+    output_node = map_element(HexFrame.NODE_Q_NEG, position, rotation, mirrored)
     output_fluid = get(derivedmapstate.nodeactualfluids, output_node, nothing)
     output_temperature = get(derivedmapstate.node_temperatures, output_node, HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
     gas_colour = get_fluid_colour(output_fluid, output_temperature)
 
     # Get fuel and oxidiser colours from their input nodes
-    fuel_node = map_element(HexFrame.NODE_R_NEG, position, rotation)
+    fuel_node = map_element(HexFrame.NODE_R_NEG, position, rotation, mirrored)
     fuel_fluid = get(derivedmapstate.nodeactualfluids, fuel_node, nothing)
     fuel_temperature = get(derivedmapstate.node_temperatures, fuel_node, HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
     fuel_colour = get_fluid_colour(fuel_fluid, fuel_temperature)
 
-    oxid_node = map_element(HexFrame.NODE_S_NEG, position, rotation)
+    oxid_node = map_element(HexFrame.NODE_S_NEG, position, rotation, mirrored)
     oxid_fluid = get(derivedmapstate.nodeactualfluids, oxid_node, nothing)
     oxid_temperature = get(derivedmapstate.node_temperatures, oxid_node, HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
     oxid_colour = get_fluid_colour(oxid_fluid, oxid_temperature)
 
     # Always render gas fluidmask with basic shader (static background)
     low_gas_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND) + Int32(render_height_offset)
-    push!(queue, render_gas_tile(glmap, :CombustionChamber1_gas_fluidmask, rotation, position, gameticks; colour = gas_colour, scale = scale, transparency = transparency, draw_height = low_gas_height, pos_offset = pos_offset))
+    push!(queue, render_gas_tile(glmap, :CombustionChamber1_gas_fluidmask, rotation, position, gameticks; mirrored = mirrored, colour = gas_colour, scale = scale, transparency = transparency, draw_height = low_gas_height, pos_offset = pos_offset))
 
     # Render animated fuel fluidmask if fuel is flowing
     if non_trivial_fuel_current
         fuel_sprites = (:CombustionChamber1_fuel_fluidmask_1, :CombustionChamber1_fuel_fluidmask_2, :CombustionChamber1_fuel_fluidmask_3, :CombustionChamber1_fuel_fluidmask_4)
         fuel_sprite = animation_sprite_picker(fuel_sprites, gameticks, 4)
         fuel_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 100) + Int32(render_height_offset)
-        push!(queue, render_liquid_tile(glmap, fuel_sprite, rotation, position, gameticks; colour = fuel_colour, scale = scale, transparency = transparency, draw_height = fuel_height, pos_offset = pos_offset))
+        push!(queue, render_liquid_tile(glmap, fuel_sprite, rotation, position, gameticks; mirrored = mirrored, colour = fuel_colour, scale = scale, transparency = transparency, draw_height = fuel_height, pos_offset = pos_offset))
     end
 
     # Render animated oxidiser fluidmask if oxidiser is flowing (offset above fuel layer to avoid z-fighting)
@@ -956,18 +959,18 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::BipropChamberCom
         oxid_sprites = (:CombustionChamber1_ox_fluidmask_1, :CombustionChamber1_ox_fluidmask_2, :CombustionChamber1_ox_fluidmask_3, :CombustionChamber1_ox_fluidmask_4)
         oxid_sprite = animation_sprite_picker(oxid_sprites, gameticks, 4)
         oxid_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 110) + Int32(render_height_offset)
-        push!(queue, render_liquid_tile(glmap, oxid_sprite, rotation, position, gameticks; colour = oxid_colour, scale = scale, transparency = transparency, draw_height = oxid_height, pos_offset = pos_offset))
+        push!(queue, render_liquid_tile(glmap, oxid_sprite, rotation, position, gameticks; mirrored = mirrored, colour = oxid_colour, scale = scale, transparency = transparency, draw_height = oxid_height, pos_offset = pos_offset))
     end
 
     # Render translucent gas overlay (combustion happening effect) if either liquid is flowing
     if non_trivial_fuel_current || non_trivial_oxid_current
         high_gas_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 200) + Int32(render_height_offset)
-        push!(queue, render_gas_tile(glmap, :CombustionChamber1_gas_fluidmask, rotation, position, gameticks; colour = gas_colour, scale = scale, transparency = transparency*0.2, draw_height = high_gas_height, pos_offset = pos_offset))
+        push!(queue, render_gas_tile(glmap, :CombustionChamber1_gas_fluidmask, rotation, position, gameticks; mirrored = mirrored, colour = gas_colour, scale = scale, transparency = transparency*0.2, draw_height = high_gas_height, pos_offset = pos_offset))
     end
 
     # Always render frame on top
     frame_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :CombustionChamber1_frame, rotation, position; scale = scale, transparency = transparency, draw_height = frame_height, pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :CombustionChamber1_frame, rotation, position; mirrored = mirrored, scale = scale, transparency = transparency, draw_height = frame_height, pos_offset = pos_offset))
 
     return nothing
 end

@@ -402,6 +402,7 @@ function print_map_summary(gamemap::GameMap)
             comp_on_tile.ship === name || continue
             comp = comp_on_tile.component
             rot = comp_on_tile.rotation
+            mirrored = comp_on_tile.mirrored
             type_name = replace(string(typeof(comp)), r"^.*\." => "")
 
             extra = ""
@@ -437,7 +438,7 @@ function print_map_summary(gamemap::GameMap)
                 extra *= "  <unable to introspect: $e>"
             end
 
-            println("    $coord rot=$rot : $type_name$extra")
+            println("    $coord rot=$rot mirrored=$mirrored : $type_name$extra")
         end
 
         # Pipe type summary

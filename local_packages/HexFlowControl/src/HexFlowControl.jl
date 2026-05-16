@@ -149,6 +149,7 @@ end
     toolbar::Int64 = 1
     last_toolbar::Int64 = 1
     toolrotation::HexAxis = HexFrame.Q_POS
+    toolmirrored::Bool = false
     placementmode::PlacementModes = INSPECT
     pendingcomponent::ComponentBehavior
     pendingpipebehavior::PipeBehavior

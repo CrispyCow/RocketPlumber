@@ -380,6 +380,9 @@ function compare_maps(original_map::GameMap, generated_map::GameMap; tolerance=1
             if orig_comp.rotation != gen_comp.rotation
                 push!(tile_mismatches, (s, coord, "Rotation mismatch", orig_comp.rotation, gen_comp.rotation))
             end
+            if orig_comp.mirrored != gen_comp.mirrored
+                push!(tile_mismatches, (s, coord, "Mirror mismatch", orig_comp.mirrored, gen_comp.mirrored))
+            end
             # Compare tunables
             tunable_match, tunable_msg = compare_component_tunables(orig_comp.component, gen_comp.component; tolerance=tolerance)
             if !tunable_match

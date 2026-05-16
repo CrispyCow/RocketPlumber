@@ -135,6 +135,29 @@ function placement_valid(comp::RotationSensitiveCompBehav, coord::TileCoord, gam
     return (true, "")
 end
 
+struct MirrorableCompBehav <: ComponentBehavior end
+HexComponentsAPI.produce_rel_elements(::MirrorableCompBehav) = ()
+HexComponentsAPI.get_tunables(::MirrorableCompBehav) = ()
+HexComponentsAPI.set_tunables(::MirrorableCompBehav, ::NTuple{0, Real}) = MirrorableCompBehav()
+HexComponentsAPI.render_base_elem!(queue, ::MirrorableCompBehav; kwargs...) = nothing
+HexComponentsAPI.map_mirroring(::MirrorableCompBehav, mirrored::Bool) = mirrored
+function placement_valid(::MirrorableCompBehav, coord::TileCoord, gamemap::GameMap; ship_name::Symbol = :primary, kwargs...)
+    return is_on_surface_tile(coord, gamemap; ship_name = ship_name) ? (true, "") : (false, "Not on ship surface")
+end
+
+struct MirroringRequiredCompBehav <: ComponentBehavior end
+HexComponentsAPI.produce_rel_elements(::MirroringRequiredCompBehav) = ()
+HexComponentsAPI.get_tunables(::MirroringRequiredCompBehav) = ()
+HexComponentsAPI.set_tunables(::MirroringRequiredCompBehav, ::NTuple{0, Real}) = MirroringRequiredCompBehav()
+HexComponentsAPI.render_base_elem!(queue, ::MirroringRequiredCompBehav; kwargs...) = nothing
+HexComponentsAPI.map_mirroring(::MirroringRequiredCompBehav, mirrored::Bool) = mirrored
+function placement_valid(::MirroringRequiredCompBehav, coord::TileCoord, gamemap::GameMap;
+        mirrored::Bool = false, ship_name::Symbol = :primary, kwargs...)
+    is_on_surface_tile(coord, gamemap; ship_name = ship_name) || return (false, "Not on ship surface")
+    mirrored || return (false, "Mirroring required")
+    return (true, "")
+end
+
 #= ---------- Test Helpers ----------- =#
 
 "No-op console sink — captures nothing"
@@ -277,6 +300,34 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         @test placed.ship === :asteroid
     end
 
+    @testset "SetTileCommand — stores mirrored state after map_mirroring" begin
+        gamemap = make_gamemap()
+        coord = TileCoord(0, 0)
+
+        process_and_log!(
+            create_set_tile_command(cq, coord, MirrorableCompBehav(), Q_POS, true),
+            gamemap
+        )
+
+        placed = get_component(gamemap, coord)
+        @test !isnothing(placed)
+        @test placed.mirrored
+    end
+
+    @testset "SetTileCommand — clears mirror for non-mirrorable components" begin
+        gamemap = make_gamemap()
+        coord = TileCoord(0, 0)
+
+        process_and_log!(
+            create_set_tile_command(cq, coord, MockCompBehav(), Q_POS, true),
+            gamemap
+        )
+
+        placed = get_component(gamemap, coord)
+        @test !isnothing(placed)
+        @test !placed.mirrored
+    end
+
     #= ---------- SetPipeBehaviorCommand ----------- =#
     @testset "SetPipeBehaviorCommand" begin
         gamemap = make_gamemap()
@@ -361,6 +412,54 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         @test !isnothing(placed)
         @test placed.rotation == HexFrame.R_POS
         @test any(contains(l, "rotated in place") for l in logs)
+    end
+
+    @testset "MoveCommand{TileCoord} — applies mirror delta with xor semantics" begin
+        gamemap = make_gamemap()
+        coord = TileCoord(0, 0)
+
+        process_and_log!(
+            create_set_tile_command(cq, coord, MirrorableCompBehav(), Q_POS),
+            gamemap
+        )
+
+        process_and_log!(
+            create_move_command(cq, coord, coord, Q_POS, true),
+            gamemap
+        )
+
+        placed = get_component(gamemap, coord)
+        @test !isnothing(placed)
+        @test placed.mirrored
+
+        process_and_log!(
+            create_move_command(cq, coord, coord, Q_POS, true),
+            gamemap
+        )
+
+        placed = get_component(gamemap, coord)
+        @test !isnothing(placed)
+        @test !placed.mirrored
+    end
+
+    @testset "MoveCommand{TileCoord} — rejects invalid in-place flip" begin
+        gamemap = make_gamemap()
+        coord = TileCoord(0, 0)
+
+        process_and_log!(
+            create_set_tile_command(cq, coord, MirroringRequiredCompBehav(), Q_POS, true),
+            gamemap
+        )
+
+        logs = process_and_log!(
+            create_move_command(cq, coord, coord, Q_POS, true),
+            gamemap
+        )
+
+        placed = get_component(gamemap, coord)
+        @test !isnothing(placed)
+        @test placed.mirrored
+        @test any(contains(l, "Cannot rotate in place") || contains(l, "Mirroring required") for l in logs)
     end
 
     @testset "MoveCommand{TileCoord} — reports occupier ship in collision log" begin
