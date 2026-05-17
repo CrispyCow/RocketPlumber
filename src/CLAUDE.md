@@ -3,6 +3,7 @@
 ## Key Files
 
 - `repl_launch.jl` — development entry point (Revise, loading screens, hot-reload)
+- `auto_test_launch.jl` — non-interactive smoke-test entry point that boots into the gameplay loop and exits after a tick cap
 - `julia_main.jl` — production entry point (no Revise, artifact verification, `@main` for JuliaC)
 - `gameloop.jl` — main game loop: GL init, snapshot management, rendering pipeline, FlowCalculator IPC, learning system tick
 - `map_loading.jl` — JLD2 serialisation and reconstruction hooks for current save formats

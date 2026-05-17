@@ -142,6 +142,7 @@ Organised in dependency layers (each layer depends only on those above it):
 
 ### Top-Level Source Files (`src/`)
 - `repl_launch.jl` — development entry point (Revise, loading screens, hot-reload)
+- `auto_test_launch.jl` — non-interactive smoke-test entry point that boots into the gameplay loop and exits after a tick cap
 - `julia_main.jl` — production entry point (no Revise, artifact verification, `@main` for JuliaC)
 - `gameloop.jl` — main game loop: GL init, snapshot management, rendering pipeline, FlowCalculator IPC, learning system tick
 - `map_loading.jl` — JLD2 serialisation and reconstruction hooks for current save formats
@@ -322,13 +323,21 @@ Concrete instances defined in `src/components.jl` (`component_list` has 15 entri
 
 ## Running the Project
 
-### Development (recommended)
+### Smoke Test
+
+```shell
+julia --project=. --threads=2,1 --gcthreads=1,1 src/auto_test_launch.jl
+```
+
+Use this first after most gameplay changes to confirm the game opens into the simulation loop without crashing.
+
+### Development (interactive)
 
 ```shell
 julia --project=. --threads=2,1 --gcthreads=1,1 src/repl_launch.jl
 ```
 
-Uses Revise for hot-reloading. The FlowCalculator runs on a background thread -- **at least 2 threads are required**. Running the launch script after making changes is the primary way to surface compile-time and runtime errors, unless told otherwise.
+Uses Revise for hot-reloading. The FlowCalculator runs on a background thread -- **at least 2 threads are required**. If the work adds or changes behaviour that should be exercised manually, follow the smoke test with this interactive launch.
 
 ### Production
 

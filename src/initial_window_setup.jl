@@ -99,6 +99,9 @@ end
 # GLFW Callback and Window Setup
 # ===============================================================
 
+const INITIAL_WINDOW_WIDTH = 1920
+const INITIAL_WINDOW_HEIGHT = 1080
+
 "GLFW error callback for logging"
 error_callback(err::GLFW.GLFWError) = @error "GLFW ERROR: code $(err.code) msg: $(err.description)"
 
@@ -226,7 +229,7 @@ end
 function start_window()
     _window::Union{Nothing, GLFW.Window} = nothing
     @eval CImGui._current_window(::Val{:GlfwOpenGL3}) = _window # Eval executed in global scope
-    _window = startgl_minimal(800, 600)  # Temporary size; will sync into g_viewstate later
+    _window = startgl_minimal(INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT)
     window = _window
     GLFW.MakeContextCurrent(window)
     ui_setup(window)

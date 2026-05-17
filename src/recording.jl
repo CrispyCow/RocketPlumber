@@ -16,6 +16,11 @@ using PNGFiles, ColorTypes
 const RECORDING_TARGET_FPS = 30
 const RECORDING_FRAME_INTERVAL = 1.0 / RECORDING_TARGET_FPS
 const FFMPEG_LOG_TAIL_BYTES = 1024 * 1024 # 1 MB of recent FFmpeg stderr for post-mortem debugging if recording fails
+const RECORDING_BUFFER_SLOTS = 2
+const RECORDING_PBO_SLOTS = 2
+const RECORDING_STOP_SENTINEL_SLOT = 0
+const RECORDING_PBO_POLL_TIMEOUT_NS = UInt64(0)
+const RECORDING_PBO_FLUSH_TIMEOUT_NS = UInt64(100_000_000)
 
 "Return the encoded video dimensions after rounding up to H.264-compatible even sizes."
 recording_encoded_dims(width::Integer, height::Integer) = (width + width % 2, height + height % 2)
@@ -41,16 +46,32 @@ end
 default_capture_path(kind::Symbol, timestamp::AbstractString = default_capture_timestamp()) =
     joinpath(capture_output_dir(), default_capture_basename(kind, timestamp))
 
+"Captured failure details for recording worker or readback shutdown paths."
+struct RecordingFailure
+    exception
+    backtrace
+end
+
 "Mutable state for an active (or idle) screen recording session."
 @kwdef mutable struct RecordingState
     is_recording::Bool = false
-    pixel_buffer::Vector{UInt8} = UInt8[]
+    recording_buffers::Vector{Vector{UInt8}} = Vector{UInt8}[]
     screenshot_buffer::Vector{UInt8} = UInt8[]
     buffer_width::Int32 = 0
     buffer_height::Int32 = 0
+    pbo_ids::Vector{UInt32} = UInt32[]
+    pbo_syncs::Vector{Ptr{Nothing}} = Ptr{Nothing}[]
+    pbo_buffer_bytes::Int = 0
+    next_pbo_issue_slot::Int = 1
+    async_readback_enabled::Bool = false
     ffmpeg_process::Union{Nothing, Base.Process} = nothing
     ffmpeg_stderr_pipe::Union{Nothing, Pipe} = nothing
     ffmpeg_stderr_task::Union{Nothing, Task} = nothing
+    free_slots::Union{Nothing, Channel{Int}} = nothing
+    ready_slots::Union{Nothing, Channel{Int}} = nothing
+    writer_task::Union{Nothing, Task} = nothing
+    writer_failure_channel::Union{Nothing, Channel{RecordingFailure}} = nothing
+    pending_writer_failure::Union{Nothing, RecordingFailure} = nothing
     ffmpeg_log_tail::Vector{UInt8} = UInt8[]
     accumulator::Float64 = 0.0
     last_frame_time::Float64 = 0.0
@@ -198,6 +219,357 @@ function should_capture_frame!(rec::RecordingState)::Bool
     return false
 end
 
+"Allocate or resize the ping-pong CPU recording buffers and reset their slot queues."
+function initialise_recording_buffers!(rec::RecordingState, fb_width::Int32, fb_height::Int32)
+    buffer_size = Int(fb_width) * Int(fb_height) * 4
+
+    if length(rec.recording_buffers) != RECORDING_BUFFER_SLOTS
+        rec.recording_buffers = [Vector{UInt8}(undef, buffer_size) for _ in 1:RECORDING_BUFFER_SLOTS]
+    else
+        for buffer in rec.recording_buffers
+            resize!(buffer, buffer_size)
+        end
+    end
+
+    rec.free_slots = Channel{Int}(RECORDING_BUFFER_SLOTS)
+    rec.ready_slots = Channel{Int}(RECORDING_BUFFER_SLOTS + 1)
+    rec.writer_failure_channel = Channel{RecordingFailure}(1)
+    rec.pending_writer_failure = nothing
+
+    for slot in 1:RECORDING_BUFFER_SLOTS
+        put!(rec.free_slots, slot)
+    end
+    return nothing
+end
+
+"Reset all PBO-side recording state after shutdown or fallback."
+function reset_recording_pbo_state!(rec::RecordingState)
+    rec.pbo_ids = UInt32[]
+    rec.pbo_syncs = Ptr{Nothing}[]
+    rec.pbo_buffer_bytes = 0
+    rec.next_pbo_issue_slot = 1
+    rec.async_readback_enabled = false
+    return nothing
+end
+
+"Return the next slot index in the fixed-size PBO ring."
+recording_pbo_next_slot(slot::Integer, slot_count::Integer = RECORDING_PBO_SLOTS) = slot == slot_count ? 1 : slot + 1
+
+"Return true when a PBO sync is still live for the given slot."
+function recording_pbo_pending(rec::RecordingState, slot::Integer)::Bool
+    isempty(rec.pbo_syncs) && return false
+    return rec.pbo_syncs[slot] != C_NULL
+end
+
+"Delete a single in-flight fence and clear the slot state."
+function delete_recording_sync!(rec::RecordingState, slot::Integer)
+    recording_pbo_pending(rec, slot) || return nothing
+    glDeleteSync(rec.pbo_syncs[slot])
+    rec.pbo_syncs[slot] = C_NULL
+    return nothing
+end
+
+"Allocate the async readback PBO ring for video recording when supported."
+function initialise_recording_pbos!(rec::RecordingState, fb_width::Int32, fb_height::Int32)::Bool
+    reset_recording_pbo_state!(rec)
+
+    rec.pbo_buffer_bytes = Int(fb_width) * Int(fb_height) * 4
+    rec.pbo_ids = fill(UInt32(0), RECORDING_PBO_SLOTS)
+    rec.pbo_syncs = fill(C_NULL, RECORDING_PBO_SLOTS)
+
+    try
+        for slot in 1:RECORDING_PBO_SLOTS
+            pbo_id = UInt32(0)
+            @cref glGenBuffers(1, &pbo_id)
+            rec.pbo_ids[slot] = pbo_id
+
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo_id)
+            glBufferData(GL_PIXEL_PACK_BUFFER, rec.pbo_buffer_bytes, C_NULL, GL_STREAM_READ)
+        end
+    catch e
+        destroy_recording_pbos!(rec)
+        @warn "Async readback PBO initialisation failed; falling back to direct capture" exception = (e, catch_backtrace())
+        return false
+    finally
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+    end
+
+    rec.async_readback_enabled = true
+    return true
+end
+
+"Delete all PBOs and fences owned by the current recording session."
+function destroy_recording_pbos!(rec::RecordingState)
+    for slot in eachindex(rec.pbo_syncs)
+        delete_recording_sync!(rec, slot)
+    end
+
+    for pbo_id in rec.pbo_ids
+        pbo_id == 0 && continue
+        pbo = pbo_id
+        @cref glDeleteBuffers(1, &pbo)
+    end
+
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+    return reset_recording_pbo_state!(rec)
+end
+
+"Return a free recording buffer slot without ever blocking the render thread."
+function try_take_free_recording_slot!(rec::RecordingState)::Union{Nothing, Int}
+    isnothing(rec.free_slots) && return nothing
+    isready(rec.free_slots) || return nothing
+    return take!(rec.free_slots)
+end
+
+"Take a CPU recording buffer slot, blocking until the writer releases one."
+function take_free_recording_slot!(rec::RecordingState)::Int
+    isnothing(rec.free_slots) && throw(ArgumentError("Recording free-slot queue is not initialised"))
+    return take!(rec.free_slots)
+end
+
+"Return a buffer slot to the free queue after an aborted capture attempt."
+function release_recording_slot!(rec::RecordingState, slot::Integer)
+    isnothing(rec.free_slots) && return nothing
+    put!(rec.free_slots, Int(slot))
+    return nothing
+end
+
+"Submit a captured buffer slot to the background FFmpeg writer."
+function submit_recording_slot!(rec::RecordingState, slot::Integer)
+    isnothing(rec.ready_slots) && throw(ArgumentError("Recording writer queue is not initialised"))
+    put!(rec.ready_slots, Int(slot))
+    return nothing
+end
+
+"Return the first non-`nothing` recording failure from a list of candidates."
+function first_recording_failure(failures::Union{Nothing, RecordingFailure}...)::Union{Nothing, RecordingFailure}
+    for failure in failures
+        !isnothing(failure) && return failure
+    end
+
+    return nothing
+end
+
+"Drain queued recording buffers into FFmpeg on a background worker thread."
+function ffmpeg_writer_loop!(
+        rec::RecordingState,
+        ffmpeg_input::IO,
+        ready_slots::Channel{Int},
+        free_slots::Channel{Int},
+        failure_channel::Channel{RecordingFailure},
+    )
+    try
+        while true
+            slot = take!(ready_slots)
+            slot == RECORDING_STOP_SENTINEL_SLOT && break
+
+            write(ffmpeg_input, rec.recording_buffers[slot])
+
+            put!(free_slots, slot)
+        end
+    catch e
+        put!(failure_channel, RecordingFailure(e, catch_backtrace()))
+    end
+
+    return nothing
+end
+
+"Start the background FFmpeg writer that owns stdin writes for recording frames."
+function start_ffmpeg_writer!(rec::RecordingState)
+    ffmpeg_process = rec.ffmpeg_process
+    ready_slots = rec.ready_slots
+    free_slots = rec.free_slots
+    failure_channel = rec.writer_failure_channel
+
+    isnothing(ffmpeg_process) && throw(ArgumentError("FFmpeg process must be started before the writer task"))
+    isnothing(ready_slots) && throw(ArgumentError("Recording writer queue is not initialised"))
+    isnothing(free_slots) && throw(ArgumentError("Recording free-slot queue is not initialised"))
+    isnothing(failure_channel) && throw(ArgumentError("Recording writer failure channel is not initialised"))
+
+    rec.writer_task = Threads.@spawn ffmpeg_writer_loop!(rec, ffmpeg_process.in, ready_slots, free_slots, failure_channel)
+    return nothing
+end
+
+"Poll for an asynchronous writer failure without blocking the render thread."
+function poll_writer_failure!(rec::RecordingState)::Union{Nothing, RecordingFailure}
+    !isnothing(rec.pending_writer_failure) && return rec.pending_writer_failure
+    isnothing(rec.writer_failure_channel) && return nothing
+    isready(rec.writer_failure_channel) || return nothing
+    rec.pending_writer_failure = take!(rec.writer_failure_channel)
+    return rec.pending_writer_failure
+end
+
+"Drain and stop the background writer, returning any surfaced writer failure."
+function shutdown_ffmpeg_writer!(rec::RecordingState)::Union{Nothing, RecordingFailure}
+    writer_failure = rec.pending_writer_failure
+    isnothing(writer_failure) && (writer_failure = poll_writer_failure!(rec))
+
+    if !isnothing(rec.ready_slots)
+        put!(rec.ready_slots, RECORDING_STOP_SENTINEL_SLOT)
+    end
+
+    if !isnothing(rec.writer_task)
+        wait(rec.writer_task)
+    end
+
+    isnothing(writer_failure) && (writer_failure = poll_writer_failure!(rec))
+
+    rec.writer_task = nothing
+    rec.free_slots = nothing
+    rec.ready_slots = nothing
+    rec.writer_failure_channel = nothing
+    rec.pending_writer_failure = nothing
+
+    return writer_failure
+end
+
+"Copy a completed PBO readback into a CPU buffer owned by the async writer."
+function copy_pbo_into_recording_buffer!(rec::RecordingState, pbo_slot::Integer, buffer_slot::Integer)
+    buffer = rec.recording_buffers[buffer_slot]
+
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, rec.pbo_ids[pbo_slot])
+    mapped_ptr = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, rec.pbo_buffer_bytes, GL_MAP_READ_BIT)
+
+    if mapped_ptr == C_NULL
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+        throw(ErrorException("Failed to map recording PBO slot $(pbo_slot)"))
+    end
+
+    unmap_ok = try
+        GC.@preserve buffer begin
+            unsafe_copyto!(pointer(buffer), Ptr{UInt8}(mapped_ptr), rec.pbo_buffer_bytes)
+        end
+        glUnmapBuffer(GL_PIXEL_PACK_BUFFER)
+    finally
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+    end
+
+    unmap_ok == GL_FALSE && throw(ErrorException("Failed to unmap recording PBO slot $(pbo_slot)"))
+    return nothing
+end
+
+"Issue an asynchronous framebuffer readback into the selected PBO slot."
+function issue_readback_to_pbo!(rec::RecordingState, pbo_slot::Integer)
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, rec.pbo_ids[pbo_slot])
+
+    try
+        glReadPixels(
+            GLint(0), GLint(0), GLsizei(rec.buffer_width), GLsizei(rec.buffer_height),
+            GL_RGBA, GL_UNSIGNED_BYTE, Ptr{Cvoid}(0)
+        )
+        rec.pbo_syncs[pbo_slot] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0)
+        rec.pbo_syncs[pbo_slot] == C_NULL && throw(ErrorException("Failed to create recording PBO fence for slot $(pbo_slot)"))
+    finally
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+    end
+
+    return nothing
+end
+
+"Submit a filled CPU recording buffer to the async writer and count the frame."
+function submit_recorded_frame!(rec::RecordingState, buffer_slot::Integer)
+    submit_recording_slot!(rec, buffer_slot)
+    rec.frame_count += 1
+    return nothing
+end
+
+"Poll or wait for a completed PBO readback, then enqueue or drop the frame."
+function try_collect_completed_pbo!(rec::RecordingState, pbo_slot::Integer; wait::Bool = false)::Bool
+    recording_pbo_pending(rec, pbo_slot) || return false
+
+    sync = rec.pbo_syncs[pbo_slot]
+    timeout_ns = wait ? RECORDING_PBO_FLUSH_TIMEOUT_NS : RECORDING_PBO_POLL_TIMEOUT_NS
+
+    while true
+        wait_status = glClientWaitSync(sync, 0, timeout_ns)
+
+        if wait_status == GL_ALREADY_SIGNALED || wait_status == GL_CONDITION_SATISFIED
+            buffer_slot = wait ? take_free_recording_slot!(rec) : try_take_free_recording_slot!(rec)
+
+            if isnothing(buffer_slot)
+                delete_recording_sync!(rec, pbo_slot)
+                return true
+            end
+
+            copy_pbo_into_recording_buffer!(rec, pbo_slot, buffer_slot)
+            delete_recording_sync!(rec, pbo_slot)
+            submit_recorded_frame!(rec, buffer_slot)
+            return true
+        elseif wait_status == GL_TIMEOUT_EXPIRED
+            wait || return false
+            yield()
+        elseif wait_status == GL_WAIT_FAILED
+            throw(ErrorException("Recording PBO fence wait failed for slot $(pbo_slot)"))
+        else
+            throw(ErrorException("Unexpected recording PBO fence status $(wait_status) for slot $(pbo_slot)"))
+        end
+    end
+end
+
+"Flush any in-flight PBO readbacks before stopping the writer or deleting GL state."
+function flush_pending_pbo_readbacks!(rec::RecordingState; allow_enqueue::Bool = true)
+    rec.async_readback_enabled || return nothing
+
+    for pbo_slot in eachindex(rec.pbo_syncs)
+        recording_pbo_pending(rec, pbo_slot) || continue
+
+        if allow_enqueue
+            try_collect_completed_pbo!(rec, pbo_slot; wait = true)
+        else
+            delete_recording_sync!(rec, pbo_slot)
+        end
+    end
+
+    return nothing
+end
+
+"Capture a frame directly into CPU memory when async GPU readback is unavailable."
+function capture_frame_direct!(rec::RecordingState)::Bool
+    buffer_slot = try_take_free_recording_slot!(rec)
+    isnothing(buffer_slot) && return false
+
+    try
+        capture_framebuffer!(rec.recording_buffers[buffer_slot], rec.buffer_width, rec.buffer_height)
+    catch
+        release_recording_slot!(rec, buffer_slot)
+        rethrow()
+    end
+
+    submit_recorded_frame!(rec, buffer_slot)
+    return true
+end
+
+"Flush pending PBO readbacks, always releasing GL resources afterwards."
+function teardown_recording_readback!(rec::RecordingState; allow_enqueue::Bool)::Union{Nothing, RecordingFailure}
+    try
+        if rec.async_readback_enabled
+            flush_pending_pbo_readbacks!(rec; allow_enqueue = allow_enqueue)
+        end
+
+        return nothing
+    catch e
+        return RecordingFailure(e, catch_backtrace())
+    finally
+        destroy_recording_pbos!(rec)
+    end
+end
+
+"Advance the PBO readback pipeline by collecting the previous slot and issuing the next readback."
+function process_async_readback_tick!(rec::RecordingState)
+    issue_slot = rec.next_pbo_issue_slot
+    collect_slot = recording_pbo_next_slot(issue_slot)
+
+    try_collect_completed_pbo!(rec, collect_slot)
+
+    if recording_pbo_pending(rec, issue_slot)
+        return nothing
+    end
+
+    issue_readback_to_pbo!(rec, issue_slot)
+    rec.next_pbo_issue_slot = collect_slot
+    return nothing
+end
+
 # ===============================================================
 # Recording Lifecycle
 # ===============================================================
@@ -210,12 +582,10 @@ function start_recording!(rec::RecordingState, fb_width::Int32, fb_height::Int32
     empty!(rec.ffmpeg_log_tail)
     rec.ffmpeg_stderr_pipe = nothing
     rec.ffmpeg_stderr_task = nothing
-
-    # Allocate or resize pixel buffer
-    buffer_size = fb_width * fb_height * 4
-    resize!(rec.pixel_buffer, buffer_size)
+    initialise_recording_buffers!(rec, fb_width, fb_height)
     rec.buffer_width = fb_width
     rec.buffer_height = fb_height
+    async_readback_started = initialise_recording_pbos!(rec, fb_width, fb_height)
 
     try
         rec.ffmpeg_stderr_pipe = Pipe()
@@ -223,7 +593,19 @@ function start_recording!(rec::RecordingState, fb_width::Int32, fb_height::Int32
             start_ffmpeg_encoder(fb_width, fb_height, RECORDING_TARGET_FPS, rec.output_path)
         end
         rec.ffmpeg_stderr_task = @async drain_ffmpeg_stderr!(rec, rec.ffmpeg_stderr_pipe)
+        start_ffmpeg_writer!(rec)
     catch e
+        if !isnothing(rec.ffmpeg_process)
+            try
+                isopen(rec.ffmpeg_process.in) && close(rec.ffmpeg_process.in)
+                wait(rec.ffmpeg_process)
+            catch close_error
+                @debug "Error closing FFmpeg process after failed recording start" exception = (close_error, catch_backtrace())
+            end
+        end
+
+        shutdown_ffmpeg_writer!(rec)
+        destroy_recording_pbos!(rec)
         rec.ffmpeg_process = nothing
         rec.ffmpeg_stderr_pipe = nothing
         rec.ffmpeg_stderr_task = nothing
@@ -243,6 +625,9 @@ function start_recording!(rec::RecordingState, fb_width::Int32, fb_height::Int32
     if encoded_width != fb_width || encoded_height != fb_height
         console_push("Recording output padded to $(encoded_width)×$(encoded_height) for H.264 compatibility")
     end
+    if !async_readback_started
+        @warn "Async PBO readback unavailable; recording is using direct framebuffer capture"
+    end
     @info "Recording started: $(rec.output_path)"
     return true
 end
@@ -251,6 +636,11 @@ end
 function stop_recording!(rec::RecordingState, console_push::Function; stop_message::Union{Nothing, String} = nothing)
     output = rec.output_path
     exit_code = nothing
+    writer_failure = poll_writer_failure!(rec)
+    readback_failure = teardown_recording_readback!(rec; allow_enqueue = isnothing(writer_failure))
+
+    shutdown_failure = shutdown_ffmpeg_writer!(rec)
+    writer_failure = first_recording_failure(writer_failure, shutdown_failure)
 
     if !isnothing(rec.ffmpeg_process)
         try
@@ -293,7 +683,23 @@ function stop_recording!(rec::RecordingState, console_push::Function; stop_messa
         output_exists = false
     end
 
-    if !isnothing(stop_message)
+    if !isnothing(writer_failure)
+        console_push("Recording failed: writer task error")
+        captured_log = ffmpeg_log_text(rec)
+        if isempty(captured_log)
+            @warn "Recording failed: writer task error" exception = (writer_failure.exception, writer_failure.backtrace)
+        else
+            @warn "Recording failed: writer task error" exception = (writer_failure.exception, writer_failure.backtrace) ffmpeg_log = captured_log
+        end
+    elseif !isnothing(readback_failure)
+        console_push("Recording failed: readback shutdown error")
+        captured_log = ffmpeg_log_text(rec)
+        if isempty(captured_log)
+            @warn "Recording failed: readback shutdown error" exception = (readback_failure.exception, readback_failure.backtrace)
+        else
+            @warn "Recording failed: readback shutdown error" exception = (readback_failure.exception, readback_failure.backtrace) ffmpeg_log = captured_log
+        end
+    elseif !isnothing(stop_message)
         console_push("Recording stopped: $(stop_message)")
         if isnothing(exit_code) || exit_code == 0
             @info "Recording stopped: $(stop_message)"
@@ -354,6 +760,14 @@ function recording_tick!(rec::RecordingState, inputstate, viewstate, window, con
         return nothing
     end
 
+    writer_failure = poll_writer_failure!(rec)
+    if !isnothing(writer_failure)
+        @warn "Recording writer failed, stopping recording" exception = (writer_failure.exception, writer_failure.backtrace)
+        inputstate.is_recording = false
+        stop_recording!(rec, console_push)
+        return nothing
+    end
+
     # Detect window resize — stop recording if dimensions changed
     fb_size = GLFW.GetFramebufferSize(window)
     if fb_size.width != rec.buffer_width || fb_size.height != rec.buffer_height
@@ -367,15 +781,17 @@ function recording_tick!(rec::RecordingState, inputstate, viewstate, window, con
         return nothing
     end
 
-    # Capture and write frame
+    # Capture and enqueue frame
     try
-        capture_framebuffer!(rec.pixel_buffer, rec.buffer_width, rec.buffer_height)
-        write(rec.ffmpeg_process.in, rec.pixel_buffer)
-        rec.frame_count += 1
+        if rec.async_readback_enabled
+            process_async_readback_tick!(rec)
+        else
+            capture_frame_direct!(rec)
+        end
     catch e
-        @warn "Recording frame write failed, stopping recording" exception = (e, catch_backtrace())
+        @warn "Recording frame capture failed, stopping recording" exception = (e, catch_backtrace())
         inputstate.is_recording = false
-        stop_recording!(rec, console_push; stop_message = "write error")
+        stop_recording!(rec, console_push; stop_message = "capture error")
     end
 
     return nothing

@@ -124,7 +124,10 @@ After each tick, the background thread deep-copies all state into a `FlowCalcula
 ## Running the Project
 
 ```shell
-# Development (recommended — uses Revise for hot-reload)
+# Smoke test first
+julia --project=. --threads=2,1 --gcthreads=1,1 src/auto_test_launch.jl
+
+# Development (interactive, uses Revise for hot-reload)
 julia --project=. --threads=2,1 --gcthreads=1,1 src/repl_launch.jl
 
 # Production
@@ -139,4 +142,4 @@ cd local_packages/<PackageName> && julia --project=. -e "using Pkg; Pkg.test()"
 
 At least 2 threads are required. The app requires OpenGL/GLFW/CImGui bindings — headless CI will fail.
 
-Running the launch script after making changes is the primary way to surface compile-time and runtime errors, unless told otherwise.
+Use `src/auto_test_launch.jl` as the first-pass smoke test after most gameplay changes so the game proves it can boot into the simulation loop without crashing. If the work adds or changes behaviour that should be exercised manually, follow it with `src/repl_launch.jl`.

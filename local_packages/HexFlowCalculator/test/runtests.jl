@@ -1701,6 +1701,61 @@ end
     @test any(contains(log, "incompatible with constraint") for log in logs)
 end
 
+@testset "process_command! — response channels" begin
+    @testset "writes APPLIED on success" begin
+        gm = make_gamemap()
+        cq = create_command_queue(4)
+        ch = Channel{CommandStatus}(1)
+
+        cmd = create_set_tile_command(cq, TileCoord(0, 0), MockCompBehav(), Q_POS; response_channel = ch)
+        HexFlowCalculator.process_command!(cmd, gm, silent_console, throw_errors = false)
+
+        @test take!(ch) == APPLIED
+        @test has_component(gm, TileCoord(0, 0))
+    end
+
+    @testset "writes INVALID when apply method refuses" begin
+        gm = make_gamemap()
+        set_component!(gm, TileCoord(0, 0),
+            ComponentOnTile(MockCompBehav(), Q_POS, false, :primary))
+
+        cq = create_command_queue(4)
+        ch = Channel{CommandStatus}(1)
+        cmd = create_set_tile_command(cq, TileCoord(0, 0), MockCompBehav(), Q_POS;
+            response_channel = ch)
+        HexFlowCalculator.process_command!(cmd, gm, silent_console, throw_errors = false)
+
+        @test take!(ch) == INVALID
+    end
+
+    @testset "writes INVALID for unrecognised action" begin
+        gm = make_gamemap()
+        set_component!(gm, TileCoord(0, 0),
+            ComponentOnTile(ActionCompBehav(), Q_POS, false, :primary))
+
+        cq = create_command_queue(4)
+        ch = Channel{CommandStatus}(1)
+        cmd = create_do_action_command(cq, TileCoord(0, 0), :no_such_action;
+            response_channel = ch)
+        HexFlowCalculator.process_command!(cmd, gm, silent_console, throw_errors = false)
+
+        @test take!(ch) == INVALID
+    end
+
+    @testset "writes REJECTED on sandbox failure" begin
+        gm = GameMap()
+        set_surface_tile!(gm, TileCoord(0, 0))
+        cq = create_command_queue(4)
+        ch = Channel{CommandStatus}(1)
+
+        cmd = create_set_tile_command(cq, TileCoord(0, 0), InvalidFluidBridgeCompBehav(), Q_POS; response_channel = ch)
+        HexFlowCalculator.process_command!(cmd, gm, silent_console, throw_errors = false)
+
+        @test take!(ch) == REJECTED
+        @test !has_component(gm, TileCoord(0, 0))
+    end
+end
+
 @testset "cancel_if_time_wrong! — time mismatch cancels" begin
     gm = GameMap()
     initialise_spacemap!(gm, UInt32(1), _test_enc_config)
@@ -1924,6 +1979,7 @@ end
     @test APPLIED isa CommandStatus
     @test REJECTED isa CommandStatus
     @test QUEUED_FAILED isa CommandStatus
+    @test INVALID isa CommandStatus
 end
 
 # ===============================================================

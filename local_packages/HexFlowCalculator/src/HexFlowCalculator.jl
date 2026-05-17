@@ -12,7 +12,7 @@ using HexFlowProcGen, HexFlowPipeComponents
 export FlowCalculatorSnapshot, FlowCalculatorSharedState, FlowCalculatorIPC, TimingState
 
 # Type exports - Commands
-export CommandStatus, APPLIED, REJECTED, QUEUED_FAILED
+export CommandStatus, APPLIED, REJECTED, QUEUED_FAILED, INVALID
 export MapEditCommand, SetTileCommand, SetPipeBehaviorCommand, MoveCommand
 export DeleteAtCommand, ClickTileCommand, DoActionCommand, AddShipSurfaceCommand, RemoveShipSurfaceCommand
 export MapOverrideCommand, AddEncounterShipCommand, RedockShipCommand
@@ -132,7 +132,7 @@ end
 # ===============================================================
 
 # Command result status
-@enum CommandStatus APPLIED REJECTED QUEUED_FAILED
+@enum CommandStatus APPLIED REJECTED QUEUED_FAILED INVALID
 
 "Abstract base type for all map edit commands."
 abstract type MapEditCommand end
@@ -505,13 +505,14 @@ end
 
 """
 Apply a map edit command directly to the `gamemap` without sandbox validation.
+Returns `true` if the mutation was applied, `false` if an internal check refused it.
 Dispatches on concrete command type.
 """
 function apply_mapedit_command!(
         gamemap::GameMap,
         command::SetTileCommand,
         threadsafe_console_push::Function
-    )
+    )::Bool
     # Determine which ship this component belongs to via placement_valid on each ship
     mapped_rotation = map_rotation(command.component, command.rotation)
     mapped_mirror = map_mirroring(command.component, command.mirrored)
@@ -522,31 +523,31 @@ function apply_mapedit_command!(
 
     if isnothing(target_ship)
         threadsafe_console_push("Cannot place component: Not a valid placement on any ship")
-        return nothing
+        return false
     end
 
     # Check if tile already occupied anywhere
     existing_comptile = get_component(gamemap, command.coord)
     if !isnothing(existing_comptile)
         threadsafe_console_push("Cannot place component: Tile is already occupied on $(existing_comptile.ship)")
-        return nothing
+        return false
     end
 
     set_component!(gamemap, command.coord, ComponentOnTile(deepcopy(command.component), mapped_rotation, mapped_mirror, target_ship))
     threadsafe_console_push("Component placed at $(command.coord) on $(target_ship)")
-    return nothing
+    return true
 end
 
 function apply_mapedit_command!(
         gamemap::GameMap,
         command::SetPipeBehaviorCommand,
         threadsafe_console_push::Function
-    )
+    )::Bool
     # Check if edge is already occupied anywhere
     existing_pipe = get_pipe(gamemap, command.coord)
     if !isnothing(existing_pipe)
         threadsafe_console_push("Cannot place pipe: Edge already occupied on $(existing_pipe.ship)")
-        return nothing
+        return false
     end
 
     # Try on-surface placement first, then off-ship fallback
@@ -555,7 +556,7 @@ function apply_mapedit_command!(
     if !isnothing(target_ship)
         set_pipe!(gamemap, command.coord, PipeOnEdge(deepcopy(command.pipe_behavior), target_ship))
         threadsafe_console_push("Pipe placed at $(command.coord) on $(target_ship)")
-        return nothing
+        return true
     end
 
     # Not on any single ship — try off-ship pipe placement (extending from a ship into space)
@@ -563,23 +564,22 @@ function apply_mapedit_command!(
     if can_place
         set_pipe!(gamemap, command.coord, PipeOnEdge(deepcopy(command.pipe_behavior), offship_target))
         threadsafe_console_push("Off-ship pipe placed at $(command.coord) on $(offship_target)")
-        return nothing
-    else
-        threadsafe_console_push("Cannot place pipe: $(reason)")
+        return true
     end
-
-    return nothing
+    threadsafe_console_push("Cannot place pipe: $(reason)")
+    return false
+    
 end
 
 function apply_mapedit_command!(
         gamemap::GameMap,
         command::MoveCommand{TileCoord},
         threadsafe_console_push::Function
-    )
+    )::Bool
     source_comptile = get_component(gamemap, command.source_coord)
     if isnothing(source_comptile)
         threadsafe_console_push("Cannot move: No component at source $(command.source_coord)")
-        return nothing
+        return false
     end
     source_ship = source_comptile.ship
 
@@ -587,7 +587,7 @@ function apply_mapedit_command!(
     can_move, reason = can_be_moved(source_comptile)
     if !can_move
         threadsafe_console_push("Component cannot be moved: $reason")
-        return nothing
+        return false
     end
 
     # Calculate new rotation
@@ -601,12 +601,12 @@ function apply_mapedit_command!(
         is_valid, reason = placement_valid(rotated_comptile, command.source_coord, gamemap; ship_name = source_ship)
         if !is_valid
             threadsafe_console_push("Cannot rotate in place: $reason")
-            return nothing
+            return false
         end
 
         set_component!(gamemap, command.source_coord, rotated_comptile)
         threadsafe_console_push("Component rotated in place at $(command.source_coord)")
-        return nothing
+        return true
     end
 
     # Determine destination ship via placement_valid
@@ -617,14 +617,14 @@ function apply_mapedit_command!(
 
     if isnothing(dest_ship)
         threadsafe_console_push("Cannot move: Destination $(command.dest_coord) not valid for any ship")
-        return nothing
+        return false
     end
 
     # Check destination not already occupied
     existing_dest = get_component(gamemap, command.dest_coord)
     if !isnothing(existing_dest)
         threadsafe_console_push("Cannot move: Destination tile already occupied on $(existing_dest.ship)")
-        return nothing
+        return false
     end
 
     # Perform move (potentially cross-ship)
@@ -637,18 +637,18 @@ function apply_mapedit_command!(
     else
         threadsafe_console_push("Component moved from $(source_ship) to $(dest_ship)")
     end
-    return nothing
+    return true
 end
 
 function apply_mapedit_command!(
         gamemap::GameMap,
         command::MoveCommand{EdgeCoord},
         threadsafe_console_push::Function
-    )
+    )::Bool
     source_pipe = get_pipe(gamemap, command.source_coord)
     if isnothing(source_pipe)
         threadsafe_console_push("Cannot move: No pipe at source $(command.source_coord)")
-        return nothing
+        return false
     end
 
     # Check if source pipe is off-surface — validate that removing it won't orphan connected pipes
@@ -659,7 +659,7 @@ function apply_mapedit_command!(
     if source_is_offship
         if !validate_offship_pipe_deletion(command.source_coord, gamemap)
             threadsafe_console_push("Cannot move pipe: would orphan connected off-surface pipes")
-            return nothing
+            return false
         end
     end
 
@@ -673,14 +673,14 @@ function apply_mapedit_command!(
             dest_ship = offship_target
         else
             threadsafe_console_push("Cannot move pipe: $(reason)")
-            return nothing
+            return false
         end
     end
 
     # Check destination not already occupied (across all ships)
     if has_pipe(gamemap, command.dest_coord)
         threadsafe_console_push("Cannot move pipe: Destination edge already occupied")
-        return nothing
+        return false
     end
 
     # Perform move
@@ -693,91 +693,94 @@ function apply_mapedit_command!(
     end
 
     threadsafe_console_push("Pipe moved from $(command.source_coord) to $(command.dest_coord)")
-    return nothing
+    return true
 end
 
 function apply_mapedit_command!(
         gamemap::GameMap,
         command::DeleteAtCommand{TileCoord},
         threadsafe_console_push::Function
-    )
+    )::Bool
     existing_comp = get_component(gamemap, command.coord)
     if !isnothing(existing_comp)
         delete_component!(gamemap, command.coord)
         threadsafe_console_push("Component deleted at $(command.coord) from $(existing_comp.ship)")
-    else
-        threadsafe_console_push("No component found at $(command.coord)")
+        return true
     end
-    return nothing
+    threadsafe_console_push("No component found at $(command.coord)")
+    return false
+    
 end
 
 function apply_mapedit_command!(
         gamemap::GameMap,
         command::DeleteAtCommand{EdgeCoord},
         threadsafe_console_push::Function
-    )
+    )::Bool
     existing_pipe = get_pipe(gamemap, command.coord)
-    if !isnothing(existing_pipe)
-        # Check if pipe is off-surface — validate deletion won't orphan connected pipes
-        v1_on = is_node_on_any_ship_surface(to_nodecoord(command.coord.v1), gamemap)
-        v2_on = is_node_on_any_ship_surface(to_nodecoord(command.coord.v2), gamemap)
-        is_offship = !(v1_on && v2_on)
+    if isnothing(existing_pipe)
+        threadsafe_console_push("No pipe found at $(command.coord)")
+        return false
+    end
 
-        if is_offship && !validate_offship_pipe_deletion(command.coord, gamemap)
-            threadsafe_console_push("Cannot delete: would orphan connected off-surface pipes")
-            return nothing
-        end
+    # Check if pipe is off-surface — validate deletion won't orphan connected pipes
+    v1_on = is_node_on_any_ship_surface(to_nodecoord(command.coord.v1), gamemap)
+    v2_on = is_node_on_any_ship_surface(to_nodecoord(command.coord.v2), gamemap)
+    is_offship = !(v1_on && v2_on)
 
-        delete_pipe!(gamemap, command.coord)
+    if is_offship && !validate_offship_pipe_deletion(command.coord, gamemap)
+        threadsafe_console_push("Cannot delete: would orphan connected off-surface pipes")
+        return false
+    end
+
+    delete_pipe!(gamemap, command.coord)
     threadsafe_console_push("Pipe deleted at $(command.coord) from $(existing_pipe.ship)")
 
-        # Reassign ownership if the deleted pipe was off-surface (may have split a chain)
-        if is_offship
-            reassign_pipe_ownership!(command.coord, gamemap)
-        end
-    else
-        threadsafe_console_push("No pipe found at $(command.coord)")
+    # Reassign ownership if the deleted pipe was off-surface (may have split a chain)
+    if is_offship
+        reassign_pipe_ownership!(command.coord, gamemap)
     end
-    return nothing
+
+    return true
 end
 
 function apply_mapedit_command!(
         gamemap::GameMap,
         command::ClickTileCommand,
         threadsafe_console_push::Function
-    )
+    )::Bool
     tilecomp = get_component(gamemap, command.coord)
     if isnothing(tilecomp)
         threadsafe_console_push("No component at $(command.coord)")
-        return nothing
+        return false
     end
 
     on_click!(tilecomp; unrotated_clicksite = command.unrotated_clicksite)
     threadsafe_console_push("Clicked component at $(command.coord) on $(tilecomp.ship)")
-    return nothing
+    return true
 end
 
 function apply_mapedit_command!(
         gamemap::GameMap,
         command::DoActionCommand,
         threadsafe_console_push::Function
-    )
+    )::Bool
     tilecomp = get_component(gamemap, command.coord)
     if isnothing(tilecomp)
         threadsafe_console_push("No component at $(command.coord)")
-        return nothing
+        return false
     end
 
     success, message = do_action!(tilecomp, command.action_id)
     threadsafe_console_push(message)
-    return nothing
+    return success
 end
 
 function apply_mapedit_command!(
         gamemap::GameMap,
         command::AddShipSurfaceCommand,
         threadsafe_console_push::Function
-    )
+    )::Bool
     coord = command.coord
 
     # Find which ships have adjacent surfaces
@@ -785,12 +788,12 @@ function apply_mapedit_command!(
 
     if isempty(adjacent_ships)
         threadsafe_console_push("Cannot add surface: Must be adjacent to existing surface")
-        return nothing
+        return false
     end
 
     if length(adjacent_ships) > 1
         threadsafe_console_push("Cannot add surface: Would connect multiple ships ($(adjacent_ships))")
-        return nothing
+        return false
     end
 
     target_ship = adjacent_ships[1]
@@ -798,43 +801,43 @@ function apply_mapedit_command!(
     # Check not already on surface
     if is_on_surface_tile(coord, gamemap; ship_name = target_ship)
         threadsafe_console_push("Surface already exists at $(coord) on $(target_ship)")
-        return nothing
+        return false
     end
 
     set_surface_tile!(gamemap, coord; ship_name = target_ship)
     threadsafe_console_push("Surface added at $(coord) on $(target_ship)")
-    return nothing
+    return true
 end
 
 function apply_mapedit_command!(
         gamemap::GameMap,
         command::RemoveShipSurfaceCommand,
         threadsafe_console_push::Function
-    )
+    )::Bool
     coord = command.coord
 
     # Find which ship owns this surface tile
     ship_with_surface = get_surface_shiptag(gamemap, coord)
     if isnothing(ship_with_surface)
         threadsafe_console_push("No surface at $(coord)")
-        return nothing
+        return false
     end
 
     # Check if removing would leave a component without surface
     if has_component(gamemap, coord)
         threadsafe_console_push("Cannot remove surface: Component present (delete component first)")
-        return nothing
+        return false
     end
 
     # Check if this is the last surface tile on this ship
     if count_surface_tiles(gamemap; ship_name = ship_with_surface) <= 1
         threadsafe_console_push("Cannot remove surface: Cannot delete last surface tile on $(ship_with_surface)")
-        return nothing
+        return false
     end
 
     delete_surface_tile!(gamemap, coord; ship_name = ship_with_surface)
     threadsafe_console_push("Surface removed at $(coord) from $(ship_with_surface)")
-    return nothing
+    return true
 end
 
 "Replace all fields of `dest` with values from `src` (same concrete type). Keeps the original object reference."
@@ -850,7 +853,7 @@ function apply_mapedit_command!(
         gamemap::GameMap,
         command::MapOverrideCommand,
         threadsafe_console_push::Function
-    )
+    )::Bool
     # Deepcopy the provided map to avoid sharing mutable state
     newmap = deepcopy(command.new_map)
 
@@ -861,7 +864,7 @@ function apply_mapedit_command!(
     numpipes = count_pipes(newmap)
     threadsafe_console_push("Map override applied with $numtiles surfaces, $numcomps tiles, and $numpipes pipes")
 
-    return nothing
+    return true
 end
 
 "Add an encounter ship, with optional encounter point recycling for live encounters."
@@ -869,7 +872,7 @@ function apply_mapedit_command!(
         gamemap::GameMap,
         command::AddEncounterShipCommand,
         threadsafe_console_push::Function
-    )
+    )::Bool
     if command.dir === nothing
         encounter_ship_optimal_dir!(gamemap, command.blueprint, command.ship_name_base,
             command.seed; max_view_bounds = command.max_view_bounds)
@@ -887,7 +890,7 @@ function apply_mapedit_command!(
         threadsafe_console_push("Encounter triggered: $(command.ship_name_base)")
     end
 
-    return nothing
+    return true
 end
 
 """
@@ -900,17 +903,17 @@ function apply_mapedit_command!(
         gamemap::GameMap,
         command::RedockShipCommand,
         threadsafe_console_push::Function
-    )
+    )::Bool
     if command.ship_name === :primary
         threadsafe_console_push("Cannot redock the primary ship")
-        return nothing
+        return false
     end
 
     ship = get_ship_state(gamemap, command.ship_name)
 
     if !(ship.docking_status isa ConnectedDockStat)
         threadsafe_console_push("Ship $(command.ship_name) is not in a connected state")
-        return nothing
+        return false
     end
 
     # Pre-compute offset tiles without modifying the ship
@@ -923,7 +926,7 @@ function apply_mapedit_command!(
 
     if !isempty(intersect(trial_tiles, exclusion_zone))
         threadsafe_console_push("Redock position too close to another ship")
-        return nothing
+        return false
     end
 
     # Validation passed, perform the move on the real map
@@ -939,7 +942,7 @@ function apply_mapedit_command!(
     ship.docking_status = ApproachingDockStat(anim_offset, target_offset, step)
     threadsafe_console_push("Ship $(command.ship_name) relocated")
 
-    return nothing
+    return true
 end
 
 "Modify a single tile pipe at a specified axis, adding, replacing, or deleting the fragment."
@@ -947,7 +950,7 @@ function apply_mapedit_command!(
         gamemap::GameMap,
         command::ModifyTilePipeCommand,
         threadsafe_console_push::Function
-    )
+    )::Bool
     # Canonicalise axis
     axis = normalise_tile_pipe_axis(command.axis)
     
@@ -956,7 +959,7 @@ function apply_mapedit_command!(
     
     if isnothing(ship)
         threadsafe_console_push("Tile not on any ship surface")
-        return nothing
+        return false
     end
     
     # Get existing component at tile, or start with empty
@@ -970,7 +973,7 @@ function apply_mapedit_command!(
     # Reject if not a multi-pipe component
     if !isa(current_behav, MultiPipeTileCompBehav)
         threadsafe_console_push("Tile occupied by non-pipe component")
-        return nothing
+        return false
     end
     
     # Update with new fragment at axis
@@ -985,7 +988,7 @@ function apply_mapedit_command!(
         threadsafe_console_push("Tile pipe modified at $(command.tile)")
     end
 
-    return nothing
+    return true
 end
 
 "Move a tile pipe fragment from one location/axis to another."
@@ -993,7 +996,7 @@ function apply_mapedit_command!(
         gamemap::GameMap,
         command::MoveTilePipeCommand,
         threadsafe_console_push::Function
-    )
+    )::Bool
     # Canonicalise both axes
     src_axis = normalise_tile_pipe_axis(command.src_axis)
     dst_axis = normalise_tile_pipe_axis(command.dst_axis)
@@ -1001,7 +1004,7 @@ function apply_mapedit_command!(
     src_comp = get_component(gamemap, command.src_tile)
     if isnothing(src_comp) || !isa(src_comp.component, MultiPipeTileCompBehav)
         threadsafe_console_push("Source tile has no multi-pipe component")
-        return nothing
+        return false
     end
     src_ship = src_comp.ship
     
@@ -1009,7 +1012,7 @@ function apply_mapedit_command!(
     src_frag = get_tile_pipe(src_behav, src_axis)
     if isempty(src_frag)
         threadsafe_console_push("Source axis is empty")
-        return nothing
+        return false
     end
     
     # Resolve destination ship
@@ -1017,7 +1020,7 @@ function apply_mapedit_command!(
     
     if isnothing(dst_ship)
         threadsafe_console_push("Destination tile not on any ship")
-        return nothing
+        return false
     end
     
     # Get or create destination component
@@ -1030,13 +1033,13 @@ function apply_mapedit_command!(
     
     if !isa(dst_behav, MultiPipeTileCompBehav)
         threadsafe_console_push("Destination occupied by non-pipe component")
-        return nothing
+        return false
     end
     
     # Check destination axis is empty
     if !isempty(get_tile_pipe(dst_behav, dst_axis))
         threadsafe_console_push("Destination axis already occupied")
-        return nothing
+        return false
     end
 
     if command.src_tile == command.dst_tile && src_ship == dst_ship
@@ -1058,6 +1061,17 @@ function apply_mapedit_command!(
 
     threadsafe_console_push("Tile pipe moved from $(command.src_tile) to $(command.dst_tile)")
 
+    return true
+end
+
+"Write `status` to a command's response channel if one is attached.\nSwallows put! errors so a closed channel cannot crash the calculator loop."
+function _try_put_status!(command::MapEditCommand, status::CommandStatus)
+    command.response_channel === nothing && return nothing
+    try
+        put!(command.response_channel, status)
+    catch
+        # Channel may be closed; ignore — same policy as before.
+    end
     return nothing
 end
 
@@ -1076,9 +1090,10 @@ function process_command!(
     sandbox = deepcopy(gamemap)
     original_hash = hash(sandbox)
 
-    # Try to apply the command to the sandbox first
     try
-        apply_mapedit_command!(sandbox, command, (msg) -> nothing)  # Silent for sandbox
+        # Dry-run on the sandbox with a silent console. The return value is
+        # discarded here — the real-map call below decides the final status.
+        apply_mapedit_command!(sandbox, command, (msg) -> nothing)
         new_hash = hash(sandbox)
 
         # If map changed, validate it won't cause errors
@@ -1095,33 +1110,13 @@ function process_command!(
             compute_region_temperatures!(test_derivedmapstate, test_scratchpad, test_mna_state)
         end
 
-        # If we get here, validation succeeded - apply to real gamemap
-        apply_mapedit_command!(gamemap, command, threadsafe_console_push)
-
-        # Send success response if channel provided
-        if command.response_channel !== nothing
-            try
-                put!(command.response_channel, APPLIED)
-            catch
-                # Ignore response channel failures
-            end
-        end
+        applied = apply_mapedit_command!(gamemap, command, threadsafe_console_push)
+        _try_put_status!(command, applied ? APPLIED : INVALID)
 
     catch sandbox_error
-        # Sandbox validation failed
-        error_msg = "Invalid map edit: $(sandbox_error)"
-        threadsafe_console_push(error_msg)
+        threadsafe_console_push("Invalid map edit: $(sandbox_error)")
+        _try_put_status!(command, REJECTED)
 
-        # Send failure response if channel provided
-        if command.response_channel !== nothing
-            try
-                put!(command.response_channel, REJECTED)
-            catch
-                # Ignore response channel failures
-            end
-        end
-
-        # rethrow if requested
         if throw_errors
             @warn "Rethrowing sandbox error" exception = sandbox_error
             rethrow(sandbox_error)

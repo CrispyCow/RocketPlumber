@@ -20,7 +20,14 @@
       "PowerShell(gh pr list)",
       "PowerShell(julia --project=local_packages\\\\HexFrame -e \"using Pkg; Pkg.test\\(\\)\")",
       "PowerShell(julia --project=local_packages\\\\FlowEngine -e \"using Pkg; Pkg.test\\(\\)\")",
-      "PowerShell(julia --project=local_packages\\\\HexFlowCalculator -e \"using Pkg; Pkg.test\\(\\)\")"
+      "PowerShell(julia --project=local_packages\\\\HexFlowCalculator -e \"using Pkg; Pkg.test\\(\\)\")",
+      "PowerShell($env:HEXFLOW_TEST_MAX_TICKS = \"30\"; $proc = Start-Process -FilePath \"julia\" -ArgumentList \"--project=.\",\"--threads=2,1\",\"--gcthreads=1,1\",\"src/auto_test_launch.jl\" -NoNewWindow -PassThru -RedirectStandardOutput \"harness_stdout.txt\" -RedirectStandardError \"harness_stderr.txt\"; if \\(-not $proc.WaitForExit\\(300000\\)\\) { $proc.Kill\\(\\); Write-Output \"TIMEOUT\" } else { Write-Output \"EXIT_CODE=$\\($proc.ExitCode\\)\" })",
+      "PowerShell($proc = Start-Process -FilePath \"julia\" -ArgumentList \"--project=.\",\"--threads=2,1\",\"--gcthreads=1,1\",\"src/auto_test_launch.jl\" -NoNewWindow -PassThru -RedirectStandardOutput \"harness_stdout2.txt\" -RedirectStandardError \"harness_stderr2.txt\" -Wait; \"EXIT_CODE=$\\($proc.ExitCode\\)\")",
+      "PowerShell($env:HEXFLOW_TEST_MAX_TICKS = \"60\"; $proc = Start-Process -FilePath \"julia\" -ArgumentList \"--project=.\",\"--threads=2,1\",\"--gcthreads=1,1\",\"src/auto_test_launch.jl\" -NoNewWindow -PassThru -RedirectStandardOutput \"harness_stdout.txt\" -RedirectStandardError \"harness_stderr.txt\"; $exited = $proc.WaitForExit\\(180000\\); if \\(-not $exited\\) { Write-Host \"TIMEOUT: process did not exit within 180s\"; $proc.Kill\\(\\) } else { Write-Host \"EXIT_CODE=$\\($proc.ExitCode\\)\" })",
+      "PowerShell($env:HEXFLOW_TEST_MAX_TICKS = \"60\"; $proc = Start-Process -FilePath \"julia\" -ArgumentList \"--project=.\",\"--threads=2,1\",\"--gcthreads=1,1\",\"src/auto_test_launch.jl\" -NoNewWindow -PassThru -Wait -RedirectStandardOutput \"harness_stdout2.txt\" -RedirectStandardError \"harness_stderr2.txt\"; Write-Host \"EXIT_CODE=$\\($proc.ExitCode\\)\")",
+      "Bash(git -C c:/Users/chris/Repos/RocketPlumberPrivate diff --stat src/recording.jl)",
+      "WebSearch",
+      "Bash(julia --project=. --threads=2,1 --gcthreads=1,1 src/auto_test_launch.jl)"
     ]
   }
 }

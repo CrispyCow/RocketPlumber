@@ -196,10 +196,18 @@ function ui_rendering!(
     end
 end
 
-"Cleans up resources, windows, and requests FlowCalculator task termination"
-function cleanup!(flowcalc_ipc::FlowCalculatorIPC, globjmap::GLObjectMap, window::GLFW.Window)
+"""
+Requests termination of the FlowCalculator task, waits for it to exit, then
+tears down OpenGL resources. Waiting on the task before returning guarantees the
+background thread is fully stopped, so callers can safely destroy the window or
+let the Julia process exit without leaving a stranded `@spawn`ed task running.
+"""
+function cleanup!(flowcalc_ipc::FlowCalculatorIPC, flowcalc_task::Task, globjmap::GLObjectMap, window::GLFW.Window)
     @info "Requesting termination of FlowCalculator task"
     @atomic flowcalc_ipc.shared_state.should_exit = true
+
+    @info "Waiting for FlowCalculator task to exit"
+    wait(flowcalc_task)
 
     @info "Cleaning up OpenGL resources"
     teardown_glmap(globjmap)
@@ -245,10 +253,18 @@ function build_learning_runtime_state(gamemap::GameMap; initial_active_tutorial_
     )
 end
 
-"Enter the main game loop with a map loaded from a file path (String), a pre-generated GameMap, or an empty map (nothing)."
+"""
+Enter the main game loop with a map loaded from a file path (String), a pre-generated GameMap, or an empty map (nothing).
+
+If `test_commands` is supplied, the non-interactive smoke-test harness drives
+the loop by enqueueing at most one scheduled `MapEditCommand` per render frame
+and signalling a normal quit once the schedule is exhausted. See
+`src/test_harness.jl` and `src/auto_test_launch.jl`.
+"""
 function enter_gameloop(window::GLFW.Window;
         map_source::Union{Nothing, String, GameMap, ShipState} = nothing,
         initial_active_tutorial_id::Union{Nothing, Symbol} = nothing,
+        test_commands = nothing,
     )::GameLoopResult
     #= Loop Setup =#
     ui_loadingscreen_render(window, "Instantiating game state")
@@ -285,6 +301,10 @@ function enter_gameloop(window::GLFW.Window;
     g_flowcalc_task = Threads.@spawn flowcalculator_loop!(g_flowcalc_ipc, deepcopy(initial_snapshot))
     @info "FlowCalculator task spawned: $(g_flowcalc_task)"
 
+    if !isnothing(test_commands)
+        sort!(test_commands, by = step -> step.tick, rev = true)
+    end
+
     #= Main Loop =#
     ui_loadingscreen_render(window, "Entering main loop")
 
@@ -292,6 +312,10 @@ function enter_gameloop(window::GLFW.Window;
         g_viewstate.frame_count += 1
         updatefps(window, g_inputstate.is_recording ? "(RECORDING)" : "")
         @timeit render_loop_timer "Get Snapshot" g_snapshot::FlowCalculatorSnapshot = g_flowcalc_ipc.get_snapshot()
+
+        if !isnothing(test_commands)
+            test_system_tick!(test_commands, g_snapshot, g_inputstate, g_flowcalc_ipc.command_queue, g_flowcalc_ipc.console_push, g_flowcalc_task)
+        end
 
         # Learning system tick (main game only, not sandbox)
         if !isnothing(learning_state)
@@ -341,7 +365,7 @@ function enter_gameloop(window::GLFW.Window;
         stop_recording!(g_recording, g_flowcalc_ipc.console_push)
     end
 
-    cleanup!(g_flowcalc_ipc, g_globjmap, window)
+    cleanup!(g_flowcalc_ipc, g_flowcalc_task, g_globjmap, window)
 
     return result
 end # enter_gameloop
