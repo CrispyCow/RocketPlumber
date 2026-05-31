@@ -323,6 +323,9 @@ test_commands::TestCommandSchedule = [
     make_test_step(3050, make_test_action(TileCoord(1, -14), :open_valve);
         expected_status = APPLIED,
         description = "Open armed switched nozzle at (1,-14)"),
+    make_test_step(3070, make_test_action(TileCoord(-3, 0), :repair_component);
+        expected_status = INVALID,
+        description = "Attempt repair on undamaged turbopump at (-3,0)"),
 
     # ----- Phase C-11: Negative action tests -------------------------
     # `:flip` is not recognised by tanks; the command logs the failure but still

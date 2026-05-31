@@ -364,6 +364,11 @@ function print_activation_states(gamemap::GameMap)
                         push!(flags, "noz_damaged=$(HexFlowNozzleComponents.is_damaged(noz))")
                     end
                 end
+                if comp isa HexFlowPumpComponents.TurboPumpCompBehav
+                    push!(flags, "tp_inactive=$(HexFlowBasicComponents.is_inactive(comp.deactivation))")
+                    push!(flags, "tp_damaged=$(HexFlowBasicComponents.is_damaged(comp.overheat))")
+                    push!(flags, "tp_temp_k=$(round(HexFlowBasicComponents.get_component_temperature(comp.overheat); digits = 1))")
+                end
                 # Switch / valve state
                 if hasproperty(comp, :switch) && hasproperty(comp.switch, :state)
                     push!(flags, "switch_state=$(comp.switch.state)")

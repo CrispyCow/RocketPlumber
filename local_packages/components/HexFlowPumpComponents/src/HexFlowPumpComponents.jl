@@ -17,10 +17,12 @@ using HexFlowBasicComponents, HexFlowSwitchComponents
 # ComponentBehavior Mandatories
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional
-import HexComponentsAPI: on_click!, update_flowbehav!, render_map_elem!, get_actions, do_action!, produce_rel_fluid_declarations, map_mirroring
+import HexComponentsAPI: on_click!, update_flowbehav!, render_map_elem!, get_actions, do_action!, produce_rel_fluid_declarations, map_mirroring, get_component_temperature
 import HexComponentsAPI: get_reactivation_probe, accept_reactivation_probe!
 # Behavior Fragment Dependencies
-import HexFlowBasicComponents: deactivate!, reactivate!, is_inactive
+import HexFlowBasicComponents: deactivate!, reactivate!, is_inactive, damage!, undamage!, is_damaged
+import HexFlowBasicComponents: get_overheat_percentage, get_overheat_tint, update_overheat_state!
+import HexFlowBasicComponents: OverheatLimitBehavFrag, ComponentTemperatureBehavFrag, DamageStateBehavFrag
 import HexFlowSwitchComponents: set_target_conductance_to_min!, set_target_conductance_to_max!
 
 # Behavior Fragment Exports
@@ -138,6 +140,24 @@ const TURBOPUMP_TURBINE_POWER_SCALING::Float64 = 1.0e-4
 const TURBOPUMP_TURBINE_TEMPERATURE_POWER_SCALING::Float64 = 0.45
 const TURBOPUMP_RENDER_MAX_ROTATION_SPEED::Float64 = 900.0
 const TURBOPUMP_SMOKE_CURRENT_THRESHOLD::Float64 = 0.02
+const TURBOPUMP_GENTURBINE_HEIGHT_OFFSET::Int = 5
+const TURBOPUMP_VIBE_ACTIVITY_THRESHOLD::Float64 = 1.0e-3
+const TURBOPUMP_MIN_ACTIVE_VIBE_MAGNITUDE_PX::Float64 = 0.75
+
+"Return the turbopump vibration activity, disabling idle vibration when the rotor is stationary."
+function turbopump_vibe_activity(rpm_fraction::Real, pump_flow_fraction::Real)::Float64
+    rpm_fraction <= 0.0 && return 0.0
+    return clamp(max(Float64(rpm_fraction), Float64(pump_flow_fraction)), 0.0, 1.0)
+end
+
+"Returns the base and temperature-tinted colours used by turbopump shell layers."
+function turbopump_render_colours(base_colour::ColourType, overheat::OverheatLimitBehavFrag)
+    return (
+        base = base_colour,
+        genturbine = multiply_colours(base_colour, get_overheat_tint(overheat)),
+    )
+end
+
 
 # ===============================================================
 # Concrete Component Behaviors
@@ -158,6 +178,7 @@ struct TurboPumpCompBehav <: ComponentBehavior
     cycle_efficiency::Float64         # turbine energy conversion factor (0–1)
     rotor::RotorStateBehavFrag        # RPM state, inertia, friction, max_rpm
     deactivation::AutoDeactivationBehavFrag  # auto-deactivation state (replaces manual stall)
+    overheat::OverheatLimitBehavFrag  # turbine thermal state and persistent damage
 end
 
 "Practical keyword-based constructor for TurboPumpCompBehav."
@@ -170,7 +191,10 @@ function TurboPumpCompBehav(;
         max_rpm::Real = 3000.0,
         rotor_inertia::Real = 100.0,
         friction_coefficient::Real = 0.02,
-        deactivation::AutoDeactivationBehavFrag = AutoDeactivationBehavFrag()
+        deactivation::AutoDeactivationBehavFrag = AutoDeactivationBehavFrag(),
+        limit_temperature_k::Float64 = 1500.0,
+        thermal_mass::Float64 = 2.0,
+        heat_loss_factor::Float64 = 0.05
     )
     rotor = RotorStateBehavFrag(
         current_rpm = current_rpm,
@@ -178,13 +202,21 @@ function TurboPumpCompBehav(;
         rotor_inertia = rotor_inertia,
         friction_coefficient = friction_coefficient
     )
+    overheat = OverheatLimitBehavFrag(
+        limit_temperature_k,
+        thermal_mass,
+        heat_loss_factor;
+        temperature = ComponentTemperatureBehavFrag(),
+        damage = DamageStateBehavFrag()
+    )
     return TurboPumpCompBehav(
         Float64(max_pump_voltage),
         max(Float64(series_conductance), 0.0),
         max(Float64(max_turbine_conductance), 0.0),
         max(Float64(cycle_efficiency), 1e-6),
         rotor,
-        deactivation
+        deactivation,
+        overheat
     )
 end
 
@@ -196,7 +228,7 @@ end
 
 "Produces pump voltage source, series resistor, and variable-conductance turbine resistor."
 function produce_rel_elements(comp::TurboPumpCompBehav)::NTuple{3, RelativeElement}
-    active = !is_inactive(comp.deactivation)
+    active = !is_inactive(comp.deactivation) && !is_damaged(comp.overheat)
     rpm_fraction = get_rpm_fraction(comp.rotor)
     pump_voltage = active ? comp.max_pump_voltage * rpm_fraction : 0.0
 
@@ -222,7 +254,7 @@ function produce_rel_elements(comp::TurboPumpCompBehav)::NTuple{3, RelativeEleme
     return (pump_source, series_resistor, turbine_resistor)
 end
 
-function get_tunables(comp::TurboPumpCompBehav)::NTuple{8, TunableProps}
+function get_tunables(comp::TurboPumpCompBehav)::NTuple{11, TunableProps}
     return (
         TunableProps(comp.max_pump_voltage, "Max pump voltage", "V"),
         TunableProps(comp.series_conductance, "Series conductance", "1/R"),
@@ -232,19 +264,22 @@ function get_tunables(comp::TurboPumpCompBehav)::NTuple{8, TunableProps}
         TunableProps(comp.rotor.rotor_inertia, "Rotor inertia", ""),
         TunableProps(comp.rotor.friction_coefficient, "Friction coefficient", "power/RPM"),
         TunableProps(comp.cycle_efficiency, "Cycle efficiency", ""),
+        get_tunables(comp.overheat)...,
     )
 end
 
-function set_tunables(comp::TurboPumpCompBehav, tunables::NTuple{8, T})::TurboPumpCompBehav where {T <: Real}
+function set_tunables(comp::TurboPumpCompBehav, tunables::NTuple{11, T})::TurboPumpCompBehav where {T <: Real}
     vals = Float64.(tunables)
     newrotor = RotorStateBehavFrag(comp.rotor.rpm, vals[5], vals[6], vals[7])
+    newoverheat = set_tunables(comp.overheat, (vals[9], vals[10], vals[11]))
     comp = TurboPumpCompBehav(
         vals[1],
         max(vals[2], 0.0),
         max(vals[3], 0.0),
         max(vals[8], 1e-6),
         newrotor,
-        comp.deactivation
+        comp.deactivation,
+        newoverheat
     )
     setstate!(comp.rotor.rpm, clamp(vals[4], 0.0, comp.rotor.max_rpm))
     return comp
@@ -263,56 +298,57 @@ map_mirroring(::TurboPumpCompBehav, mirrored::Bool) = mirrored
 
 # No on_click! override needed; auto-deactivation requires no manual reset.
 on_click!(comp::TurboPumpCompBehav; kwargs...) = nothing
-get_actions(comp::TurboPumpCompBehav; kwargs...) = ()
+get_component_temperature(comp::TurboPumpCompBehav; kwargs...) = get_component_temperature(comp.overheat)
+get_actions(comp::TurboPumpCompBehav; kwargs...) = get_actions(comp.overheat; kwargs...)
+do_action!(comp::TurboPumpCompBehav, action_id::Symbol; kwargs...) = do_action!(comp.overheat, action_id; kwargs...)
 
 "Updates rotor RPM from the previous tick's MNA solution and deactivates on harmful turbine reversal."
 function update_flowbehav!(comp::TurboPumpCompBehav; mna_state::MNA_State, tile::TileCoord, rotation::HexAxis, mirrored::Bool = false, derivedmapstate::DerivedMapState, kwargs...)
     applied_inertia = comp.rotor.rotor_inertia * TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
     friction_power = comp.rotor.friction_coefficient * (get_current_rpm(comp.rotor) + 200.0) # adds 'static' friction to help rpm get to zero
-
-    # When inactive, only friction acts (no turbine, no pump load)
-    if is_inactive(comp.deactivation)
-        delta_rpm = -friction_power / (applied_inertia * BASE_UPS)
-        update_rpm!(comp.rotor, delta_rpm)
-        return nothing
-    end
-
-    # Read turbine shunt current (signed) to detect harmful reverse flow.
-    # Turbine element: NODE_S_POS → GROUND, current = V_s_pos × G_turbine.
     s_pos_node = map_element(HexFrame.NODE_S_POS, tile, rotation, mirrored)
-    s_pos_voltage = get(mna_state.node_voltages, s_pos_node, 0.0)
-    turbine_g = effective_turbine_conductance(comp)
-    turbine_current = s_pos_voltage * turbine_g  # signed; negative means reverse flow into S_POS
+    s_pos_fluid = get(derivedmapstate.nodeactualfluids, s_pos_node, nothing)
+    fluid_temperature_k = get(derivedmapstate.node_temperatures, s_pos_node, THERMAL_AMBIENT_TEMPERATURE_K)
+    delta_rpm = -friction_power / (applied_inertia * BASE_UPS)
+    mass_flow_rate = 0.0
 
-    # Deactivate when reverse flow through the turbine sink exceeds tolerance.
-    if turbine_current < -pump_probe_tol
-        deactivate!(comp.deactivation)
-        delta_rpm = -friction_power / (applied_inertia * BASE_UPS)
-        update_rpm!(comp.rotor, delta_rpm)
-        return nothing
+    if !is_inactive(comp.deactivation) && !is_damaged(comp.overheat)
+        # Read turbine shunt current (signed) to detect harmful reverse flow.
+        # Turbine element: NODE_S_POS → GROUND, current = V_s_pos × G_turbine.
+        s_pos_voltage = get(mna_state.node_voltages, s_pos_node, 0.0)
+        turbine_g = effective_turbine_conductance(comp)
+        turbine_current = s_pos_voltage * turbine_g  # signed; negative means reverse flow into S_POS
+
+        # Deactivate when reverse flow through the turbine sink exceeds tolerance.
+        if turbine_current < -pump_probe_tol
+            deactivate!(comp.deactivation)
+        else
+            # Forward turbine current only contributes to power; reverse current is allowed but yields no energy.
+            turbine_current_forward = max(turbine_current, 0.0)
+            fluid_density = isnothing(s_pos_fluid) ? 0.0 : something(lookup_fluid_density(s_pos_fluid), 0.0)
+            temperature_change_k = max(fluid_temperature_k - THERMAL_AMBIENT_TEMPERATURE_K, 0.0)
+            turbine_power = fluid_density * turbine_current_forward * temperature_change_k * TURBOPUMP_TURBINE_TEMPERATURE_POWER_SCALING
+
+            # Pump load — clamp to forward pump current only.
+            # Reverse pump current is allowed hydraulically but intentionally excluded from rotor energy
+            # integration; the clamp below is what bounds it, not deactivation.
+            source_current = get(mna_state.vsource_currents, ElementID(tile, pump_element_index), 0.0)
+            pump_current = max(-Float64(source_current), 0.0)
+            rpm_fraction = get_rpm_fraction(comp.rotor)
+            pump_voltage = comp.max_pump_voltage * rpm_fraction
+            pump_power = pump_voltage * pump_current
+
+            # RPM integration
+            energy_in = comp.cycle_efficiency * turbine_power
+            delta_rpm = (energy_in - pump_power - friction_power) / (applied_inertia * BASE_UPS)
+            mass_flow_rate = turbine_current_forward * fluid_density
+        end
     end
 
-    # Forward turbine current only contributes to power; reverse current is allowed but yields no energy.
-    turbine_current_forward = max(turbine_current, 0.0)
-    fluid = get(derivedmapstate.nodeactualfluids, s_pos_node, nothing)
-    density = fluid !== nothing ? something(lookup_fluid_density(fluid), 0.0) : 0.0
-    fluid_temperature_k = get(derivedmapstate.node_temperatures, s_pos_node, THERMAL_AMBIENT_TEMPERATURE_K)
-    temperature_change_k = max(fluid_temperature_k - THERMAL_AMBIENT_TEMPERATURE_K, 0.0)
-    turbine_power = density * turbine_current_forward * temperature_change_k * TURBOPUMP_TURBINE_TEMPERATURE_POWER_SCALING
-
-    # Pump load — clamp to forward pump current only.
-    # Reverse pump current is allowed hydraulically but intentionally excluded from rotor energy
-    # integration; the clamp below is what bounds it, not deactivation.
-    source_current = get(mna_state.vsource_currents, ElementID(tile, pump_element_index), 0.0)
-    pump_current = max(-Float64(source_current), 0.0)
-    rpm_fraction = get_rpm_fraction(comp.rotor)
-    pump_voltage = comp.max_pump_voltage * rpm_fraction
-    pump_power = pump_voltage * pump_current
-
-    # RPM integration
-    energy_in = comp.cycle_efficiency * turbine_power
-    delta_rpm = (energy_in - pump_power - friction_power) / (applied_inertia * BASE_UPS)
     update_rpm!(comp.rotor, delta_rpm)
+    update_overheat_state!(comp.overheat;
+        fluid_temperature_k = fluid_temperature_k,
+        mass_flow_rate = mass_flow_rate)
 
     return nothing
 end
@@ -321,6 +357,7 @@ end
 scheduler, or `nothing` when the pump is already active. The pump voltage source reflects the
 current rotor RPM at the time of probing."""
 function get_reactivation_probe(comp::TurboPumpCompBehav; kwargs...)
+    is_damaged(comp.overheat) && return nothing
     is_inactive(comp.deactivation) || return nothing
     rpm_fraction = get_rpm_fraction(comp.rotor)
     pump_source = RelativeElement(
@@ -367,21 +404,28 @@ end
 "Renders static turbopump elements: fluid mask, rotor, and static parts."
 function render_base_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, mirrored::Bool = false, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     fluidmask_colour = DEFAULT_EMPTY_FLUID_COLOUR
+    render_colours = turbopump_render_colours(colour, comp.overheat)
+    genturbine_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + TURBOPUMP_GENTURBINE_HEIGHT_OFFSET + render_height_offset)
 
     # Fluid mask.
     push!(queue, render_basic_tile(glmap, :TurboPump1_fluidmask, rotation, position; mirrored = mirrored, scale = scale, colour = fluidmask_colour, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
     # Rotor.
-    push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; mirrored = mirrored, scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 10 + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; mirrored = mirrored, scale = scale, transparency = transparency, colour = render_colours.base, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 10 + render_height_offset), pos_offset = pos_offset))
     # Static housing.
-    push!(queue, render_basic_tile(glmap, :TurboPump1_static, rotation, position; mirrored = mirrored, scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :TurboPump1_static, rotation, position; mirrored = mirrored, scale = scale, transparency = transparency, colour = render_colours.base, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset), pos_offset = pos_offset))
+    # Temperature-reactive generator turbine.
+    push!(queue, render_basic_tile(glmap, :TurboPump1_genturbine, rotation, position; mirrored = mirrored, scale = scale, transparency = transparency, colour = render_colours.genturbine, draw_height = genturbine_height, pos_offset = pos_offset))
     # Vibrating pipework.
-    push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; mirrored = mirrored, scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + 10 + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; mirrored = mirrored, scale = scale, transparency = transparency, colour = render_colours.base, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + 10 + render_height_offset), pos_offset = pos_offset))
 
     return nothing
 end
 
 "Renders turbopump with animations when active: spinning rotor, vibration, and smoke effects."
 function render_map_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot, gameticks::Int64, rotation::HexAxis, mirrored::Bool = false, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
+    render_colours = turbopump_render_colours(ColourType(1.0, 1.0, 1.0, 1.0), comp.overheat)
+    genturbine_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + TURBOPUMP_GENTURBINE_HEIGHT_OFFSET + render_height_offset)
+
     # Get turbine fluid colour
     turbine_input_node = map_element(HexFrame.NODE_S_POS, position, rotation, mirrored)
     fluid = get(derivedmapstate.nodeactualfluids, turbine_input_node, nothing)
@@ -397,6 +441,8 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBeh
     rpm_fraction = get_rpm_fraction(comp.rotor)
     max_pump_flow = max(comp.max_pump_voltage * comp.series_conductance, 1.0e-6)
     pump_flow_fraction = clamp(pump_flow / max_pump_flow, 0.0, 1.0)
+    vibe_activity = turbopump_vibe_activity(rpm_fraction, pump_flow_fraction)
+    vibe_magnitude = vibe_activity <= TURBOPUMP_VIBE_ACTIVITY_THRESHOLD ? 0.0 : max(TURBOPUMP_MIN_ACTIVE_VIBE_MAGNITUDE_PX, 2.0 * vibe_activity)
 
     smoke_sprites = (:TurboPump1_smoke_1, :TurboPump1_smoke_2, :TurboPump1_smoke_3)
 
@@ -406,21 +452,22 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBeh
     # Rotor.
     if rpm_fraction > 0.0
         rotor_rotation = animation_rotate(gameticks, TURBOPUMP_RENDER_MAX_ROTATION_SPEED * rpm_fraction)
-        push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; mirrored = mirrored, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100 + render_height_offset), pos_offset = pos_offset, sprite_rotation_tweak_mat = rotor_rotation))
+        push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; mirrored = mirrored, colour = render_colours.base, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100 + render_height_offset), pos_offset = pos_offset, sprite_rotation_tweak_mat = rotor_rotation))
     else
-        push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; mirrored = mirrored, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100 + render_height_offset), pos_offset = pos_offset))
+        push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; mirrored = mirrored, colour = render_colours.base, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 100 + render_height_offset), pos_offset = pos_offset))
     end
 
     # Static housing.
-    push!(queue, render_basic_tile(glmap, :TurboPump1_static, rotation, position; mirrored = mirrored, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :TurboPump1_static, rotation, position; mirrored = mirrored, colour = render_colours.base, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, :TurboPump1_genturbine, rotation, position; mirrored = mirrored, colour = render_colours.genturbine, draw_height = genturbine_height, pos_offset = pos_offset))
 
     # Vibrating pipework.
-    if pump_flow_fraction > 0.0
-        vibe_offset = animation_vibe_offset(gameticks; magnitude = 2.0 * pump_flow_fraction)
+    if vibe_magnitude > 0.0
+        vibe_offset = animation_vibe_offset(gameticks; magnitude = vibe_magnitude)
         vibe_offset_vec = SVector{2, Float32}(Float32.(vibe_offset)...)
-        push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; mirrored = mirrored, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + render_height_offset), pos_offset = pos_offset, sprite_offset_tweak_px = vibe_offset_vec))
+        push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; mirrored = mirrored, colour = render_colours.base, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + render_height_offset), pos_offset = pos_offset, sprite_offset_tweak_px = vibe_offset_vec))
     else
-        push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; mirrored = mirrored, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + render_height_offset), pos_offset = pos_offset))
+        push!(queue, render_basic_tile(glmap, :TurboPump1_vibepart, rotation, position; mirrored = mirrored, colour = render_colours.base, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM + render_height_offset), pos_offset = pos_offset))
     end
 
     # Turbine exhaust smoke.
@@ -428,6 +475,8 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBeh
         smoke_sprite = animation_sprite_picker(smoke_sprites, gameticks, 4)
         push!(queue, render_basic_tile(glmap, smoke_sprite, rotation, position; mirrored = mirrored, colour = fluidmask_colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_ANIM) + Int32(10) + Int32(render_height_offset), pos_offset = pos_offset))
     end
+
+    render_map_elem!(queue, comp.overheat; glmap, rotation, position, pos_offset, render_height_offset, kwargs...)
 
     return nothing
 end

@@ -261,7 +261,7 @@ end
     @test tunables[1].type_desc == "Nozzle Throat Area"
     @test tunables[2].type_desc == "Temperature Limit"
     @test tunables[3].type_desc == "Thermal Mass"
-    @test tunables[4].type_desc == "Radiative Surface Area"
+    @test tunables[4].type_desc == "Heat Loss Factor"
     @test tunables[5].type_desc == "Max Conductance (Fully ON)"
     @test tunables[7].type_desc == "Growth Factor"
 
@@ -273,7 +273,7 @@ end
     @test tuned.nozzle.throat_area ≈ 0.25
     @test tuned.nozzle.overheat.limit_temperature_k ≈ 450.0
     @test tuned.nozzle.overheat.thermal_mass ≈ 6.5
-    @test tuned.nozzle.overheat.radiative_surface_area ≈ 7.0
+    @test tuned.nozzle.overheat.heat_loss_factor ≈ 7.0
     @test tuned.switch.switch.max_conductance ≈ 3.0
     @test tuned.switch.switch.min_conductance ≈ 0.1
 

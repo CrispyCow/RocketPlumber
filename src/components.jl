@@ -52,12 +52,14 @@ const SwitchedTinyNozzle = SwitchedNozzleCompBehav(
     max_conductance = 2.0,
     min_conductance = 0.0,
     growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS),
-    limit_temperature_k = 400.0
+    limit_temperature_k = 400.0,
 )
 
 const TurboPump = TurboPumpCompBehav(
     max_pump_voltage = 50.0,
     series_conductance = 1.0,
+    thermal_mass = 2.0,
+    heat_loss_factor = 0.05,
 )
 
 const ElecTurboPump = ElectricPumpCompBehav(

@@ -1,6 +1,7 @@
 using Test
 using HexComponentsAPI
 using HexFlowBasicComponents
+using HexFluids: THERMAL_AMBIENT_TEMPERATURE_K
 
 @testset "Damage fragment" begin
     damage = DamageStateBehavFrag()
@@ -28,9 +29,10 @@ end
 end
 
 @testset "Overheat fragment" begin
-    @test_throws ErrorException OverheatLimitBehavFrag(300.0, 5.0, 1.0)
-    @test_throws ErrorException OverheatLimitBehavFrag(400.0, 0.0, 1.0)
-    @test_throws ErrorException OverheatLimitBehavFrag(400.0, 5.0, -1.0)
+    clamped = OverheatLimitBehavFrag(300.0, 0.0, -1.0)
+    @test clamped.limit_temperature_k == THERMAL_AMBIENT_TEMPERATURE_K + 1.0
+    @test clamped.thermal_mass == 1.0e-6
+    @test clamped.heat_loss_factor == 0.0
 
     overheat = OverheatLimitBehavFrag(400.0, 5.3, 5.0)
     @test get_overheat_limit_temperature(overheat) == 400.0
@@ -41,33 +43,42 @@ end
     @test tuned.temperature === overheat.temperature
     @test tuned.damage === overheat.damage
 
+    invalid = set_tunables(overheat, (250.0, 0.0, -1.0))
+    @test invalid.limit_temperature_k == THERMAL_AMBIENT_TEMPERATURE_K + 1.0
+    @test invalid.thermal_mass == 1.0e-6
+    @test invalid.heat_loss_factor == 0.0
+
     calibrated = OverheatLimitBehavFrag(400.0, 5.3, 5.0)
     nominal_mass_flow = 30.0 / (1 / 2.0 + 1 / 0.04)
-    for _ in 1:BASE_UPS
+    for _ in 1:(5 * BASE_UPS)
         update_overheat_state!(calibrated; fluid_temperature_k = 800.0, mass_flow_rate = nominal_mass_flow)
     end
-    @test 398.0 <= get_component_temperature(calibrated) <= 400.5
+    @test 394.5 <= get_component_temperature(calibrated) <= 396.0
     @test !is_damaged(calibrated)
-    @test 0.98 <= get_overheat_percentage(calibrated) < 1.0
+    @test 0.94 <= get_overheat_percentage(calibrated) < 1.0
 
     hot_tint = get_overheat_tint(calibrated)
     @test hot_tint[1] == 1.0
-    @test 0.0 < hot_tint[2] < 0.02
-    @test 0.0 < hot_tint[3] < 0.02
+    @test 0.03 < hot_tint[2] < 0.06
+    @test 0.03 < hot_tint[3] < 0.06
 
-    while !is_damaged(calibrated)
-        update_overheat_state!(calibrated; fluid_temperature_k = 800.0, mass_flow_rate = nominal_mass_flow)
+    damaging = OverheatLimitBehavFrag(400.0, 5.3, 5.0)
+    for _ in 1:(20 * BASE_UPS)
+        update_overheat_state!(damaging; fluid_temperature_k = 900.0, mass_flow_rate = nominal_mass_flow)
+        is_damaged(damaging) && break
     end
-    @test get_overheat_percentage(calibrated) == 1.0
+    @test is_damaged(damaging)
+    @test get_overheat_percentage(damaging) == 1.0
 
-    start_temperature = get_component_temperature(calibrated)
+    start_temperature = get_component_temperature(damaging)
     for _ in 1:(5 * BASE_UPS)
-        update_overheat_state!(calibrated; fluid_temperature_k = 300.0, mass_flow_rate = 0.0)
+        update_overheat_state!(damaging; fluid_temperature_k = 300.0, mass_flow_rate = 0.0)
     end
-    @test get_component_temperature(calibrated) < start_temperature
-    @test is_damaged(calibrated)
+    @test get_component_temperature(damaging) <= 301.5
+    @test get_component_temperature(damaging) < start_temperature
+    @test is_damaged(damaging)
 
-    repaired, _ = do_action!(calibrated, :repair_component)
+    repaired, _ = do_action!(damaging, :repair_component)
     @test repaired
-    @test !is_damaged(calibrated)
+    @test !is_damaged(damaging)
 end

@@ -9,7 +9,7 @@ using HexFlowPumpComponents
 using HexFlowSwitchComponents
 
 using HexElements: CONST_RESISTOR, CONST_VOLTAGE
-using HexFlowPumpComponents: EnergyStoreBehavFrag, RotorStateBehavFrag, get_current_energy, get_max_energy, update_energy!, get_current_rpm, get_rpm_fraction, update_rpm!, effective_turbine_conductance
+using HexFlowPumpComponents: EnergyStoreBehavFrag, RotorStateBehavFrag, get_current_energy, get_max_energy, update_energy!, get_current_rpm, get_rpm_fraction, update_rpm!, effective_turbine_conductance, turbopump_vibe_activity
 
 const TEST_TILE = TileCoord(3, -2)
 const TEST_ROTATION = HexFrame.Q_POS
@@ -44,11 +44,11 @@ function make_derived_state(
         tile::TileCoord = TEST_TILE;
         rotation::HexAxis = TEST_ROTATION,
         mirrored::Bool = false,
-        fluid::HexFluids.FluidType = HexFluids.COLD_GAS,
+        fluid::Union{HexFluids.FluidType, Nothing} = HexFluids.COLD_GAS,
         temperature_k::Float64 = HexFluids.THERMAL_AMBIENT_TEMPERATURE_K
     )
     turbine_input_node = map_element(HexFrame.NODE_S_POS, tile, rotation, mirrored)
-    nodeactualfluids = Dict{NodeCoord, HexFluids.FluidType}(turbine_input_node => fluid)
+    nodeactualfluids = isnothing(fluid) ? Dict{NodeCoord, HexFluids.FluidType}() : Dict{NodeCoord, HexFluids.FluidType}(turbine_input_node => fluid)
     node_temperatures = Dict{NodeCoord, Float64}(turbine_input_node => temperature_k)
     return DerivedMapState(nodeactualfluids = nodeactualfluids, node_temperatures = node_temperatures)
 end
@@ -69,7 +69,10 @@ function make_turbopump(
         max_rpm::Float64 = 3000.0,
         rotor_inertia::Float64 = 1000.0,
         friction_coefficient::Float64 = 0.005,
-        deactivation::AutoDeactivationBehavFrag = AutoDeactivationBehavFrag()
+        deactivation::AutoDeactivationBehavFrag = AutoDeactivationBehavFrag(),
+        limit_temperature_k::Float64 = 1500.0,
+        thermal_mass::Float64 = 30.0,
+        heat_loss_factor::Float64 = 0.7
     )
     return TurboPumpCompBehav(
         max_pump_voltage = max_pump_voltage,
@@ -80,8 +83,37 @@ function make_turbopump(
         max_rpm = max_rpm,
         rotor_inertia = rotor_inertia,
         friction_coefficient = friction_coefficient,
-        deactivation = deactivation
+        deactivation = deactivation,
+        limit_temperature_k = limit_temperature_k,
+        thermal_mass = thermal_mass,
+        heat_loss_factor = heat_loss_factor
     )
+end
+
+"Build a high-flow, low-spinup turbopump fixture for thermal regression tests."
+function make_hot_turbopump(; kwargs...)
+    return make_turbopump(; max_rpm = 1.0e9, rotor_inertia = 1.0e9, kwargs...)
+end
+
+"Advance a turbopump under a fixed turbine-side condition until damage triggers or the limit expires."
+function run_until_damage!(comp::TurboPumpCompBehav;
+        tile::TileCoord = TEST_TILE,
+        rotation::HexAxis = TEST_ROTATION,
+        voltage::Float64 = 40.0,
+        fluid::HexFluids.FluidType = HexFluids.BIPROP_EXHAUST,
+        temperature_k::Float64 = 2300.0,
+        max_ticks::Int = Int(30 * BASE_UPS)
+    )
+    mna_state = MNA_State()
+    set_node_voltage!(mna_state, tile, HexFrame.NODE_S_POS, voltage; rotation = rotation)
+    derivedmapstate = make_derived_state(tile; rotation = rotation, fluid = fluid, temperature_k = temperature_k)
+
+    for tick in 1:max_ticks
+        update_flowbehav!(comp; tile = tile, rotation = rotation, mna_state = mna_state, derivedmapstate = derivedmapstate)
+        is_damaged(comp.overheat) && return tick
+    end
+
+    return max_ticks
 end
 
 "Construct an electric pump variant for regression coverage."
@@ -176,10 +208,14 @@ end
     reactivate!(comp.deactivation)
 
     tunables = get_tunables(comp)
-    @test tunables isa NTuple{8, TunableProps}
+    @test tunables isa NTuple{11, TunableProps}
     original_rpm_state = comp.rotor.rpm
-    tuned = set_tunables(comp, (60.0, 2.0, 0.6, 3500.0, 3500.0, 400.0, 0.5, 0.90))
+    original_temperature_state = comp.overheat.temperature
+    original_damage_state = comp.overheat.damage
+    tuned = set_tunables(comp, (60.0, 2.0, 0.6, 3500.0, 3500.0, 400.0, 0.5, 0.90, 1600.0, 12.0, 7.0))
     @test tuned.rotor.rpm === original_rpm_state
+    @test tuned.overheat.temperature === original_temperature_state
+    @test tuned.overheat.damage === original_damage_state
     @test tuned.max_pump_voltage ≈ 60.0
     @test tuned.series_conductance ≈ 2.0
     @test tuned.max_turbine_conductance ≈ 0.6
@@ -188,6 +224,9 @@ end
     @test tuned.rotor.rotor_inertia ≈ 400.0
     @test tuned.rotor.friction_coefficient ≈ 0.5
     @test tuned.cycle_efficiency ≈ 0.90
+    @test tuned.overheat.limit_temperature_k ≈ 1600.0
+    @test tuned.overheat.thermal_mass ≈ 12.0
+    @test tuned.overheat.heat_loss_factor ≈ 7.0
 
     decls = produce_rel_fluid_declarations(comp)
     @test length(decls) == 3
@@ -195,10 +234,91 @@ end
     @test decls[2] === RelativeFluidDeclaration(HexFrame.NODE_Q_NEG, FluidConstraintRule(HexFluids.IS_LIQUID))
     @test decls[3] === RelativeFluidDeclaration(HexFrame.NODE_S_POS, FluidConstraintRule(HexFluids.IS_GAS))
 
-    # No :unstall action and clicking is a no-op.
-    @test get_actions(comp) == ()
+    # No click action; repair exists but is disabled while undamaged.
+    actions = get_actions(comp)
+    @test length(actions) == 1
+    @test actions[1].id === :repair_component
+    @test !actions[1].enabled
     on_click!(comp)
     @test !is_inactive(comp.deactivation)
+end
+
+@testset "Turbopump overheat" begin
+    fresh = make_turbopump()
+    @test get_component_temperature(fresh) == THERMAL_AMBIENT_TEMPERATURE_K
+    @test !is_damaged(fresh.overheat)
+
+    tunables = get_tunables(fresh)
+    @test length(tunables) == 11
+    @test tunables[9].type_desc == "Temperature Limit"
+    @test tunables[10].type_desc == "Thermal Mass"
+    @test tunables[11].type_desc == "Heat Loss Factor"
+
+    heated = make_turbopump()
+    set_component_temperature!(heated.overheat, 975.0)
+    damage!(heated.overheat)
+    roundtrip_values = ntuple(index -> tunables[index].current_val, 11)
+    roundtripped = set_tunables(heated, roundtrip_values)
+    @test get_component_temperature(roundtripped) == 975.0
+    @test is_damaged(roundtripped.overheat)
+
+    monoprop_safe = make_hot_turbopump()
+    monoprop_mna = MNA_State()
+    set_node_voltage!(monoprop_mna, TEST_TILE, HexFrame.NODE_S_POS, 40.0)
+    monoprop_derived = make_derived_state(fluid = HexFluids.MONOPROP_GAS, temperature_k = 800.0)
+    for _ in 1:(5 * BASE_UPS)
+        update_flowbehav!(monoprop_safe; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = monoprop_mna, derivedmapstate = monoprop_derived)
+    end
+    @test !is_damaged(monoprop_safe.overheat)
+    @test get_component_temperature(monoprop_safe) < 1000.0
+
+    off_mixture_safe = make_hot_turbopump()
+    off_mixture_mna = MNA_State()
+    set_node_voltage!(off_mixture_mna, TEST_TILE, HexFrame.NODE_S_POS, 40.0)
+    off_mixture_derived = make_derived_state(fluid = HexFluids.BIPROP_EXHAUST, temperature_k = 1400.0)
+    for _ in 1:(5 * BASE_UPS)
+        update_flowbehav!(off_mixture_safe; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = off_mixture_mna, derivedmapstate = off_mixture_derived)
+    end
+    @test !is_damaged(off_mixture_safe.overheat)
+
+    peak_biprop = make_hot_turbopump()
+    damage_tick = run_until_damage!(peak_biprop)
+    @test is_damaged(peak_biprop.overheat)
+    @test damage_tick < 30 * BASE_UPS
+    @test get_overheat_percentage(peak_biprop.overheat) == 1.0
+    @test all(!elem.active for elem in produce_rel_elements(peak_biprop))
+
+    damaged_probe = make_hot_turbopump(deactivation = AutoDeactivationBehavFrag())
+    @test run_until_damage!(damaged_probe) < 30 * BASE_UPS
+    deactivate!(damaged_probe.deactivation)
+    @test isnothing(get_reactivation_probe(damaged_probe; tile = TEST_TILE, rotation = TEST_ROTATION))
+
+    repaired_active = make_hot_turbopump()
+    @test run_until_damage!(repaired_active) < 30 * BASE_UPS
+    repair_actions = get_actions(repaired_active)
+    @test length(repair_actions) == 1
+    @test repair_actions[1].id === :repair_component
+    @test repair_actions[1].enabled
+    repaired, _ = do_action!(repaired_active, :repair_component)
+    @test repaired
+    @test !is_damaged(repaired_active.overheat)
+    @test all(elem.active for elem in produce_rel_elements(repaired_active))
+    @test isnothing(get_reactivation_probe(repaired_active; tile = TEST_TILE, rotation = TEST_ROTATION))
+
+    repaired_damaged_probe, _ = do_action!(damaged_probe, :repair_component)
+    @test repaired_damaged_probe
+    @test !is_damaged(damaged_probe.overheat)
+    @test get_reactivation_probe(damaged_probe; tile = TEST_TILE, rotation = TEST_ROTATION) isa ReactivationProbe
+
+    cooling_probe = make_hot_turbopump()
+    @test run_until_damage!(cooling_probe) < 30 * BASE_UPS
+    start_temperature = get_component_temperature(cooling_probe)
+    ambient_state = make_derived_state(fluid = HexFluids.BIPROP_EXHAUST, temperature_k = THERMAL_AMBIENT_TEMPERATURE_K)
+    for _ in 1:(20 * BASE_UPS)
+        update_flowbehav!(cooling_probe; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = MNA_State(), derivedmapstate = ambient_state)
+    end
+    @test get_component_temperature(cooling_probe) < start_temperature
+    @test all(!elem.active for elem in produce_rel_elements(cooling_probe))
 end
 
 @testset "Turbo pump mirroring" begin
@@ -443,6 +563,24 @@ end
     elems_overshoot = produce_rel_elements(overshoot)
     @test elems_overshoot[1].value ≈ overshoot.max_pump_voltage  # capped at max
     @test elems_overshoot[3].value ≈ 0.0  # conductance zero above max_rpm
+end
+
+@testset "Turbopump render helpers" begin
+    base_colour = HexFlowPumpComponents.ColourType(0.4, 0.6, 0.8, 0.5)
+    heated = make_turbopump()
+    set_component_temperature!(heated.overheat, heated.overheat.limit_temperature_k * 1.2)
+    layer_colours = HexFlowPumpComponents.turbopump_render_colours(base_colour, heated.overheat)
+
+    @test layer_colours.base == base_colour
+    @test layer_colours.genturbine == multiply_colours(base_colour, get_overheat_tint(heated.overheat))
+    @test layer_colours.genturbine != base_colour
+end
+
+@testset "Turbopump vibration gating" begin
+    @test turbopump_vibe_activity(0.0, 0.75) == 0.0
+    @test turbopump_vibe_activity(-0.2, 0.75) == 0.0
+    @test turbopump_vibe_activity(0.1, 0.75) == 0.75
+    @test turbopump_vibe_activity(0.25, 2.0) == 1.0
 end
 
 @testset "Electric pump regression coverage" begin

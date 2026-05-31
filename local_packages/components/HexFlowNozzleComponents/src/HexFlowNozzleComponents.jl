@@ -51,20 +51,20 @@ const DEFAULT_NOZZLE_LIMIT_TEMPERATURE_K = 3000.0
 const SWITCHED_NOZZLE_LIMIT_TEMPERATURE_K = 400.0
 
 default_nozzle_relative_scale(throat_area::Real)::Float64 = Float64(throat_area) / 0.2
-default_nozzle_radiative_surface_area(throat_area::Real)::Float64 = 25.0 * default_nozzle_relative_scale(throat_area)
+default_nozzle_heat_loss_factor(throat_area::Real)::Float64 = 5.0 * default_nozzle_relative_scale(throat_area)
 default_nozzle_thermal_mass(throat_area::Real)::Float64 = 2.0 * default_nozzle_relative_scale(throat_area)^(3 / 2)
 
 function default_nozzle_overheat(
         throat_area::Real;
         limit_temperature_k::Real = DEFAULT_NOZZLE_LIMIT_TEMPERATURE_K,
         thermal_mass::Union{Nothing, Real} = nothing,
-        radiative_surface_area::Union{Nothing, Real} = nothing,
+        heat_loss_factor::Union{Nothing, Real} = nothing,
         temperature::ComponentTemperatureBehavFrag = ComponentTemperatureBehavFrag(),
         damage::DamageStateBehavFrag = DamageStateBehavFrag()
     )
     thermal_mass_f = isnothing(thermal_mass) ? default_nozzle_thermal_mass(throat_area) : Float64(thermal_mass)
-    radiative_surface_area_f = isnothing(radiative_surface_area) ? default_nozzle_radiative_surface_area(throat_area) : Float64(radiative_surface_area)
-    return OverheatLimitBehavFrag(limit_temperature_k, thermal_mass_f, radiative_surface_area_f; temperature = temperature, damage = damage)
+    heat_loss_factor_f = isnothing(heat_loss_factor) ? default_nozzle_heat_loss_factor(throat_area) : Float64(heat_loss_factor)
+    return OverheatLimitBehavFrag(limit_temperature_k, thermal_mass_f, heat_loss_factor_f; temperature = temperature, damage = damage)
 end
 
 "Convenience constructor: node + area + deactivation + overheat (full form used by set_tunables)"
@@ -81,10 +81,6 @@ end
 function NozzleBehavFrag(connected_node::NodePos, throat_area::Real)
     throat_area_f = Float64(throat_area)
     return NozzleBehavFrag(connected_node, throat_area_f, AutoDeactivationBehavFrag(), default_nozzle_overheat(throat_area_f))
-end
-
-function multiply_colours(base::ColourType, tint::ColourType)::ColourType
-    return ColourType((base .* tint)...)
 end
 
 is_inactive(nozzle::NozzleBehavFrag) = is_inactive(nozzle.deactivation)
@@ -382,7 +378,7 @@ function BasicNozzleCompBehav(;
         sprite::Symbol,
         limit_temperature_k::Float64 = DEFAULT_NOZZLE_LIMIT_TEMPERATURE_K,
         thermal_mass::Union{Nothing, Float64} = nothing,
-        radiative_surface_area::Union{Nothing, Float64} = nothing
+        heat_loss_factor::Union{Nothing, Float64} = nothing
     )
     nozzlefrag = NozzleBehavFrag(
         connected_node,
@@ -392,7 +388,7 @@ function BasicNozzleCompBehav(;
             throat_area;
             limit_temperature_k = limit_temperature_k,
             thermal_mass = thermal_mass,
-            radiative_surface_area = radiative_surface_area
+            heat_loss_factor = heat_loss_factor
         )
     )
     spritefrag = PlainSpriteBehavFrag(sprite)
@@ -438,8 +434,8 @@ function SwitchedNozzleCompBehav(;
         min_conductance::Float64,
         growth_factor::Float64,
         limit_temperature_k::Float64 = SWITCHED_NOZZLE_LIMIT_TEMPERATURE_K,
-        thermal_mass::Union{Nothing, Float64} = nothing,
-        radiative_surface_area::Union{Nothing, Float64} = nothing
+        thermal_mass::Float64 = 1.0,
+        heat_loss_factor::Float64 = 0.3
     )
     # Nozzle connects internal node to ground
     nozzlefrag = NozzleBehavFrag(
@@ -450,7 +446,7 @@ function SwitchedNozzleCompBehav(;
             throat_area;
             limit_temperature_k = limit_temperature_k,
             thermal_mass = thermal_mass,
-            radiative_surface_area = radiative_surface_area
+            heat_loss_factor = heat_loss_factor
         )
     )
 
@@ -491,7 +487,7 @@ function get_tunables(comp::SwitchedNozzleCompBehav)::NTuple{7, TunableProps}
 end
 
 function set_tunables(comp::SwitchedNozzleCompBehav, tunables::NTuple{7, Real})::SwitchedNozzleCompBehav
-    # Tunable order: throat area, temperature limit, thermal mass, radiative surface area, max conductance, min conductance, growth factor.
+    # Tunable order: throat area, temperature limit, thermal mass, heat loss factor, max conductance, min conductance, growth factor.
     nozzle_tunables = (tunables[1], tunables[2], tunables[3], tunables[4])
     switch_tunables = (tunables[5], tunables[6], tunables[7])
 

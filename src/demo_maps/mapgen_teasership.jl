@@ -107,7 +107,7 @@ function mapgen_teasership()
             HexFrame.NODE_INTERNAL_1,
             0.2,
             AutoDeactivationBehavFrag(),
-            OverheatLimitBehavFrag(400.0, 5.3, 5.0)
+            OverheatLimitBehavFrag(400.0, 1.0, 0.3)
         ),
         BoolSwitchBehavFrag(SwitchBehavFrag(
             RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_INTERNAL_1),

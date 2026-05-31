@@ -29,7 +29,7 @@ export getstate, settrue!, setfalse!, setstate!
 export StallBehavFrag, stall!, unstall!, is_stalled
 export AutoDeactivationBehavFrag, deactivate!, reactivate!, is_inactive
 export DamageStateBehavFrag, damage!, undamage!, is_damaged
-export ComponentTemperatureBehavFrag, get_component_temperature, set_component_temperature!
+export ComponentTemperatureBehavFrag, get_component_temperature, set_component_temperature!, multiply_colours
 export OverheatLimitBehavFrag, get_overheat_limit_temperature, get_overheat_percentage, get_overheat_tint, update_overheat_state!
 # Concrete Component Behavior Exports
 export BasicCompBehav
@@ -251,46 +251,45 @@ ComponentTemperatureBehavFrag(temperature_k::Real) = ComponentTemperatureBehavFr
 get_component_temperature(frag::ComponentTemperatureBehavFrag)::Float64 = getstate(frag.temperature_state)
 set_component_temperature!(frag::ComponentTemperatureBehavFrag, temperature_k::Real) = setstate!(frag.temperature_state, Float64(temperature_k))
 
+"Multiply a base colour by a tint colour component-wise."
+multiply_colours(base::ColourType, tint::ColourType)::ColourType = ColourType((base .* tint)...)
+
 #= ---------- OverheatLimitBehavFrag ----------- =#
 
 const THERMAL_FLUID_COUPLING_SCALE = 1.0
-const THERMAL_RADIATION_SCALE = 1.0e-10
+const THERMAL_HEAT_LOSS_SCALE = 1.0
 
 "Reusable overheating fragment with local temperature state, persistent damage, and configurable heat-balance parameters"
 struct OverheatLimitBehavFrag
     limit_temperature_k::Float64
     thermal_mass::Float64
-    radiative_surface_area::Float64
+    heat_loss_factor::Float64
     temperature::ComponentTemperatureBehavFrag
     damage::DamageStateBehavFrag
 
     function OverheatLimitBehavFrag(
             limit_temperature_k::Real,
             thermal_mass::Real,
-            radiative_surface_area::Real,
+            heat_loss_factor::Real,
             temperature::ComponentTemperatureBehavFrag,
             damage::DamageStateBehavFrag
         )
-        limit_temperature_f = Float64(limit_temperature_k)
-        thermal_mass_f = Float64(thermal_mass)
-        radiative_surface_area_f = Float64(radiative_surface_area)
+        limit_temperature_f = max(Float64(limit_temperature_k), THERMAL_AMBIENT_TEMPERATURE_K + 1.0)
+        thermal_mass_f = max(Float64(thermal_mass), 1.0e-6)
+        heat_loss_factor_f = max(Float64(heat_loss_factor), 0.0)
 
-        limit_temperature_f > THERMAL_AMBIENT_TEMPERATURE_K || error("Overheat limit temperature must exceed ambient temperature")
-        thermal_mass_f > 0.0 || error("Thermal mass must be positive")
-        radiative_surface_area_f >= 0.0 || error("Radiative surface area must be non-negative")
-
-        return new(limit_temperature_f, thermal_mass_f, radiative_surface_area_f, temperature, damage)
+        return new(limit_temperature_f, thermal_mass_f, heat_loss_factor_f, temperature, damage)
     end
 end
 
 function OverheatLimitBehavFrag(
         limit_temperature_k::Real,
         thermal_mass::Real,
-        radiative_surface_area::Real;
+        heat_loss_factor::Real;
         temperature::ComponentTemperatureBehavFrag = ComponentTemperatureBehavFrag(),
         damage::DamageStateBehavFrag = DamageStateBehavFrag()
     )
-    return OverheatLimitBehavFrag(limit_temperature_k, thermal_mass, radiative_surface_area, temperature, damage)
+    return OverheatLimitBehavFrag(limit_temperature_k, thermal_mass, heat_loss_factor, temperature, damage)
 end
 
 get_overheat_limit_temperature(frag::OverheatLimitBehavFrag)::Float64 = frag.limit_temperature_k
@@ -304,15 +303,15 @@ function get_tunables(frag::OverheatLimitBehavFrag)::NTuple{3, TunableProps}
     return (
         TunableProps(frag.limit_temperature_k, "Temperature Limit", "K"),
         TunableProps(frag.thermal_mass, "Thermal Mass", "thermal units"),
-        TunableProps(frag.radiative_surface_area, "Radiative Surface Area", "area units"),
+        TunableProps(frag.heat_loss_factor, "Heat Loss Factor", "1/K-units"),
     )
 end
 
 function set_tunables(frag::OverheatLimitBehavFrag, tunables::NTuple{3, T})::OverheatLimitBehavFrag where {T <: Real}
     return OverheatLimitBehavFrag(
-        Float64(tunables[1]),
-        Float64(tunables[2]),
-        Float64(tunables[3]),
+        tunables[1],
+        tunables[2],
+        tunables[3],
         frag.temperature,
         frag.damage
     )
@@ -348,8 +347,8 @@ function update_overheat_state!(
     dt_f = Float64(dt)
 
     fluid_heat_flow = THERMAL_FLUID_COUPLING_SCALE * mass_flow_rate_f * (fluid_temperature_f - current_temperature)
-    radiative_heat_flow = THERMAL_RADIATION_SCALE * frag.radiative_surface_area * (THERMAL_AMBIENT_TEMPERATURE_K^4 - current_temperature^4)
-    net_heat_flow = fluid_heat_flow + radiative_heat_flow
+    heat_loss_flow = THERMAL_HEAT_LOSS_SCALE * frag.heat_loss_factor * (THERMAL_AMBIENT_TEMPERATURE_K - current_temperature)
+    net_heat_flow = fluid_heat_flow + heat_loss_flow
     next_temperature = current_temperature + net_heat_flow * dt_f / frag.thermal_mass
 
     set_component_temperature!(frag, next_temperature)
