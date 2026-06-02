@@ -904,7 +904,7 @@ function depart_ship!(gamemap::GameMap, ship_name::Symbol; max_view_bounds::Unio
     # If bounds provided, ensure target point is off-screen
     if !isnothing(max_view_bounds)
         DEPART_DISTANCE_TILES = _ensure_offscreen_distance(
-            get_cartesian_bounds(gamemap.ships[ship_name]), direction_vec, DEPART_DISTANCE_TILES, max_view_bounds
+            get_cartesian_bounds(gamemap, ship_name), direction_vec, DEPART_DISTANCE_TILES, max_view_bounds
         )
     end
 

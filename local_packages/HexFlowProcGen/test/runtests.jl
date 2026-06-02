@@ -472,6 +472,28 @@ const mock_pipe_opts = [PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES,
         @test select_fuel_tag(fuel_configs, 1.0, 1, UInt32(42)) == HexFluids.COLD_GAS
     end
 
+    @testset "Fuel tag selection honours richness gates" begin
+        gated_fuel_configs = Dict{FluidType, FuelTagConfig}(
+            HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0),
+                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
+            HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 2.5),
+                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
+            HexFluids.FUEL_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 4.0),
+                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
+            HexFluids.OXIDISER_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 4.0),
+                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
+        )
+
+        sample_points = 1:4096
+        seed = UInt32(0xB1F00001)
+
+        @test any(point -> select_fuel_tag(gated_fuel_configs, 2.5, point, seed) == HexFluids.MONOPROP_LIQUID, sample_points)
+        @test !any(point -> select_fuel_tag(gated_fuel_configs, 3.9, point, seed) == HexFluids.FUEL_LIQUID, sample_points)
+        @test !any(point -> select_fuel_tag(gated_fuel_configs, 3.9, point, seed) == HexFluids.OXIDISER_LIQUID, sample_points)
+        @test any(point -> select_fuel_tag(gated_fuel_configs, 4.0, point, seed) == HexFluids.FUEL_LIQUID, sample_points)
+        @test any(point -> select_fuel_tag(gated_fuel_configs, 4.0, point, seed) == HexFluids.OXIDISER_LIQUID, sample_points)
+    end
+
     @testset "Encounter name generation" begin
         name = generate_encounter_name(UInt32(12345), ENCOUNTER_SHIP)
         @test !isempty(name)

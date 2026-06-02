@@ -734,7 +734,7 @@ get_axial_bounds(gamemap::GameMap)::HexFrame.AxialBounds = get_axial_bounds(keys
 Calculate the cartesian coordinate extremes for a set of surface tiles.
 Accepts an iterable of `TileCoord` and returns a `HexFrame.CartesianBounds` tuple with the cartesian
 x/y values furthest from the origin in each direction. This operates on the provided tile set and
-is used by `ShipState`, `ShipBlueprint`, and `GameMap` overloads.
+is used by the `ShipBlueprint`, `GameMap`, and `(GameMap, ship_name)` overloads.
 
 Note: Y_POS is the maximum y value (top of screen), Y_NEG is minimum (bottom).
 X_POS is maximum x (right), X_NEG is minimum (left).
@@ -768,6 +768,12 @@ function get_cartesian_bounds(tiles)::HexFrame.CartesianBounds
     return (X_POS = x_max, X_NEG = x_min, Y_POS = y_max, Y_NEG = y_min)
 end
 get_cartesian_bounds(gamemap::GameMap)::HexFrame.CartesianBounds = get_cartesian_bounds(keys(gamemap.surface_shiptags))
+
+"Cartesian bounds for one ship's surface tiles, selected by `ship_name`."
+function get_cartesian_bounds(gamemap::GameMap, ship_name::Symbol)::HexFrame.CartesianBounds
+    _get_ship_state(gamemap, ship_name)
+    return get_cartesian_bounds(tile for (tile, owner) in each_surface_owner(gamemap) if owner === ship_name)
+end
 
 "Get the centroid of an iterable of surface tiles in axial coordinates. Returns nothing for an empty set."
 function get_surface_centroid(tiles)::Union{AxialCoord, Nothing}

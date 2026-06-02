@@ -129,9 +129,39 @@ function _ship_selector_ui!(inputstate::InputState, flowcalc_ipc::FlowCalculator
     end
 
     idx = gui_listbox_int!(inputstate, key, label, display_names, Int32(0))
-    idx = clamp(idx, Int32(0), Int32(max(0, length(selectable_ships) - 1)))
-    inputstate.gui_inputs[key] = idx
     return selectable_ships[idx + 1], current_gamemap
+end
+
+"Return deterministic fuel-tag options for an encounter class."
+function _encounter_fuel_options(class_config::EncounterClassConfig)
+    if isempty(class_config.fuel_configs)
+        return (
+            ["None (scrap)"],
+            Union{HexFluids.FluidType, Nothing}[nothing],
+        )
+    end
+
+    sorted_tags = sort!(collect(keys(class_config.fuel_configs)))
+    return (
+        string.(sorted_tags),
+        Union{HexFluids.FluidType, Nothing}[sorted_tags...],
+    )
+end
+
+"Return all encounter-set options for the selected fuel tag, including currently locked ones."
+function _encounter_set_options(
+        class_config::EncounterClassConfig,
+        fuel_tag::Union{HexFluids.FluidType, Nothing},
+        richness::Float64,
+    )
+    isnothing(fuel_tag) && return Tuple{ShipComponentSet, Float64}[]
+
+    fuel_config = get(class_config.fuel_configs, fuel_tag, nothing)
+    isnothing(fuel_config) && return Tuple{ShipComponentSet, Float64}[]
+
+    return [
+        (wcs.component_set, evaluate_scaling(wcs.weight, richness)) for wcs in fuel_config.component_pool
+    ]
 end
 
 function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, snapshot::FlowCalculatorSnapshot, viewstate::ViewState, winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}}, max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing)
@@ -442,8 +472,10 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             class_enums = [ENCOUNTER_SHIP, ENCOUNTER_FUEL_CACHE, ENCOUNTER_SCRAP]
             class_sel = gui_listbox_int!(inputstate, :enc_class_sel, "Class", class_names, Cint(0))
 
-            fuel_names = ["COLD_GAS", "MONOPROP_LIQUID", "None (scrap)"]
-            fuel_enums = Union{HexFluids.FluidType, Nothing}[HexFluids.COLD_GAS, HexFluids.MONOPROP_LIQUID, nothing]
+            enc_class = class_enums[class_sel + 1]
+            class_config = encounter_system_config.encounter_class_configs[enc_class]
+
+            fuel_names, fuel_enums = _encounter_fuel_options(class_config)
             fuel_sel = gui_listbox_int!(inputstate, :enc_fuel_sel, "Fuel Tag", fuel_names, Cint(0))
 
             richness_val = gui_input_double!(
@@ -459,28 +491,35 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             dir_names = ["Q+", "R-", "S+", "Q-", "R+", "S-"]
             dir_sel = gui_listbox_int!(inputstate, :enc_dir_sel, "Direction", dir_names, Cint(3))
 
-            enc_class = class_enums[class_sel + 1]
             enc_fuel = fuel_enums[fuel_sel + 1]
             enc_richness = Float64(richness_val)
             enc_seed = UInt32(abs(seed_val))
             enc_dir = HexFrame.HexAxis(dir_sel)
 
-            class_config = encounter_system_config.encounter_class_configs[enc_class]
             steps, stacks = compute_hull_size(class_config.hull_size, enc_richness)
             target = compute_target_components(class_config.target_components, enc_richness)
             CImGui.Text(@sprintf("Hull: %d steps, %d stacks", steps, stacks))
             CImGui.Text(@sprintf("Target components: %d", target))
 
-            fuel_valid = enc_fuel === nothing || haskey(class_config.fuel_configs, enc_fuel)
-            if !fuel_valid
-                valid_tags = join(string.(keys(class_config.fuel_configs)), ", ")
-                CImGui.TextColored(
-                    ImVec4(1.0, 0.4, 0.4, 1.0),
-                    "Fuel tag not in class config. Valid: $valid_tags"
-                )
+            encounter_set_options = _encounter_set_options(class_config, enc_fuel, enc_richness)
+            CImGui.SeparatorText("Encounter Set Options")
+            if isempty(encounter_set_options)
+                if isnothing(enc_fuel)
+                    CImGui.TextWrapped("Scrap encounters do not use fuel-tagged ship sets.")
+                else
+                    CImGui.TextWrapped("No encounter sets are registered for the selected fuel tag.")
+                end
+            else
+                for (shipset, weight) in encounter_set_options
+                    if weight > 0.0
+                        CImGui.TextWrapped(@sprintf("%s (weight %.2f)", shipset.name, weight))
+                    else
+                        CImGui.TextWrapped("$(shipset.name) (locked at current richness)")
+                    end
+                end
             end
 
-            if CImGui.Button("Generate & Dock", ImVec2(-1, 30)) && fuel_valid
+            if CImGui.Button("Generate & Dock", ImVec2(-1, 30))
                 new_shipmap = generate_encounter(
                     enc_class, enc_fuel, enc_richness,
                     enc_seed, class_config
@@ -494,7 +533,7 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
                 @info "Dev: generated encounter" name = display_name class = enc_class richness = enc_richness
             end
 
-            if CImGui.Button("Generate & Dock (Optimal)", ImVec2(-1, 30)) && fuel_valid
+            if CImGui.Button("Generate & Dock (Optimal)", ImVec2(-1, 30))
                 new_shipmap = generate_encounter(
                     enc_class, enc_fuel, enc_richness,
                     enc_seed, class_config
@@ -510,7 +549,7 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
                 @info "Dev: generated encounter (optimal dir)" name = display_name class = enc_class richness = enc_richness
             end
 
-            if CImGui.Button("Generate (No Dock)", ImVec2(-1, 30)) && fuel_valid
+            if CImGui.Button("Generate (No Dock)", ImVec2(-1, 30))
                 blueprint = generate_encounter(
                     enc_class, enc_fuel, enc_richness,
                     enc_seed, class_config

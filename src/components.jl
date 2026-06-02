@@ -282,19 +282,56 @@ function roll_component(::Val{:TriGasTank_comp}, point, seed)
     )
 end
 
-function roll_component(::Val{:TriLiquidTank_comp}, point, seed)
-    liquid_density = HexFluids.lookup_fluid_density(HexFluids.MONOPROP_LIQUID)::Float64
+"Roll a Thevinin liquid tank for `fluid`; `fill_range` controls the initial fill fraction."
+function _roll_tri_liquid_tank(fluid, fill_range::Tuple{Float64, Float64}, point, seed)
+    liquid_density = HexFluids.lookup_fluid_density(fluid)::Float64
     max_charge = pick_from_range(150.0, 250.0, point, seed) / liquid_density
-    initial_charge = max_charge * pick_from_range(0.25, 0.75, get_noise(point, seed), seed)
+    fill_min, fill_max = fill_range
+    initial_charge = max_charge * pick_from_range(fill_min, fill_max, get_noise(point, seed), seed)
 
     return ThevininTankCompBehav(
         LiquidTankBehavFrag, 3;
-        fluid = HexFluids.MONOPROP_LIQUID,
+        fluid = fluid,
         max_charge = max_charge,
         max_voltage = 1.0,
         initial_charge = initial_charge,
         series_conductance = pick_from_range(4.0, 6.0, point, seed)
     )
+end
+
+"Roll a pressure-fed tank whose liquid side is `liquid_fluid` and whose pressurant remains cold gas."
+function _roll_pressure_fed_tank(liquid_fluid, fill_range::Tuple{Float64, Float64}, point, seed)
+    liquid_density = HexFluids.lookup_fluid_density(liquid_fluid)::Float64
+    max_charge = pick_from_range(150.0, 250.0, point, seed) / liquid_density
+    fill_min, fill_max = fill_range
+    initial_charge = max_charge * pick_from_range(fill_min, fill_max, get_noise(point, seed), seed)
+
+    return PressureFedTankCompBehav(
+        PressureFedTankBehavFrag(
+            initial_liquid_charge = initial_charge,
+            initial_gas_charge = 0.0,
+            max_liquid_charge = max_charge,
+            max_gas_pressure = pick_from_range(40.0, 60.0, point, seed),
+            gas_node = HexFrame.NODE_Q_POS,
+            initial_liquid_fluid = liquid_fluid
+        ),
+        (HexFrame.NODE_Q_NEG,),
+        pick_from_range(3.0, 7.0, point, seed),
+        HexFluids.COLD_GAS,
+        NoRotationBehavFrag()
+    )
+end
+
+function roll_component(::Val{:TriLiquidTank_comp}, point, seed)
+    return _roll_tri_liquid_tank(HexFluids.MONOPROP_LIQUID, (0.25, 0.75), point, seed)
+end
+
+function roll_component(::Val{:TriFuelTank_comp}, point, seed)
+    return _roll_tri_liquid_tank(HexFluids.FUEL_LIQUID, (0.25, 0.75), point, seed)
+end
+
+function roll_component(::Val{:TriOxidiserTank_comp}, point, seed)
+    return _roll_tri_liquid_tank(HexFluids.OXIDISER_LIQUID, (0.25, 0.75), point, seed)
 end
 
 function roll_component(::Val{:TriGasTank_full_comp}, point, seed)
@@ -313,60 +350,39 @@ function roll_component(::Val{:TriGasTank_full_comp}, point, seed)
 end
 
 function roll_component(::Val{:TriLiquidTank_full_comp}, point, seed)
-    liquid_density = HexFluids.lookup_fluid_density(HexFluids.MONOPROP_LIQUID)::Float64
-    max_charge = pick_from_range(150.0, 250.0, point, seed) / liquid_density
-    initial_charge = max_charge * pick_from_range(0.75, 1.0, get_noise(point, seed), seed)
+    return _roll_tri_liquid_tank(HexFluids.MONOPROP_LIQUID, (0.75, 1.0), point, seed)
+end
 
-    return ThevininTankCompBehav(
-        LiquidTankBehavFrag, 3;
-        fluid = HexFluids.MONOPROP_LIQUID,
-        max_charge = max_charge,
-        max_voltage = 1.0,
-        initial_charge = initial_charge,
-        series_conductance = pick_from_range(4.0, 6.0, point, seed)
-    )
+function roll_component(::Val{:TriFuelTank_full_comp}, point, seed)
+    return _roll_tri_liquid_tank(HexFluids.FUEL_LIQUID, (0.75, 1.0), point, seed)
+end
+
+function roll_component(::Val{:TriOxidiserTank_full_comp}, point, seed)
+    return _roll_tri_liquid_tank(HexFluids.OXIDISER_LIQUID, (0.75, 1.0), point, seed)
 end
 
 function roll_component(::Val{:PressureFedLiquidTank_comp}, point, seed)
-    liquid_density = HexFluids.lookup_fluid_density(HexFluids.MONOPROP_LIQUID)::Float64
-    max_charge = pick_from_range(150.0, 250.0, point, seed) / liquid_density
-    initial_charge = max_charge * pick_from_range(0.25, 0.75, get_noise(point, seed), seed)
+    return _roll_pressure_fed_tank(HexFluids.MONOPROP_LIQUID, (0.25, 0.75), point, seed)
+end
 
-    return PressureFedTankCompBehav(
-        PressureFedTankBehavFrag(
-            initial_liquid_charge = initial_charge,
-            initial_gas_charge = 0.0,
-            max_liquid_charge = max_charge,
-            max_gas_pressure = pick_from_range(40.0, 60.0, point, seed),
-            gas_node = HexFrame.NODE_Q_POS,
-            initial_liquid_fluid = HexFluids.MONOPROP_LIQUID
-        ),
-        (HexFrame.NODE_Q_NEG,),
-        pick_from_range(3.0, 7.0, point, seed),
-        HexFluids.COLD_GAS,
-        NoRotationBehavFrag()
-    )
+function roll_component(::Val{:PressureFedFuelTank_comp}, point, seed)
+    return _roll_pressure_fed_tank(HexFluids.FUEL_LIQUID, (0.25, 0.75), point, seed)
+end
+
+function roll_component(::Val{:PressureFedOxidiserTank_comp}, point, seed)
+    return _roll_pressure_fed_tank(HexFluids.OXIDISER_LIQUID, (0.25, 0.75), point, seed)
 end
 
 function roll_component(::Val{:PressureFedLiquidTank_full_comp}, point, seed)
-    liquid_density = HexFluids.lookup_fluid_density(HexFluids.MONOPROP_LIQUID)::Float64
-    max_charge = pick_from_range(150.0, 250.0, point, seed) / liquid_density
-    initial_charge = max_charge * pick_from_range(0.75, 0.98, get_noise(point, seed), seed)
+    return _roll_pressure_fed_tank(HexFluids.MONOPROP_LIQUID, (0.75, 0.98), point, seed)
+end
 
-    return PressureFedTankCompBehav(
-        PressureFedTankBehavFrag(
-            initial_liquid_charge = initial_charge,
-            initial_gas_charge = 0.0,
-            max_liquid_charge = max_charge,
-            max_gas_pressure = pick_from_range(40.0, 60.0, point, seed),
-            gas_node = HexFrame.NODE_Q_POS,
-            initial_liquid_fluid = HexFluids.MONOPROP_LIQUID
-        ),
-        (HexFrame.NODE_Q_NEG,),
-        pick_from_range(3.0, 7.0, point, seed),
-        HexFluids.COLD_GAS,
-        NoRotationBehavFrag()
-    )
+function roll_component(::Val{:PressureFedFuelTank_full_comp}, point, seed)
+    return _roll_pressure_fed_tank(HexFluids.FUEL_LIQUID, (0.75, 0.98), point, seed)
+end
+
+function roll_component(::Val{:PressureFedOxidiserTank_full_comp}, point, seed)
+    return _roll_pressure_fed_tank(HexFluids.OXIDISER_LIQUID, (0.75, 0.98), point, seed)
 end
 
 function roll_component(::Val{:LargeAdjValve_comp}, point, seed)
@@ -473,6 +489,20 @@ shipset_pressure_fed_monoprop = ShipComponentSet(
     ]
 )
 
+shipset_biprop_pressure_fed = ShipComponentSet(
+    "Pressure Fed Biprop",
+    [
+        CompSpawnOptions(:PressureFedFuelTank_full_comp, [(1, 100.0), (2, 200.0)], CLUSTERED_PLACE),
+        CompSpawnOptions(:PressureFedOxidiserTank_full_comp, [(1, 100.0), (2, 200.0)], CLUSTERED_PLACE),
+        CompSpawnOptions(:TriGasTank_full_comp, [(1, 200.0)], CLUSTERED_PLACE),
+        CompSpawnOptions(:BasicBipropChamber_comp, [(1, 200.0)], RANDOM_PLACE),
+        CompSpawnOptions(:TinyOnOffValve_comp, [(1, 200.0), (2, 200.0)], RANDOM_PLACE),
+        CompSpawnOptions(:TinyAdjValve_comp, [(0, 200.0), (1, 200.0)], RANDOM_PLACE),
+        CompSpawnOptions(:TinyNozzle_comp, [(1, 100.0), (2, 200.0)], NOZZLE_EDGE_PLACE),
+        CompSpawnOptions(:SmallNozzle_comp, [(1, 100.0), (0, 200.0)], NOZZLE_EDGE_PLACE),
+    ]
+)
+
 standard_pipeoptions::Vector{PipeSpawnOptions} = [
     PipeSpawnOptions(:BigPipe_pipe, HexFlowProcGen.ONE_CONNECT_PIPES, 0.05),
     PipeSpawnOptions(:ScrapPipe_pipe, HexFlowProcGen.RANDOM_PIPES, 0.03),
@@ -503,6 +533,22 @@ compset_liquid_cache = ShipComponentSet(
     ]
 )
 
+compset_fuel_cache = ShipComponentSet(
+    "Fuel Tank Array",
+    [
+        CompSpawnOptions(:TriFuelTank_full_comp, [(2, 100.0), (3, 200.0), (4, 100.0)], CLUSTERED_PLACE),
+        CompSpawnOptions(:ElecTransferPump_comp, [(0, 50.0), (1, 100.0)], RANDOM_PLACE),
+    ]
+)
+
+compset_oxidiser_cache = ShipComponentSet(
+    "Oxidiser Tank Array",
+    [
+        CompSpawnOptions(:TriOxidiserTank_full_comp, [(2, 100.0), (3, 200.0), (4, 100.0)], CLUSTERED_PLACE),
+        CompSpawnOptions(:ElecTransferPump_comp, [(0, 50.0), (1, 100.0)], RANDOM_PLACE),
+    ]
+)
+
 compset_extra_gas_tanks = ShipComponentSet(
     "Extra Gas Tanks",
     [
@@ -514,6 +560,20 @@ compset_extra_liquid_tanks = ShipComponentSet(
     "Extra Liquid Tanks",
     [
         CompSpawnOptions(:TriLiquidTank_comp, [(1, 50.0), (2, 100.0), (3, 150.0), (4, 100.0), (5, 50.0)], CLUSTERED_PLACE),
+    ]
+)
+
+compset_extra_fuel_tanks = ShipComponentSet(
+    "Extra Fuel Tanks",
+    [
+        CompSpawnOptions(:TriFuelTank_comp, [(1, 50.0), (2, 100.0), (3, 150.0), (4, 100.0), (5, 50.0)], CLUSTERED_PLACE),
+    ]
+)
+
+compset_extra_oxidiser_tanks = ShipComponentSet(
+    "Extra Oxidiser Tanks",
+    [
+        CompSpawnOptions(:TriOxidiserTank_comp, [(1, 50.0), (2, 100.0), (3, 150.0), (4, 100.0), (5, 50.0)], CLUSTERED_PLACE),
     ]
 )
 
@@ -565,6 +625,12 @@ _ship_monoprop_pool = WeightedComponentSet[
     WeightedComponentSet(compset_extra_liquid_tanks, GatedLinearScaling(0.3, 0.0, 2.0)),
 ]
 
+_ship_biprop_pool = WeightedComponentSet[
+    WeightedComponentSet(shipset_biprop_pressure_fed, NoScaling(1.0)),
+    WeightedComponentSet(compset_extra_fuel_tanks, GatedLinearScaling(0.3, 0.0, 4.0)),
+    WeightedComponentSet(compset_extra_oxidiser_tanks, GatedLinearScaling(0.3, 0.0, 4.0)),
+]
+
 _cache_coldgas_pool = WeightedComponentSet[
     WeightedComponentSet(compset_gas_cache, NoScaling(1.0)),
 ]
@@ -573,13 +639,21 @@ _cache_monoprop_pool = WeightedComponentSet[
     WeightedComponentSet(compset_liquid_cache, NoScaling(1.0)),
 ]
 
+_cache_fuel_pool = WeightedComponentSet[
+    WeightedComponentSet(compset_fuel_cache, NoScaling(1.0)),
+]
+
+_cache_oxidiser_pool = WeightedComponentSet[
+    WeightedComponentSet(compset_oxidiser_cache, NoScaling(1.0)),
+]
+
 _scrap_pool = WeightedComponentSet[
     WeightedComponentSet(compset_scrap_tiny_nozzle, NoScaling(2.0)),
     WeightedComponentSet(compset_scrap_small_nozzle, GatedLinearScaling(2.6, 0.0, 0.5)),
     WeightedComponentSet(compset_scrap_medium_nozzle, GatedLinearScaling(0.8, 0.0, 2.0)),
     WeightedComponentSet(compset_scrap_switched_nozzle, NoScaling(0.8)),
     WeightedComponentSet(compset_scrap_transfer_pump, GatedLinearScaling(0.6, 0.0, 0.3)),
-    WeightedComponentSet(compset_scrap_turbo_pump, GatedLinearScaling(0.3, 0.0, 2.0)),
+    WeightedComponentSet(compset_scrap_turbo_pump, GatedLinearScaling(0.8, 0.3, 2.0)),
     WeightedComponentSet(compset_scrap_large_adj_valve, GatedLinearScaling(0.5, 0.0, 0.5)),
     WeightedComponentSet(compset_scrap_tiny_adj_valve, GatedLinearScaling(0.5, 0.0, 0.5)),
     WeightedComponentSet(compset_scrap_large_onoff_valve, GatedLinearScaling(0.5, 0.0, 0.5)),
@@ -601,6 +675,7 @@ ship_class_config = EncounterClassConfig(
     Dict{FluidType, FuelTagConfig}(
         HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), _ship_coldgas_pool),
         HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 2.5), _ship_monoprop_pool),
+        HexFluids.FUEL_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 4.0), _ship_biprop_pool),
     ),
     standard_pipeoptions,
 )
@@ -612,6 +687,8 @@ fuel_cache_class_config = EncounterClassConfig(
     Dict{FluidType, FuelTagConfig}(
         HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), _cache_coldgas_pool),
         HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 2.5), _cache_monoprop_pool),
+        HexFluids.FUEL_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 4.0), _cache_fuel_pool),
+        HexFluids.OXIDISER_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 4.0), _cache_oxidiser_pool),
     ),
     fuel_cache_pipeoptions,
 )

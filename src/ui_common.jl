@@ -124,6 +124,7 @@ end
 "Read/write an `Int32` listbox selection from `inputs[key]` via an ImGui listbox."
 function gui_listbox_int!(inputs::Dict{Symbol, Any}, key::Symbol, label::String, names::Vector{String}, default::Int32)
     val::Int32 = haskey(inputs, key) ? inputs[key] : default
+    val = clamp(val, Int32(0), Int32(max(0, length(names) - 1)))  # guard a stale index when the list has shrunk
     @cref CImGui.ListBox(label, &val, names)
     inputs[key] = val
     return val
