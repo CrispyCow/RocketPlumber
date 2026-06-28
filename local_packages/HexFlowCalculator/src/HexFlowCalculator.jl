@@ -1341,6 +1341,17 @@ with these and then restored after the trial solve completes.
     pending_set::Set{TileCoord} = Set{TileCoord}()         # duplicate-guard for O(1) membership test
     probe_elements::Vector{AbsoluteElement} = Vector{AbsoluteElement}()       # probe-only elements (not a copy of primary)
     probe_declarations::Vector{AbsFluidDecl} = Vector{AbsFluidDecl}()         # probe-only declarations
+    trial_derivedmapstate::DerivedMapState = DerivedMapState()
+    trial_mna_state::MNA_State = MNA_State()
+    trial_scratchpad::CalculatorScratchpad = CalculatorScratchpad()
+end
+
+"Reinitialise the scheduler's isolated trial solve state after a failed speculative solve."
+function reset_reactivation_trial_state!(scheduler::ReactivationScheduler)
+    scheduler.trial_derivedmapstate = DerivedMapState()
+    scheduler.trial_mna_state = MNA_State()
+    scheduler.trial_scratchpad = CalculatorScratchpad()
+    return nothing
 end
 
 """
@@ -1389,6 +1400,21 @@ function load_reactivation_probe!(
     return nothing
 end
 
+"Copy the live primary inputs into the isolated trial state, then append the current probe inputs."
+function seed_reactivation_trial_inputs!(scheduler::ReactivationScheduler, derivedmapstate::DerivedMapState)
+    trial_derivedmapstate = scheduler.trial_derivedmapstate
+
+    resize!(trial_derivedmapstate.primaryelements, length(derivedmapstate.primaryelements))
+    copyto!(trial_derivedmapstate.primaryelements, derivedmapstate.primaryelements)
+    append!(trial_derivedmapstate.primaryelements, scheduler.probe_elements)
+
+    resize!(trial_derivedmapstate.primary_fluid_declarations, length(derivedmapstate.primary_fluid_declarations))
+    copyto!(trial_derivedmapstate.primary_fluid_declarations, derivedmapstate.primary_fluid_declarations)
+    append!(trial_derivedmapstate.primary_fluid_declarations, scheduler.probe_declarations)
+
+    return trial_derivedmapstate
+end
+
 """
 Attempt one speculative reactivation probe from the scheduler queue.
 
@@ -1396,8 +1422,9 @@ Pops candidate coords from the front of the queue, discarding stale entries, unt
 target is found or the queue is exhausted. Returns `true` if a trial was run (accepted or
 rejected with fallback solve already executed), or `false` if the queue was empty.
 
-On an accepted probe the speculative solve results remain in `derivedmapstate` / `mna_state`.
-On a rejected or errored probe the base solve is re-run from the primary inputs.
+Speculative trials run on scheduler-owned trial state so a singular or otherwise invalid probe
+cannot poison the live MNA cache. After any attempted trial, the live primary inputs are
+recollected and the committed solve is rerun on the live state.
 """
 function run_reactivation_trial!(
         scheduler::ReactivationScheduler,
@@ -1421,37 +1448,37 @@ function run_reactivation_trial!(
         # Load probe-only elements/declarations into scheduler scratch buffers
         load_reactivation_probe!(scheduler, comp, coord)
 
-        # Temporarily extend primary collections with probe elements for the trial solve
-        n_primary_elem = length(derivedmapstate.primaryelements)
-        n_primary_decl = length(derivedmapstate.primary_fluid_declarations)
-        append!(derivedmapstate.primaryelements, scheduler.probe_elements)
-        append!(derivedmapstate.primary_fluid_declarations, scheduler.probe_declarations)
+        # Seed the isolated trial state from the current live primary inputs.
+        trial_derivedmapstate = seed_reactivation_trial_inputs!(scheduler, derivedmapstate)
+        trial_mna_state = scheduler.trial_mna_state
+        trial_scratchpad = scheduler.trial_scratchpad
 
         # Speculative solve — isolated by try/catch so a failure does not crash the loop
         trial_accepted = false
         try
-            solve_from_inputs!(derivedmapstate, mna_state, scratchpad, current_tick)
+            solve_from_inputs!(trial_derivedmapstate, trial_mna_state, trial_scratchpad, current_tick)
             trial_accepted = accept_reactivation_probe!(comp;
                 tile = coord,
                 ship_name = ship_name,
                 gamemap = gamemap,
-                derivedmapstate = derivedmapstate,
-                mna_state = mna_state,
+                derivedmapstate = trial_derivedmapstate,
+                mna_state = trial_mna_state,
             )
         catch
             # Speculative solve threw — treat as rejection and clean up
-            clear_calculator_scratchpad!(scratchpad)
+            reset_reactivation_trial_state!(scheduler)
         end
 
-        # Restore primary collections (remove appended probe elements regardless of outcome)
-        resize!(derivedmapstate.primaryelements, n_primary_elem)
-        resize!(derivedmapstate.primary_fluid_declarations, n_primary_decl)
+        # Always rebuild the live solve from committed map state. Accepted probes may mutate
+        # the component, so the primary input collections must be refreshed before solving.
+        collect_primary_map_inputs!(gamemap, derivedmapstate)
+        solve_from_inputs!(derivedmapstate, mna_state, scratchpad, current_tick)
 
         if !trial_accepted
-            solve_from_inputs!(derivedmapstate, mna_state, scratchpad, current_tick)
+            return true  # one probe was attempted and rejected (or errored)
         end
 
-        return true  # one probe was attempted this tick (accepted or rejected)
+        return true  # one probe was attempted and accepted this tick
     end
 
     return false  # queue was empty

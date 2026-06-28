@@ -93,6 +93,33 @@ HexComponentsAPI.get_tunables(::InvalidFluidBridgeCompBehav) = ()
 HexComponentsAPI.set_tunables(::InvalidFluidBridgeCompBehav, ::NTuple{0, Real}) = InvalidFluidBridgeCompBehav()
 HexComponentsAPI.render_base_elem!(queue, ::InvalidFluidBridgeCompBehav; kwargs...) = nothing
 
+struct GroundedAnchorCompBehav <: ComponentBehavior end
+HexComponentsAPI.produce_rel_elements(::GroundedAnchorCompBehav) = (
+    RelativeElement(RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND), 1.0, HexElements.CONST_RESISTOR),
+)
+HexComponentsAPI.get_tunables(::GroundedAnchorCompBehav) = ()
+HexComponentsAPI.set_tunables(::GroundedAnchorCompBehav, ::NTuple{0, Real}) = GroundedAnchorCompBehav()
+HexComponentsAPI.render_base_elem!(queue, ::GroundedAnchorCompBehav; kwargs...) = nothing
+
+mutable struct SingularProbeCompBehav <: ComponentBehavior
+    accepted::Bool
+end
+HexComponentsAPI.produce_rel_elements(::SingularProbeCompBehav) = ()
+HexComponentsAPI.get_tunables(::SingularProbeCompBehav) = ()
+HexComponentsAPI.set_tunables(comp::SingularProbeCompBehav, ::NTuple{0, Real}) = comp
+HexComponentsAPI.render_base_elem!(queue, ::SingularProbeCompBehav; kwargs...) = nothing
+function HexComponentsAPI.get_reactivation_probe(::SingularProbeCompBehav; kwargs...)
+    return ReactivationProbe((
+        RelativeElement(RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND), 1.0, HexElements.V_DEP_VOLTAGE; dependent_index = 2),
+        RelativeElement(RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.GROUND), -1.0, HexElements.C_DEP_CURRENT; dependent_index = 1),
+        RelativeElement(RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.NODE_Q_POS), 1.0, HexElements.CONST_RESISTOR),
+    ))
+end
+function HexComponentsAPI.accept_reactivation_probe!(comp::SingularProbeCompBehav; kwargs...)
+    comp.accepted = true
+    return true
+end
+
 #= ---------- Additional Mock for DoActionCommand ----------- =#
 
 # external counter for action execution
@@ -1086,6 +1113,53 @@ end
     handle_thrusters!(gs, gm, derived, mna; base_ups = BASE_UPS)
     @test gs.acceleration_ship_frame ≈ SVector(0.0, 0.0)  # zero thrust → zero accel
     @test gs.acceleration_space_map_frame ≈ SVector(0.0, 0.0)
+end
+
+# ===============================================================
+# Tests — Reactivation Scheduler
+# ===============================================================
+
+@testset "run_reactivation_trial! — singular probe stays isolated" begin
+    gamemap = make_gamemap()
+    probe_tile = TileCoord(1, 0)
+    set_surface_tile!(gamemap, probe_tile; ship_name = :primary)
+
+    set_component!(gamemap, TileCoord(0, 0), ComponentOnTile(GroundedAnchorCompBehav(), Q_POS, :primary))
+    set_component!(gamemap, probe_tile, ComponentOnTile(SingularProbeCompBehav(false), Q_POS, :primary))
+
+    live_derived = DerivedMapState()
+    live_mna = MNA_State()
+    live_scratchpad = CalculatorScratchpad()
+
+    update_components!(gamemap, live_mna, live_derived)
+    collect_primary_map_inputs!(gamemap, live_derived)
+    solve_from_inputs!(live_derived, live_mna, live_scratchpad, Int64(1))
+
+    baseline_elements = copy(live_derived.filteredelements)
+    baseline_voltages = copy(live_mna.node_voltages)
+
+    scheduler = HexFlowCalculator.ReactivationScheduler()
+    HexFlowCalculator.scan_reactivation_requests!(scheduler, gamemap)
+    @test scheduler.pending == [probe_tile]
+
+    probe_comp = something(get_component(gamemap, probe_tile))
+    HexFlowCalculator.load_reactivation_probe!(scheduler, probe_comp, probe_tile)
+
+    trial_derived = DerivedMapState()
+    resize!(trial_derived.primaryelements, length(live_derived.primaryelements))
+    copyto!(trial_derived.primaryelements, live_derived.primaryelements)
+    append!(trial_derived.primaryelements, scheduler.probe_elements)
+    resize!(trial_derived.primary_fluid_declarations, length(live_derived.primary_fluid_declarations))
+    copyto!(trial_derived.primary_fluid_declarations, live_derived.primary_fluid_declarations)
+    append!(trial_derived.primary_fluid_declarations, scheduler.probe_declarations)
+
+    @test_throws SingularException solve_from_inputs!(trial_derived, MNA_State(), CalculatorScratchpad(), Int64(1))
+
+    @test HexFlowCalculator.run_reactivation_trial!(scheduler, gamemap, live_derived, live_mna, live_scratchpad, Int64(1))
+    @test isempty(scheduler.pending)
+    @test !get_component(gamemap, probe_tile).component.accepted
+    @test live_derived.filteredelements == baseline_elements
+    @test live_mna.node_voltages == baseline_voltages
 end
 
 # ===============================================================

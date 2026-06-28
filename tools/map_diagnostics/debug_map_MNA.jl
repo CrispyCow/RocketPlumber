@@ -343,7 +343,8 @@ function print_activation_states(gamemap::GameMap)
     println("ACTIVATION / STATE FLAGS (singularity-relevant)")
     println("===========================================================")
     for (name, ship) in gamemap.ships
-        for (coord, comp_on_tile) in ship.components
+        for (coord, comp_on_tile) in get_components(gamemap)
+            comp_on_tile.ship === name || continue
             comp = comp_on_tile.component
             type_name = replace(string(typeof(comp)), r"^.*\." => "")
             flags = String[]
