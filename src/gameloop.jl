@@ -104,9 +104,10 @@ end
 
 "Creates input and view state structs, populating window and framebuffer sizes"
 function init_input_viewstates(window::GLFW.Window)::Tuple{InputState, ViewState}
+    initial_component = deepcopy(component_list[1])
     inputstate = InputState(
-        pendingcomponent = deepcopy(component_list[1]),
-        pendingpipebehavior = ScrapPipeBehav()
+        pendingpipebehavior = ScrapPipeBehav(),
+        tile_tool_state = PlacementTileState(pendingcomponent = initial_component),
     )
     viewstate = ViewState()
 
@@ -136,24 +137,28 @@ function user_handler!(
     inputstate.gui_inputs[:time_progressing] = is_time_progressing(snapshot.gamemap)
     current_time_years = get_time_years(snapshot.gamemap)
     inputstate.gui_inputs[:current_spacemap_time] = something(current_time_years, 0.0)
+    inputstate.gui_inputs[:consume_right_click] = false
 
     GLFW.PollEvents()
     cimgui_io = CImGui.GetIO()
     handle_inputs!(inputstate, viewstate, flowcalc_ipc.shared_state, window, cimgui_io) # input handling (window sizes, cursor, keys, scroll)
+    mouse_captured = unsafe_load(cimgui_io.WantCaptureMouse)
 
-    if !unsafe_load(cimgui_io.WantCaptureMouse) # don't handle mouse if clicking GUI
-        # Redock mode intercepts all mouse input
-        if inputstate.placementmode == REDOCK
-            _handle_redock_click!(inputstate, flowcalc_ipc, window)
-        else
-            flowcalc_inspect_click!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
-            flowcalc_tileplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
-            flowcalc_pipeplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
-            flowcalc_moveplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
-            flowcalc_deleteplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
-            flowcalc_surfaceeditor!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push)
+    state = placement_state(inputstate)
+    if is_standard_family_state(state)
+        flowcalc_standard_interaction!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push, window; mouse_captured = mouse_captured)
+
+        if !mouse_captured && placement_state(inputstate) isa PlacementReadyState
             flowcalc_rightclick_action!(inputstate, snapshot.gamemap, window)
         end
+    elseif state isa PlacementRedockState
+        _handle_redock_click!(inputstate, flowcalc_ipc, window; mouse_captured = mouse_captured)
+    elseif state isa PlacementTileState
+        flowcalc_tileplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push, window; mouse_captured = mouse_captured)
+    elseif state isa PlacementDeleteState
+        flowcalc_deleteplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push, window; mouse_captured = mouse_captured)
+    elseif state isa PlacementSurfaceEditState
+        flowcalc_surfaceeditor!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push, window; mouse_captured = mouse_captured)
     end
 
     return update_lastinstate!(inputstate, window)

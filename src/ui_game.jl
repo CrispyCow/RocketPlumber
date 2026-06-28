@@ -12,33 +12,23 @@ using HexFlowProcGen
 using HexFlowCalculator
 using HexFlowControl
 
-
-const STANDARD_MODE_CONFIG = (
-    (INSPECT, "[1] Inspect"),
-    (MOVE, "[2] Move"),
-    (PIPE, "[3] Edit Pipes"),
-)
-const EDITOR_MODE_CONFIG = (
-    STANDARD_MODE_CONFIG...,
-    (DELETE, "[4] Delete"),
-    (TILE, "[5] Create Tile"),
-    (SURFACE_EDIT, "[6] Edit Surface"),
-)
-
 const PIPE_TYPES = (
     ("Scrap Pipe", ScrapPipeBehav),
     ("Big Pipe", BigPipeBehav),
 )
 
-const MODE_DESCRIPTIONS = Dict(
-    TILE => "Configuring TILE for placement...",
-    PIPE => "Left-click: place pipe. Click existing: delete.\nRight-click: component/ship actions.",
-    INSPECT => "Left-click: interact.\nRight-click: component/ship actions.",
-    MOVE => "Click a part to select, click to move.\nRight-click: component/ship actions.",
-    DELETE => "Click a part to delete it.",
-    REDOCK => "Left-click: place ship. Right-click/ESC: cancel.",
-)
-mode_description(mode::PlacementModes) = get(MODE_DESCRIPTIONS, mode, "No properties available")
+"Property-panel description for the current placement state."
+function placement_state_description(state::AbstractPlacementState)::Union{Nothing, String}
+    state isa PlacementReadyState && return nothing
+    state isa PlacementPressedState && return "Move pending."
+    state isa PlacementMoveState && return "Move active. Drag to place."
+    state isa PlacementPipeChainState && return "Pipe chain active. Left-click to place or delete."
+    state isa PlacementTileState && return "Tile placement active."
+    state isa PlacementDeleteState && return "Delete active. Left-click deletes."
+    state isa PlacementSurfaceEditState && return "Surface edit active. Left-click toggles surface."
+    state isa PlacementRedockState && return "Redock active. Left-click to place ship."
+    return nothing
+end
 
 """
 Generic tunable editor for the property box.
@@ -640,8 +630,7 @@ function ui_velocity_tracker_render(
 end
 
 """
-Renders the toolbar with mode select and terminal on the bottom of the window.
-Can mutate inputstate.placementmode based on input from the radio buttons.
+Renders the terminal toolbar at the bottom of the window.
 Must be called within ui_renderwrap.
 """
 function ui_toolbar_render!(
@@ -652,20 +641,6 @@ function ui_toolbar_render!(
     win_float = to_float(winsize)
 
     ui_window("Toolbar", (0.0, win_float.height - toolbarheight), (win_float.width, toolbarheight))
-    CImGui.Columns(2)
-
-    # Mode Select
-    CImGui.SetColumnWidth(0, 150.0)
-    CImGui.Text("Modes:")
-    modes_config = inputstate.editor_mode ? EDITOR_MODE_CONFIG : STANDARD_MODE_CONFIG
-    for (mode, label) in modes_config
-        if CImGui.RadioButton(label, inputstate.placementmode === mode)
-            set_placementmode!(inputstate, mode)
-        end
-    end
-
-    # Terminal
-    CImGui.NextColumn()
     CImGui.Text("TERMINAL:")
     CImGui.BeginChild("TerminalLog", (0.0, 0.0), true)
     for message in threadsafe_console_see()
@@ -689,31 +664,32 @@ function ui_propertybox_render!(
         inputstate::InputState, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot,
         winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}}, flowcalc_ipc::FlowCalculatorIPC
     )
-    pendcomp = inputstate.pendingcomponent
+    state = placement_state(inputstate)
     win_float = to_float(winsize)
 
     ui_window("Properties", (win_float.width - propertyboxwidth, 0.0), (propertyboxwidth, win_float.height - toolbarheight))
 
     # Display mode description
     CImGui.Text("PROPERTIES:")
-    CImGui.Text(mode_description(inputstate.placementmode))
+    state_description = placement_state_description(state)
+    if !isnothing(state_description)
+        CImGui.Text(state_description)
+    end
     CImGui.Separator()
     CImGui.NewLine()
 
-    # TILE mode: edit component tunables
-    if inputstate.placementmode == TILE
+    # Tile placement: edit component tunables
+    if state isa PlacementTileState
         CImGui.Text("Tile Tunable Values:")
         CImGui.Separator()
         CImGui.Indent()
-        new_tunables = edit_tunables!(get_tunables(pendcomp))
-        inputstate.pendingcomponent = set_tunables(pendcomp, new_tunables)
+        new_tunables = edit_tunables!(get_tunables(state.pendingcomponent))
+        state.pendingcomponent = set_tunables(state.pendingcomponent, new_tunables)
         CImGui.Unindent()
     end
 
-    # PIPE mode: select pipe type and edit tunables
-    if inputstate.placementmode == PIPE
-        # Show type selection buttons if in editor mode
-        if inputstate.editor_mode
+    # Pipe chain state: edit pipe behaviour settings while actively placing pipes in editor mode
+    if state isa PlacementPipeChainState && editor_capabilities_enabled(inputstate)
             CImGui.Text("Select Pipe Type:")
             for (label, pipe_type) in PIPE_TYPES
                 if CImGui.Button(label)
@@ -723,10 +699,6 @@ function ui_propertybox_render!(
             end
             CImGui.NewLine()
             CImGui.NewLine()
-        else
-            # Can only place scrap pipes outside editor mode
-            inputstate.pendingpipebehavior = ScrapPipeBehav()
-        end
 
         # Show tunables for the selected pipe behaviour
         CImGui.Text("Pipe Properties:")
@@ -738,8 +710,8 @@ function ui_propertybox_render!(
         CImGui.Unindent()
     end
 
-    # INSPECT mode: display info about right-click selected or hovered element
-    if inputstate.placementmode == INSPECT
+    # Ready state: display info about right-click selected or hovered element
+    if state isa PlacementReadyState
         selected = inputstate.rightclick_selectedcoord
 
         if !isnothing(selected)

@@ -19,10 +19,38 @@ HexComponentsAPI.get_pipe_tunables(::MockPipeBehav) = ()
 HexComponentsAPI.set_pipe_tunables(behaviour::MockPipeBehav, ::Any) = behaviour
 HexComponentsAPI.render_pipe_base!(::Any, ::MockPipeBehav; kwargs...) = nothing
 
+# ===============================================================
+# Test Helpers
+# ===============================================================
+
+make_tile_state(; mirrored = false) = PlacementTileState(pendingcomponent = MockCompBehav(), toolmirrored = mirrored)
+
 function make_test_inputstate()
     return InputState(
-        pendingcomponent = MockCompBehav(),
         pendingpipebehavior = MockPipeBehav(),
+        tile_tool_state = make_tile_state(),
+    )
+end
+
+function make_test_redock_state()
+    return PlacementRedockState(
+        ship_name = :test_ship,
+        ship_tiles = Set{TileCoord}(),
+        exclusion_ring = Set{TileCoord}(),
+        ship_nodes = Set{NodeCoord}(),
+        other_ship_tiles = Set{TileCoord}(),
+        other_ship_nodes = Set{NodeCoord}(),
+        original_centre = TileCoord(0, 0),
+    )
+end
+
+function make_pressed_state(; move_target = nothing, click_tile = TileCoord(1, 2))
+    return PlacementPressedState(
+        press_started_at = 3.5,
+        press_cursor_cart = CartesianCoord(1.5, 2.5),
+        click_tile = click_tile,
+        move_target = move_target,
+        move_target_valid = !isnothing(move_target),
     )
 end
 
@@ -32,110 +60,136 @@ end
 
 @testset "HexFlowControl" begin
 
-    @testset "PlacementModes enum" begin
-        @test INSPECT isa PlacementModes
-        @test MOVE isa PlacementModes
-        @test PIPE isa PlacementModes
-        @test DELETE isa PlacementModes
-        @test TILE isa PlacementModes
-        @test SURFACE_EDIT isa PlacementModes
-        @test REDOCK isa PlacementModes
+    @testset "InputState defaults" begin
+        is = make_test_inputstate()
+        @test placement_state(is) isa PlacementReadyState
+        @test !editor_capabilities_enabled(is)
+        @test is.tile_tool_state isa PlacementTileState
+        @test is.tile_tool_state.pendingcomponent isa MockCompBehav
     end
 
-    @testset "set_placementmode! basic transitions" begin
+    @testset "state classification helpers" begin
         is = make_test_inputstate()
-        @test is.placementmode == INSPECT
+        state = placement_state(is)
+        @test state isa PlacementReadyState
+        @test is_standard_family_state(state)
+        @test !is_active_standard_interaction_state(state)
 
-        set_placementmode!(is, MOVE)
-        @test is.placementmode == MOVE
+        set_placement_state!(is, make_pressed_state())
+        state = placement_state(is)
+        @test state isa PlacementPressedState
+        @test is_standard_family_state(state)
+        @test is_active_standard_interaction_state(state)
 
-        set_placementmode!(is, PIPE)
-        @test is.placementmode == PIPE
+        set_placement_state!(is, PlacementDeleteState())
+        state = placement_state(is)
+        @test state isa PlacementDeleteState
+        @test state isa AbstractEditorPlacementState
+        @test !is_active_standard_interaction_state(state)
 
-        set_placementmode!(is, REDOCK)
-        @test is.placementmode == REDOCK
+        set_placement_state!(is, make_test_redock_state())
+        state = placement_state(is)
+        @test state isa PlacementRedockState
+        @test !(state isa AbstractEditorPlacementState)
+        @test !is_standard_family_state(state)
     end
 
-    @testset "set_placementmode! clears state on transition" begin
+    @testset "editor capability gate" begin
         is = make_test_inputstate()
-        is.selectedcoord = TileCoord(1, 2)
-        is.action_popup = nothing  # already nothing, just verifying the pattern
-
-        set_placementmode!(is, MOVE)
-        @test is.selectedcoord === nothing
-        @test is.action_popup === nothing
-        @test is.redock_state === nothing
+        @test !editor_capabilities_enabled(is)
+        is.editor_mode = true
+        @test editor_capabilities_enabled(is)
     end
 
-    @testset "set_placementmode! clears redock_state on mode change" begin
+    @testset "world-selection helpers" begin
         is = make_test_inputstate()
+        is.rightclick_selectedcoord = TileCoord(1, 1)
+        is.rightclick_selectedship = :test_ship
 
-        # Simulate entering redock mode
-        set_placementmode!(is, REDOCK)
-        is.redock_state = RedockModeState(
-            ship_name = :test_ship,
-            ship_tiles = Set{TileCoord}(),
-            exclusion_ring = Set{TileCoord}(),
-            ship_nodes = Set{NodeCoord}(),
-            other_ship_tiles = Set{TileCoord}(),
-            other_ship_nodes = Set{NodeCoord}(),
-            original_centre = TileCoord(0, 0),
-        )
-        @test is.placementmode == REDOCK
-        @test !isnothing(is.redock_state)
+        clear_world_selection!(is)
+        @test isnothing(is.rightclick_selectedcoord)
+        @test isnothing(is.rightclick_selectedship)
+        @test isnothing(is.action_popup)
 
-        # Switching to ANY mode should clear redock_state
-        set_placementmode!(is, INSPECT)
-        @test is.placementmode == INSPECT
-        @test is.redock_state === nothing
+        set_placement_state!(is, make_pressed_state())
+        clear_placement_state!(is)
+        @test placement_state(is) isa PlacementReadyState
     end
 
-    @testset "set_placementmode! no-op when same mode" begin
+    @testset "editor transition helpers" begin
         is = make_test_inputstate()
-        is.selectedcoord = TileCoord(3, 4)
+        tile_state = make_tile_state()
 
-        # Same mode should be a no-op — selectedcoord preserved
-        set_placementmode!(is, INSPECT)
-        @test is.selectedcoord == TileCoord(3, 4)
+        enter_editor_placement_state!(is, tile_state)
+        @test placement_state(is) === tile_state
+
+        toggle_editor_placement_state!(is, make_tile_state())
+        @test placement_state(is) isa PlacementReadyState
+
+        toggle_editor_placement_state!(is, PlacementDeleteState())
+        @test placement_state(is) isa PlacementDeleteState
+
+        toggle_editor_placement_state!(is, PlacementSurfaceEditState())
+        @test placement_state(is) isa PlacementSurfaceEditState
+
+        enter_ready_placement_state!(is)
+        @test placement_state(is) isa PlacementReadyState
     end
 
-    @testset "set_placementmode! REDOCK to REDOCK is no-op" begin
+    @testset "redock transition helper" begin
         is = make_test_inputstate()
-        set_placementmode!(is, REDOCK)
-        is.redock_state = RedockModeState(
-            ship_name = :ship_a,
-            ship_tiles = Set{TileCoord}(),
-            exclusion_ring = Set{TileCoord}(),
-            ship_nodes = Set{NodeCoord}(),
-            other_ship_tiles = Set{TileCoord}(),
-            other_ship_nodes = Set{NodeCoord}(),
-            original_centre = TileCoord(0, 0),
-        )
+        redock_state = make_test_redock_state()
 
-        # Same mode (REDOCK → REDOCK) should be a no-op — redock_state preserved
-        set_placementmode!(is, REDOCK)
-        @test !isnothing(is.redock_state)
-        @test is.redock_state.ship_name === :ship_a
+        enter_redock_placement_state!(is, redock_state)
+        @test placement_state(is) === redock_state
+        @test placement_state(is) isa PlacementRedockState
+
+        enter_ready_placement_state!(is)
+        @test placement_state(is) isa PlacementReadyState
     end
 
-    @testset "REDOCK exits cleanly via number key path" begin
-        # Simulates: user is in REDOCK, presses key 1 → set_placementmode!(is, INSPECT)
+    @testset "pressed-state helper only clears pressed state" begin
         is = make_test_inputstate()
-        set_placementmode!(is, REDOCK)
-        is.redock_state = RedockModeState(
-            ship_name = :test_ship,
-            ship_tiles = Set{TileCoord}(),
-            exclusion_ring = Set{TileCoord}(),
-            ship_nodes = Set{NodeCoord}(),
-            other_ship_tiles = Set{TileCoord}(),
-            other_ship_nodes = Set{NodeCoord}(),
-            original_centre = TileCoord(0, 0),
-        )
+        set_placement_state!(is, make_pressed_state())
+        clear_placement_pressed_state!(is)
+        @test placement_state(is) isa PlacementReadyState
 
-        # Pressing key 1 calls set_placementmode!(is, INSPECT)
-        set_placementmode!(is, INSPECT)
-        @test is.placementmode == INSPECT
-        @test is.redock_state === nothing
+        move_state = PlacementMoveState(move_target = TileComponentMoveTarget(TileCoord(2, 3)))
+        set_placement_state!(is, move_state)
+        clear_placement_pressed_state!(is)
+        @test placement_state(is) == move_state
+    end
+
+    @testset "move and pipe helper predicates" begin
+        is = make_test_inputstate()
+        @test !(placement_state(is) isa PlacementMoveState)
+        @test !(placement_state(is) isa PlacementPipeChainState)
+
+        set_placement_state!(is, PlacementMoveState(move_target = TilePipeMoveTarget(TileCoord(1, 2), HexFrame.Q_POS)))
+        state = placement_state(is)
+        @test state isa PlacementMoveState
+
+        set_placement_state!(is, PlacementPipeChainState(source_node = VertexCoord(TileCoord(0, 0), HexFrame.Q_POS)))
+        state = placement_state(is)
+        @test state isa PlacementPipeChainState
+        @test is_active_standard_interaction_state(state)
+
+        clear_placement_state!(is)
+        @test !(placement_state(is) isa PlacementMoveState)
+        @test !(placement_state(is) isa PlacementPipeChainState)
+    end
+
+    @testset "toolbar and tile tool cache survive state clearing" begin
+        is = make_test_inputstate()
+        is.toolbar = 7
+        cached_tile_state = is.tile_tool_state
+
+        enter_editor_placement_state!(is, cached_tile_state)
+        clear_placement_state!(is)
+
+        @test is.toolbar == 7
+        @test is.tile_tool_state === cached_tile_state
+        @test placement_state(is) isa PlacementReadyState
     end
 
 end

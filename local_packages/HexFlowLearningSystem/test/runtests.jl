@@ -28,8 +28,8 @@ HexComponentsAPI.render_pipe_base!(::Any, ::MockPipeBehav; kwargs...) = nothing
 
 function make_test_inputstate()
     return InputState(
-        pendingcomponent = MockCompBehav(),
         pendingpipebehavior = MockPipeBehav(),
+        tile_tool_state = PlacementTileState(pendingcomponent = MockCompBehav()),
     )
 end
 

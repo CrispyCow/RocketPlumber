@@ -709,7 +709,7 @@ function get_entry_docking_intro()::LearningEntry
                     step_blocker = function(inputs::LearningInputs)
                         # Finish once the player has entered redock placement mode for a docked ship.
                         inputstate = inputs.inputstate
-                        (inputstate.placementmode == REDOCK && inputstate.redock_state isa RedockModeState) && return nothing
+                        (placement_state(inputstate) isa PlacementRedockState) && return nothing
                         return "Right-click the docked ship and select 'Redock' to enter redock mode."
                     end,
                 ),

@@ -203,24 +203,38 @@ function calc_max_reachable_bounds(viewstate::ViewState)
     return (X_POS = Float64(max_right), X_NEG = Float64(min_left), Y_POS = Float64(max_top), Y_NEG = Float64(min_bottom))
 end
 
-"Poll key rising edges and mutate InputState and FlowCalculatorSharedState (tool rotation, placement mode, pause, time warp, exit)"
+"Poll key rising edges and mutate InputState and FlowCalculatorSharedState (tile tool rotation/mirroring, placement state, pause, time warp, exit)"
 function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedState, window::GLFW.Window)
-    # R key for tool rotation
-    get_inrising!(inputstate, GLFW.KEY_R, window) && (inputstate.toolrotation = next_enum_val(inputstate.toolrotation))
+    state = placement_state(inputstate)
 
-    # F key for tile-component mirroring
-    if inputstate.placementmode == TILE || inputstate.placementmode == MOVE
-        get_inrising!(inputstate, GLFW.KEY_F, window) && (inputstate.toolmirrored = !inputstate.toolmirrored)
+    # R key for tile-placement rotation
+    if state isa PlacementTileState && get_inrising!(inputstate, GLFW.KEY_R, window)
+        state.toolrotation = next_enum_val(state.toolrotation)
     end
 
-    # ESC key — cancel redock > dismiss action popup > cancel time warp > close space map > clear selection > exit to inspect mode > toggle pause menu
+    # F key for tile-placement and active-move mirroring
+    if get_inrising!(inputstate, GLFW.KEY_F, window)
+        if state isa PlacementTileState
+            state.toolmirrored = !state.toolmirrored
+        elseif state isa PlacementMoveState
+            set_placement_state!(inputstate, PlacementMoveState(
+                move_target = state.move_target,
+                drag_reference_axis = state.drag_reference_axis,
+                toolrotation = state.toolrotation,
+                toolmirrored = !state.toolmirrored,
+            ))
+            state = placement_state(inputstate)
+        end
+    end
+
+    # ESC key — cancel redock or editor tool > cancel active standard interaction > dismiss action popup > cancel time warp > toggle pause menu
     if get_inrising!(inputstate, GLFW.KEY_ESCAPE, window)
-        if inputstate.placementmode == REDOCK
-            set_placementmode!(inputstate, INSPECT)
+        if state isa PlacementRedockState || state isa AbstractEditorPlacementState
+            enter_ready_placement_state!(inputstate)
+        elseif is_active_standard_interaction_state(state)
+            clear_placement_state!(inputstate)
         elseif !isnothing(inputstate.action_popup)
-            inputstate.action_popup = nothing
-            inputstate.rightclick_selectedcoord = nothing
-            inputstate.rightclick_selectedship = nothing
+            clear_action_popup_selection!(inputstate)
         elseif inputstate.spacemap_active
             time_prog = get(inputstate.gui_inputs, :time_progressing, false)::Bool
             if time_prog
@@ -229,10 +243,6 @@ function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedSt
             else
                 inputstate.spacemap_active = false
             end
-        elseif !isnothing(inputstate.selectedcoord)
-            inputstate.selectedcoord = nothing
-        elseif inputstate.placementmode != INSPECT
-            set_placementmode!(inputstate, INSPECT)
         else
             inputstate.escape_menu_active = !inputstate.escape_menu_active
         end
@@ -244,8 +254,6 @@ function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedSt
         @atomic :monotonic shared_state.is_paused = !current_paused
     end
 
-    # ` key to toggle editor mode
-    get_inrising!(inputstate, GLFW.KEY_GRAVE_ACCENT, window) && (inputstate.editor_mode = !inputstate.editor_mode)
     # \ key to toggle dev utils menu
     get_inrising!(inputstate, GLFW.KEY_BACKSLASH, window) && (inputstate.dev_utils_menu_active = !inputstate.dev_utils_menu_active)
     # M key to toggle space map (blocked during time progression)
@@ -256,16 +264,11 @@ function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedSt
         end
     end
 
-    # Number keys 1-3 for standard placement modes
-    get_inrising!(inputstate, GLFW.KEY_1, window) && set_placementmode!(inputstate, INSPECT)
-    get_inrising!(inputstate, GLFW.KEY_2, window) && set_placementmode!(inputstate, MOVE)
-    get_inrising!(inputstate, GLFW.KEY_3, window) && set_placementmode!(inputstate, PIPE)
-
-    # Number keys 4-6 for editor-only placement modes
-    if inputstate.editor_mode
-        get_inrising!(inputstate, GLFW.KEY_4, window) && set_placementmode!(inputstate, DELETE)
-        get_inrising!(inputstate, GLFW.KEY_5, window) && set_placementmode!(inputstate, TILE)
-        get_inrising!(inputstate, GLFW.KEY_6, window) && set_placementmode!(inputstate, SURFACE_EDIT)
+    # Number keys 4-6 for editor-only placement states when editor capability is enabled
+    if editor_capabilities_enabled(inputstate)
+        get_inrising!(inputstate, GLFW.KEY_4, window) && toggle_editor_placement_state!(inputstate, PlacementDeleteState())
+        get_inrising!(inputstate, GLFW.KEY_5, window) && toggle_editor_placement_state!(inputstate, inputstate.tile_tool_state)
+        get_inrising!(inputstate, GLFW.KEY_6, window) && toggle_editor_placement_state!(inputstate, PlacementSurfaceEditState())
     end
 
     # ] key — increase sim speed
@@ -581,6 +584,476 @@ function render_tile_pipe_frag_ghost!(queue::Vector{<:RenderCommand}, glmap::GLO
     return nothing
 end
 
+"Render the MOVE overlay path between two coordinates, with optional source marker and dash trail."
+function render_move_arrow_overlay!(
+        queue::Vector{<:RenderCommand},
+        glmap::GLObjectMap,
+        gameticks::Int64,
+        start_coord,
+        end_coord;
+        draw_start_marker::Bool = true,
+        draw_dashes::Bool = true,
+        colour = SVector{4, Float32}(0.8, 0.8, 0.2, 1.0),
+        draw_height::Int32 = Int32(100200),
+        start_marker_scale::Float64 = 1.0
+    )
+    start_vec = glvec(start_coord)
+    end_vec = glvec(end_coord)
+    linevec = end_vec - start_vec
+    line_length = norm(linevec)
+    angle = line_length == 0 ? 0.0f0 : rad2deg(atan(-linevec[2], linevec[1]))
+
+    if draw_start_marker
+        push!(queue, render_basic_sprite(glmap, :MoveArrow_arrow_start, rotmat_2D(0.0), start_coord; colour = colour, draw_height = draw_height, scale = start_marker_scale))
+    end
+
+    push!(queue, render_basic_sprite(glmap, :MoveArrow_arrow_head, rotmat_2D(angle), end_coord; colour = colour, draw_height = draw_height))
+
+    dash_spacing = 0.5f0
+    animation_speed = 0.03f0
+    end_fade_distance = 0.2f0
+    if draw_dashes && line_length > dash_spacing * 0.5
+        anim_offset_units = (gameticks * animation_speed) % dash_spacing
+        anim_offset_param = anim_offset_units / line_length
+        dash_step = dash_spacing / line_length
+        fade_boundary = 1.0 - (end_fade_distance / line_length)
+
+        for t in anim_offset_param:dash_step:(fade_boundary - dash_step * 0.01)
+            dash_pos_vec = start_vec + t * linevec
+            dash_pos = CartesianCoord(dash_pos_vec[1], dash_pos_vec[2])
+            push!(queue, render_basic_sprite(glmap, :MoveArrow_dash, rotmat_2D(angle), dash_pos; colour = colour, draw_height = draw_height))
+        end
+    end
+
+    return nothing
+end
+
+# ===============================================================
+# PIPE Chain Helpers
+# ===============================================================
+
+"Resolve a PIPE source node from the current click. Only explicit node clicks start chaining."
+function resolve_pipe_source_node(inputstate::InputState)::Union{Nothing, VertexCoord}
+    element = get_clicked(inputstate)
+    element isa VertexCoord || return nothing
+    return to_proper(element)
+end
+
+"Return whether a resolved PIPE source node belongs to a ship currently rendered with an offset."
+function is_pipe_source_on_offset_ship(source_vertex::VertexCoord, gamemap::GameMap)::Bool
+    node = to_nodecoord(source_vertex)
+    ship_name = find_ship_for_node(node, gamemap; default = nothing)
+    isnothing(ship_name) && return false
+    return get_ship_render_offset(gamemap, ship_name) != AxialCoord(0.0, 0.0)
+end
+
+"Return the snapped direction from one vertex to another." 
+function vertex_to_vertex_axis(source_vertex::VertexCoord, far_vertex::VertexCoord)::HexAxis
+    source_pos = to_cartesian(source_vertex)
+    far_pos = to_cartesian(far_vertex)
+    return nearest_hex_axis(to_axial(far_pos) - to_axial(source_pos))
+end
+
+"Return whether deleting an existing edge pipe is allowed under current off-ship rules."
+function can_delete_edge_pipe(edge::EdgeCoord, gamemap::GameMap)::Bool
+    v1_on = is_node_on_any_ship_surface(to_nodecoord(edge.v1), gamemap)
+    v2_on = is_node_on_any_ship_surface(to_nodecoord(edge.v2), gamemap)
+    is_offship = !(v1_on && v2_on)
+    return !is_offship || validate_offship_pipe_deletion(edge, gamemap)
+end
+
+"Return whether a new edge pipe can be placed under the current on-surface or off-ship rules."
+function can_place_edge_pipe(edge::EdgeCoord, gamemap::GameMap)::Bool
+    !isnothing(find_ship_containing_edge(gamemap, edge)) && return true
+    can_place, _, _ = can_place_pipe_offship(edge, gamemap)
+    return can_place
+end
+
+"Collect the six concrete PIPE candidates incident to a selected source node." 
+function collect_pipe_chain_candidates(source_vertex::VertexCoord, inputstate::InputState, gamemap::GameMap)
+    candidates = NamedTuple[]
+
+    # Around a selected node there are always six directional possibilities:
+    # three physical edge pipes and three tile-through-pipe equivalents.
+    for edge in get_edges(source_vertex)
+        far_node = to_proper(edge.v1 == source_vertex ? edge.v2 : edge.v1)
+        existing_pipe = get_pipe(gamemap, edge)
+
+        if !isnothing(existing_pipe)
+            push!(candidates, (
+                kind = :edge,
+                direction_axis = vertex_to_vertex_axis(source_vertex, far_node),
+                edge = edge,
+                tile = nothing,
+                axis = nothing,
+                far_node = far_node,
+                ghost_payload = existing_pipe,
+                can_commit = can_delete_edge_pipe(edge, gamemap),
+                commit_kind = :delete,
+            ))
+            continue
+        end
+
+        push!(candidates, (
+            kind = :edge,
+            direction_axis = vertex_to_vertex_axis(source_vertex, far_node),
+            edge = edge,
+            tile = nothing,
+            axis = nothing,
+            far_node = far_node,
+            ghost_payload = inputstate.pendingpipebehavior,
+            can_commit = can_place_edge_pipe(edge, gamemap),
+            commit_kind = :place,
+        ))
+    end
+
+    source_node = to_nodecoord(source_vertex)
+    pending_frag = get_pending_tile_pipe_frag(inputstate)
+
+    # `local_dir` identifies which vertex of this adjacent tile is the selected source.
+    # Rotating it by 180 degrees gives the outward-facing direction and the far node.
+    for (tile, local_dir) in get_adjacent_tiles_for_node(source_node)
+        axis = normalise_tile_pipe_axis(local_dir)
+        direction_axis = rotate(local_dir, HexFrame.Q_NEG)
+        far_node = to_proper(VertexCoord(tile, direction_axis))
+        existing_frag = get_tile_pipe_frag_any_ship(gamemap, tile, axis)
+
+        if !isnothing(existing_frag) && !isempty(existing_frag)
+            push!(candidates, (
+                kind = :tile,
+                direction_axis = direction_axis,
+                edge = nothing,
+                tile = tile,
+                axis = axis,
+                far_node = far_node,
+                ghost_payload = existing_frag,
+                can_commit = true,
+                commit_kind = :delete,
+            ))
+            continue
+        end
+
+        push!(candidates, (
+            kind = :tile,
+            direction_axis = direction_axis,
+            edge = nothing,
+            tile = tile,
+            axis = axis,
+            far_node = far_node,
+            ghost_payload = pending_frag,
+            can_commit = !isnothing(pending_frag) && can_modify_tile_pipe(gamemap, tile),
+            commit_kind = :place,
+        ))
+    end
+
+    return candidates
+end
+
+"Resolve the currently active PIPE candidate from the cursor direction around the selected source node." 
+function get_active_pipe_chain_candidate(source_vertex::VertexCoord, inputstate::InputState, gamemap::GameMap)
+    cursor_pos = get_cursor_cart(inputstate)
+    cursor_pos === nothing && return nothing
+
+    source_pos = to_cartesian(source_vertex)
+    cursor_axis = nearest_hex_axis(to_axial(cursor_pos) - to_axial(source_pos))
+
+    for candidate in collect_pipe_chain_candidates(source_vertex, inputstate, gamemap)
+        if candidate.direction_axis == cursor_axis
+            return candidate
+        end
+    end
+
+    return nothing
+end
+
+"Advance or clear PIPE chaining state when a queued command reports back from the calculator thread." 
+function poll_pipe_chain_response!(inputstate::InputState)
+    state = placement_state(inputstate)
+    state isa PlacementPipeChainState || return nothing
+
+    channel = state.pending_response_channel
+    isnothing(channel) && return nothing
+    isready(channel) || return nothing
+
+    status = take!(channel)
+    if status == APPLIED
+        next_source = something(state.pending_next_source_node, state.source_node)
+        set_placement_state!(inputstate, PlacementPipeChainState(source_node = next_source))
+    else
+        set_placement_state!(inputstate, PlacementPipeChainState(source_node = state.source_node))
+    end
+    return nothing
+end
+
+"Build the map-edit command for the currently active PIPE candidate." 
+function create_pipe_chain_command(
+        command_queue::CommandQueue,
+        inputstate::InputState,
+        candidate;
+        response_channel::Union{Nothing, Channel} = nothing
+    )
+    if candidate.kind === :edge
+        if candidate.commit_kind === :delete
+            return create_delete_command(command_queue, candidate.edge; response_channel = response_channel)
+        end
+
+        return create_set_pipe_behavior_command(
+            command_queue,
+            candidate.edge,
+            inputstate.pendingpipebehavior;
+            response_channel = response_channel,
+        )
+    end
+
+    frag = candidate.commit_kind === :delete ? NoPipeBehavFrag() : get_pending_tile_pipe_frag(inputstate)
+    frag === nothing && return nothing
+
+    return HexFlowCalculator.ModifyTilePipeCommand(
+        id = command_queue.next_command_id(),
+        tile = candidate.tile,
+        axis = candidate.axis,
+        frag = frag,
+        response_channel = response_channel,
+    )
+end
+
+# ===============================================================
+# MOVE Interaction Helpers
+# ===============================================================
+
+"Return the current cursor position as a CartesianCoord, or `nothing` when unavailable."
+function get_cursor_cart(inputstate::InputState)::Union{Nothing, CartesianCoord}
+    if isnothing(inputstate.cursor_x) || isnothing(inputstate.cursor_y)
+        return nothing
+    end
+    return CartesianCoord(inputstate.cursor_x, inputstate.cursor_y)
+end
+
+"Clear the active world action popup and its selection highlights."
+function clear_action_popup_selection!(inputstate::InputState)
+    inputstate.action_popup = nothing
+    inputstate.rightclick_selectedcoord = nothing
+    inputstate.rightclick_selectedship = nothing
+    return nothing
+end
+
+"Return the snapped hex axis nearest the cursor around a tile centre."
+function nearest_tile_rotation_axis(cursor_cart::CartesianCoord, tile::TileCoord)::HexAxis
+    tile_centre = to_cartesian(tile)
+    direction = to_axial(cursor_cart) - to_axial(tile_centre)
+    return nearest_hex_axis(direction)
+end
+
+"Resolve the current MOVE hover target under the cursor."
+function get_move_hover_target(inputstate::InputState, gamemap::GameMap)
+    element = get_clicked(inputstate)
+    element === nothing && return nothing
+    is_on_offset_ship(element, gamemap) && return nothing
+
+    if element isa TileCoord
+        tilecomp = get_component(gamemap, element)
+        isnothing(tilecomp) && return nothing
+
+        can_move, reason = can_be_moved(tilecomp)
+        if tilecomp.component isa MultiPipeTileCompBehav
+            axis = hovered_tile_pipe_axis(inputstate, element)
+            frag = get_tile_pipe(tilecomp.component, axis)
+            isempty(frag) && return nothing
+            return (; coord = element, kind = :tile_pipe, tile_pipe_axis = axis, can_move, reason, frag)
+        end
+
+        return (; coord = element, kind = :tile_component, tile_pipe_axis = nothing, can_move, reason, frag = nothing)
+    elseif element isa EdgeCoord
+        pipe_behav = get_pipe(gamemap, element)
+        isnothing(pipe_behav) && return nothing
+        can_move, reason = can_pipe_be_moved(pipe_behav)
+        return (; coord = element, kind = :edge_pipe, tile_pipe_axis = nothing, can_move, reason, frag = nothing)
+    end
+
+    return nothing
+end
+
+"Record a pending MOVE hold on the current target and clear any stale popup state."
+function set_move_hold_target!(inputstate::InputState, target)::Bool
+    cursor_cart = get_cursor_cart(inputstate)
+    cursor_cart === nothing && return false
+    click_tile = round_to_tile(cursor_cart)
+
+    clear_action_popup_selection!(inputstate)
+
+    move_target = if target.kind === :tile_component
+        TileComponentMoveTarget(target.coord)
+    elseif target.kind === :tile_pipe
+        TilePipeMoveTarget(target.coord, target.tile_pipe_axis)
+    else
+        EdgePipeMoveTarget(target.coord)
+    end
+
+    set_placement_state!(inputstate, PlacementPressedState(
+        press_started_at = time(),
+        press_cursor_cart = cursor_cart,
+        click_tile = click_tile,
+        move_target = move_target,
+        move_target_valid = target.can_move,
+    ))
+    return true
+end
+
+"Promote the pending MOVE hold into an active drag selection."
+function activate_move_drag!(inputstate::InputState)
+    state = placement_state(inputstate)
+    state isa PlacementPressedState || return nothing
+    move_target = state.move_target
+    isnothing(move_target) && return nothing
+
+    reference_axis = if move_target isa TileComponentMoveTarget
+        nearest_tile_rotation_axis(state.press_cursor_cart, move_target.coord)
+    else
+        nothing
+    end
+
+    set_placement_state!(inputstate, PlacementMoveState(
+        move_target = move_target,
+        drag_reference_axis = reference_axis,
+        toolrotation = HexFrame.Q_POS,
+        toolmirrored = false,
+    ))
+    return nothing
+end
+
+"Update MOVE tile rotation from the current cursor position while an active drag is in progress."
+function update_active_move_rotation!(inputstate::InputState)
+    state = placement_state(inputstate)
+    state isa PlacementMoveState || return nothing
+    state.move_target isa TileComponentMoveTarget || return nothing
+    isnothing(state.drag_reference_axis) && return nothing
+
+    cursor_cart = get_cursor_cart(inputstate)
+    cursor_cart === nothing && return nothing
+
+    destination = round_to_tile(cursor_cart)
+    current_axis = nearest_tile_rotation_axis(cursor_cart, destination)
+    set_placement_state!(inputstate, PlacementMoveState(
+        move_target = state.move_target,
+        drag_reference_axis = state.drag_reference_axis,
+        toolrotation = rotate(current_axis, rotate_reverse(state.drag_reference_axis)),
+        toolmirrored = state.toolmirrored,
+    ))
+    return nothing
+end
+
+"Create an INSPECT-style click command from the stored MOVE short-click press site."
+function create_move_short_click_command(command_queue::CommandQueue, inputstate::InputState)
+    state = placement_state(inputstate)
+    state isa PlacementPressedState || return nothing
+    hold_coord = state.click_tile
+    hold_coord isa TileCoord || return nothing
+
+    tile_center_cart = to_cartesian(hold_coord)
+    unrotated_clicksite = state.press_cursor_cart - tile_center_cart
+    return create_click_tile_command(command_queue, hold_coord, unrotated_clicksite)
+end
+
+"Return whether the active MOVE selection can commit at the current cursor destination."
+function can_commit_active_move(inputstate::InputState, gamemap::GameMap)::Bool
+    state = placement_state(inputstate)
+    state isa PlacementMoveState || return false
+
+    cursor_cart = get_cursor_cart(inputstate)
+    cursor_cart === nothing && return false
+
+    if state.move_target isa TilePipeMoveTarget
+        selected = state.move_target.coord
+        src_axis = state.move_target.axis
+        dst_tile = round_to_tile(cursor_cart)
+        dst_axis = hovered_tile_pipe_axis(inputstate, dst_tile)
+
+        if dst_tile == selected && dst_axis == src_axis
+            return false
+        end
+        return can_move_tile_pipe_to(gamemap, dst_tile, dst_axis)
+    elseif state.move_target isa TileComponentMoveTarget
+        selected = state.move_target.coord
+        tilecomp = get_component(gamemap, selected)
+        isnothing(tilecomp) && return false
+
+        new_rotation = map_rotation(tilecomp, rotate(tilecomp.rotation, state.toolrotation))
+        requested_mirror = xor(tilecomp.mirrored, state.toolmirrored)
+        new_mirrored = map_mirroring(tilecomp, requested_mirror)
+        destination = round_to_tile(cursor_cart)
+
+        if destination == selected
+            rotated_comptile = ComponentOnTile(tilecomp.component, new_rotation, new_mirrored, tilecomp.ship)
+            is_valid, _ = placement_valid(rotated_comptile, selected, gamemap; ship_name = tilecomp.ship)
+            return is_valid
+        end
+
+        !isnothing(get_component(gamemap, destination)) && return false
+        dest_ship = find_ship_for_placement(
+            tilecomp.component, destination, gamemap;
+            rotation = new_rotation, mirrored = new_mirrored
+        )
+        return !isnothing(dest_ship)
+    elseif state.move_target isa EdgePipeMoveTarget
+        selected = state.move_target.coord
+        destination = round_to_edge(cursor_cart)
+        destination == selected && return false
+
+        source_pipe = get_pipe(gamemap, selected)
+        isnothing(source_pipe) && return false
+
+        src_v1_on = is_node_on_any_ship_surface(to_nodecoord(selected.v1), gamemap)
+        src_v2_on = is_node_on_any_ship_surface(to_nodecoord(selected.v2), gamemap)
+        source_is_offship = !(src_v1_on && src_v2_on)
+
+        source_is_offship && !validate_offship_pipe_deletion(selected, gamemap) && return false
+        has_pipe(gamemap, destination) && return false
+
+        !isnothing(find_ship_containing_edge(gamemap, destination)) && return true
+        can_place, _, _ = can_place_pipe_offship(destination, gamemap)
+        return can_place
+    end
+
+    return false
+end
+
+"Build the current active MOVE command, or return `nothing` when the release should cancel."
+function create_active_move_command(command_queue::CommandQueue, inputstate::InputState, gamemap::GameMap)
+    can_commit_active_move(inputstate, gamemap) || return nothing
+
+    state = placement_state(inputstate)
+    state isa PlacementMoveState || return nothing
+    cursor_cart = get_cursor_cart(inputstate)
+    if cursor_cart === nothing
+        return nothing
+    end
+
+    if state.move_target isa TilePipeMoveTarget
+        selected = state.move_target.coord
+        src_axis = state.move_target.axis
+        dst_tile = round_to_tile(cursor_cart)
+        dst_axis = hovered_tile_pipe_axis(inputstate, dst_tile)
+        return HexFlowCalculator.MoveTilePipeCommand(
+            id = command_queue.next_command_id(),
+            src_tile = selected,
+            src_axis = src_axis,
+            dst_tile = dst_tile,
+            dst_axis = dst_axis,
+            response_channel = nothing
+        )
+    elseif state.move_target isa TileComponentMoveTarget
+        selected = state.move_target.coord
+        destination = round_to_tile(cursor_cart)
+        return create_move_command(command_queue, selected, destination, state.toolrotation, state.toolmirrored)
+    elseif state.move_target isa EdgePipeMoveTarget
+        selected = state.move_target.coord
+        destination = round_to_edge(cursor_cart)
+        return create_move_command(command_queue, selected, destination, state.toolrotation, state.toolmirrored)
+    end
+
+    return nothing
+end
+
 # ===============================================================
 # Pending Component Updates
 # ===============================================================
@@ -590,8 +1063,18 @@ function pendingcomponent_typeupdate!(inputstate::InputState)
     toolbar_has_changed = inputstate.last_toolbar != inputstate.toolbar
     inputstate.last_toolbar = inputstate.toolbar
 
+    tile_tool_state = inputstate.tile_tool_state
+    if isnothing(tile_tool_state)
+        tile_tool_state = PlacementTileState(pendingcomponent = deepcopy(component_list[inputstate.toolbar]))
+        inputstate.tile_tool_state = tile_tool_state
+    end
+
     if toolbar_has_changed
-        inputstate.pendingcomponent = deepcopy(component_list[inputstate.toolbar])
+        tile_tool_state.pendingcomponent = deepcopy(component_list[inputstate.toolbar])
+    end
+
+    if !editor_capabilities_enabled(inputstate)
+        inputstate.pendingpipebehavior = ScrapPipeBehav()
     end
     return nothing
 end
@@ -613,8 +1096,10 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
         return
     end
 
+    state = placement_state(inputstate)
+
     # Redock ghost — show ship footprint and exclusion zone following the cursor
-    if inputstate.placementmode == REDOCK
+    if state isa PlacementRedockState
         _render_redock_ghost!(queue, glmap, inputstate)
         return # suppress all other placement ghosts during redock
     end
@@ -627,231 +1112,154 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
         push!(
             queue, render_basic_sprite(
                 glmap, :MoveArrow_arrow_start, rotmat_2D(0.0), selected;
-                colour = selection_colour, draw_height = Int32(100100),
-                scale = 2.5
+                colour = selection_colour, draw_height = Int32(100100), scale = 2.5
             )
         )
     end
 
-    if inputstate.placementmode == TILE
+    if state isa PlacementTileState
         coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
-        component = component_list[inputstate.toolbar]
-        rotation = map_rotation(component, inputstate.toolrotation)
-        mirrored = map_mirroring(component, inputstate.toolmirrored)
+        component = state.pendingcomponent
+        rotation = map_rotation(component, state.toolrotation)
+        mirrored = map_mirroring(component, state.toolmirrored)
         target_ship = find_ship_for_placement(component, coord, gamemap; rotation = rotation, mirrored = mirrored)
         ghost_colour = isnothing(target_ship) ? GHOST_COLOUR_INVALID : GHOST_COLOUR_VALID
         render_base_elem!(queue, component; glmap = glmap, rotation = rotation, mirrored = mirrored, position = coord, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000))
     end
 
-    if inputstate.placementmode == PIPE
-        # Get clicked element; convert VertexCoord to nearest EdgeCoord
-        element = get_clicked(inputstate)
-        if element isa VertexCoord
-            element = round_to_edge(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
-        end
+    if state isa PlacementPipeChainState
+        source_vertex = state.source_node
 
-        if element isa EdgeCoord
-            edge::EdgeCoord = element
-            pipe_behav = get_pipe(gamemap, edge)
-            existing_pipe = !isnothing(pipe_behav)
+        push!(
+            queue, render_basic_sprite(
+                glmap, :MoveArrow_arrow_start, rotmat_2D(0.0), source_vertex;
+                colour = SVector{4, Float32}(1.0, 0.85, 0.2, 1.0), transparency = 0.5,
+                draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_NODE + 50), scale = 0.6,
+            )
+        )
 
-            if existing_pipe
-                # Hovering over existing pipe — red delete indicator overlay
+        candidate = get_active_pipe_chain_candidate(source_vertex, inputstate, gamemap)
+        if !isnothing(candidate)
+            ghost_colour = (candidate.commit_kind === :delete || !candidate.can_commit) ? GHOST_COLOUR_INVALID : GHOST_COLOUR_VALID
+
+            if candidate.kind === :edge
                 render_pipe_base!(
-                    queue, pipe_behav; glmap = glmap, rotation = HexFrame.Q_POS,
-                    position = edge, transparency = 0.5, colour = GHOST_COLOUR_INVALID, render_height_offset = Int32(100000)
+                    queue, candidate.ghost_payload;
+                    glmap = glmap, rotation = HexFrame.Q_POS, position = candidate.edge,
+                    transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000),
                 )
-            else
-                # Empty edge — show placement ghost with validity colouring
-                pipe_behav = inputstate.pendingpipebehavior
-                rotation = HexFrame.Q_POS
-
-                # Check if both nodes are on valid ship surfaces, or allow off-ship placement
-                valid_placement = !isnothing(find_ship_containing_edge(gamemap, edge))
-                if !valid_placement
-                    can_place, _, _ = can_place_pipe_offship(edge, gamemap)
-                    valid_placement = can_place
-                end
-                if valid_placement
-                    render_pipe_base!(queue, pipe_behav; glmap = glmap, rotation = rotation, position = edge, transparency = 0.5)
-                else
-                    render_pipe_base!(queue, pipe_behav; glmap = glmap, rotation = rotation, position = edge, transparency = 0.5, colour = GHOST_COLOUR_INVALID)
-                end
-            end
-        elseif element isa TileCoord
-            tilecoord::TileCoord = element
-            axis = hovered_tile_pipe_axis(inputstate, tilecoord)
-            existing_frag = get_tile_pipe_frag_any_ship(gamemap, tilecoord, axis)
-
-            if !isnothing(existing_frag) && !isempty(existing_frag)
-                render_tile_pipe_frag_ghost!(queue, glmap, tilecoord, axis, existing_frag; transparency = 0.5, colour = GHOST_COLOUR_INVALID, render_height_offset = 100000)
-            else
-                frag = get_pending_tile_pipe_frag(inputstate)
-                if !isnothing(frag)
-                    ghost_colour = can_modify_tile_pipe(gamemap, tilecoord) ? GHOST_COLOUR_VALID : GHOST_COLOUR_INVALID
-                    render_tile_pipe_frag_ghost!(queue, glmap, tilecoord, axis, frag; transparency = 0.5, colour = ghost_colour, render_height_offset = 100000)
-                end
+            elseif !isnothing(candidate.ghost_payload)
+                render_tile_pipe_frag_ghost!(
+                    queue, glmap, candidate.tile, candidate.axis, candidate.ghost_payload;
+                    transparency = 0.5, colour = ghost_colour, render_height_offset = 100000,
+                )
             end
         end
     end
 
-    if inputstate.placementmode == MOVE
-        #= ---------- Move hover indicator (no selection yet) ----------- =#
-        if inputstate.selectedcoord === nothing
-            element = get_clicked(inputstate)
-            hover_target = nothing
-            can_move = false
-
-            if element isa TileCoord
-                tilecomp = get_component(gamemap, element)
-                if !isnothing(tilecomp)
-                    can_move_result, _ = can_be_moved(tilecomp)
-                    can_move = can_move_result
-                    if tilecomp.component isa MultiPipeTileCompBehav
-                        axis = hovered_tile_pipe_axis(inputstate, element)
-                        frag = get_tile_pipe(tilecomp.component, axis)
-                        if !isempty(frag)
-                            move_colour = can_move ? SVector{4, Float32}(1.0, 0.9, 0.2, 0.75) : SVector{4, Float32}(1.0, 0.4, 0.4, 0.75)
-                            render_tile_pipe_frag_ghost!(queue, glmap, element, axis, frag; transparency = 0.7, colour = move_colour, render_height_offset = 100100)
-                        end
-                    else
-                        hover_target = element
-                    end
-                end
-            elseif element isa EdgeCoord
-                pipe_behav = get_pipe(gamemap, element)
-                if !isnothing(pipe_behav)
-                    hover_target = element
-                    can_move_result, _ = can_pipe_be_moved(pipe_behav)
-                    can_move = can_move_result
-                end
+    if state isa PlacementPressedState && !isnothing(state.move_target) && state.hold_threshold_crossed
+        #= ---------- Move activation indicator ----------- =#
+        if state.move_target isa TilePipeMoveTarget
+            target_coord = state.move_target.coord
+            target_axis = state.move_target.axis
+            tilecomp = get_component(gamemap, target_coord)
+            if !isnothing(tilecomp) && tilecomp.component isa MultiPipeTileCompBehav
+                frag = get_tile_pipe(tilecomp.component, target_axis)
+                move_colour = state.move_target_valid ?
+                    SVector{4, Float32}(1.0, 0.9, 0.2, 0.75) :
+                    SVector{4, Float32}(1.0, 0.4, 0.4, 0.75)
+                !isempty(frag) && render_tile_pipe_frag_ghost!(queue, glmap, target_coord, target_axis, frag; transparency = 0.7, colour = move_colour, render_height_offset = 100100)
             end
+        elseif state.move_target isa TileComponentMoveTarget
+            move_colour = state.move_target_valid ?
+                SVector{4, Float32}(1.0, 0.9, 0.2, 0.75) :
+                SVector{4, Float32}(1.0, 0.4, 0.4, 0.75)
+            push!(
+                queue, render_basic_sprite(
+                    glmap, :MoveArrow_arrow_start, rotmat_2D(0.0), state.move_target.coord;
+                    colour = move_colour, draw_height = Int32(100100), scale = 1.5
+                )
+            )
+        elseif state.move_target isa EdgePipeMoveTarget
+            move_colour = state.move_target_valid ? GHOST_COLOUR_VALID : GHOST_PIPE_COLOUR_INVALID
+            actual_pipe = get_pipe(gamemap, state.move_target.coord)
+            !isnothing(actual_pipe) && render_pipe_base!(
+                queue, actual_pipe; glmap = glmap, rotation = HexFrame.Q_POS,
+                position = state.move_target.coord, transparency = 0.7, colour = move_colour, render_height_offset = Int32(100100)
+            )
+        end
+    elseif state isa PlacementMoveState
+        move_target = state.move_target
 
-            if !isnothing(hover_target)
-                indicator_colour = can_move ?
-                    SVector{4, Float32}(1.0, 0.9, 0.2, 0.6) :  # Yellow — valid move target
-                    SVector{4, Float32}(1.0, 0.4, 0.4, 0.6)     # Red — cannot move
-                push!(
-                    queue, render_basic_sprite(
-                        glmap, :MoveArrow_arrow_start, rotmat_2D(0.0), hover_target;
-                        colour = indicator_colour, draw_height = Int32(100100), scale = 1.5
-                    )
+        if move_target isa TileComponentMoveTarget
+            tilecomp = get_component(gamemap, move_target.coord)
+            if !isnothing(tilecomp)
+                #= ---------- Tile move ghost ----------- =#
+                coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
+                rotation = map_rotation(tilecomp, rotate(tilecomp.rotation, state.toolrotation))
+                requested_mirror = xor(tilecomp.mirrored, state.toolmirrored)
+                mirrored = map_mirroring(tilecomp, requested_mirror)
+                ghost_colour = can_commit_active_move(inputstate, gamemap) ? GHOST_COLOUR_VALID : GHOST_COLOUR_INVALID
+
+                render_base_elem!(queue, tilecomp; glmap = glmap, rotation = rotation, mirrored = mirrored, position = coord, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000))
+
+                #= ---------- Move arrow (start circle, end arrowhead, animated dashes) ----------- =#
+                render_move_arrow_overlay!(
+                    queue, glmap, gamestate.ticks, move_target.coord, coord;
+                    draw_start_marker = true,
+                    draw_dashes = true,
+                    colour = SVector{4, Float32}(0.8, 0.8, 0.2, 1.0),
+                    draw_height = Int32(100200),
+                    start_marker_scale = 1.0
                 )
             end
-        end
+        elseif move_target isa TilePipeMoveTarget
+            tilecomp = get_component(gamemap, move_target.coord)
+            if !isnothing(tilecomp) && tilecomp.component isa MultiPipeTileCompBehav
+                src_frag = get_tile_pipe(tilecomp.component, move_target.axis)
+                if !isempty(src_frag)
+                    render_tile_pipe_frag_ghost!(queue, glmap, move_target.coord, move_target.axis, src_frag; transparency = 0.95, colour = SVector{4, Float32}(0.95, 0.85, 0.2, 0.9), render_height_offset = 100120)
 
-        # Tile move ghost
-        if inputstate.selectedcoord isa TileCoord
-            tilecomp = get_component(gamemap, inputstate.selectedcoord)
-            if !isnothing(tilecomp)
-                if inputstate.selected_tile_pipe_axis !== nothing && tilecomp.component isa MultiPipeTileCompBehav
-                    src_axis = inputstate.selected_tile_pipe_axis
-                    src_frag = get_tile_pipe(tilecomp.component, src_axis)
-                    if !isempty(src_frag)
-                        render_tile_pipe_frag_ghost!(queue, glmap, inputstate.selectedcoord, src_axis, src_frag; transparency = 0.95, colour = SVector{4, Float32}(0.95, 0.85, 0.2, 0.9), render_height_offset = 100120)
-
-                        coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
-                        dst_axis = hovered_tile_pipe_axis(inputstate, coord)
-                        if !(coord == inputstate.selectedcoord && dst_axis == src_axis)
-                            ghost_colour = can_move_tile_pipe_to(gamemap, coord, dst_axis) ? GHOST_COLOUR_VALID : GHOST_COLOUR_INVALID
-                            render_tile_pipe_frag_ghost!(queue, glmap, coord, dst_axis, src_frag; transparency = 0.5, colour = ghost_colour, render_height_offset = 100000)
-                        end
-                    end
-                else
                     coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
-                    rotation = map_rotation(tilecomp, rotate(tilecomp.rotation, inputstate.toolrotation))
-                    requested_mirror = xor(tilecomp.mirrored, inputstate.toolmirrored)
-                    mirrored = map_mirroring(tilecomp, requested_mirror)
-                    target_ship = find_ship_for_placement(tilecomp.component, coord, gamemap; rotation = rotation, mirrored = mirrored)
-                    ghost_colour = isnothing(target_ship) ? GHOST_COLOUR_INVALID : GHOST_COLOUR_VALID
-                    render_base_elem!(queue, tilecomp; glmap = glmap, rotation = rotation, mirrored = mirrored, position = coord, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000))
+                    dst_axis = hovered_tile_pipe_axis(inputstate, coord)
+                    if !(coord == move_target.coord && dst_axis == move_target.axis)
+                        ghost_colour = can_commit_active_move(inputstate, gamemap) ? GHOST_COLOUR_VALID : GHOST_COLOUR_INVALID
+                        render_tile_pipe_frag_ghost!(queue, glmap, coord, dst_axis, src_frag; transparency = 0.5, colour = ghost_colour, render_height_offset = 100000)
+
+                        render_move_arrow_overlay!(
+                            queue, glmap, gamestate.ticks, move_target.coord, coord;
+                            draw_start_marker = false,
+                            draw_dashes = true,
+                            colour = SVector{4, Float32}(0.8, 0.8, 0.2, 1.0),
+                            draw_height = Int32(100200)
+                        )
+                    end
                 end
             end
-        end
-
-        # Pipe move ghost, uses actual pipe behaviour for correct sprite
-        if inputstate.selectedcoord isa EdgeCoord
-            actual_pipe = get_pipe(gamemap, inputstate.selectedcoord)
+        elseif move_target isa EdgePipeMoveTarget
+            actual_pipe = get_pipe(gamemap, move_target.coord)
             if !isnothing(actual_pipe)
+                #= ---------- Pipe move ghost ----------- =#
                 ghost_edge = round_to_edge(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
-
-                # Check if both nodes are on valid ship surfaces, or allow off-ship placement
-                valid_dest = !isnothing(find_ship_containing_edge(gamemap, ghost_edge))
-                if !valid_dest
-                    can_place, _, _ = can_place_pipe_offship(ghost_edge, gamemap)
-                    valid_dest = can_place
-                end
-
-                ghost_colour = valid_dest ? GHOST_COLOUR_VALID : GHOST_PIPE_COLOUR_INVALID
+                ghost_colour = can_commit_active_move(inputstate, gamemap) ? GHOST_COLOUR_VALID : GHOST_PIPE_COLOUR_INVALID
                 render_pipe_base!(
                     queue, actual_pipe; glmap = glmap, rotation = HexFrame.Q_POS,
                     position = ghost_edge, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000)
                 )
-            end
-        end
 
-        # Move arrow (start circle, end arrowhead, animated dashes)
-        if !isnothing(inputstate.selectedcoord)
-            startcoord = inputstate.selectedcoord
-            if !(inputstate.selectedcoord isa TileCoord && inputstate.selected_tile_pipe_axis !== nothing)
-                push!(
-                    queue, render_basic_sprite(
-                        glmap, :MoveArrow_arrow_start, rotmat_2D(0.0), startcoord;
-                        colour = SVector{4, Float32}(0.8, 0.8, 0.2, 1.0), draw_height = Int32(100200)
-                    )
+                #= ---------- Move arrow (start circle and end arrowhead) ----------- =#
+                render_move_arrow_overlay!(
+                    queue, glmap, gamestate.ticks, move_target.coord, ghost_edge;
+                    draw_start_marker = true,
+                    draw_dashes = true,
+                    colour = SVector{4, Float32}(0.8, 0.8, 0.2, 1.0),
+                    draw_height = Int32(100200)
                 )
-            end
-
-            # Determine end coordinate based on selected type
-            if inputstate.selectedcoord isa TileCoord
-                endcoord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
-            elseif inputstate.selectedcoord isa EdgeCoord
-                endcoord = round_to_edge(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
-            else
-                return
-            end
-
-            # Render arrowhead
-            linevec = glvec(endcoord) - glvec(startcoord)
-            angle = rad2deg(atan(-linevec[2], linevec[1]))
-            push!(
-                queue, render_basic_sprite(
-                    glmap, :MoveArrow_arrow_head, rotmat_2D(angle), endcoord;
-                    colour = SVector{4, Float32}(0.8, 0.8, 0.2, 1.0), draw_height = Int32(100200)
-                )
-            )
-
-            # Render animated dashes along the line
-            dash_spacing = 0.5f0 # Tile units between dash centers
-            animation_speed = 0.03f0 # Animation speed multiplier
-            end_fade_distance = 0.2f0 # Distance from end where dashes disappear
-
-            # Render line if long enough for meaningful spacing
-            line_length = norm(linevec)
-            if line_length > dash_spacing * 0.5
-                # Calculate animation offset (loops every dash_spacing units)
-                anim_offset_units = (gamestate.ticks * animation_speed) % dash_spacing
-                anim_offset_param = anim_offset_units / line_length
-                dash_step = dash_spacing / line_length # Step size in parameter space
-                fade_boundary = 1.0 - (end_fade_distance / line_length) # Fade boundary in parameter space
-
-                # Generate dash positions along the line
-                dash_range = anim_offset_param:dash_step:(fade_boundary - dash_step * 0.01)
-                for t in dash_range
-                    dash_pos_vec = glvec(startcoord) + t * linevec
-                    dash_pos = CartesianCoord(dash_pos_vec[1], dash_pos_vec[2])
-                    push!(
-                        queue, render_basic_sprite(
-                            glmap, :MoveArrow_dash, rotmat_2D(angle), dash_pos;
-                            colour = SVector{4, Float32}(0.8, 0.8, 0.2, 1.0), draw_height = Int32(100200)
-                        )
-                    )
-                end
             end
         end
     end
 
-    if inputstate.placementmode == SURFACE_EDIT
+    if state isa PlacementSurfaceEditState
         coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
 
         # Check which ship owns this surface, or which ship it would be added to
@@ -880,7 +1288,7 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
         )
     end
 
-    if inputstate.placementmode == DELETE
+    if state isa PlacementDeleteState
         element = get_clicked(inputstate)
         indicator_position = nothing
 
@@ -1044,215 +1452,190 @@ function flowcalc_tileplacer!(
         command_queue::CommandQueue,
         inputstate::InputState,
         gamemap::GameMap,
-        threadsafe_console_push::Function
+        threadsafe_console_push::Function,
+        window::GLFW.Window;
+        mouse_captured::Bool = false
     )
-    if inputstate.placementmode != TILE
-        return
+    state = placement_state(inputstate)
+    state isa PlacementTileState || return nothing
+
+    if get_inrising!(inputstate, GLFW.MOUSE_BUTTON_RIGHT, window)
+        inputstate.gui_inputs[:consume_right_click] = true
+        enter_ready_placement_state!(inputstate)
+        return nothing
     end
+
+    mouse_captured && return nothing
+
     if !CImGui.IsMouseClicked(CImGui.lib.ImGuiMouseButton_Left)
-        return
+        return nothing
     end
 
     coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
 
     # Block interactions on ships with non-zero render offset
     if is_on_offset_ship(coord, gamemap)
-        return
+        return nothing
     end
 
-    command = create_set_tile_command(command_queue, coord, inputstate.pendingcomponent, inputstate.toolrotation, inputstate.toolmirrored)
+    command = create_set_tile_command(command_queue, coord, state.pendingcomponent, state.toolrotation, state.toolmirrored)
     try_enqueue_command!(command_queue, command, threadsafe_console_push)
     return nothing
 end
 
-"Enqueue pipe placement command when in PIPE mode and mouse clicked or held"
-function flowcalc_pipeplacer!(
+"Drive the unified placement-state machine for STANDARD mode."
+function flowcalc_standard_interaction!(
         command_queue::CommandQueue,
         inputstate::InputState,
         gamemap::GameMap,
-        threadsafe_console_push::Function
+        threadsafe_console_push::Function,
+        window::GLFW.Window;
+        mouse_captured::Bool = false
     )
-    if inputstate.placementmode != PIPE
-        return nothing
-    end
-    if !CImGui.IsMouseClicked(CImGui.lib.ImGuiMouseButton_Left)
-        return nothing
-    end
-
-    # Get clicked element; convert VertexCoord to nearest EdgeCoord
-    element = get_clicked(inputstate)
-    if element isa VertexCoord
-        element = round_to_edge(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
-    end
-
-    # Block interactions on ships with non-zero render offset
-    if is_on_offset_ship(element, gamemap)
+    state = placement_state(inputstate)
+    if !is_standard_family_state(state)
         return nothing
     end
 
-    if element isa EdgeCoord
-        edge::EdgeCoord = element
-        existing = has_pipe(gamemap, edge)
-        if existing
-            # Delete existing pipe (toggle behaviour)
-            command = create_delete_command(command_queue, edge)
-        else
-            # Place new pipe
-            command = create_set_pipe_behavior_command(command_queue, edge, inputstate.pendingpipebehavior)
-        end
-    elseif element isa TileCoord
-        tilecoord::TileCoord = element
-        axis = hovered_tile_pipe_axis(inputstate, tilecoord)
-        existing_frag = get_tile_pipe_frag_any_ship(gamemap, tilecoord, axis)
+    if !editor_capabilities_enabled(inputstate)
+        inputstate.pendingpipebehavior = ScrapPipeBehav()
+    end
 
-        frag = if !isnothing(existing_frag) && !isempty(existing_frag)
-            NoPipeBehavFrag()
-        else
-            get_pending_tile_pipe_frag(inputstate)
-        end
-        frag === nothing && return nothing
+    poll_pipe_chain_response!(inputstate)
 
-        command = HexFlowCalculator.ModifyTilePipeCommand(
-            id = command_queue.next_command_id(),
-            tile = tilecoord,
-            axis = axis,
-            frag = frag,
-            response_channel = nothing
-        )
-    else
+    if is_active_standard_interaction_state(state) && get_inrising!(inputstate, GLFW.MOUSE_BUTTON_RIGHT, window)
+        inputstate.gui_inputs[:consume_right_click] = true
+        clear_placement_state!(inputstate)
         return nothing
     end
 
-    try_enqueue_command!(command_queue, command, threadsafe_console_push)
-    return nothing
-end
+    left_rising = get_inrising!(inputstate, GLFW.MOUSE_BUTTON_LEFT, window)
+    left_falling = get_infalling!(inputstate, GLFW.MOUSE_BUTTON_LEFT, window)
+    left_held = get_instate(GLFW.MOUSE_BUTTON_LEFT, window)
 
-"Enqueue move command when in MOVE mode, handling selection and destination"
-function flowcalc_moveplacer!(
-        command_queue::CommandQueue,
-        inputstate::InputState,
-        gamemap::GameMap,
-        threadsafe_console_push::Function
-    )
-    if inputstate.placementmode != MOVE
-        return
-    end
-    if !CImGui.IsMouseClicked(CImGui.lib.ImGuiMouseButton_Left)
-        return
-    end
-
-    element = get_clicked(inputstate)
-    if element === nothing
-        return
-    end
-
-    # Block interactions on ships with non-zero render offset
-    if is_on_offset_ship(element, gamemap)
-        return
-    end
-
-    # If no selection yet, set it
-    if inputstate.selectedcoord === nothing
-        if element isa VertexCoord
-            threadsafe_console_push("Can't move a node")
-            return
+    if state isa PlacementPipeChainState
+        if !isnothing(state.pending_response_channel)
+            return nothing
         end
 
-        # Check if something is present at the coordinate
-        # NOTE: checks not authoritative here as gamemap may change before command is processed
-        if element isa TileCoord
-            tilecomp = get_component(gamemap, element)
-            if isnothing(tilecomp)
-                threadsafe_console_push("No component found at $(element)")
-                return
-            end
-            can_move, reason = can_be_moved(tilecomp)
-            if !can_move
-                threadsafe_console_push("Cannot select component at $(element): $reason")
-                return
-            end
-
-            if tilecomp.component isa MultiPipeTileCompBehav
-                axis = hovered_tile_pipe_axis(inputstate, element)
-                frag = get_tile_pipe(tilecomp.component, axis)
-                if isempty(frag)
-                    threadsafe_console_push("No tile pipe found on axis $(axis) at $(element)")
-                    return
-                end
-
-                inputstate.selectedcoord = element
-                inputstate.selected_tile_pipe_axis = axis
-                inputstate.toolrotation = HexFrame.Q_POS # Reset delta rotation so ghost matches source
-                inputstate.toolmirrored = false
-                threadsafe_console_push("Selected axis $(axis) on multi-pipe at $(element)")
-                return
-            end
-        elseif element isa EdgeCoord
-            if !has_pipe(gamemap, element)
-                threadsafe_console_push("No pipe found at $(element)")
-                return
-            end
+        if mouse_captured || !left_rising
+            return nothing
         end
 
-        inputstate.selectedcoord = element
-        inputstate.selected_tile_pipe_axis = nothing
-        inputstate.toolrotation = HexFrame.Q_POS # Reset delta rotation so ghost matches source
-        inputstate.toolmirrored = false
-        threadsafe_console_push("Selected $(element) for moving")
-        return
-    end
-
-    # Handle deselection or move
-    selected = inputstate.selectedcoord
-
-    if selected isa TileCoord && inputstate.selected_tile_pipe_axis !== nothing
-        src_axis = inputstate.selected_tile_pipe_axis
-        dst_tile = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
-        dst_axis = hovered_tile_pipe_axis(inputstate, dst_tile)
-
-        if dst_tile == selected && dst_axis == src_axis
-            inputstate.selectedcoord = nothing
-            inputstate.selected_tile_pipe_axis = nothing
-            threadsafe_console_push("Deselected multi-pipe axis")
-            return
+        source_node = state.source_node
+        if is_pipe_source_on_offset_ship(source_node, gamemap)
+            return nothing
         end
 
-        command = HexFlowCalculator.MoveTilePipeCommand(
-            id = command_queue.next_command_id(),
-            src_tile = selected,
-            src_axis = src_axis,
-            dst_tile = dst_tile,
-            dst_axis = dst_axis,
-            response_channel = nothing
-        )
-        try_enqueue_command!(command_queue, command, threadsafe_console_push)
+        candidate = get_active_pipe_chain_candidate(source_node, inputstate, gamemap)
+        if isnothing(candidate) || !candidate.can_commit
+            return nothing
+        end
 
-        inputstate.selectedcoord = nothing
-        inputstate.selected_tile_pipe_axis = nothing
-        return
+        response_channel = Channel{CommandStatus}(1)
+        command = create_pipe_chain_command(command_queue, inputstate, candidate; response_channel = response_channel)
+        isnothing(command) && return nothing
+
+        success, _ = try_enqueue_command!(command_queue, command, threadsafe_console_push)
+        if success
+            set_placement_state!(inputstate, PlacementPipeChainState(
+                source_node = source_node,
+                pending_next_source_node = candidate.far_node,
+                pending_response_channel = response_channel,
+            ))
+        end
+        return nothing
     end
 
-    # Generic tile/edge move logic (non-multi-pipe or edge pipes)
-    if selected == element && selected isa EdgeCoord
-        # Pipes have no rotation — same-edge click is a no-op, deselect
-        inputstate.selectedcoord = nothing
-        inputstate.selected_tile_pipe_axis = nothing
-        threadsafe_console_push("Deselected $(element)")
-        return
+    if mouse_captured
+        if !(state isa PlacementReadyState) && !left_held
+            clear_placement_state!(inputstate)
+        end
+        return nothing
     end
 
-    # Create move command
-    source = selected
-    if source isa TileCoord
-        destination = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
-    elseif source isa EdgeCoord
-        destination = round_to_edge(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
-    end
-    command = create_move_command(command_queue, source, destination, inputstate.toolrotation, inputstate.toolmirrored)
-    try_enqueue_command!(command_queue, command, threadsafe_console_push)
+    if state isa PlacementMoveState
+        update_active_move_rotation!(inputstate)
 
-    inputstate.selectedcoord = nothing
-    inputstate.selected_tile_pipe_axis = nothing
+        if left_falling
+            command = create_active_move_command(command_queue, inputstate, gamemap)
+            if !isnothing(command)
+                try_enqueue_command!(command_queue, command, threadsafe_console_push)
+            end
+            clear_placement_state!(inputstate)
+        end
+
+        return nothing
+    end
+
+    if state isa PlacementPressedState
+        if !isnothing(state.move_target) && !state.hold_threshold_crossed && time() - state.press_started_at >= 0.5
+            if state.move_target_valid
+                activate_move_drag!(inputstate)
+                return nothing
+            end
+
+            set_placement_state!(inputstate, PlacementPressedState(
+                press_started_at = state.press_started_at,
+                press_cursor_cart = state.press_cursor_cart,
+                click_tile = state.click_tile,
+                move_target = state.move_target,
+                move_target_valid = state.move_target_valid,
+                hold_threshold_crossed = true,
+            ))
+            state = placement_state(inputstate)::PlacementPressedState
+        end
+
+        if left_falling
+            command = create_move_short_click_command(command_queue, inputstate)
+            if !isnothing(command)
+                try_enqueue_command!(command_queue, command, threadsafe_console_push)
+            end
+            clear_placement_state!(inputstate)
+            return nothing
+        end
+
+        if !left_held
+            clear_placement_state!(inputstate)
+            return nothing
+        end
+
+        return nothing
+    end
+
+    if !left_rising
+        return nothing
+    end
+
+    source_node = resolve_pipe_source_node(inputstate)
+    if !isnothing(source_node)
+        if !is_pipe_source_on_offset_ship(source_node, gamemap)
+            clear_action_popup_selection!(inputstate)
+            set_placement_state!(inputstate, PlacementPipeChainState(source_node = source_node))
+        end
+        return nothing
+    end
+
+    target = get_move_hover_target(inputstate, gamemap)
+    if isnothing(target)
+        clear_action_popup_selection!(inputstate)
+        pressed_element = get_clicked(inputstate)
+        if pressed_element isa TileCoord || pressed_element isa EdgeCoord
+            cursor_cart = get_cursor_cart(inputstate)
+            if cursor_cart !== nothing
+                set_placement_state!(inputstate, PlacementPressedState(
+                    press_started_at = time(),
+                    press_cursor_cart = cursor_cart,
+                    click_tile = round_to_tile(cursor_cart),
+                    move_target = nothing,
+                    move_target_valid = false,
+                ))
+            end
+        end
+        return nothing
+    end
+
+    set_move_hold_target!(inputstate, target)
     return nothing
 end
 
@@ -1261,13 +1644,23 @@ function flowcalc_deleteplacer!(
         command_queue::CommandQueue,
         inputstate::InputState,
         gamemap::GameMap,
-        threadsafe_console_push::Function
+        threadsafe_console_push::Function,
+        window::GLFW.Window;
+        mouse_captured::Bool = false
     )
-    if inputstate.placementmode != DELETE
-        return
+    state = placement_state(inputstate)
+    state isa PlacementDeleteState || return nothing
+
+    if get_inrising!(inputstate, GLFW.MOUSE_BUTTON_RIGHT, window)
+        inputstate.gui_inputs[:consume_right_click] = true
+        enter_ready_placement_state!(inputstate)
+        return nothing
     end
+
+    mouse_captured && return nothing
+
     if !CImGui.IsMouseClicked(CImGui.lib.ImGuiMouseButton_Left)
-        return
+        return nothing
     end
 
     element = get_clicked(inputstate)
@@ -1275,12 +1668,12 @@ function flowcalc_deleteplacer!(
     # Nodes (vertices) cannot be deleted — filter before command creation
     if element isa VertexCoord
         threadsafe_console_push("Cannot delete a node")
-        return
+        return nothing
     end
 
     # Block interactions on ships with non-zero render offset
     if is_on_offset_ship(element, gamemap)
-        return
+        return nothing
     end
 
     command = create_delete_command(command_queue, element)
@@ -1289,46 +1682,35 @@ function flowcalc_deleteplacer!(
     return nothing
 end
 
-"Handle click in INSPECT mode: enqueue a ClickTileCommand for on_click! behaviour"
-function flowcalc_inspect_click!(
-        command_queue::CommandQueue,
-        inputstate::InputState,
-        gamemap::GameMap,
-        threadsafe_console_push::Function
-    )
-    inputstate.placementmode != INSPECT && return
-    !CImGui.IsMouseClicked(CImGui.lib.ImGuiMouseButton_Left) && return
-
-    cursor_cart = CartesianCoord(inputstate.cursor_x, inputstate.cursor_y)
-    tile = round_to_tile(cursor_cart)
-    is_on_offset_ship(tile, gamemap) && return # skip if on offset ship to prevent interactions during visual effects
-
-    tile_center_cart = to_cartesian(tile)
-    unrotated_clicksite = cursor_cart - tile_center_cart
-    command = create_click_tile_command(command_queue, tile, unrotated_clicksite)
-    try_enqueue_command!(command_queue, command, threadsafe_console_push)
-    return nothing
-end
-
 "Enqueue surface tile add/remove command when in SURFACE_EDIT mode and mouse clicked"
 function flowcalc_surfaceeditor!(
         command_queue::CommandQueue,
         inputstate::InputState,
         gamemap::GameMap,
-        threadsafe_console_push::Function
+        threadsafe_console_push::Function,
+        window::GLFW.Window;
+        mouse_captured::Bool = false
     )
-    if inputstate.placementmode != SURFACE_EDIT
-        return
+    state = placement_state(inputstate)
+    state isa PlacementSurfaceEditState || return nothing
+
+    if get_inrising!(inputstate, GLFW.MOUSE_BUTTON_RIGHT, window)
+        inputstate.gui_inputs[:consume_right_click] = true
+        enter_ready_placement_state!(inputstate)
+        return nothing
     end
+
+    mouse_captured && return nothing
+
     if !CImGui.IsMouseClicked(CImGui.lib.ImGuiMouseButton_Left)
-        return
+        return nothing
     end
 
     coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
 
     # Block interactions on ships with non-zero render offset
     if is_on_offset_ship(coord, gamemap)
-        return
+        return nothing
     end
 
     # Toggle: if surface exists on any ship, remove it; otherwise add it
@@ -1344,13 +1726,18 @@ function flowcalc_surfaceeditor!(
 end
 
 """
-Handle right-click: open action popup for a component or ship.
+Handle right-click: cancel an active MOVE or PIPE interaction, or open an action popup.
 Uses `get_clicked` hit-testing to route precisely. Clicking on a component opens
 the component popup, clicking on gaps between components or empty surface opens
 the ship popup. Works in all placement modes.
 """
 function flowcalc_rightclick_action!(inputstate::InputState, gamemap::GameMap, window::GLFW.Window)
+    get(inputstate.gui_inputs, :consume_right_click, false)::Bool && return nothing
     get_inrising!(inputstate, GLFW.MOUSE_BUTTON_RIGHT, window) || return nothing
+    state = placement_state(inputstate)
+    if !(state isa PlacementReadyState)
+        return nothing
+    end
 
     # Need valid cursor position
     isnothing(inputstate.cursor_x) && return nothing
@@ -1488,8 +1875,9 @@ const REDOCK_EXCLUSION_COL = SVector{4, Float32}(1.0, 0.78, 0.2, 0.15)
 
 "Render ghost tiles for the ship being repositioned, coloured by placement validity."
 function _render_redock_ghost!(queue::Vector{<:RenderCommand}, glmap::GLObjectMap, inputstate::InputState)
-    rs = inputstate.redock_state
-    isnothing(rs) && return nothing
+    state = placement_state(inputstate)
+    state isa PlacementRedockState || return nothing
+    rs = state
 
     cursor_tile = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
     delta = cursor_tile - rs.original_centre
@@ -1537,8 +1925,7 @@ function _enter_redock_mode!(inputstate::InputState, flowcalc_ipc::FlowCalculato
     centroid = get_surface_centroid(gamemap, ship_name)
     original_centre = isnothing(centroid) ? TileCoord(0, 0) : round_to_tile(centroid)
 
-    set_placementmode!(inputstate, REDOCK)
-    inputstate.redock_state = RedockModeState(
+    enter_redock_placement_state!(inputstate, PlacementRedockState(
         ship_name = ship_name,
         ship_tiles = core_tiles,
         exclusion_ring = setdiff(ring2, core_tiles),
@@ -1546,7 +1933,7 @@ function _enter_redock_mode!(inputstate::InputState, flowcalc_ipc::FlowCalculato
         other_ship_tiles = other_tiles,
         other_ship_nodes = other_nodes,
         original_centre = original_centre,
-    )
+    ))
     flowcalc_ipc.console_push("Redock mode: click to place $(ship_name), ESC to cancel")
     return nothing
 end
@@ -1575,16 +1962,20 @@ function _execute_redock!(rs::RedockModeState, delta::TileCoord, flowcalc_ipc::F
 end
 
 "Handle left-click during redock mode: validate placement and enqueue the redock command."
-function _handle_redock_click!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, window::GLFW.Window)
-    rs = inputstate.redock_state
-    isnothing(rs) && return nothing
+function _handle_redock_click!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, window::GLFW.Window; mouse_captured::Bool = false)
+    state = placement_state(inputstate)
+    state isa PlacementRedockState || return nothing
+    rs = state
 
     # Right-click cancels redock mode (same as ESC)
     if get_inrising!(inputstate, GLFW.MOUSE_BUTTON_RIGHT, window)
-        set_placementmode!(inputstate, INSPECT)
+        inputstate.gui_inputs[:consume_right_click] = true
+        enter_ready_placement_state!(inputstate)
         flowcalc_ipc.console_push("Redock cancelled")
         return nothing
     end
+
+    mouse_captured && return nothing
 
     !CImGui.IsMouseClicked(CImGui.lib.ImGuiMouseButton_Left) && return nothing
     (isnothing(inputstate.cursor_x) || isnothing(inputstate.cursor_y)) && return nothing
@@ -1598,6 +1989,6 @@ function _handle_redock_click!(inputstate::InputState, flowcalc_ipc::FlowCalcula
     end
 
     _execute_redock!(rs, delta, flowcalc_ipc)
-    set_placementmode!(inputstate, INSPECT)
+    enter_ready_placement_state!(inputstate)
     return nothing
 end

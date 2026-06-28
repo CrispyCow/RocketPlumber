@@ -4,38 +4,23 @@ using HexFrame, HexComponentsAPI
 using StaticArrays, GLFW, Dates
 
 # Type exports
-export PlacementModes, INSPECT, MOVE, PIPE, DELETE, TILE, SURFACE_EDIT, REDOCK
 export SimSpeed, SIM_1X, SIM_2X, SIM_4X, SIM_MAX
 export ExitReason, EXIT_QUIT, EXIT_MENU, EXIT_SANDBOX_COMPLETED, EXIT_SANDBOX_STARTED
 export AbstractPopupTarget, ComponentPopupTarget, ShipPopupTarget
+export AbstractPlacementMoveTarget, TileComponentMoveTarget, TilePipeMoveTarget, EdgePipeMoveTarget
+export AbstractPlacementState, AbstractEditorPlacementState
+export PlacementReadyState, PlacementPressedState, PlacementMoveState, PlacementPipeChainState
+export PlacementDeleteState, PlacementTileState, PlacementSurfaceEditState, PlacementRedockState
 export ActionPopupState, HintData, RedockModeState, InputState, ViewState, GameState
 
 # Function exports
 export create_consolebuffer, get_viewtransform
-export get_lastinstate!, update_lastinstate!, get_instate, get_inrising!
-export set_placementmode!
+export get_lastinstate!, update_lastinstate!, get_instate, get_inrising!, get_infalling!
+export placement_state, set_placement_state!, clear_placement_pressed_state!, clear_placement_state!
+export is_standard_family_state, is_active_standard_interaction_state
+export clear_world_selection!, enter_ready_placement_state!, enter_editor_placement_state!, toggle_editor_placement_state!
+export enter_redock_placement_state!, editor_capabilities_enabled
 export sim_speed_to_ups, increase_sim_speed, decrease_sim_speed, sim_speed_label
-
-# ===============================================================
-# Placement Modes
-# ===============================================================
-
-"Placement mode enum for hex tile placement"
-@enum PlacementModes INSPECT MOVE PIPE DELETE TILE SURFACE_EDIT REDOCK
-
-"Set placement mode, clearing any active selection, action popup, and redock state."
-function set_placementmode!(inputstate, mode::PlacementModes)
-    if inputstate.placementmode != mode
-        inputstate.selectedcoord = nothing
-        inputstate.selected_tile_pipe_axis = nothing
-        inputstate.rightclick_selectedcoord = nothing
-        inputstate.rightclick_selectedship = nothing
-        inputstate.action_popup = nothing
-        inputstate.redock_state = nothing
-        inputstate.placementmode = mode
-    end
-    return nothing
-end
 
 # ===============================================================
 # Simulation Speed
@@ -94,6 +79,12 @@ end
 # Data Structures
 # ===============================================================
 
+"Abstract type for the nested placement-state machine."
+abstract type AbstractPlacementState end
+
+"Marker base type for editor-only placement states."
+abstract type AbstractEditorPlacementState <: AbstractPlacementState end
+
 "Holds tutorial/hint data for displaying in the hint popup window"
 @kwdef mutable struct HintData
     title::String
@@ -127,11 +118,11 @@ end
 end
 
 """
-State for the interactive redock placement mode. Entered when the player selects
+State for the interactive redock placement state. Entered when the player selects
 'Redock' from a ship's right-click menu. Pre-computed tile/node sets are cached on
 entry so per-frame validity checking is cheap.
 """
-@kwdef mutable struct RedockModeState
+@kwdef mutable struct PlacementRedockState <: AbstractPlacementState
     ship_name::Symbol                           # ship being redocked
     ship_tiles::Set{TileCoord}                  # original surface tiles (green/red ghost)
     exclusion_ring::Set{TileCoord}              # combined 2-ring expansion minus core (grey ghost)
@@ -141,6 +132,86 @@ entry so per-frame validity checking is cheap.
     original_centre::TileCoord                  # centre tile for computing mouse delta
 end
 
+const RedockModeState = PlacementRedockState
+
+# ===============================================================
+# Placement State
+# ===============================================================
+
+"Abstract type for movable targets inside the placement-state machine."
+abstract type AbstractPlacementMoveTarget end
+
+"Move target representing a whole tile component."
+struct TileComponentMoveTarget <: AbstractPlacementMoveTarget
+    coord::TileCoord
+end
+
+"Move target representing a single tile-pipe fragment on a tile axis."
+struct TilePipeMoveTarget <: AbstractPlacementMoveTarget
+    coord::TileCoord
+    axis::HexAxis
+end
+
+"Move target representing an edge pipe."
+struct EdgePipeMoveTarget <: AbstractPlacementMoveTarget
+    coord::EdgeCoord
+end
+
+const PlacementMoveTarget = Union{TileComponentMoveTarget, TilePipeMoveTarget, EdgePipeMoveTarget}
+
+"Idle placement state: inspect-hover plus click classification."
+struct PlacementReadyState <: AbstractPlacementState end
+
+"Pending placement click state while resolving inspect short-click versus move hold."
+@kwdef struct PlacementPressedState <: AbstractPlacementState
+    press_started_at::Float64
+    press_cursor_cart::CartesianCoord
+    click_tile::Union{Nothing, TileCoord} = nothing
+    move_target::Union{Nothing, PlacementMoveTarget} = nothing
+    move_target_valid::Bool = false
+    hold_threshold_crossed::Bool = false
+end
+
+"Active placement move-drag state."
+@kwdef struct PlacementMoveState <: AbstractPlacementState
+    move_target::PlacementMoveTarget
+    drag_reference_axis::Union{Nothing, HexAxis} = nothing
+    toolrotation::HexAxis = HexFrame.Q_POS
+    toolmirrored::Bool = false
+end
+
+"Active placement pipe-chain state." 
+@kwdef struct PlacementPipeChainState <: AbstractPlacementState
+    source_node::VertexCoord
+    pending_next_source_node::Union{Nothing, VertexCoord} = nothing
+    #= Stores a calculator response channel without depending on HexFlowCalculator.CommandStatus at the package boundary. =#
+    pending_response_channel::Union{Nothing, Channel} = nothing
+end
+
+"Editor-only delete placement state."
+struct PlacementDeleteState <: AbstractEditorPlacementState end
+
+"Editor-only tile placement state."
+@kwdef mutable struct PlacementTileState <: AbstractEditorPlacementState
+    pendingcomponent::ComponentBehavior
+    toolrotation::HexAxis = HexFrame.Q_POS
+    toolmirrored::Bool = false
+end
+
+"Editor-only surface-edit placement state."
+struct PlacementSurfaceEditState <: AbstractEditorPlacementState end
+
+const PlacementState = Union{
+    PlacementReadyState,
+    PlacementPressedState,
+    PlacementMoveState,
+    PlacementPipeChainState,
+    PlacementDeleteState,
+    PlacementTileState,
+    PlacementSurfaceEditState,
+    PlacementRedockState,
+}
+
 "Input state for placement, selection, and control"
 @kwdef mutable struct InputState
     # placement
@@ -148,14 +219,9 @@ end
     cursor_y::Union{Nothing, Float64} = nothing
     toolbar::Int64 = 1
     last_toolbar::Int64 = 1
-    toolrotation::HexAxis = HexFrame.Q_POS
-    toolmirrored::Bool = false
-    placementmode::PlacementModes = INSPECT
-    pendingcomponent::ComponentBehavior
     pendingpipebehavior::PipeBehavior
-    selectedcoord::Union{Nothing, TileCoord, EdgeCoord} = nothing
-    #= Only meaningful when selectedcoord isa TileCoord with MultiPipeTileCompBehav; clear when selectedcoord cleared, in set_placementmode!, after successful move =#
-    selected_tile_pipe_axis::Union{Nothing, HexAxis} = nothing
+    tile_tool_state::Union{Nothing, PlacementTileState} = nothing
+    placement_state::PlacementState = PlacementReadyState()
     rightclick_selectedcoord::Union{Nothing, TileCoord} = nothing
     rightclick_selectedship::Union{Nothing, Symbol} = nothing
     last_command_time::Float64 = 0.0
@@ -172,7 +238,6 @@ end
     is_recording::Bool = false
     screenshot_requested::Bool = false
     action_popup::Union{Nothing, ActionPopupState} = nothing
-    redock_state::Union{Nothing, RedockModeState} = nothing
     # loop status
     exit_reason::Union{Nothing, ExitReason} = nothing
     pending_sandbox_id::Union{Nothing, Symbol} = nothing
@@ -207,6 +272,87 @@ during manoeuvre burn phases; identical to ship frame when not burning.
     acceleration_ship_frame::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
     acceleration_space_map_frame::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
     ticks::Int64 = 0
+end
+
+# ===============================================================
+# Placement State Helpers
+# ===============================================================
+
+"Return the current nested placement state."
+placement_state(inputstate::InputState) = inputstate.placement_state
+
+"Replace the nested placement state."
+function set_placement_state!(inputstate::InputState, state::PlacementState)
+    inputstate.placement_state = state
+    return nothing
+end
+
+"Return `true` when placement is in one of the standard gameplay state-machine states."
+function is_standard_family_state(state::AbstractPlacementState)::Bool
+    return state isa PlacementReadyState ||
+        state isa PlacementPressedState ||
+        state isa PlacementMoveState ||
+        state isa PlacementPipeChainState
+end
+
+"Return `true` when a standard gameplay interaction is active beyond ready state."
+function is_active_standard_interaction_state(state::AbstractPlacementState)::Bool
+    return state isa PlacementPressedState || state isa PlacementMoveState || state isa PlacementPipeChainState
+end
+
+"Return whether editor-only capabilities are enabled for the current input state."
+editor_capabilities_enabled(inputstate::InputState)::Bool = inputstate.editor_mode
+
+"Clear popup and selection state without mutating the active placement state."
+function clear_world_selection!(inputstate::InputState)
+    inputstate.rightclick_selectedcoord = nothing
+    inputstate.rightclick_selectedship = nothing
+    inputstate.action_popup = nothing
+    return nothing
+end
+
+"Enter the idle ready placement state and clear world-selection UI state."
+function enter_ready_placement_state!(inputstate::InputState)
+    clear_world_selection!(inputstate)
+    inputstate.placement_state = PlacementReadyState()
+    return nothing
+end
+
+"Enter an editor-only placement state, clearing world-selection UI state first."
+function enter_editor_placement_state!(inputstate::InputState, state::AbstractEditorPlacementState)
+    clear_world_selection!(inputstate)
+    inputstate.placement_state = state
+    return nothing
+end
+
+"Toggle an editor-only placement state, returning to ready when the same tool is selected twice."
+function toggle_editor_placement_state!(inputstate::InputState, state::AbstractEditorPlacementState)
+    if inputstate.placement_state isa AbstractEditorPlacementState && typeof(inputstate.placement_state) === typeof(state)
+        return enter_ready_placement_state!(inputstate)
+    end
+
+    return enter_editor_placement_state!(inputstate, state)
+end
+
+"Enter redock placement state, clearing world-selection UI state first."
+function enter_redock_placement_state!(inputstate::InputState, state::PlacementRedockState)
+    clear_world_selection!(inputstate)
+    inputstate.placement_state = state
+    return nothing
+end
+
+"Clear only the pending pressed state when placement has not yet committed to move or pipe behaviour."
+function clear_placement_pressed_state!(inputstate::InputState)
+    if inputstate.placement_state isa PlacementPressedState
+        inputstate.placement_state = PlacementReadyState()
+    end
+    return nothing
+end
+
+"Clear any nested placement state and return to ready state."
+function clear_placement_state!(inputstate::InputState)
+    inputstate.placement_state = PlacementReadyState()
+    return nothing
 end
 
 # ===============================================================
@@ -339,6 +485,15 @@ function get_inrising!(states::Dict{GLFW.MouseButton, Bool}, key::GLFW.MouseButt
     return get_instate(key, window) && !get_lastinstate!(states, key)
 end
 
+"Returns true on falling edge (released this frame, pressed last frame)."
+function get_infalling!(states::Dict{GLFW.Key, Bool}, key::GLFW.Key, window::GLFW.Window)::Bool
+    return !get_instate(key, window) && get_lastinstate!(states, key)
+end
+
+function get_infalling!(states::Dict{GLFW.MouseButton, Bool}, key::GLFW.MouseButton, window::GLFW.Window)::Bool
+    return !get_instate(key, window) && get_lastinstate!(states, key)
+end
+
 #= ---------- InputState convenience methods (delegate to dict core) ---------- =#
 
 "Return the last-tracked state of a key via InputState."
@@ -364,6 +519,11 @@ Calling on an untracked key adds it to the dict as released.
 """
 function get_inrising!(inputstate::InputState, key::T, window::GLFW.Window)::Bool where {T <: Union{GLFW.Key, GLFW.MouseButton}}
     return get_instate(key, window) && !get_lastinstate!(inputstate, key)
+end
+
+"Returns true on falling edge of key or mousebutton state via InputState."
+function get_infalling!(inputstate::InputState, key::T, window::GLFW.Window)::Bool where {T <: Union{GLFW.Key, GLFW.MouseButton}}
+    return !get_instate(key, window) && get_lastinstate!(inputstate, key)
 end
 
 end # module HexFlowControl

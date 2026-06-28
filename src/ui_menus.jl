@@ -182,6 +182,54 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
     button_width = propertyboxwidth - 50.0
     button_height = 20.0
 
+    if CImGui.CollapsingHeader("Editor")
+        editor_state = placement_state(inputstate)
+        editor_state_label = if editor_state isa PlacementReadyState
+            "Standard"
+        elseif editor_state isa PlacementPressedState
+            "Move Pending"
+        elseif editor_state isa PlacementMoveState
+            "Move"
+        elseif editor_state isa PlacementPipeChainState
+            "Pipe Chain"
+        elseif editor_state isa PlacementTileState
+            "Tile Placement"
+        elseif editor_state isa PlacementDeleteState
+            "Delete"
+        elseif editor_state isa PlacementSurfaceEditState
+            "Surface Edit"
+        elseif editor_state isa PlacementRedockState
+            "Redock"
+        else
+            "Unknown"
+        end
+        CImGui.Text("State: $(editor_state_label)")
+
+        editor_enabled = inputstate.editor_mode
+        @cref CImGui.Checkbox("Editor Mode", &editor_enabled)
+        if editor_enabled != inputstate.editor_mode
+            inputstate.editor_mode = editor_enabled
+            if !editor_enabled && placement_state(inputstate) isa AbstractEditorPlacementState
+                enter_ready_placement_state!(inputstate)
+            end
+        end
+
+        !inputstate.editor_mode && CImGui.BeginDisabled()
+        tile_tool_state = inputstate.tile_tool_state
+        isnothing(tile_tool_state) && error("Tile tool state must be initialised before opening Developer Utilities")
+
+        if CImGui.RadioButton("[4] Delete", placement_state(inputstate) isa PlacementDeleteState)
+            toggle_editor_placement_state!(inputstate, PlacementDeleteState())
+        end
+        if CImGui.RadioButton("[5] Tile Placement", placement_state(inputstate) isa PlacementTileState)
+            toggle_editor_placement_state!(inputstate, tile_tool_state)
+        end
+        if CImGui.RadioButton("[6] Surface Edit", placement_state(inputstate) isa PlacementSurfaceEditState)
+            toggle_editor_placement_state!(inputstate, PlacementSurfaceEditState())
+        end
+        !inputstate.editor_mode && CImGui.EndDisabled()
+    end
+
     if (CImGui.CollapsingHeader("Tools"))
         if CImGui.Button("Clear Map", (button_width, button_height))
             @info "Clearing map..."
