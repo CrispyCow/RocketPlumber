@@ -21,7 +21,7 @@ using HexFlowSwitchComponents
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional
 import HexComponentsAPI: on_click!, get_thrust, get_component_temperature, update_flowbehav!, render_map_elem!, placement_valid, collect_effect_particles!, get_actions, do_action!, produce_rel_fluid_declarations, map_mirroring
-import HexComponentsAPI: get_reactivation_probe, accept_reactivation_probe!
+import HexComponentsAPI: ReactivationProbe, ReactivationProbeOutcome, get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe!
 # Behavior Fragment Dependencies
 import HexFlowBasicComponents: deactivate!, reactivate!, is_inactive, damage!, undamage!, is_damaged, get_overheat_percentage, get_overheat_tint, update_overheat_state!
 import HexFlowSwitchComponents: get_switch_percentage
@@ -198,10 +198,10 @@ function get_reactivation_probe(nozzle::NozzleBehavFrag; kwargs...)
 end
 
 """
-Accept reactivation only when the speculative nozzle current is positive and non-trivial.
-Leaves state unchanged on rejection.
+Classify nozzle reactivation from speculative flow.
+Positive non-trivial flow is useful, reverse flow is harmful, and zero or pruned flow is neutral.
 """
-function accept_reactivation_probe!(nozzle::NozzleBehavFrag; tile::TileCoord, rotation::HexAxis, derivedmapstate::DerivedMapState, mna_state, kwargs...)
+function classify_reactivation_probe(nozzle::NozzleBehavFrag; tile::TileCoord, rotation::HexAxis, derivedmapstate::DerivedMapState, mna_state, kwargs...)
     probe_rel_elem = RelativeElement(
         RelativeElementConnections(nozzle.connected_node, HexFrame.GROUND),
         nozzle.throat_area^2,
@@ -210,10 +210,16 @@ function accept_reactivation_probe!(nozzle::NozzleBehavFrag; tile::TileCoord, ro
     )
     probe_abs_elem = map_element(probe_rel_elem, tile, nozzle_element_index, rotation)
     probe_current = abs_element_get_current(probe_abs_elem, derivedmapstate, mna_state)
-    isnothing(probe_current) && return false
-    probe_current > probe_tol || return false
+    isnothing(probe_current) && return HexComponentsAPI.PROBE_NEUTRAL
+    probe_current > probe_tol && return HexComponentsAPI.PROBE_USEFUL
+    probe_current < -probe_tol && return HexComponentsAPI.PROBE_HARMFUL
+    return HexComponentsAPI.PROBE_NEUTRAL
+end
+
+"Reactivate the nozzle after a useful speculative probe result." 
+function commit_reactivation_probe!(nozzle::NozzleBehavFrag; kwargs...)
     reactivate!(nozzle)
-    return true
+    return nothing
 end
 
 function update_flowbehav!(nozzle::NozzleBehavFrag; rotation::HexAxis, tile::TileCoord, mna_state::MNA_State, derivedmapstate::DerivedMapState, kwargs...)
@@ -407,7 +413,8 @@ get_actions(comp::BasicNozzleCompBehav; kwargs...) = get_actions(comp.nozzle; kw
 do_action!(comp::BasicNozzleCompBehav, action_id::Symbol; kwargs...) = do_action!(comp.nozzle, action_id; kwargs...)
 update_flowbehav!(comp::BasicNozzleCompBehav; kwargs...) = update_flowbehav!(comp.nozzle; kwargs...)
 get_reactivation_probe(comp::BasicNozzleCompBehav; kwargs...) = get_reactivation_probe(comp.nozzle; kwargs...)
-accept_reactivation_probe!(comp::BasicNozzleCompBehav; kwargs...) = accept_reactivation_probe!(comp.nozzle; kwargs...)
+classify_reactivation_probe(comp::BasicNozzleCompBehav; kwargs...) = classify_reactivation_probe(comp.nozzle; kwargs...)
+commit_reactivation_probe!(comp::BasicNozzleCompBehav; kwargs...) = commit_reactivation_probe!(comp.nozzle; kwargs...)
 render_base_elem!(queue::Vector{<:RenderCommand}, behav::BasicNozzleCompBehav; kwargs...) = render_base_elem!(queue, behav.sprite; kwargs...)
 collect_effect_particles!(manager, comp::BasicNozzleCompBehav; kwargs...) = collect_effect_particles!(manager, comp.nozzle; kwargs...)
 placement_valid(comp::BasicNozzleCompBehav, coord::TileCoord, gamemap::GameMap; kwargs...) = placement_valid(comp.nozzle, coord, gamemap; kwargs...)
@@ -536,7 +543,8 @@ function update_flowbehav!(comp::SwitchedNozzleCompBehav; kwargs...)
 end
 
 get_reactivation_probe(comp::SwitchedNozzleCompBehav; kwargs...) = get_reactivation_probe(comp.nozzle; kwargs...)
-accept_reactivation_probe!(comp::SwitchedNozzleCompBehav; kwargs...) = accept_reactivation_probe!(comp.nozzle; kwargs...)
+classify_reactivation_probe(comp::SwitchedNozzleCompBehav; kwargs...) = classify_reactivation_probe(comp.nozzle; kwargs...)
+commit_reactivation_probe!(comp::SwitchedNozzleCompBehav; kwargs...) = commit_reactivation_probe!(comp.nozzle; kwargs...)
 
 function placement_valid(comp::SwitchedNozzleCompBehav, coord::TileCoord, gamemap::GameMap; rotation::HexAxis, ship_name::Symbol = :primary, kwargs...)
     # For switched nozzles, check the switch's external connection node (v1).
@@ -705,6 +713,7 @@ const biprop_fuel_vcvs_index::Int = 1      # Fuel VCVS element index
 const biprop_oxid_vcvs_index::Int = 2      # Oxidiser VCVS element index
 const backflow_tolerance::Float64 = 0.02   # Tolerance for flow detection and backflow guard
 const biprop_flow_threshold::Float64 = 1e-9  # Total-flow threshold guarding the limiting-reactant divide
+const BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K::Float64 = 50.0  # Minimum temperature for unmixed propellants
 
 "Mutable state for bipropellant combustion chamber"
 mutable struct BipropChamberState
@@ -732,7 +741,7 @@ oxidiser: 1.0) produce the default optimal ratio of 2.5 and are deliberately bel
 conductances (2.0–10.0) so the orifice dominates the input impedance.
 """
 function BipropChamberCompBehav(; fuel_conductance::Float64 = 0.4, oxid_conductance::Float64 = 1.0, r_optimal::Float64 = 2.5)
-    state = BipropChamberState(HexFluids.THERMAL_AMBIENT_TEMPERATURE_K, AutoDeactivationBehavFrag())
+    state = BipropChamberState(BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K, AutoDeactivationBehavFrag())
     return BipropChamberCompBehav(fuel_conductance, oxid_conductance, r_optimal, state)
 end
 
@@ -817,9 +826,11 @@ function set_tunables(comp::BipropChamberCompBehav, tunables::NTuple{3, T})::Bip
 end
 
 function update_flowbehav!(comp::BipropChamberCompBehav; rotation::HexAxis, tile::TileCoord, mna_state::MNA_State, derivedmapstate::DerivedMapState, kwargs...)
+    t_min = BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K
+
     # Inactive chamber must not retain its previous combustion temperature
     if is_inactive(comp.state.auto_deactivation)
-        comp.state.output_temperature_state = HexFluids.THERMAL_AMBIENT_TEMPERATURE_K
+        comp.state.output_temperature_state = t_min
         return nothing
     end
 
@@ -830,14 +841,13 @@ function update_flowbehav!(comp::BipropChamberCompBehav; rotation::HexAxis, tile
     # Deactivate on backflow (negative current beyond tolerance) on either leg
     if fuel_current < -backflow_tolerance || oxid_current < -backflow_tolerance
         deactivate!(comp.state.auto_deactivation)
-        comp.state.output_temperature_state = HexFluids.THERMAL_AMBIENT_TEMPERATURE_K
+        comp.state.output_temperature_state = t_min
         return nothing
     end
 
-    # Peak combustion temperature is the BIPROP_EXHAUST reference temperature; fall back to ambient if unset
-    t_ambient = HexFluids.THERMAL_AMBIENT_TEMPERATURE_K
+    # Combustion chamber temperature range: 50K (cold unmixed propellants) to 2300K (stoichiometric combustion)
     t_max_lookup = HexFluids.lookup_fluid_reference_temperature(HexFluids.BIPROP_EXHAUST)
-    t_max = isnothing(t_max_lookup) ? t_ambient : t_max_lookup
+    t_max = isnothing(t_max_lookup) ? t_min : t_max_lookup
 
     # Limiting-reactant combustion model on volumetric flows. Either flow at zero gives zero combustion.
     fuel_flow = max(fuel_current, 0.0)
@@ -845,14 +855,14 @@ function update_flowbehav!(comp::BipropChamberCompBehav; rotation::HexAxis, tile
     total_flow = fuel_flow + oxid_flow
 
     if total_flow < biprop_flow_threshold
-        comp.state.output_temperature_state = t_ambient
+        comp.state.output_temperature_state = t_min
         return nothing
     end
 
     combustible_fuel = min(fuel_flow, oxid_flow / comp.r_optimal)
     combusted_flow = combustible_fuel * (1.0 + comp.r_optimal)
     combustion_fraction = combusted_flow / total_flow
-    comp.state.output_temperature_state = t_ambient + combustion_fraction * (t_max - t_ambient)
+    comp.state.output_temperature_state = t_min + combustion_fraction * (t_max - t_min)
 
     return nothing
 end
@@ -863,7 +873,7 @@ when the chamber is currently active.
 
 The probe rebuilds the full chamber stamp (2 VCVS, 2 CCCS, 2 orifice resistors) so the
 trial solve sees the same network the chamber would produce on its first live tick after
-reactivation. Acceptance is decided in `accept_reactivation_probe!` based on both legs
+reactivation. Classification is decided in `classify_reactivation_probe` based on both legs
 flowing forward.
 """
 function get_reactivation_probe(comp::BipropChamberCompBehav; kwargs...)
@@ -875,31 +885,32 @@ end
 map_mirroring(::BipropChamberCompBehav, mirrored::Bool) = mirrored
 
 """
-Accept reactivation only when the speculative solve shows both fuel and oxidiser
-flowing forward through the chamber's VCVS sources.
+Classify chamber reactivation only when the speculative solve shows both fuel and oxidiser
+flowing acceptably through the chamber's VCVS sources.
 
-The acceptance gate is the inverse of the live deactivation gate in `update_flowbehav!`:
+The classification gate is the inverse of the live deactivation gate in `update_flowbehav!`:
 deactivation triggers when either leg falls below `-backflow_tolerance`, so reactivation
 requires both legs to be at least `-backflow_tolerance` (i.e. neither is in significant
-backflow). On rejection the component is left untouched and the scheduler will retry on
-a future tick if the request is still pending.
+backflow). Missing legs classify neutral.
 """
-function accept_reactivation_probe!(comp::BipropChamberCompBehav;
-        tile::TileCoord, rotation::HexAxis,
-        derivedmapstate::DerivedMapState, mna_state, kwargs...)
+function classify_reactivation_probe(comp::BipropChamberCompBehav; tile::TileCoord, rotation::HexAxis, derivedmapstate::DerivedMapState, mna_state, kwargs...)
     fuel_current = get(mna_state.vsource_currents, ElementID(tile, biprop_fuel_vcvs_index), nothing)
     oxid_current = get(mna_state.vsource_currents, ElementID(tile, biprop_oxid_vcvs_index), nothing)
 
     # If either VCVS was pruned out of the trial solve, currents won't be in the dict.
-    # Treat that as rejection — we cannot prove forward flow.
-    isnothing(fuel_current) && return false
-    isnothing(oxid_current) && return false
+    # Treat that as neutral — we cannot prove forward flow.
+    isnothing(fuel_current) && return HexComponentsAPI.PROBE_NEUTRAL
+    isnothing(oxid_current) && return HexComponentsAPI.PROBE_NEUTRAL
 
-    fuel_current >= -backflow_tolerance || return false
-    oxid_current >= -backflow_tolerance || return false
+    fuel_current < -backflow_tolerance && return HexComponentsAPI.PROBE_HARMFUL
+    oxid_current < -backflow_tolerance && return HexComponentsAPI.PROBE_HARMFUL
+    return HexComponentsAPI.PROBE_USEFUL
+end
 
+"Reactivate the chamber after a useful speculative probe result." 
+function commit_reactivation_probe!(comp::BipropChamberCompBehav; kwargs...)
     reactivate!(comp.state.auto_deactivation)
-    return true
+    return nothing
 end
 
 function render_base_elem!(queue::Vector{<:RenderCommand}, comp::BipropChamberCompBehav; glmap::GLObjectMap, rotation::HexAxis, mirrored::Bool = false, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)

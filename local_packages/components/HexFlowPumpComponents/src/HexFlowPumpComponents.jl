@@ -18,7 +18,7 @@ using HexFlowBasicComponents, HexFlowSwitchComponents
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional
 import HexComponentsAPI: on_click!, update_flowbehav!, render_map_elem!, get_actions, do_action!, produce_rel_fluid_declarations, map_mirroring, get_component_temperature
-import HexComponentsAPI: get_reactivation_probe, accept_reactivation_probe!
+import HexComponentsAPI: ReactivationProbe, ReactivationProbeOutcome, get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe!
 # Behavior Fragment Dependencies
 import HexFlowBasicComponents: deactivate!, reactivate!, is_inactive, damage!, undamage!, is_damaged
 import HexFlowBasicComponents: get_overheat_percentage, get_overheat_tint, update_overheat_state!
@@ -382,11 +382,11 @@ function get_reactivation_probe(comp::TurboPumpCompBehav; kwargs...)
 end
 
 """
-Accept reactivation when the speculative turbine shunt current is not harmfully reversed.
-Reactivation is allowed for both useful and neutral turbine flow; only harmful reverse flow
-through the turbine sink blocks reactivation. Returns `false` if turbine element was pruned.
+Classify reactivation when the speculative turbine shunt current is not harmfully reversed.
+Useful and neutral turbine flow are both accepted at the shared API boundary, while
+harmful reverse flow blocks reactivation. Pruned turbine elements classify neutral.
 """
-function accept_reactivation_probe!(comp::TurboPumpCompBehav; tile::TileCoord, rotation::HexAxis, mirrored::Bool = false, derivedmapstate::DerivedMapState, mna_state, kwargs...)
+function classify_reactivation_probe(comp::TurboPumpCompBehav; tile::TileCoord, rotation::HexAxis, mirrored::Bool = false, derivedmapstate::DerivedMapState, mna_state, kwargs...)
     turbine_rel_elem = RelativeElement(
         RelativeElementConnections(HexFrame.NODE_S_POS, HexFrame.GROUND),
         effective_turbine_conductance(comp),
@@ -395,10 +395,15 @@ function accept_reactivation_probe!(comp::TurboPumpCompBehav; tile::TileCoord, r
     )
     turbine_abs_elem = map_element(turbine_rel_elem, tile, turbine_element_index, rotation, mirrored)
     turbine_current = abs_element_get_current(turbine_abs_elem, derivedmapstate, mna_state)
-    isnothing(turbine_current) && return false
-    turbine_current < -pump_probe_tol && return false
+    isnothing(turbine_current) && return HexComponentsAPI.PROBE_NEUTRAL
+    turbine_current < -pump_probe_tol && return HexComponentsAPI.PROBE_HARMFUL
+    return HexComponentsAPI.PROBE_USEFUL
+end
+
+"Reactivate the pump after a useful speculative probe result." 
+function commit_reactivation_probe!(comp::TurboPumpCompBehav; kwargs...)
     reactivate!(comp.deactivation)
-    return true
+    return nothing
 end
 
 "Renders static turbopump elements: fluid mask, rotor, and static parts."

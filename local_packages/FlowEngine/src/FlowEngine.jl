@@ -130,9 +130,11 @@ J = column indices, V = values), then converting to CSC sparse format via `Spars
 with fully pre-allocated work buffers. The `combine = +` argument handles multiple contributions
 to the same matrix position (e.g., resistors sharing a node sum their conductances).
 
-Structure and value change detection uses hashes computed from the IJV vectors:
-- `structure_hash`: XOR of hash((I[k], J[k])) — detects topology changes (new/removed non-zeros)
-- `value_hash`: hash of V vector — detects conductance/gain magnitude changes
+The authoritative cache hashes are computed from the constructed CSC matrix, not the raw stamps:
+- `structure_hash`: hash of CSC `colptr` and `rowval` — detects changes in stored matrix structure
+- `value_hash`: hash of CSC `nzval` — detects magnitude changes while structure is unchanged
+- `zero_state_hash`: hash of which CSC stored values are exactly zero — catches warm-path hazards
+    where exact-zero transitions preserve CSC storage but invalidate numeric reuse
 """
 @kwdef mutable struct AMatrixCache
     # IJV stamp vectors (refilled each tick via empty! + push!)
@@ -153,9 +155,10 @@ Structure and value change detection uses hashes computed from the IJV vectors:
     # KLU factorisation — circuit-simulation specialist from SuiteSparse.
     # WARNING: deepcopy of KLUFactorization shares C pointers (_symbolic, _numeric) and will double-free on GC, Do not copy!
     mat_A_lu::KLU.KLUFactorization{Float64, Int64} = klu(sparse([1], [1], [1.0]))
-    # Two-tier cache hashes
-    structure_hash::UInt64 = UInt64(0) # hash of IJV positions (I, J) — topology
-    value_hash::UInt64 = UInt64(0)     # hash of IJV magnitudes (V) — conductances/gains
+    # CSC-based cache hashes
+    structure_hash::UInt64 = UInt64(0)  # hash of CSC colptr/rowval — stored structure
+    value_hash::UInt64 = UInt64(0)      # hash of CSC nzval — stored magnitudes
+    zero_state_hash::UInt64 = UInt64(0) # hash of CSC exact-zero participation
 end
 @struct_hash_equal AMatrixCache
 
@@ -1118,29 +1121,44 @@ function MNA_construct_A_sparse!(mna_state::MNA_State)
     return nothing
 end
 
-"""
-Compute structure and value hashes from the IJV vectors.
-
-Structure hash: XOR-combined hash of (I[k], J[k]) pairs. Detects topology changes (which matrix
-positions have non-zero entries). Uses XOR for Dict iteration order independence.
-
-Value hash: standard `hash()` over the V vector. Detects magnitude changes in conductances, gains,
-and connectivity values.
-
-Returns `(structure_hash, value_hash)`.
-"""
-function compute_A_hashes(cache::AMatrixCache)::Tuple{UInt64, UInt64}
-    I = cache.ijv_I; J = cache.ijv_J; V = cache.ijv_V
-
-    sh = UInt64(0)
-    for k in eachindex(I, J)
-        sh ⊻= hash((I[k], J[k]))
+"""Fold vector contents into a hash seed in order."""
+function _fold_hash(values, h::UInt64)::UInt64
+    for value in values
+        h = hash(value, h)
     end
-    sh = hash(length(I), sh) # include entry count for extra safety
+    return h
+end
 
-    vh = hash(V)
+"""
+Compute structure, value, and zero-state hashes from the constructed CSC A matrix.
 
-    return (sh, vh)
+Must be called after `MNA_construct_A_sparse!`. The CSC output of `SparseArrays.sparse!` is
+canonical for equivalent matrices, so these order-sensitive hashes are stable across equivalent
+raw stamp orderings.
+
+Returns `(structure_hash, value_hash, zero_state_hash)`.
+"""
+function compute_A_hashes(cache::AMatrixCache)::Tuple{UInt64, UInt64, UInt64}
+    colptr = cache.csccolptr
+    rowval = cache.cscrowval
+    nzval = cache.cscnzval
+
+    # Hash CSC structure via canonical column pointers and row indices.
+    structure_hash = hash(length(rowval))
+    structure_hash = _fold_hash(colptr, structure_hash)
+    structure_hash = _fold_hash(rowval, structure_hash)
+
+    # Hash CSC stored values to detect magnitude changes under fixed structure.
+    value_hash = hash(length(nzval))
+    value_hash = _fold_hash(nzval, value_hash)
+
+    # Hash CSC exact-zero participation to catch zero-toggle reuse hazards.
+    zero_state_hash = hash(length(nzval))
+    for value in nzval
+        zero_state_hash = hash(iszero(value), zero_state_hash)
+    end
+
+    return (structure_hash, value_hash, zero_state_hash)
 end
 
 """
@@ -1161,36 +1179,38 @@ end
 """
 Update the A matrix and its KLU factorisation using the unified IJV → sparse! pipeline.
 
-Each call stamps all elements into IJV vectors (zero-allocation), then applies three-tier caching:
+Each call stamps all elements into IJV vectors (zero-allocation), then applies two-tier caching:
 
-1. **Structure changed** (different non-zero positions): full sparse construction + `klu()`
-   factorisation — needs new symbolic analysis. This is the cold path.
-2. **Values changed** (same positions, different magnitudes): sparse construction (zero-alloc) +
-   `klu!()` in-place numeric refactorisation — reuses symbolic analysis, near-zero allocation.
-3. **Nothing changed**: skip entirely — previous KLU factorisation is still valid.
+1. **Structure or zero-state changed**: full sparse construction + `klu()` factorisation
+   needs new symbolic analysis. This is the cold path.
+2. **Values changed** (same positions and zero-state, different magnitudes): sparse construction
+   (zero-alloc) + `klu!()` in-place numeric refactorisation — reuses symbolic analysis.
+
+On the first tick, all hashes initialize to zero, so the new hashes always differ, triggering the
+cold path naturally.
 """
 function MNA_updateA!(mna_state::MNA_State)
     # Stamp elements into IJV (zero-alloc after warmup)
     MNA_stamp_A_ijv!(mna_state)
 
+    # Build sparse matrix and compute authoritative hashes from the CSC structure
+    MNA_construct_A_sparse!(mna_state)
+
     cache = mna_state.a_cache
-    new_structure_hash, new_value_hash = compute_A_hashes(cache)
+    new_structure_hash, new_value_hash, new_zero_state_hash = compute_A_hashes(cache)
 
-    if new_structure_hash != cache.structure_hash
-        # Cold path: topology changed — full sparse rebuild + new KLU factorisation
-        MNA_construct_A_sparse!(mna_state)
+    if new_structure_hash != cache.structure_hash ||
+       new_zero_state_hash != cache.zero_state_hash
+        # Cold path: topology or zero-state changed so do full sparse rebuild + new KLU factorisation
         cache.mat_A_lu = klu(cache.mat_A_sparse)
-        cache.structure_hash = new_structure_hash
-        cache.value_hash = new_value_hash
-
     elseif new_value_hash != cache.value_hash
-        # Warm path: values changed — rebuild sparse (zero-alloc) + in-place numeric refactor
-        MNA_construct_A_sparse!(mna_state)
+        # Warm path: CSC structure and zero participation are stable so do numeric refactor only
         klu!(cache.mat_A_lu, nonzeros(cache.mat_A_sparse))
-        cache.value_hash = new_value_hash
-
     end
-    # else: nothing changed — skip entirely
+
+    cache.structure_hash = new_structure_hash
+    cache.value_hash = new_value_hash
+    cache.zero_state_hash = new_zero_state_hash
 
     return nothing
 end

@@ -18,7 +18,8 @@ export get_component_dry_mass, get_component_wet_mass
 export collect_effect_particles!
 export get_actions, do_action!
 export get_default_component_mass, set_default_component_mass!
-export ReactivationProbe, get_reactivation_probe, accept_reactivation_probe!
+export ReactivationProbe, ReactivationProbeOutcome, PROBE_HARMFUL, PROBE_NEUTRAL, PROBE_USEFUL
+export get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe!
 
 # Pipe Behavior Exports
 export PipeBehavior
@@ -209,6 +210,13 @@ struct ReactivationProbe{E <: Tuple, D <: Tuple}
     rel_fluid_declarations::D
 end
 
+"Shared outcome classification returned by speculative reactivation probe checks."
+@enum ReactivationProbeOutcome::UInt8 begin
+    PROBE_HARMFUL
+    PROBE_NEUTRAL
+    PROBE_USEFUL
+end
+
 "Convenience constructor for probes that carry only circuit elements."
 ReactivationProbe(rel_elements::Tuple) = ReactivationProbe(rel_elements, ())
 
@@ -218,17 +226,36 @@ or `nothing` if the component has no pending reactivation request this tick.
 
 Returning a non-`nothing` probe signals to the calculator scheduler that this component
 wishes to test whether it can be safely reactivated. The scheduler will run a speculative
-solve with the probe's elements appended and then call `accept_reactivation_probe!`.
+solve with the probe's elements appended, classify the result with `classify_reactivation_probe`,
+and call `commit_reactivation_probe!` only when the classification is useful.
 """
 get_reactivation_probe(behav::T; kwargs...) where {T <: ComponentBehavior} = nothing
 
 """
-Called after a speculative solve completed without errors, using this component's probe inputs.
+Classify the outcome of a speculative reactivation probe for this component.
 
-Should return `true` only if the speculative solve state indicates the reactivation is safe.
-May mutate the component on success. Must leave the component unchanged when returning `false`.
+This hook must be pure and must not mutate component state.
+
+Return values:
+
+- `PROBE_USEFUL`: the speculative solve is good enough that the scheduler may commit this component immediately
+- `PROBE_NEUTRAL`: the speculative solve is neither useful enough to commit solo nor actively harmful
+- `PROBE_HARMFUL`: the speculative solve is actively wrong for this component this tick
+
+Components that treat a neutral-ish speculative state as immediately acceptable should
+classify it as `PROBE_USEFUL` at this shared API boundary.
 """
-accept_reactivation_probe!(behav::T; kwargs...) where {T <: ComponentBehavior} = false
+function classify_reactivation_probe(behav::T; kwargs...) where {T <: ComponentBehavior}
+    error("classify_reactivation_probe not implemented for $(nameof(T))")
+end
+
+"""
+Apply the committed effect of a useful speculative reactivation probe.
+
+The scheduler only calls this hook after `classify_reactivation_probe` returned
+`PROBE_USEFUL` for the corresponding speculative solve.
+"""
+commit_reactivation_probe!(behav::T; kwargs...) where {T <: ComponentBehavior} = nothing
 
 # ===============================================================
 # ComponentOnTile Wrapper
@@ -278,7 +305,8 @@ placement_valid(comp::ComponentOnTile, coord, surface; kwargs...) = placement_va
 get_actions(comp::ComponentOnTile; kwargs...) = get_actions(comp.component; kwargs...)
 do_action!(comp::ComponentOnTile, action_id::Symbol; kwargs...) = do_action!(comp.component, action_id; kwargs...)
 get_reactivation_probe(comp::ComponentOnTile; kwargs...) = get_reactivation_probe(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
-accept_reactivation_probe!(comp::ComponentOnTile; kwargs...) = accept_reactivation_probe!(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
+classify_reactivation_probe(comp::ComponentOnTile; kwargs...) = classify_reactivation_probe(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
+commit_reactivation_probe!(comp::ComponentOnTile; kwargs...) = commit_reactivation_probe!(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
 
 "General implementation which leverages the existing ComponentBehavior produce_rel_elements function"
 function produce_abs_elements(tilecomp::ComponentOnTile, tile::TileCoord)

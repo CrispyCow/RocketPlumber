@@ -1,4 +1,7 @@
 using Test
+using LinearAlgebra: SingularException
+using SparseArrays: sparse, nonzeros, rowvals, nnz
+using KLU: klu, klu!
 using HexFrame
 using HexElements
 using HexFluids
@@ -1015,6 +1018,85 @@ end
         @test mna.a_cache.value_hash != old_hash # value changed → LU was redone
     end
 
+    @testset "sparse CSC storage is canonical across equivalent raw stamp orderings" begin
+        I1 = [3, 1, 2, 1, 3, 2]
+        J1 = [2, 1, 1, 1, 2, 1]
+        V1 = [5.0, 1.0, 2.0, -1.0, -5.0, 4.0]
+
+        I2 = reverse(I1)
+        J2 = reverse(J1)
+        V2 = reverse(V1)
+
+        A1 = sparse(I1, J1, V1, 3, 3, +)
+        A2 = sparse(I2, J2, V2, 3, 3, +)
+
+        @test A1.colptr == A2.colptr
+        @test rowvals(A1) == rowvals(A2)
+        @test nonzeros(A1) == nonzeros(A2)
+    end
+
+    @testset "MNA_buildA_sparse canonicalises equivalent element ordering" begin
+        mna1 = build_mna(base_elements)
+        mna2 = build_mna(reverse(base_elements))
+
+        A1 = MNA_buildA_sparse(mna1)
+        A2 = MNA_buildA_sparse(mna2)
+
+        @test A1.colptr == A2.colptr
+        @test rowvals(A1) == rowvals(A2)
+        @test nonzeros(A1) == nonzeros(A2)
+    end
+
+    @testset "sparse combine can produce stored explicit zeros" begin
+        A = sparse([1, 1], [1, 1], [1.0, -1.0], 1, 1, +)
+
+        @test nnz(A) == 1
+        @test count(!iszero, A) == 0
+        @test nonzeros(A) == [0.0]
+    end
+
+    @testset "KLU numeric refactor throws on stored-zero warm transition" begin
+        matrix1 = sparse([1, 2, 1, 2], [1, 1, 2, 2], [-1.0, -0.1, 1.0, -0.5], 2, 2)
+        matrix2 = sparse([1, 2, 1, 2], [1, 1, 2, 2], [0.0, -0.1, 2.0, -0.5], 2, 2)
+
+        factor = klu(matrix1)
+        @test_throws SingularException klu!(factor, nonzeros(matrix2))
+    end
+
+    @testset "real stamped MNA can change CSC zero-state without changing CSC structure" begin
+        resistor_id = ElementID(TileCoord(0, 0), UInt8(2))
+
+        elems_nonzero = copy(base_elements)
+        elems_zero = [
+            base_elements[1],
+            make_element(TileCoord(0,0), 2, n_a, n_b, 0.0, CONST_RESISTOR),
+            base_elements[3],
+        ]
+
+        mna_nonzero = build_mna(elems_nonzero)
+        mna_zero = build_mna(elems_zero)
+
+        A_nonzero = MNA_buildA_sparse(mna_nonzero)
+        A_zero = MNA_buildA_sparse(mna_zero)
+
+        @test A_nonzero.colptr == A_zero.colptr
+        @test rowvals(A_nonzero) == rowvals(A_zero)
+        @test map(iszero, nonzeros(A_nonzero)) != map(iszero, nonzeros(A_zero))
+        @test !any(iszero, nonzeros(A_nonzero))
+        @test any(iszero, nonzeros(A_zero))
+    end
+
+    @testset "real stamped zero-toggle witness becomes singular on cold rebuild" begin
+        elems_zero = [
+            base_elements[1],
+            make_element(TileCoord(0,0), 2, n_a, n_b, 0.0, CONST_RESISTOR),
+            base_elements[3],
+        ]
+
+        mna_zero = build_mna(elems_zero)
+        @test_throws SingularException MNA_updateA!(mna_zero)
+    end
+
     @testset "MNA_updateA! detects topology changes" begin
         mna = build_mna(base_elements)
         MNA_updateA!(mna)
@@ -1053,10 +1135,12 @@ end
     @testset "compute_A_hashes detects structure vs value changes" begin
         mna = build_mna(base_elements)
         MNA_stamp_A_ijv!(mna)
+        MNA_construct_A_sparse!(mna)
         sh1, vh1 = compute_A_hashes(mna.a_cache)
 
         # Same elements → same hashes
         MNA_stamp_A_ijv!(mna)
+        MNA_construct_A_sparse!(mna)
         sh2, vh2 = compute_A_hashes(mna.a_cache)
         @test sh1 == sh2
         @test vh1 == vh2
@@ -1073,6 +1157,7 @@ end
             active = resistor.active,
         )
         MNA_stamp_A_ijv!(mna)
+        MNA_construct_A_sparse!(mna)
         sh3, vh3 = compute_A_hashes(mna.a_cache)
         @test sh3 == sh1  # structure unchanged
         @test vh3 != vh1  # value changed

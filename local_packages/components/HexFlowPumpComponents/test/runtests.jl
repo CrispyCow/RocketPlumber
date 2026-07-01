@@ -477,7 +477,7 @@ end
     @test probe.rel_elements[1].value ≈ inactive_comp.max_pump_voltage * get_rpm_fraction(inactive_comp.rotor)
 end
 
-@testset "Turbopump accept_reactivation_probe!" begin
+@testset "Turbopump classify_reactivation_probe and commit_reactivation_probe!" begin
     tile = TEST_TILE
     rotation = TEST_ROTATION
 
@@ -500,42 +500,44 @@ end
         return mna_state, derivedmapstate
     end
 
-    # Positive turbine current (useful flow) → accept.
+    # Positive turbine current (useful flow) → useful.
     comp_accept = make_turbopump(current_rpm = 500.0)
     deactivate!(comp_accept.deactivation)
     mna_pos, dm_pos = make_turbine_probe_state(comp_accept; s_pos_voltage = 5.0)
-    @test accept_reactivation_probe!(comp_accept; tile = tile, rotation = rotation, derivedmapstate = dm_pos, mna_state = mna_pos)
+    @test classify_reactivation_probe(comp_accept; tile = tile, rotation = rotation, derivedmapstate = dm_pos, mna_state = mna_pos) === PROBE_USEFUL
+    @test is_inactive(comp_accept.deactivation)
+    commit_reactivation_probe!(comp_accept; tile = tile, rotation = rotation, derivedmapstate = dm_pos, mna_state = mna_pos)
     @test !is_inactive(comp_accept.deactivation)
 
-    # Zero turbine current (neutral) → accept (not harmful).
+    # Zero turbine current (neutral-ish) → useful at the shared API boundary.
     comp_neutral = make_turbopump(current_rpm = 500.0)
     deactivate!(comp_neutral.deactivation)
     mna_zero, dm_zero = make_turbine_probe_state(comp_neutral; s_pos_voltage = 0.0)
-    @test accept_reactivation_probe!(comp_neutral; tile = tile, rotation = rotation, derivedmapstate = dm_zero, mna_state = mna_zero)
-    @test !is_inactive(comp_neutral.deactivation)
+    @test classify_reactivation_probe(comp_neutral; tile = tile, rotation = rotation, derivedmapstate = dm_zero, mna_state = mna_zero) === PROBE_USEFUL
+    @test is_inactive(comp_neutral.deactivation)
 
-    # Harmful reverse turbine current → reject; state unchanged.
+    # Harmful reverse turbine current → harmful; state unchanged.
     comp_reject = make_turbopump(current_rpm = 500.0)
     deactivate!(comp_reject.deactivation)
     mna_neg, dm_neg = make_turbine_probe_state(comp_reject; s_pos_voltage = -5.0)
-    @test !accept_reactivation_probe!(comp_reject; tile = tile, rotation = rotation, derivedmapstate = dm_neg, mna_state = mna_neg)
+    @test classify_reactivation_probe(comp_reject; tile = tile, rotation = rotation, derivedmapstate = dm_neg, mna_state = mna_neg) === PROBE_HARMFUL
     @test is_inactive(comp_reject.deactivation)
 
-    # Pruned turbine element → reject.
+    # Pruned turbine element → neutral.
     comp_pruned = make_turbopump(current_rpm = 500.0)
     deactivate!(comp_pruned.deactivation)
-    @test !accept_reactivation_probe!(comp_pruned; tile = tile, rotation = rotation, derivedmapstate = DerivedMapState(), mna_state = MNA_State())
+    @test classify_reactivation_probe(comp_pruned; tile = tile, rotation = rotation, derivedmapstate = DerivedMapState(), mna_state = MNA_State()) === PROBE_NEUTRAL
     @test is_inactive(comp_pruned.deactivation)
 
-    # Reverse pump-source current does NOT block reactivation.
+    # Reverse pump-source current does NOT block useful classification.
     comp_revpump = make_turbopump(current_rpm = 500.0)
     deactivate!(comp_revpump.deactivation)
     mna_revpump, dm_revpump = make_turbine_probe_state(comp_revpump; s_pos_voltage = 3.0)
     # Inject a positive (reversing) pump source current into the mock state.
     register_vsources!(mna_revpump, tile, 1)
     mna_revpump.vsource_currents[ElementID(tile, 1)] = 2.0
-    @test accept_reactivation_probe!(comp_revpump; tile = tile, rotation = rotation, derivedmapstate = dm_revpump, mna_state = mna_revpump)
-    @test !is_inactive(comp_revpump.deactivation)
+    @test classify_reactivation_probe(comp_revpump; tile = tile, rotation = rotation, derivedmapstate = dm_revpump, mna_state = mna_revpump) === PROBE_USEFUL
+    @test is_inactive(comp_revpump.deactivation)
 end
 
 @testset "Variable conductance" begin

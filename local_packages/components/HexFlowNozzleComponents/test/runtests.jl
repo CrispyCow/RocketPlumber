@@ -158,7 +158,7 @@ end
     @test isnothing(get_reactivation_probe(nozzle; tile = tile, rotation = rotation))
 end
 
-@testset "Nozzle accept_reactivation_probe!" begin
+@testset "Nozzle classify_reactivation_probe and commit_reactivation_probe!" begin
     tile = TEST_TILE
     rotation = TEST_ROTATION
 
@@ -181,31 +181,33 @@ end
         return mna_state, derivedmapstate
     end
 
-    # Positive probe current → accept and reactivate.
+    # Positive probe current → useful, then commit reactivates.
     nozzle_accept = NozzleBehavFrag(HexFrame.NODE_Q_POS, 0.2)
     deactivate!(nozzle_accept)
     mna_pos, dm_pos = make_probe_state(nozzle_accept; pressure = 5.0)
-    @test accept_reactivation_probe!(nozzle_accept; tile = tile, rotation = rotation, derivedmapstate = dm_pos, mna_state = mna_pos)
+    @test classify_reactivation_probe(nozzle_accept; tile = tile, rotation = rotation, derivedmapstate = dm_pos, mna_state = mna_pos) === PROBE_USEFUL
+    @test is_inactive(nozzle_accept)
+    commit_reactivation_probe!(nozzle_accept; tile = tile, rotation = rotation, derivedmapstate = dm_pos, mna_state = mna_pos)
     @test !is_inactive(nozzle_accept)
 
-    # Negative probe current → reject; state unchanged.
+    # Negative probe current → harmful; state unchanged.
     nozzle_reject = NozzleBehavFrag(HexFrame.NODE_Q_POS, 0.2)
     deactivate!(nozzle_reject)
     mna_neg, dm_neg = make_probe_state(nozzle_reject; pressure = -5.0)
-    @test !accept_reactivation_probe!(nozzle_reject; tile = tile, rotation = rotation, derivedmapstate = dm_neg, mna_state = mna_neg)
+    @test classify_reactivation_probe(nozzle_reject; tile = tile, rotation = rotation, derivedmapstate = dm_neg, mna_state = mna_neg) === PROBE_HARMFUL
     @test is_inactive(nozzle_reject)
 
-    # Zero (neutral) probe current → reject (not > probe_tol).
+    # Zero (neutral) probe current → neutral.
     nozzle_neutral = NozzleBehavFrag(HexFrame.NODE_Q_POS, 0.2)
     deactivate!(nozzle_neutral)
     mna_zero, dm_zero = make_probe_state(nozzle_neutral; pressure = 0.0)
-    @test !accept_reactivation_probe!(nozzle_neutral; tile = tile, rotation = rotation, derivedmapstate = dm_zero, mna_state = mna_zero)
+    @test classify_reactivation_probe(nozzle_neutral; tile = tile, rotation = rotation, derivedmapstate = dm_zero, mna_state = mna_zero) === PROBE_NEUTRAL
     @test is_inactive(nozzle_neutral)
 
-    # Pruned element (not in filteredelements) → reject.
+    # Pruned element (not in filteredelements) → neutral.
     nozzle_pruned = NozzleBehavFrag(HexFrame.NODE_Q_POS, 0.2)
     deactivate!(nozzle_pruned)
-    @test !accept_reactivation_probe!(nozzle_pruned; tile = tile, rotation = rotation, derivedmapstate = DerivedMapState(), mna_state = MNA_State())
+    @test classify_reactivation_probe(nozzle_pruned; tile = tile, rotation = rotation, derivedmapstate = DerivedMapState(), mna_state = MNA_State()) === PROBE_NEUTRAL
     @test is_inactive(nozzle_pruned)
 end
 
@@ -320,7 +322,7 @@ end
     @test comp.fuel_conductance == 0.4
     @test comp.oxid_conductance == 1.0
     @test comp.r_optimal == 2.5
-    @test comp.state.output_temperature_state == HexFluids.THERMAL_AMBIENT_TEMPERATURE_K
+    @test comp.state.output_temperature_state == HexFlowNozzleComponents.BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K
     @test !is_inactive(comp.state.auto_deactivation)
 end
 
@@ -349,7 +351,7 @@ end
     @test length(decls) == 3
     @test decls[1] === RelativeFluidDeclaration(HexFrame.NODE_R_NEG, FluidTypeRule(HexFluids.FUEL_LIQUID))
     @test decls[2] === RelativeFluidDeclaration(HexFrame.NODE_S_NEG, FluidTypeRule(HexFluids.OXIDISER_LIQUID))
-    @test decls[3] === RelativeFluidDeclaration(HexFrame.NODE_Q_NEG, FluidSource(HexFluids.BIPROP_EXHAUST, HexFluids.THERMAL_AMBIENT_TEMPERATURE_K))
+    @test decls[3] === RelativeFluidDeclaration(HexFrame.NODE_Q_NEG, FluidSource(HexFluids.BIPROP_EXHAUST, HexFlowNozzleComponents.BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K))
 end
 
 @testset "Bipropellant combustion chamber tunables" begin
@@ -423,7 +425,7 @@ end
     
     update_flowbehav!(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
     @test is_inactive(comp.state.auto_deactivation)
-    @test comp.state.output_temperature_state == HexFluids.THERMAL_AMBIENT_TEMPERATURE_K
+    @test comp.state.output_temperature_state == HexFlowNozzleComponents.BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K
     
     # Reset and test oxidiser backflow
     comp = BipropChamberCompBehav()
@@ -432,7 +434,33 @@ end
     
     update_flowbehav!(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
     @test is_inactive(comp.state.auto_deactivation)
-    @test comp.state.output_temperature_state == HexFluids.THERMAL_AMBIENT_TEMPERATURE_K
+    @test comp.state.output_temperature_state == HexFlowNozzleComponents.BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K
+end
+
+@testset "Bipropellant combustion chamber non-combustion floor" begin
+    tile = TEST_TILE
+    rotation = TEST_ROTATION
+    derivedmapstate = DerivedMapState()
+    expected_temperature = HexFlowNozzleComponents.BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K
+
+    fuel_only = BipropChamberCompBehav()
+    fuel_only_mna_state = MNA_State()
+    fuel_only_mna_state.vsource_currents[ElementID(tile, 1)] = 10.0
+    fuel_only_mna_state.vsource_currents[ElementID(tile, 2)] = 0.0
+    update_flowbehav!(fuel_only; rotation = rotation, tile = tile, mna_state = fuel_only_mna_state, derivedmapstate = derivedmapstate)
+    @test fuel_only.state.output_temperature_state == expected_temperature
+
+    oxid_only = BipropChamberCompBehav()
+    oxid_only_mna_state = MNA_State()
+    oxid_only_mna_state.vsource_currents[ElementID(tile, 1)] = 0.0
+    oxid_only_mna_state.vsource_currents[ElementID(tile, 2)] = 10.0
+    update_flowbehav!(oxid_only; rotation = rotation, tile = tile, mna_state = oxid_only_mna_state, derivedmapstate = derivedmapstate)
+    @test oxid_only.state.output_temperature_state == expected_temperature
+
+    zero_flow = BipropChamberCompBehav()
+    zero_flow_mna_state = MNA_State()
+    update_flowbehav!(zero_flow; rotation = rotation, tile = tile, mna_state = zero_flow_mna_state, derivedmapstate = derivedmapstate)
+    @test zero_flow.state.output_temperature_state == expected_temperature
 end
 
 @testset "Bipropellant combustion chamber temperature curve" begin

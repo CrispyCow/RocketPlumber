@@ -504,8 +504,8 @@ end
     @test isnothing(get_reactivation_probe(both_sealed))
 end
 
-@testset "Pressure-fed tank: reactivation probe accept" begin
-    "Build a DerivedMapState and MNA_State with a registered vsource for accept tests."
+@testset "Pressure-fed tank: reactivation probe classify and commit" begin
+    "Build a DerivedMapState and MNA_State with a registered vsource for classify tests."
     function setup_pf_probe(comp, tile::TileCoord, index::Int, current::Float64; rotation = HexFrame.Q_POS)
         (frag_liq, frag_gas) = produce_rel_elements(comp.tank)
         frag = index == 1 ? frag_liq : frag_gas
@@ -518,37 +518,56 @@ end
         return dm, mna
     end
 
-    # Liquid auto-empty: accept positive inflow, reject outflow
+    # Liquid auto-empty: useful on positive inflow, harmful on outflow
     liq_empty = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 4.0)
     dm_pos, mna_pos = setup_pf_probe(liq_empty, TEST_TILE, 1, 5.0)
-    @test accept_reactivation_probe!(liq_empty; tile = TEST_TILE, derivedmapstate = dm_pos, mna_state = mna_pos)
-    @test liq_empty.tank.liquid_state.charge == 0.0  # no mutation on accept
+    @test classify_reactivation_probe(liq_empty; tile = TEST_TILE, derivedmapstate = dm_pos, mna_state = mna_pos) === PROBE_USEFUL
+    @test liq_empty.tank.liquid_state.charge == 0.0
+    @test !liquid_is_force_reactivated(liq_empty.tank)
+    commit_reactivation_probe!(liq_empty; tile = TEST_TILE, derivedmapstate = dm_pos, mna_state = mna_pos)
+    @test liquid_is_force_reactivated(liq_empty.tank)
+    @test !gas_is_force_reactivated(liq_empty.tank)
 
     liq_empty2 = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 4.0)
     dm_neg, mna_neg = setup_pf_probe(liq_empty2, TEST_TILE, 1, -5.0)
-    @test !accept_reactivation_probe!(liq_empty2; tile = TEST_TILE, derivedmapstate = dm_neg, mna_state = mna_neg)
+    @test classify_reactivation_probe(liq_empty2; tile = TEST_TILE, derivedmapstate = dm_neg, mna_state = mna_neg) === PROBE_HARMFUL
+    @test !liquid_is_force_reactivated(liq_empty2.tank)
 
-    # Liquid auto-full: accept negative outflow, reject inflow (low gas charge to avoid overpressure)
+    # Liquid auto-full: useful on negative outflow, harmful on inflow (low gas charge to avoid overpressure)
     liq_full = make_pressurefed_tank(liquid_charge = 40.0, gas_charge = 0.5)
     dm_full_neg, mna_full_neg = setup_pf_probe(liq_full, TEST_TILE, 1, -5.0)
-    @test accept_reactivation_probe!(liq_full; tile = TEST_TILE, derivedmapstate = dm_full_neg, mna_state = mna_full_neg)
-    @test liq_full.tank.liquid_state.charge == 40.0  # no mutation
+    @test classify_reactivation_probe(liq_full; tile = TEST_TILE, derivedmapstate = dm_full_neg, mna_state = mna_full_neg) === PROBE_USEFUL
+    @test liq_full.tank.liquid_state.charge == 40.0
+    commit_reactivation_probe!(liq_full; tile = TEST_TILE, derivedmapstate = dm_full_neg, mna_state = mna_full_neg)
+    @test liquid_is_force_reactivated(liq_full.tank)
 
     liq_full2 = make_pressurefed_tank(liquid_charge = 40.0, gas_charge = 0.5)
     dm_full_pos, mna_full_pos = setup_pf_probe(liq_full2, TEST_TILE, 1, 5.0)
-    @test !accept_reactivation_probe!(liq_full2; tile = TEST_TILE, derivedmapstate = dm_full_pos, mna_state = mna_full_pos)
+    @test classify_reactivation_probe(liq_full2; tile = TEST_TILE, derivedmapstate = dm_full_pos, mna_state = mna_full_pos) === PROBE_HARMFUL
+    @test !liquid_is_force_reactivated(liq_full2.tank)
 
-    # Gas auto-empty: accept positive inflow
+    # Gas auto-empty: useful on positive inflow
     gas_empty = make_pressurefed_tank(liquid_charge = 20.0, gas_charge = 0.0)
     dm_ge_pos, mna_ge_pos = setup_pf_probe(gas_empty, TEST_TILE, 2, 5.0)
-    @test accept_reactivation_probe!(gas_empty; tile = TEST_TILE, derivedmapstate = dm_ge_pos, mna_state = mna_ge_pos)
-    @test gas_empty.tank.gas_state.charge == 0.0  # no mutation
+    @test classify_reactivation_probe(gas_empty; tile = TEST_TILE, derivedmapstate = dm_ge_pos, mna_state = mna_ge_pos) === PROBE_USEFUL
+    @test gas_empty.tank.gas_state.charge == 0.0
+    commit_reactivation_probe!(gas_empty; tile = TEST_TILE, derivedmapstate = dm_ge_pos, mna_state = mna_ge_pos)
+    @test gas_is_force_reactivated(gas_empty.tank)
+    @test !liquid_is_force_reactivated(gas_empty.tank)
 
-    # Pruned element: reject
+    # Pruned element: neutral
     liq_empty_pruned = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 4.0)
-    @test !accept_reactivation_probe!(liq_empty_pruned; tile = TEST_TILE, derivedmapstate = DerivedMapState(), mna_state = MNA_State())
+    @test classify_reactivation_probe(liq_empty_pruned; tile = TEST_TILE, derivedmapstate = DerivedMapState(), mna_state = MNA_State()) === PROBE_NEUTRAL
 
-    # Gas overpressure: accept when gas outflow is useful; reject if harmful
+    # Pruned companion side: still useful when the remaining side can reactivate independently
+    liq_empty_gas_pruned = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 0.0)
+    dm_liq_only, mna_liq_only = setup_pf_probe(liq_empty_gas_pruned, TEST_TILE, 1, 5.0)
+    @test classify_reactivation_probe(liq_empty_gas_pruned; tile = TEST_TILE, derivedmapstate = dm_liq_only, mna_state = mna_liq_only) === PROBE_USEFUL
+    commit_reactivation_probe!(liq_empty_gas_pruned; tile = TEST_TILE, derivedmapstate = dm_liq_only, mna_state = mna_liq_only)
+    @test liquid_is_force_reactivated(liq_empty_gas_pruned.tank)
+    @test !gas_is_force_reactivated(liq_empty_gas_pruned.tank)
+
+    # Gas overpressure: useful when gas outflow is useful and liquid side stays neutral
     overpressure = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 42.0)
     dm_op_gas, mna_op_gas = setup_pf_probe(overpressure, TEST_TILE, 2, -5.0)  # gas outflow: useful
     # Must also register the liquid vsource since both sides are probed
@@ -557,7 +576,10 @@ end
     abs_liq = map_element(active_liq, TEST_TILE, 1, HexFrame.Q_POS)
     push!(dm_op_gas.filteredelements, abs_liq)
     mna_op_gas.vsource_currents[abs_liq.id] = 0.0  # liquid neutral
-    @test accept_reactivation_probe!(overpressure; tile = TEST_TILE, derivedmapstate = dm_op_gas, mna_state = mna_op_gas)
+    @test classify_reactivation_probe(overpressure; tile = TEST_TILE, derivedmapstate = dm_op_gas, mna_state = mna_op_gas) === PROBE_USEFUL
+    commit_reactivation_probe!(overpressure; tile = TEST_TILE, derivedmapstate = dm_op_gas, mna_state = mna_op_gas)
+    @test !liquid_is_force_reactivated(overpressure.tank)
+    @test gas_is_force_reactivated(overpressure.tank)
 end
 
 # ===============================================================
@@ -978,8 +1000,8 @@ end
     @test isnothing(get_reactivation_probe(liq_mid))
 end
 
-@testset "ThevininTankCompBehav: reactivation probe (accept)" begin
-    "Build DerivedMapState and MNA_State for accept_reactivation_probe! tests."
+@testset "ThevininTankCompBehav: reactivation probe classify and commit" begin
+    "Build DerivedMapState and MNA_State for classify_reactivation_probe tests."
     function setup_probe_accept(behav, tile::TileCoord, current::Float64; rotation::HexAxis = HexFrame.Q_POS)
         (rel_vsource,) = produce_rel_elements(behav)
         active_vsource = @set rel_vsource.active = true
@@ -998,39 +1020,68 @@ end
     # --- Empty tank ---
     gas_empty = make_gas_tank(initial_charge = 0.0)
 
-    # Pruned element: reject
+    # Pruned element: neutral
     pruned_dm = DerivedMapState()
     pruned_mna = MNA_State()
-    @test !accept_reactivation_probe!(gas_empty; tile = TEST_TILE, derivedmapstate = pruned_dm, mna_state = pruned_mna)
+    @test classify_reactivation_probe(gas_empty; tile = TEST_TILE, derivedmapstate = pruned_dm, mna_state = pruned_mna) === PROBE_NEUTRAL
 
-    # Positive inflow: accept
+    # Positive inflow: useful
     dm_pos, mna_pos = setup_probe_accept(gas_empty.tank, TEST_TILE, 5.0)
-    @test accept_reactivation_probe!(gas_empty; tile = TEST_TILE, derivedmapstate = dm_pos, mna_state = mna_pos)
-    @test gas_empty.tank.tank.state.charge == 0.0  # no mutation on accept
+    @test classify_reactivation_probe(gas_empty; tile = TEST_TILE, derivedmapstate = dm_pos, mna_state = mna_pos) === PROBE_USEFUL
+    @test gas_empty.tank.tank.state.charge == 0.0
+    @test !is_force_reactivated(gas_empty.tank.tank)
+    commit_reactivation_probe!(gas_empty; tile = TEST_TILE, derivedmapstate = dm_pos, mna_state = mna_pos)
+    @test is_force_reactivated(gas_empty.tank.tank)
 
-    # Negative current (outflow): reject
+    # Negative current (outflow): harmful
     dm_neg, mna_neg = setup_probe_accept(gas_empty.tank, TEST_TILE, -5.0)
-    @test !accept_reactivation_probe!(gas_empty; tile = TEST_TILE, derivedmapstate = dm_neg, mna_state = mna_neg)
+    @test classify_reactivation_probe(gas_empty; tile = TEST_TILE, derivedmapstate = dm_neg, mna_state = mna_neg) === PROBE_HARMFUL
 
-    # Neutral current (below tolerance): reject
+    # Neutral current (below tolerance): neutral
     dm_neut, mna_neut = setup_probe_accept(gas_empty.tank, TEST_TILE, probe_tol / 2)
-    @test !accept_reactivation_probe!(gas_empty; tile = TEST_TILE, derivedmapstate = dm_neut, mna_state = mna_neut)
+    @test classify_reactivation_probe(gas_empty; tile = TEST_TILE, derivedmapstate = dm_neut, mna_state = mna_neut) === PROBE_NEUTRAL
 
     # --- Full tank ---
     gas_full = make_gas_tank(initial_charge = 40.0)
 
-    # Negative outflow: accept
+    # Negative outflow: useful
     dm_neg_full, mna_neg_full = setup_probe_accept(gas_full.tank, TEST_TILE, -5.0)
-    @test accept_reactivation_probe!(gas_full; tile = TEST_TILE, derivedmapstate = dm_neg_full, mna_state = mna_neg_full)
-    @test gas_full.tank.tank.state.charge == 40.0  # no mutation on accept
+    @test classify_reactivation_probe(gas_full; tile = TEST_TILE, derivedmapstate = dm_neg_full, mna_state = mna_neg_full) === PROBE_USEFUL
+    @test gas_full.tank.tank.state.charge == 40.0
+    commit_reactivation_probe!(gas_full; tile = TEST_TILE, derivedmapstate = dm_neg_full, mna_state = mna_neg_full)
+    @test is_force_reactivated(gas_full.tank.tank)
 
-    # Positive inflow: reject
+    # Positive inflow: harmful
     dm_pos_full, mna_pos_full = setup_probe_accept(gas_full.tank, TEST_TILE, 5.0)
-    @test !accept_reactivation_probe!(gas_full; tile = TEST_TILE, derivedmapstate = dm_pos_full, mna_state = mna_pos_full)
+    @test classify_reactivation_probe(gas_full; tile = TEST_TILE, derivedmapstate = dm_pos_full, mna_state = mna_pos_full) === PROBE_HARMFUL
 
-    # Neutral current: reject
+    # Neutral current: neutral
     dm_neut_full, mna_neut_full = setup_probe_accept(gas_full.tank, TEST_TILE, -(probe_tol / 2))
-    @test !accept_reactivation_probe!(gas_full; tile = TEST_TILE, derivedmapstate = dm_neut_full, mna_state = mna_neut_full)
+    @test classify_reactivation_probe(gas_full; tile = TEST_TILE, derivedmapstate = dm_neut_full, mna_state = mna_neut_full) === PROBE_NEUTRAL
+end
+
+@testset "Tank force reactivation flags are one-shot" begin
+    gas = make_gas_tank(initial_charge = 0.0)
+    force_reactivate!(gas.tank.tank)
+    @test tank_is_active(gas.tank.tank)
+
+    mna = register_vsources!(MNA_State(), TEST_TILE, 1)
+    mna.vsource_currents[ElementID(TEST_TILE, 1)] = 6.0
+    update_flowbehav!(gas.tank.tank; tile = TEST_TILE, mna_state = mna)
+    @test !is_force_reactivated(gas.tank.tank)
+
+    pf = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 0.0)
+    force_liquid_reactivate!(pf.tank)
+    force_gas_reactivate!(pf.tank)
+    @test pressurefed_liquid_source_active(pf.tank)
+    @test pressurefed_gas_source_active(pf.tank)
+
+    mna_pf = register_vsources!(MNA_State(), TEST_TILE, 2)
+    mna_pf.vsource_currents[ElementID(TEST_TILE, 1)] = 5.0
+    mna_pf.vsource_currents[ElementID(TEST_TILE, 2)] = 4.0
+    update_flowbehav!(pf.tank; tile = TEST_TILE, mna_state = mna_pf)
+    @test !liquid_is_force_reactivated(pf.tank)
+    @test !gas_is_force_reactivated(pf.tank)
 end
 
 @testset "ThevininTankCompBehav: component tunables and declarations" begin

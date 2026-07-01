@@ -18,19 +18,23 @@ using HexFlowBasicComponents
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # ComponentBehavior Optional
 import HexComponentsAPI: update_flowbehav!, render_map_elem!, map_rotation, can_be_moved, get_component_wet_mass, get_actions, do_action!, produce_rel_fluid_declarations
-import HexComponentsAPI: get_reactivation_probe, accept_reactivation_probe!, ReactivationProbe
+import HexComponentsAPI: ReactivationProbe, ReactivationProbeOutcome, get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe!
 
 # Concrete Component Behavior Exports
 export ThevininTankCompBehav, GasTankBehavFrag, LiquidTankBehavFrag
 export PressureFedTankBehavFrag, PressureFedTankCompBehav
 export SealStateBehavFrag, seal!, unseal!, is_sealed
 export TankBehavFrag, TankState, tank_is_active, tank_is_auto_empty, tank_is_auto_full
+export force_reactivate!, clear_force_reactivate!, is_force_reactivated
+export force_liquid_reactivate!, clear_force_liquid_reactivate!, liquid_is_force_reactivated
+export force_gas_reactivate!, clear_force_gas_reactivate!, gas_is_force_reactivated
 export StoredFluidState, get_stored_fluid
 export FixedFluidBehavFrag, StoredFluidBehavFrag, set_stored_fluid!, clear_stored_fluid!
 export liquid_is_sealed, gas_is_sealed
 export pressurefed_liquid_is_auto_empty, pressurefed_liquid_is_auto_full
 export pressurefed_gas_is_auto_empty, pressurefed_gas_is_auto_full_pressure
 export pressurefed_liquid_source_active, pressurefed_gas_source_active, pressurefed_liquid_path_active
+export pressurefed_probe_current_class
 
 # ===============================================================
 # Behavior Fragments
@@ -66,12 +70,16 @@ struct TankBehavFrag
     max_voltage::Float64
     state::TankState
     sealstate::SealStateBehavFrag
+    force_reactivate_state::BinaryStateBehavFrag
 end
 
 is_sealed(tank::TankBehavFrag)::Bool = is_sealed(tank.sealstate)
+is_force_reactivated(tank::TankBehavFrag)::Bool = getstate(tank.force_reactivate_state)
+force_reactivate!(tank::TankBehavFrag) = settrue!(tank.force_reactivate_state)
+clear_force_reactivate!(tank::TankBehavFrag) = setfalse!(tank.force_reactivate_state)
 
 "True when the tank voltage source is active: unsealed with charge in the open middle range."
-tank_is_active(tank::TankBehavFrag) = !is_sealed(tank.sealstate) && 0.0 < tank.state.charge < tank.max_charge
+tank_is_active(tank::TankBehavFrag) = !is_sealed(tank.sealstate) && (0.0 < tank.state.charge < tank.max_charge || is_force_reactivated(tank))
 
 "True when the tank is automatically disconnected at the empty boundary (not sealed)."
 tank_is_auto_empty(tank::TankBehavFrag) = !is_sealed(tank.sealstate) && tank.state.charge <= 0.0
@@ -101,7 +109,8 @@ function TankBehavFrag(;
         max_charge_f,
         float(max_voltage),
         TankState(initial_charge_f),
-        sealstate
+        sealstate,
+        BinaryStateBehavFrag(false)
     )
 end
 
@@ -136,11 +145,14 @@ function set_tunables(tank::TankBehavFrag, tunables::NTuple{3, T})::TankBehavFra
         float_vals[1], # max_charge
         float_vals[2], # max_voltage
         float_vals[3],  # current charge state
-        tank.sealstate
+        tank.sealstate,
+        tank.force_reactivate_state
     )
 end
 
 function update_flowbehav!(tank::TankBehavFrag; tile::TileCoord, mna_state::MNA_State, kwargs...)
+    clear_force_reactivate!(tank)
+    
     is_sealed(tank.sealstate) && return  # Manual seal: ignore stale current until source is dropped
 
     tank_vsource_element_id = ElementID(tile, tank_vsource_element_index)
@@ -247,26 +259,36 @@ function get_reactivation_probe(behav::T; kwargs...) where {T <: AbstractTankBeh
 end
 
 """
-Accept reactivation only when the speculative current is in the useful direction:
-positive (inflow) for an empty tank, negative (outflow) for a full tank.
-Does not mutate tank state on acceptance.
+Classify tank reactivation from the speculative current direction:
+positive (inflow) is useful for an empty tank, negative (outflow) is useful for a full tank.
+Wrong-sign flow is harmful; zero or pruned current is neutral.
 """
-function accept_reactivation_probe!(behav::T; tile::TileCoord, derivedmapstate::DerivedMapState, mna_state, rotation::HexAxis = HexFrame.Q_POS, kwargs...) where {T <: AbstractTankBehavFrag}
+function classify_reactivation_probe(behav::T; tile::TileCoord, derivedmapstate::DerivedMapState, mna_state, rotation::HexAxis = HexFrame.Q_POS, kwargs...) where {T <: AbstractTankBehavFrag}
     (rel_vsource,) = produce_rel_elements(behav)
     active_vsource = @set rel_vsource.active = true
     abs_vsource = map_element(active_vsource, tile, tank_vsource_element_index, rotation)
 
     current = abs_element_get_current(abs_vsource, derivedmapstate, mna_state)
-    !isnothing(current) || return false  # Pruned from speculative solve
+    isnothing(current) && return HexComponentsAPI.PROBE_NEUTRAL  # Pruned from speculative solve
 
     probe_tol = 1e-9
     if tank_is_auto_empty(behav.tank)
-        return current > probe_tol   # Empty: accept only positive inflow
+        current > probe_tol  && return HexComponentsAPI.PROBE_USEFUL   # Empty: positive inflow is useful
+        current < -probe_tol && return HexComponentsAPI.PROBE_HARMFUL  # Empty: negative outflow is harmful
+        return HexComponentsAPI.PROBE_NEUTRAL
     elseif tank_is_auto_full(behav.tank)
-        return current < -probe_tol  # Full: accept only negative outflow
+        current < -probe_tol && return HexComponentsAPI.PROBE_USEFUL   # Full: negative outflow is useful
+        current > probe_tol  && return HexComponentsAPI.PROBE_HARMFUL  # Full: positive inflow is harmful
+        return HexComponentsAPI.PROBE_NEUTRAL
     else
         error("Tank reactivation probe reached impossible state: tank is neither sealed, active, empty, nor full")
     end
+end
+
+"Set the one-shot tank force-reactivation flag after a useful speculative result." 
+function commit_reactivation_probe!(behav::T; kwargs...) where {T <: AbstractTankBehavFrag}
+    force_reactivate!(behav.tank)
+    return nothing
 end
 
 #= ---------- GasTankBehavFrag ----------- =#
@@ -397,6 +419,8 @@ struct PressureFedTankBehavFrag
     gas_state::TankState
     liquid_sealstate::SealStateBehavFrag  # manual player seal
     gas_sealstate::SealStateBehavFrag     # manual player seal
+    force_liquid_reactivate_state::BinaryStateBehavFrag
+    force_gas_reactivate_state::BinaryStateBehavFrag
     max_liquid_charge::Float64
     max_gas_pressure::Float64
     gas_node::NodePos
@@ -434,6 +458,8 @@ function PressureFedTankBehavFrag(;
         TankState(initial_gas_charge_f),
         liquid_sealstate,
         gas_sealstate,
+        BinaryStateBehavFrag(false),
+        BinaryStateBehavFrag(false),
         max_liquid_charge_f,
         max_gas_pressure_f,
         gas_node,
@@ -443,9 +469,15 @@ end
 
 "True when the liquid side is manually sealed."
 liquid_is_sealed(tank::PressureFedTankBehavFrag) = is_sealed(tank.liquid_sealstate)
+liquid_is_force_reactivated(tank::PressureFedTankBehavFrag)::Bool = getstate(tank.force_liquid_reactivate_state)
+force_liquid_reactivate!(tank::PressureFedTankBehavFrag) = settrue!(tank.force_liquid_reactivate_state)
+clear_force_liquid_reactivate!(tank::PressureFedTankBehavFrag) = setfalse!(tank.force_liquid_reactivate_state)
 
 "True when the gas side is manually sealed."
 gas_is_sealed(tank::PressureFedTankBehavFrag) = is_sealed(tank.gas_sealstate)
+gas_is_force_reactivated(tank::PressureFedTankBehavFrag)::Bool = getstate(tank.force_gas_reactivate_state)
+force_gas_reactivate!(tank::PressureFedTankBehavFrag) = settrue!(tank.force_gas_reactivate_state)
+clear_force_gas_reactivate!(tank::PressureFedTankBehavFrag) = setfalse!(tank.force_gas_reactivate_state)
 
 "True when the liquid side is automatically disconnected at the empty boundary (not manually sealed)."
 pressurefed_liquid_is_auto_empty(tank::PressureFedTankBehavFrag) = !liquid_is_sealed(tank) && tank.liquid_state.charge <= 0.0
@@ -463,7 +495,7 @@ pressurefed_gas_is_auto_full_pressure(tank::PressureFedTankBehavFrag) = !gas_is_
 "True when the liquid voltage source should be active."
 function pressurefed_liquid_source_active(tank::PressureFedTankBehavFrag)
     liquid_is_sealed(tank) && return false
-    0.0 < tank.liquid_state.charge < tank.max_liquid_charge || return false
+    (0.0 < tank.liquid_state.charge < tank.max_liquid_charge || liquid_is_force_reactivated(tank)) || return false
     pressurefed_gas_is_auto_full_pressure(tank) && return false
     return true
 end
@@ -471,7 +503,7 @@ end
 "True when the gas voltage source should be active."
 function pressurefed_gas_source_active(tank::PressureFedTankBehavFrag)
     gas_is_sealed(tank) && return false
-    tank.gas_state.charge <= 0.0 && return false
+    (tank.gas_state.charge > 0.0 || gas_is_force_reactivated(tank)) || return false
     pressurefed_gas_is_auto_full_pressure(tank) && return false
     return true
 end
@@ -549,7 +581,7 @@ end
 "Create a new fragment with updated tunables. Preserves seal state and creates a fresh `StoredFluidState` copy."
 function set_tunables(tank::PressureFedTankBehavFrag, tunables::NTuple{4, T})::PressureFedTankBehavFrag where {T <: Real}
     float_vals = Float64.(tunables)
-    return PressureFedTankBehavFrag(
+    new_tank = PressureFedTankBehavFrag(
         initial_liquid_charge = clamp(float_vals[3], 0.0, float_vals[1]),
         initial_gas_charge = float_vals[4],
         max_liquid_charge = float_vals[1],
@@ -559,9 +591,15 @@ function set_tunables(tank::PressureFedTankBehavFrag, tunables::NTuple{4, T})::P
         liquid_sealstate = tank.liquid_sealstate,
         gas_sealstate = tank.gas_sealstate
     )
+    new_tank.force_liquid_reactivate_state.state = tank.force_liquid_reactivate_state.state
+    new_tank.force_gas_reactivate_state.state = tank.force_gas_reactivate_state.state
+    return new_tank
 end
 
 function update_flowbehav!(tank::PressureFedTankBehavFrag; tile::TileCoord, mna_state::MNA_State, kwargs...)
+    clear_force_liquid_reactivate!(tank)
+    clear_force_gas_reactivate!(tank)
+
     liquid_element_id = ElementID(tile, pressurefed_liquid_vsource_index)
     gas_element_id = ElementID(tile, pressurefed_gas_vsource_index)
 
@@ -855,7 +893,8 @@ do_action!(comp::ThevininTankCompBehav, action_id::Symbol; kwargs...) = do_actio
 map_rotation(comp::ThevininTankCompBehav, rotation::HexAxis) = map_rotation(comp.tank, rotation)
 can_be_moved(comp::ThevininTankCompBehav; kwargs...) = can_be_moved(comp.tank; kwargs...)
 get_reactivation_probe(comp::ThevininTankCompBehav; kwargs...) = get_reactivation_probe(comp.tank; kwargs...)
-accept_reactivation_probe!(comp::ThevininTankCompBehav; kwargs...) = accept_reactivation_probe!(comp.tank; kwargs...)
+classify_reactivation_probe(comp::ThevininTankCompBehav; kwargs...) = classify_reactivation_probe(comp.tank; kwargs...)
+commit_reactivation_probe!(comp::ThevininTankCompBehav; kwargs...) = commit_reactivation_probe!(comp.tank; kwargs...)
 
 # Rendering traits
 const TANK_INDICATOR_GREEN = ColourType(0.2, 0.9, 0.2, 1.0) # Connected and active
@@ -1104,63 +1143,104 @@ end
 
 """
 Classify a measured current relative to the desired flow direction.
-Returns `:useful`, `:harmful`, or `:neutral`.
+Returns a `ReactivationProbeOutcome`.
 """
-function pressurefed_probe_current_class(current::Float64, desired_direction::Symbol; tol::Float64 = 1e-9)
+function pressurefed_probe_current_class(current::Float64, desired_direction::Symbol; tol::Float64 = 1e-9)::ReactivationProbeOutcome
     if desired_direction === :positive
-        current > tol  && return :useful
-        current < -tol && return :harmful
+        current > tol  && return HexComponentsAPI.PROBE_USEFUL
+        current < -tol && return HexComponentsAPI.PROBE_HARMFUL
     else
-        current < -tol && return :useful
-        current > tol  && return :harmful
+        current < -tol && return HexComponentsAPI.PROBE_USEFUL
+        current > tol  && return HexComponentsAPI.PROBE_HARMFUL
     end
-    return :neutral
+    return HexComponentsAPI.PROBE_NEUTRAL
 end
 
 """
-Accept a speculative reactivation probe when at least one probed side has useful flow and
-no probed side has harmful flow. Does not mutate charge or seal states.
+Classify a speculative pressure-fed tank probe when at least one probed side has useful flow and
+no probed side has harmful flow. Pruned companion sides are treated as unavailable rather
+than harmful so one side can still reactivate independently. Useful sides are committed later
+via `commit_reactivation_probe!`.
 """
-function accept_reactivation_probe!(comp::PressureFedTankCompBehav{N}; tile::TileCoord, derivedmapstate::DerivedMapState, mna_state, rotation::HexAxis = HexFrame.Q_POS, kwargs...) where {N}
+function classify_reactivation_probe(comp::PressureFedTankCompBehav{N}; tile::TileCoord, derivedmapstate::DerivedMapState, mna_state, rotation::HexAxis = HexFrame.Q_POS, kwargs...) where {N}
     tank = comp.tank
     sides = pressurefed_probe_sides(tank)
 
-    (!sides.probe_liquid && !sides.probe_gas) && return false
+    (!sides.probe_liquid && !sides.probe_gas) && return HexComponentsAPI.PROBE_HARMFUL
 
     (frag_liquid_vsource, frag_gas_vsource) = produce_rel_elements(tank)
-    liquid_class = :neutral
-    gas_class = :neutral
+    liquid_class = HexComponentsAPI.PROBE_NEUTRAL
+    gas_class = HexComponentsAPI.PROBE_NEUTRAL
 
     if sides.probe_liquid
         active_vsource = @set frag_liquid_vsource.active = true
         abs_vsource = map_element(active_vsource, tile, pressurefed_liquid_vsource_index, rotation)
         liquid_current = abs_element_get_current(abs_vsource, derivedmapstate, mna_state)
-        !isnothing(liquid_current) || return false  # Pruned: reject
-
-        # Gas overpressure overrides desired direction: want liquid outflow to relieve headspace pressure
-        liquid_desired = if sides.gas_auto_full_pressure
-            :negative
-        elseif sides.liq_auto_full
-            :negative
-        else
-            :positive  # auto-empty: want inflow to fill
+        isnothing(liquid_current) || begin
+            # Gas overpressure overrides desired direction: want liquid outflow to relieve headspace pressure
+            liquid_desired = if sides.gas_auto_full_pressure
+                :negative
+            elseif sides.liq_auto_full
+                :negative
+            else
+                :positive  # auto-empty: want inflow to fill
+            end
+            liquid_class = pressurefed_probe_current_class(liquid_current, liquid_desired)
+            liquid_class === HexComponentsAPI.PROBE_HARMFUL && return HexComponentsAPI.PROBE_HARMFUL
         end
-        liquid_class = pressurefed_probe_current_class(liquid_current, liquid_desired)
-        liquid_class === :harmful && return false
     end
 
     if sides.probe_gas
         active_vsource = @set frag_gas_vsource.active = true
         abs_vsource = map_element(active_vsource, tile, pressurefed_gas_vsource_index, rotation)
         gas_current = abs_element_get_current(abs_vsource, derivedmapstate, mna_state)
-        !isnothing(gas_current) || return false  # Pruned: reject
-
-        gas_desired = sides.gas_auto_empty ? :positive : :negative  # empty wants inflow, overpressure wants outflow
-        gas_class = pressurefed_probe_current_class(gas_current, gas_desired)
-        gas_class === :harmful && return false
+        isnothing(gas_current) || begin
+            gas_desired = sides.gas_auto_empty ? :positive : :negative  # empty wants inflow, overpressure wants outflow
+            gas_class = pressurefed_probe_current_class(gas_current, gas_desired)
+            gas_class === HexComponentsAPI.PROBE_HARMFUL && return HexComponentsAPI.PROBE_HARMFUL
+        end
     end
 
-    return liquid_class === :useful || gas_class === :useful
+    (liquid_class === HexComponentsAPI.PROBE_USEFUL || gas_class === HexComponentsAPI.PROBE_USEFUL) && return HexComponentsAPI.PROBE_USEFUL
+    return HexComponentsAPI.PROBE_NEUTRAL
+end
+
+"Set one-shot force-reactivation flags for the useful pressure-fed side or sides." 
+function commit_reactivation_probe!(comp::PressureFedTankCompBehav{N}; tile::TileCoord, derivedmapstate::DerivedMapState, mna_state, rotation::HexAxis = HexFrame.Q_POS, kwargs...) where {N}
+    tank = comp.tank
+    sides = pressurefed_probe_sides(tank)
+
+    (!sides.probe_liquid && !sides.probe_gas) && return nothing
+
+    (frag_liquid_vsource, frag_gas_vsource) = produce_rel_elements(tank)
+
+    if sides.probe_liquid
+        active_vsource = @set frag_liquid_vsource.active = true
+        abs_vsource = map_element(active_vsource, tile, pressurefed_liquid_vsource_index, rotation)
+        liquid_current = abs_element_get_current(abs_vsource, derivedmapstate, mna_state)
+        if !isnothing(liquid_current)
+            liquid_desired = if sides.gas_auto_full_pressure
+                :negative
+            elseif sides.liq_auto_full
+                :negative
+            else
+                :positive  # auto-empty: want inflow to fill
+            end
+            pressurefed_probe_current_class(liquid_current, liquid_desired) === HexComponentsAPI.PROBE_USEFUL && force_liquid_reactivate!(tank)
+        end
+    end
+
+    if sides.probe_gas
+        active_vsource = @set frag_gas_vsource.active = true
+        abs_vsource = map_element(active_vsource, tile, pressurefed_gas_vsource_index, rotation)
+        gas_current = abs_element_get_current(abs_vsource, derivedmapstate, mna_state)
+        if !isnothing(gas_current)
+            gas_desired = sides.gas_auto_empty ? :positive : :negative  # empty wants inflow, overpressure wants outflow
+            pressurefed_probe_current_class(gas_current, gas_desired) === HexComponentsAPI.PROBE_USEFUL && force_gas_reactivate!(tank)
+        end
+    end
+
+    return nothing
 end
 
 #= ---------- PressureFedTankCompBehav rendering ----------- =#

@@ -1335,10 +1335,13 @@ The `probe_elements` and `probe_declarations` vectors are reusable scratch space
 for the probe-specific circuit additions. Before each trial they are loaded with
 only the new elements from the probe; the normal primary collections are extended
 with these and then restored after the trial solve completes.
+
 """
 @kwdef mutable struct ReactivationScheduler
     pending::Vector{TileCoord} = Vector{TileCoord}()       # FIFO queue of tile coords awaiting a probe
     pending_set::Set{TileCoord} = Set{TileCoord}()         # duplicate-guard for O(1) membership test
+    neutral_registry::Set{TileCoord} = Set{TileCoord}()    # solo-neutral candidates eligible for grouped retry
+    grouped_coords::Vector{TileCoord} = Vector{TileCoord}()    # scratch coord list for grouped retries
     probe_elements::Vector{AbsoluteElement} = Vector{AbsoluteElement}()       # probe-only elements (not a copy of primary)
     probe_declarations::Vector{AbsFluidDecl} = Vector{AbsFluidDecl}()         # probe-only declarations
     trial_derivedmapstate::DerivedMapState = DerivedMapState()
@@ -1351,6 +1354,35 @@ function reset_reactivation_trial_state!(scheduler::ReactivationScheduler)
     scheduler.trial_derivedmapstate = DerivedMapState()
     scheduler.trial_mna_state = MNA_State()
     scheduler.trial_scratchpad = CalculatorScratchpad()
+    return nothing
+end
+
+"Add a coord to the neutral registry. Set.push! is idempotent, so duplicates are naturally handled."
+function push_neutral_registry!(scheduler::ReactivationScheduler, coord::TileCoord)
+    push!(scheduler.neutral_registry, coord)
+    return nothing
+end
+
+"Remove a coord from the neutral registry if present. Set.delete! is idempotent."
+function drop_neutral_registry!(scheduler::ReactivationScheduler, coord::TileCoord)
+    delete!(scheduler.neutral_registry, coord)
+    return nothing
+end
+
+"Remove a coord from the pending FIFO and duplicate guard if present."
+function drop_pending_coord!(scheduler::ReactivationScheduler, coord::TileCoord)
+    coord in scheduler.pending_set || return nothing
+    delete!(scheduler.pending_set, coord)
+    filter!(pending_coord -> pending_coord != coord, scheduler.pending)
+    return nothing
+end
+
+"Drop neutral-registry entries whose component disappeared or no longer requests a probe."
+function prune_neutral_registry!(scheduler::ReactivationScheduler, gamemap::GameMap)
+    filter!(scheduler.neutral_registry) do coord
+        comp = get_component(gamemap, coord)
+        !isnothing(comp) && !isnothing(get_reactivation_probe(comp))
+    end
     return nothing
 end
 
@@ -1371,6 +1403,49 @@ end
 
 
 """
+Map the currently requested probe into the provided output vectors.
+
+Only active probe elements are carried through, matching the normal map-input
+collector. Element IDs still use the original tuple indices so dependent probes
+can preserve their component-local numbering.
+"""
+function append_reactivation_probe!(
+        probe_elements::Vector{AbsoluteElement},
+        probe_declarations::Vector{AbsFluidDecl},
+        comp::ComponentOnTile,
+        coord::TileCoord
+    )
+    probe = get_reactivation_probe(comp)
+    isnothing(probe) && throw(ArgumentError("Component at $coord does not currently request a reactivation probe"))
+
+    for (i, rel_elem) in pairs(probe.rel_elements)
+        rel_elem.active || continue
+        push!(probe_elements, map_element(rel_elem, coord, i, comp.rotation, comp.mirrored))
+    end
+
+    for rel_decl in probe.rel_fluid_declarations
+        push!(probe_declarations, map_declaration(rel_decl, coord, comp.rotation, comp.mirrored))
+    end
+
+    return nothing
+end
+
+
+"Map the currently requested probe into the provided output vectors, replacing any previous contents."
+function load_reactivation_probe!(
+        probe_elements::Vector{AbsoluteElement},
+        probe_declarations::Vector{AbsFluidDecl},
+        comp::ComponentOnTile,
+        coord::TileCoord
+    )
+    empty!(probe_elements)
+    empty!(probe_declarations)
+    append_reactivation_probe!(probe_elements, probe_declarations, comp, coord)
+    return nothing
+end
+
+
+"""
 Load the probe's mapped elements and declarations into the scheduler's scratch buffers.
 
 Only stores elements/declarations contributed by the probe itself — not copies of the
@@ -1383,18 +1458,19 @@ function load_reactivation_probe!(
         comp::ComponentOnTile,
         coord::TileCoord
     )
-    probe = get_reactivation_probe(comp)
+    load_reactivation_probe!(scheduler.probe_elements, scheduler.probe_declarations, comp, coord)
+    return nothing
+end
 
-    # Map probe's relative elements. Probe elements use 1-based indexing within the probe tuple,
-    # matching the component's own element indexing — ElementID(coord, i) refers to the same slot.
+"Load mapped probes for all supplied coords into the scheduler scratch buffers."
+function load_reactivation_probes!(scheduler::ReactivationScheduler, gamemap::GameMap, coords::AbstractVector{TileCoord})
     empty!(scheduler.probe_elements)
-    for (i, rel_elem) in pairs(probe.rel_elements)
-        push!(scheduler.probe_elements, map_element(rel_elem, coord, i, comp.rotation, comp.mirrored))
-    end
-
     empty!(scheduler.probe_declarations)
-    for rel_decl in probe.rel_fluid_declarations
-        push!(scheduler.probe_declarations, map_declaration(rel_decl, coord, comp.rotation, comp.mirrored))
+
+    for coord in coords
+        comp = get_component(gamemap, coord)
+        isnothing(comp) && throw(ArgumentError("Component at $coord no longer exists"))
+        append_reactivation_probe!(scheduler.probe_elements, scheduler.probe_declarations, comp, coord)
     end
 
     return nothing
@@ -1415,12 +1491,110 @@ function seed_reactivation_trial_inputs!(scheduler::ReactivationScheduler, deriv
     return trial_derivedmapstate
 end
 
+"Solve the currently loaded speculative trial inputs into the scheduler-owned trial state."
+function solve_reactivation_trial!(scheduler::ReactivationScheduler, derivedmapstate::DerivedMapState, current_tick::Int64)::Bool
+    trial_derivedmapstate = seed_reactivation_trial_inputs!(scheduler, derivedmapstate)
+
+    try
+        solve_from_inputs!(trial_derivedmapstate, scheduler.trial_mna_state, scheduler.trial_scratchpad, current_tick)
+        return true
+    catch
+        reset_reactivation_trial_state!(scheduler)
+        return false
+    end
+end
+
+"Classify one component against the scheduler's current speculative trial state." 
+function classify_trial_outcome(comp::ComponentOnTile, coord::TileCoord, gamemap::GameMap, scheduler::ReactivationScheduler)::ReactivationProbeOutcome
+    return classify_reactivation_probe(comp;
+        tile = coord,
+        ship_name = comp.ship,
+        gamemap = gamemap,
+        derivedmapstate = scheduler.trial_derivedmapstate,
+        mna_state = scheduler.trial_mna_state,
+    )
+end
+
+"Commit one useful component against the scheduler's current speculative trial state." 
+function commit_trial_outcome!(comp::ComponentOnTile, coord::TileCoord, gamemap::GameMap, scheduler::ReactivationScheduler)
+    commit_reactivation_probe!(comp;
+        tile = coord,
+        ship_name = comp.ship,
+        gamemap = gamemap,
+        derivedmapstate = scheduler.trial_derivedmapstate,
+        mna_state = scheduler.trial_mna_state,
+    )
+    return nothing
+end
+
+"Attempt one grouped retry using the current neutral registry."
+function attempt_grouped_neutral_retry!(
+        scheduler::ReactivationScheduler,
+        gamemap::GameMap,
+        derivedmapstate::DerivedMapState,
+        current_tick::Int64
+    )
+    prune_neutral_registry!(scheduler, gamemap)
+    length(scheduler.neutral_registry) > 1 || return nothing
+
+    empty!(scheduler.grouped_coords)
+    append!(scheduler.grouped_coords, scheduler.neutral_registry)
+
+    try
+        load_reactivation_probes!(scheduler, gamemap, scheduler.grouped_coords)
+    catch
+        reset_reactivation_trial_state!(scheduler)
+        prune_neutral_registry!(scheduler, gamemap)
+        return nothing
+    end
+
+    solve_reactivation_trial!(scheduler, derivedmapstate, current_tick) || return nothing
+
+    useful_coords = TileCoord[]
+    harmful_coords = TileCoord[]
+
+    for coord in scheduler.grouped_coords
+        comp = get_component(gamemap, coord)
+        isnothing(comp) && continue
+
+        outcome = try
+            classify_trial_outcome(comp, coord, gamemap, scheduler)
+        catch
+            drop_neutral_registry!(scheduler, coord)
+            return nothing
+        end
+
+        if outcome === HexComponentsAPI.PROBE_USEFUL
+            push!(useful_coords, coord)
+        elseif outcome === HexComponentsAPI.PROBE_HARMFUL
+            push!(harmful_coords, coord)
+        end
+    end
+
+    if !isempty(harmful_coords)
+        for coord in harmful_coords
+            drop_neutral_registry!(scheduler, coord)
+        end
+        return nothing
+    end
+
+    for coord in useful_coords
+        comp = get_component(gamemap, coord)
+        isnothing(comp) && continue
+        commit_trial_outcome!(comp, coord, gamemap, scheduler)
+        drop_neutral_registry!(scheduler, coord)
+        drop_pending_coord!(scheduler, coord)
+    end
+
+    return nothing
+end
+
 """
 Attempt one speculative reactivation probe from the scheduler queue.
 
 Pops candidate coords from the front of the queue, discarding stale entries, until a valid
-target is found or the queue is exhausted. Returns `true` if a trial was run (accepted or
-rejected with fallback solve already executed), or `false` if the queue was empty.
+target is found or the queue is exhausted. Returns `true` if a speculative attempt was made,
+or `false` if the queue was empty.
 
 Speculative trials run on scheduler-owned trial state so a singular or otherwise invalid probe
 cannot poison the live MNA cache. After any attempted trial, the live primary inputs are
@@ -1441,44 +1615,46 @@ function run_reactivation_trial!(
 
         # Re-resolve: verify component still exists and still requests a probe (drops stale entries after map edits)
         comp = get_component(gamemap, coord)
-        isnothing(comp) && continue  # stale, try next
-        ship_name = comp.ship
-        isnothing(get_reactivation_probe(comp)) && continue  # no longer requesting, skip
+        if isnothing(comp)
+            drop_neutral_registry!(scheduler, coord)
+            continue  # stale, try next
+        end
+        if isnothing(get_reactivation_probe(comp))
+            drop_neutral_registry!(scheduler, coord)
+            continue  # no longer requesting, skip
+        end
 
         # Load probe-only elements/declarations into scheduler scratch buffers
         load_reactivation_probe!(scheduler, comp, coord)
 
-        # Seed the isolated trial state from the current live primary inputs.
-        trial_derivedmapstate = seed_reactivation_trial_inputs!(scheduler, derivedmapstate)
-        trial_mna_state = scheduler.trial_mna_state
-        trial_scratchpad = scheduler.trial_scratchpad
+        # Speculative solo solve — isolated by try/catch so a failure does not crash the loop.
+        if solve_reactivation_trial!(scheduler, derivedmapstate, current_tick)
+            trial_outcome = try
+                classify_trial_outcome(comp, coord, gamemap, scheduler)
+            catch
+                drop_neutral_registry!(scheduler, coord)
+                HexComponentsAPI.PROBE_HARMFUL
+            end
 
-        # Speculative solve — isolated by try/catch so a failure does not crash the loop
-        trial_accepted = false
-        try
-            solve_from_inputs!(trial_derivedmapstate, trial_mna_state, trial_scratchpad, current_tick)
-            trial_accepted = accept_reactivation_probe!(comp;
-                tile = coord,
-                ship_name = ship_name,
-                gamemap = gamemap,
-                derivedmapstate = trial_derivedmapstate,
-                mna_state = trial_mna_state,
-            )
-        catch
-            # Speculative solve threw — treat as rejection and clean up
-            reset_reactivation_trial_state!(scheduler)
+            if trial_outcome === HexComponentsAPI.PROBE_USEFUL
+                commit_trial_outcome!(comp, coord, gamemap, scheduler)
+                drop_neutral_registry!(scheduler, coord)
+            elseif trial_outcome === HexComponentsAPI.PROBE_HARMFUL
+                drop_neutral_registry!(scheduler, coord)
+            else
+                push_neutral_registry!(scheduler, coord)
+                attempt_grouped_neutral_retry!(scheduler, gamemap, derivedmapstate, current_tick)
+            end
+        else
+            drop_neutral_registry!(scheduler, coord)
         end
 
-        # Always rebuild the live solve from committed map state. Accepted probes may mutate
-        # the component, so the primary input collections must be refreshed before solving.
+        # Always rebuild the live solve from committed map state. Useful probes may mutate the
+        # component, so the primary input collections must be refreshed before solving.
         collect_primary_map_inputs!(gamemap, derivedmapstate)
         solve_from_inputs!(derivedmapstate, mna_state, scratchpad, current_tick)
 
-        if !trial_accepted
-            return true  # one probe was attempted and rejected (or errored)
-        end
-
-        return true  # one probe was attempted and accepted this tick
+        return true  # one speculative attempt was processed this tick
     end
 
     return false  # queue was empty

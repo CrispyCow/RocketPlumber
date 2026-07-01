@@ -115,9 +115,140 @@ function HexComponentsAPI.get_reactivation_probe(::SingularProbeCompBehav; kwarg
         RelativeElement(RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.NODE_Q_POS), 1.0, HexElements.CONST_RESISTOR),
     ))
 end
-function HexComponentsAPI.accept_reactivation_probe!(comp::SingularProbeCompBehav; kwargs...)
+function HexComponentsAPI.classify_reactivation_probe(comp::SingularProbeCompBehav; kwargs...)
+    return PROBE_USEFUL
+end
+function HexComponentsAPI.commit_reactivation_probe!(comp::SingularProbeCompBehav; kwargs...)
     comp.accepted = true
-    return true
+    return nothing
+end
+
+mutable struct BootstrapProbeCompBehav <: ComponentBehavior
+    charge::Float64
+    probe_voltage::Float64
+    accepted::Bool
+    force_active::Bool
+end
+
+function HexComponentsAPI.produce_rel_elements(comp::BootstrapProbeCompBehav)
+    is_active = comp.charge > 0.0 || comp.force_active
+    return (
+        RelativeElement(RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND), comp.probe_voltage, HexElements.CONST_VOLTAGE; active = is_active),
+        RelativeElement(RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND), 1.0, HexElements.CONST_RESISTOR; active = is_active),
+    )
+end
+
+HexComponentsAPI.get_tunables(::BootstrapProbeCompBehav) = ()
+HexComponentsAPI.set_tunables(comp::BootstrapProbeCompBehav, ::NTuple{0, Real}) = comp
+HexComponentsAPI.render_base_elem!(queue, ::BootstrapProbeCompBehav; kwargs...) = nothing
+
+function HexComponentsAPI.get_reactivation_probe(comp::BootstrapProbeCompBehav; kwargs...)
+    comp.charge > 0.0 && return nothing
+    return ReactivationProbe((
+        RelativeElement(RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND), comp.probe_voltage, HexElements.CONST_VOLTAGE),
+        RelativeElement(RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND), 1.0, HexElements.CONST_RESISTOR),
+    ))
+end
+
+function HexComponentsAPI.classify_reactivation_probe(comp::BootstrapProbeCompBehav;
+        tile::TileCoord,
+        rotation::HexAxis = HexFrame.Q_POS,
+        derivedmapstate::DerivedMapState,
+        mna_state,
+        kwargs...)
+    probe = get_reactivation_probe(comp)
+    isnothing(probe) && return PROBE_HARMFUL
+
+    abs_vsource = map_element(probe.rel_elements[1], tile, 1, rotation)
+    current = abs_element_get_current(abs_vsource, derivedmapstate, mna_state)
+    return !isnothing(current) && abs(current) > 1e-9 ? PROBE_USEFUL : PROBE_NEUTRAL
+end
+
+function HexComponentsAPI.commit_reactivation_probe!(comp::BootstrapProbeCompBehav; kwargs...)
+    comp.accepted = true
+    comp.force_active = true
+    return nothing
+end
+
+function HexComponentsAPI.update_flowbehav!(comp::BootstrapProbeCompBehav; tile::TileCoord, mna_state::MNA_State, kwargs...)
+    vsource_id = ElementID(tile, 1)
+    if !haskey(mna_state.vsources, vsource_id)
+        comp.force_active = false
+        return nothing
+    end
+    current = get(mna_state.vsource_currents, vsource_id, 0.0)
+    comp.charge += abs(current) / BASE_UPS
+    comp.force_active = false
+    return nothing
+end
+
+mutable struct GroupedNeutralProbeCompBehav <: ComponentBehavior
+    required_probe_count::Int
+    committed::Bool
+    active::Bool
+    always_neutral::Bool
+end
+
+function HexComponentsAPI.produce_rel_elements(comp::GroupedNeutralProbeCompBehav)
+    return (
+        RelativeElement(
+            RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND),
+            1.0,
+            HexElements.CONST_RESISTOR;
+            active = comp.active
+        ),
+    )
+end
+
+HexComponentsAPI.get_tunables(::GroupedNeutralProbeCompBehav) = ()
+HexComponentsAPI.set_tunables(comp::GroupedNeutralProbeCompBehav, ::NTuple{0, Real}) = comp
+HexComponentsAPI.render_base_elem!(queue, ::GroupedNeutralProbeCompBehav; kwargs...) = nothing
+
+function HexComponentsAPI.get_reactivation_probe(comp::GroupedNeutralProbeCompBehav; kwargs...)
+    comp.active && return nothing
+    return ReactivationProbe((
+        RelativeElement(
+            RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND),
+            1.0,
+            HexElements.CONST_RESISTOR;
+            active = true
+        ),
+    ))
+end
+
+function HexComponentsAPI.classify_reactivation_probe(comp::GroupedNeutralProbeCompBehav; derivedmapstate::DerivedMapState, kwargs...)
+    comp.always_neutral && return PROBE_NEUTRAL
+    return length(derivedmapstate.primaryelements) >= comp.required_probe_count ? PROBE_USEFUL : PROBE_NEUTRAL
+end
+
+function HexComponentsAPI.commit_reactivation_probe!(comp::GroupedNeutralProbeCompBehav; kwargs...)
+    comp.committed = true
+    comp.active = true
+    return nothing
+end
+
+mutable struct HarmfulGroupedProbeCompBehav <: ComponentBehavior
+    committed::Bool
+end
+
+HexComponentsAPI.produce_rel_elements(::HarmfulGroupedProbeCompBehav) = ()
+HexComponentsAPI.get_tunables(::HarmfulGroupedProbeCompBehav) = ()
+HexComponentsAPI.set_tunables(comp::HarmfulGroupedProbeCompBehav, ::NTuple{0, Real}) = comp
+HexComponentsAPI.render_base_elem!(queue, ::HarmfulGroupedProbeCompBehav; kwargs...) = nothing
+function HexComponentsAPI.get_reactivation_probe(::HarmfulGroupedProbeCompBehav; kwargs...)
+    return ReactivationProbe((
+        RelativeElement(
+            RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND),
+            1.0,
+            HexElements.CONST_RESISTOR;
+            active = true
+        ),
+    ))
+end
+HexComponentsAPI.classify_reactivation_probe(::HarmfulGroupedProbeCompBehav; kwargs...) = PROBE_HARMFUL
+function HexComponentsAPI.commit_reactivation_probe!(comp::HarmfulGroupedProbeCompBehav; kwargs...)
+    comp.committed = true
+    return nothing
 end
 
 #= ---------- Additional Mock for DoActionCommand ----------- =#
@@ -1160,6 +1291,102 @@ end
     @test !get_component(gamemap, probe_tile).component.accepted
     @test live_derived.filteredelements == baseline_elements
     @test live_mna.node_voltages == baseline_voltages
+end
+
+@testset "run_reactivation_trial! — accepted bootstrap probe is reflected by committed rebuild" begin
+    gamemap = make_gamemap()
+    probe_tile = TileCoord(0, 0)
+    probe_comp = BootstrapProbeCompBehav(0.0, 5.0, false, false)
+    set_component!(gamemap, probe_tile, ComponentOnTile(probe_comp, Q_POS, :primary))
+
+    live_derived = DerivedMapState()
+    live_mna = MNA_State()
+    live_scratchpad = CalculatorScratchpad()
+    scheduler = HexFlowCalculator.ReactivationScheduler()
+
+    update_components!(gamemap, live_mna, live_derived)
+    HexFlowCalculator.scan_reactivation_requests!(scheduler, gamemap)
+    collect_primary_map_inputs!(gamemap, live_derived)
+
+    @test isempty(live_derived.primaryelements)
+    @test HexFlowCalculator.run_reactivation_trial!(scheduler, gamemap, live_derived, live_mna, live_scratchpad, Int64(1))
+    @test probe_comp.accepted
+    @test haskey(live_mna.vsource_currents, ElementID(probe_tile, 1))
+
+    update_components!(gamemap, live_mna, live_derived)
+    @test probe_comp.charge > 0.0
+
+    collect_primary_map_inputs!(gamemap, live_derived)
+    solve_from_inputs!(live_derived, live_mna, live_scratchpad, Int64(2))
+    @test haskey(live_mna.vsource_currents, ElementID(probe_tile, 1))
+end
+
+@testset "run_reactivation_trial! — grouped neutral retry commits useful subset" begin
+    gamemap = make_gamemap()
+    anchor_tile = TileCoord(0, 0)
+    peer_tile = TileCoord(1, 0)
+    neutral_tile = TileCoord(2, 0)
+
+    anchor_comp = GroupedNeutralProbeCompBehav(2, false, false, false)
+    peer_comp = GroupedNeutralProbeCompBehav(2, false, false, false)
+    neutral_comp = GroupedNeutralProbeCompBehav(99, false, false, true)
+
+    set_component!(gamemap, anchor_tile, ComponentOnTile(anchor_comp, Q_POS, :primary))
+    set_component!(gamemap, peer_tile, ComponentOnTile(peer_comp, Q_POS, :primary))
+    set_component!(gamemap, neutral_tile, ComponentOnTile(neutral_comp, Q_POS, :primary))
+
+    live_derived = DerivedMapState()
+    live_mna = MNA_State()
+    live_scratchpad = CalculatorScratchpad()
+    scheduler = HexFlowCalculator.ReactivationScheduler()
+
+    update_components!(gamemap, live_mna, live_derived)
+    collect_primary_map_inputs!(gamemap, live_derived)
+    solve_from_inputs!(live_derived, live_mna, live_scratchpad, Int64(1))
+
+    HexFlowCalculator.push_neutral_registry!(scheduler, anchor_tile)
+    HexFlowCalculator.push_neutral_registry!(scheduler, neutral_tile)
+    push!(scheduler.pending, peer_tile)
+    push!(scheduler.pending_set, peer_tile)
+
+    @test HexFlowCalculator.run_reactivation_trial!(scheduler, gamemap, live_derived, live_mna, live_scratchpad, Int64(2))
+    @test anchor_comp.committed
+    @test peer_comp.committed
+    @test neutral_tile in scheduler.neutral_registry
+    @test !(anchor_tile in scheduler.neutral_registry)
+    @test !(peer_tile in scheduler.neutral_registry)
+    @test !(peer_tile in scheduler.pending_set)
+end
+
+@testset "run_reactivation_trial! — harmful grouped member aborts retry and is evicted" begin
+    gamemap = make_gamemap()
+    anchor_tile = TileCoord(0, 0)
+    harmful_tile = TileCoord(1, 0)
+
+    anchor_comp = GroupedNeutralProbeCompBehav(2, false, false, false)
+    harmful_comp = HarmfulGroupedProbeCompBehav(false)
+
+    set_component!(gamemap, anchor_tile, ComponentOnTile(anchor_comp, Q_POS, :primary))
+    set_component!(gamemap, harmful_tile, ComponentOnTile(harmful_comp, Q_POS, :primary))
+
+    live_derived = DerivedMapState()
+    live_mna = MNA_State()
+    live_scratchpad = CalculatorScratchpad()
+    scheduler = HexFlowCalculator.ReactivationScheduler()
+
+    update_components!(gamemap, live_mna, live_derived)
+    collect_primary_map_inputs!(gamemap, live_derived)
+    solve_from_inputs!(live_derived, live_mna, live_scratchpad, Int64(1))
+
+    HexFlowCalculator.push_neutral_registry!(scheduler, harmful_tile)
+    push!(scheduler.pending, anchor_tile)
+    push!(scheduler.pending_set, anchor_tile)
+
+    @test HexFlowCalculator.run_reactivation_trial!(scheduler, gamemap, live_derived, live_mna, live_scratchpad, Int64(2))
+    @test !anchor_comp.committed
+    @test !harmful_comp.committed
+    @test !(harmful_tile in scheduler.neutral_registry)
+    @test anchor_tile in scheduler.neutral_registry
 end
 
 # ===============================================================
