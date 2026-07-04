@@ -33,6 +33,36 @@ HexComponentsAPI.get_tunables(::MockCompBehav) = ()
 HexComponentsAPI.set_tunables(b::MockCompBehav, ::NTuple{0, Real}) = b
 HexComponentsAPI.render_base_elem!(::AbstractVector, ::MockCompBehav; kwargs...) = nothing
 
+"Minimal ComponentBehavior with explicit dry and wet masses for delta-V tests."
+struct MockMassCompBehav <: ComponentBehavior
+    dry_mass::Float64
+    cold_gas_mass::Float64
+    monoprop_mass::Float64
+    fuel_mass::Float64
+    oxid_mass::Float64
+    unmodelled_mass::Float64
+end
+
+HexComponentsAPI.produce_rel_elements(::MockMassCompBehav) = ()
+HexComponentsAPI.get_tunables(::MockMassCompBehav) = ()
+HexComponentsAPI.set_tunables(b::MockMassCompBehav, ::NTuple{0, Real}) = b
+HexComponentsAPI.render_base_elem!(::AbstractVector, ::MockMassCompBehav; kwargs...) = nothing
+HexComponentsAPI.get_component_dry_mass(b::MockMassCompBehav; kwargs...) = b.dry_mass
+
+function HexComponentsAPI.get_component_wet_mass(
+        b::MockMassCompBehav;
+        fluid::Union{HexFluids.FluidType, Nothing} = nothing,
+        kwargs...
+    )::Float64
+    isnothing(fluid) && return b.cold_gas_mass + b.monoprop_mass + b.fuel_mass + b.oxid_mass + b.unmodelled_mass
+    fluid == HexFluids.COLD_GAS && return b.cold_gas_mass
+    fluid == HexFluids.MONOPROP_LIQUID && return b.monoprop_mass
+    fluid == HexFluids.FUEL_LIQUID && return b.fuel_mass
+    fluid == HexFluids.OXIDISER_LIQUID && return b.oxid_mass
+    fluid == HexFluids.BIPROP_EXHAUST && return b.unmodelled_mass
+    return 0.0
+end
+
 "Minimal mock PipeBehavior for testing pipe placement logic."
 struct MockPipeBehav <: PipeBehavior
     conductance::Float64
@@ -88,6 +118,69 @@ function make_bare_blueprint(seed::UInt32)
     bp = ShipBlueprint()
     stacked_random_tile_walk!(bp.ship_tiles, TileCoord(0, 0), 2, 2, seed)
     return bp
+end
+
+"Add a mock mass-reporting component to `gm` for delta-V estimator tests."
+function add_mock_mass_component!(
+        gm::GameMap,
+        coord::TileCoord;
+        dry_mass::Float64 = 0.0,
+        cold_gas_mass::Float64 = 0.0,
+        monoprop_mass::Float64 = 0.0,
+        fuel_mass::Float64 = 0.0,
+        oxid_mass::Float64 = 0.0,
+        unmodelled_mass::Float64 = 0.0,
+    )
+    set_component!(
+        gm,
+        coord,
+        ComponentOnTile(
+            MockMassCompBehav(dry_mass, cold_gas_mass, monoprop_mass, fuel_mass, oxid_mass, unmodelled_mass),
+            HexFrame.Q_POS,
+            :primary,
+        ),
+    )
+    return gm
+end
+
+"Split stored bipropellant into matched and leftover stages for estimator tests."
+function expected_biprop_stage_masses(
+        fuel_mass::Float64,
+        oxid_mass::Float64;
+        optimal_vol_ratio::Float64 = 2.5,
+    )::Tuple{Float64, Float64}
+    total_biprop_mass = fuel_mass + oxid_mass
+    total_biprop_mass <= 0.0 && return (0.0, 0.0)
+    fuel_mass <= 0.0 && return (0.0, oxid_mass)
+    oxid_mass <= 0.0 && return (0.0, fuel_mass)
+
+    fuel_density = something(HexFluids.lookup_fluid_density(HexFluids.FUEL_LIQUID), 0.0)
+    oxid_density = something(HexFluids.lookup_fluid_density(HexFluids.OXIDISER_LIQUID), 0.0)
+    (fuel_density <= 0.0 || oxid_density <= 0.0) && return (0.0, total_biprop_mass)
+
+    mass_ratio = optimal_vol_ratio * oxid_density / fuel_density
+    mass_ratio <= 0.0 && return (0.0, total_biprop_mass)
+
+    matched_fuel_mass = min(fuel_mass, oxid_mass / mass_ratio)
+    matched_total_mass = matched_fuel_mass * (1.0 + mass_ratio)
+    leftover_mass = max(total_biprop_mass - matched_total_mass, 0.0)
+    return (matched_total_mass, leftover_mass)
+end
+
+"Apply the estimator's staged Tsiolkovsky calculation to an explicit stage list."
+function expected_staged_delta_v(initial_mass::Float64, fuels::Vector{Tuple{Float64, Float64}})::Float64
+    remaining_mass = initial_mass
+    total_dv = 0.0
+
+    for (fuel_mass, ve) in sort(copy(fuels); by = last, rev = true)
+        m_final = remaining_mass - fuel_mass
+        m_final <= 0.0 && continue
+
+        total_dv += ve * log(remaining_mass / m_final)
+        remaining_mass = m_final
+    end
+
+    return total_dv
 end
 
 
@@ -178,6 +271,158 @@ end
             empirical = counts[item] / total
             @test abs(empirical - expected) <= tol
         end
+    end
+end
+
+# ===============================================================
+# Delta-V estimator tests
+# ===============================================================
+
+@testset "Delta-V estimation" begin
+
+    @testset "returns zero without usable propellant" begin
+        gm = make_origin_gamemap()
+        add_mock_mass_component!(gm, TileCoord(0, 0); dry_mass = 10.0, unmodelled_mass = 40.0)
+
+        @test estimate_min_delta_v(gm) == 0.0
+    end
+
+    @testset "cold gas only matches staged Tsiolkovsky" begin
+        gm = make_origin_gamemap()
+        add_mock_mass_component!(gm, TileCoord(0, 0); dry_mass = 10.0, cold_gas_mass = 40.0)
+
+        initial_mass = get_dry_mass(gm) + get_wet_mass(gm)
+        cold_gas_ve = something(HexFluids.lookup_fluid_exhaust_velocity(HexFluids.COLD_GAS), 0.0)
+        expected = expected_staged_delta_v(initial_mass, [(40.0, cold_gas_ve)])
+
+        @test estimate_min_delta_v(gm) ≈ expected
+    end
+
+    @testset "monopropellant only matches staged Tsiolkovsky" begin
+        gm = make_origin_gamemap()
+        add_mock_mass_component!(gm, TileCoord(0, 0); dry_mass = 10.0, monoprop_mass = 50.0)
+
+        initial_mass = get_dry_mass(gm) + get_wet_mass(gm)
+        monoprop_ve = something(HexFluids.lookup_fluid_exhaust_velocity(HexFluids.MONOPROP_GAS), 0.0)
+        expected = expected_staged_delta_v(initial_mass, [(50.0, monoprop_ve)])
+
+        @test estimate_min_delta_v(gm) ≈ expected
+    end
+
+    @testset "balanced bipropellant burns the full matched mass" begin
+        gm = make_origin_gamemap()
+        add_mock_mass_component!(gm, TileCoord(0, 0); dry_mass = 10.0, fuel_mass = 100.0, oxid_mass = 250.0)
+
+        initial_mass = get_dry_mass(gm) + get_wet_mass(gm)
+        hot_mass, cold_mass = expected_biprop_stage_masses(100.0, 250.0)
+        hot_ve = something(HexFluids.lookup_fluid_exhaust_velocity(HexFluids.BIPROP_EXHAUST, 2000.0), 0.0)
+        expected = expected_staged_delta_v(initial_mass, [(hot_mass, hot_ve)])
+
+        @test hot_mass ≈ 350.0
+        @test cold_mass == 0.0
+        @test estimate_min_delta_v(gm) ≈ expected
+    end
+
+    @testset "fuel-limited bipropellant adds a low-temperature oxidiser stage" begin
+        gm = make_origin_gamemap()
+        add_mock_mass_component!(gm, TileCoord(0, 0); dry_mass = 10.0, fuel_mass = 100.0, oxid_mass = 400.0)
+
+        initial_mass = get_dry_mass(gm) + get_wet_mass(gm)
+        hot_mass, cold_mass = expected_biprop_stage_masses(100.0, 400.0)
+        hot_ve = something(HexFluids.lookup_fluid_exhaust_velocity(HexFluids.BIPROP_EXHAUST, 2000.0), 0.0)
+        cold_ve = something(HexFluids.lookup_fluid_exhaust_velocity(HexFluids.BIPROP_EXHAUST, 50.0), 0.0)
+        expected = expected_staged_delta_v(initial_mass, [(hot_mass, hot_ve), (cold_mass, cold_ve)])
+        stranded = expected_staged_delta_v(initial_mass, [(hot_mass, hot_ve)])
+
+        @test hot_mass ≈ 350.0
+        @test cold_mass ≈ 150.0
+        @test estimate_min_delta_v(gm) ≈ expected
+        @test estimate_min_delta_v(gm) > stranded
+    end
+
+    @testset "oxidiser-limited bipropellant adds a low-temperature fuel stage" begin
+        gm = make_origin_gamemap()
+        add_mock_mass_component!(gm, TileCoord(0, 0); dry_mass = 10.0, fuel_mass = 100.0, oxid_mass = 100.0)
+
+        initial_mass = get_dry_mass(gm) + get_wet_mass(gm)
+        hot_mass, cold_mass = expected_biprop_stage_masses(100.0, 100.0)
+        hot_ve = something(HexFluids.lookup_fluid_exhaust_velocity(HexFluids.BIPROP_EXHAUST, 2000.0), 0.0)
+        cold_ve = something(HexFluids.lookup_fluid_exhaust_velocity(HexFluids.BIPROP_EXHAUST, 50.0), 0.0)
+        expected = expected_staged_delta_v(initial_mass, [(hot_mass, hot_ve), (cold_mass, cold_ve)])
+
+        @test hot_mass ≈ 140.0
+        @test cold_mass ≈ 60.0
+        @test estimate_min_delta_v(gm) ≈ expected
+    end
+
+    @testset "single-reagent bipropellant still contributes a low-temperature stage" begin
+        gm = make_origin_gamemap()
+        add_mock_mass_component!(gm, TileCoord(0, 0); dry_mass = 10.0, fuel_mass = 80.0)
+
+        initial_mass = get_dry_mass(gm) + get_wet_mass(gm)
+        hot_mass, cold_mass = expected_biprop_stage_masses(80.0, 0.0)
+        cold_ve = something(HexFluids.lookup_fluid_exhaust_velocity(HexFluids.BIPROP_EXHAUST, 50.0), 0.0)
+        expected = expected_staged_delta_v(initial_mass, [(cold_mass, cold_ve)])
+
+        @test hot_mass == 0.0
+        @test cold_mass ≈ 80.0
+        @test estimate_min_delta_v(gm) ≈ expected
+    end
+
+    @testset "unmodelled stored fluid still counts as carried mass" begin
+        baseline_gm = make_origin_gamemap()
+        add_mock_mass_component!(baseline_gm, TileCoord(0, 0); dry_mass = 10.0, cold_gas_mass = 40.0)
+
+        cargo_gm = make_origin_gamemap()
+        add_mock_mass_component!(cargo_gm, TileCoord(0, 0); dry_mass = 10.0, cold_gas_mass = 40.0, unmodelled_mass = 30.0)
+
+        initial_mass = get_dry_mass(cargo_gm) + get_wet_mass(cargo_gm)
+        cold_gas_ve = something(HexFluids.lookup_fluid_exhaust_velocity(HexFluids.COLD_GAS), 0.0)
+        cargo_expected = expected_staged_delta_v(initial_mass, [(40.0, cold_gas_ve)])
+
+        @test estimate_min_delta_v(cargo_gm) ≈ cargo_expected
+        @test estimate_min_delta_v(cargo_gm) < estimate_min_delta_v(baseline_gm)
+    end
+
+    @testset "mixed propellants burn in decreasing exhaust-velocity order" begin
+        gm = make_origin_gamemap()
+        add_mock_mass_component!(
+            gm,
+            TileCoord(0, 0);
+            dry_mass = 10.0,
+            cold_gas_mass = 40.0,
+            monoprop_mass = 60.0,
+            fuel_mass = 20.0,
+            oxid_mass = 70.0,
+            unmodelled_mass = 15.0,
+        )
+
+        cold_gas_ve = something(HexFluids.lookup_fluid_exhaust_velocity(HexFluids.COLD_GAS), 0.0)
+        monoprop_ve = something(HexFluids.lookup_fluid_exhaust_velocity(HexFluids.MONOPROP_GAS), 0.0)
+        biprop_hot_ve = something(HexFluids.lookup_fluid_exhaust_velocity(HexFluids.BIPROP_EXHAUST, 2000.0), 0.0)
+        biprop_cold_ve = something(HexFluids.lookup_fluid_exhaust_velocity(HexFluids.BIPROP_EXHAUST, 50.0), 0.0)
+        biprop_hot_mass, biprop_cold_mass = expected_biprop_stage_masses(20.0, 70.0)
+        initial_mass = get_dry_mass(gm) + get_wet_mass(gm)
+        fuels = [(40.0, cold_gas_ve), (60.0, monoprop_ve), (biprop_hot_mass, biprop_hot_ve), (biprop_cold_mass, biprop_cold_ve)]
+
+        expected = expected_staged_delta_v(initial_mass, fuels)
+        wrong_order = begin
+            remaining_mass = initial_mass
+            total_dv = 0.0
+
+            for (fuel_mass, ve) in sort(copy(fuels); by = last, rev = false)
+                m_final = remaining_mass - fuel_mass
+                m_final <= 0.0 && continue
+
+                total_dv += ve * log(remaining_mass / m_final)
+                remaining_mass = m_final
+            end
+
+            total_dv
+        end
+
+        @test estimate_min_delta_v(gm) ≈ expected
+        @test abs(expected - wrong_order) > 1.0e-6
     end
 end
 

@@ -1004,10 +1004,31 @@ end
     @test dest_mna.vsource_currents[ElementID(TileCoord(0, 0), 1)] == 0.1
 
     # GameState refill
-    src_gs = GameState(ticks = 42)
+    src_gs = GameState(ticks = 42, estimated_min_delta_v = 123.0)
     dest_gs = GameState()
     HexFlowCalculator.snapshot!(dest_gs, src_gs)
     @test dest_gs.ticks == 42
+    @test dest_gs.estimated_min_delta_v == 123.0
+end
+
+@testset "refresh_estimated_min_delta_v!" begin
+    gm = GameMap()
+
+    gs_initial = GameState(ticks = 0, estimated_min_delta_v = 42.0)
+    HexFlowCalculator.refresh_estimated_min_delta_v!(gs_initial, gm)
+    @test gs_initial.estimated_min_delta_v == 0.0
+
+    gs_skip = GameState(ticks = 1, estimated_min_delta_v = 42.0)
+    HexFlowCalculator.refresh_estimated_min_delta_v!(gs_skip, gm)
+    @test gs_skip.estimated_min_delta_v == 42.0
+
+    gs_modulo = GameState(ticks = HexFlowCalculator.DELTA_V_CACHE_TICK_DIVISOR, estimated_min_delta_v = 42.0)
+    HexFlowCalculator.refresh_estimated_min_delta_v!(gs_modulo, gm)
+    @test gs_modulo.estimated_min_delta_v == 0.0
+
+    gs_forced = GameState(ticks = 7, estimated_min_delta_v = 42.0)
+    HexFlowCalculator.refresh_estimated_min_delta_v!(gs_forced, gm; force = true)
+    @test gs_forced.estimated_min_delta_v == 0.0
 end
 
 # ===============================================================

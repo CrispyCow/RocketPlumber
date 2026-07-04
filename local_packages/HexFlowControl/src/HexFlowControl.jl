@@ -266,12 +266,16 @@ Game state tracking thrust, acceleration, and simulation ticks.
 `acceleration_ship_frame` is thrust/mass in ship-local coordinates (thrust always points +X).
 `acceleration_space_map_frame` is the same value rotated into the inertial space-map frame
 during manoeuvre burn phases; identical to ship frame when not burning.
+
+`estimated_min_delta_v` is a calculator-owned cached conservative delta-V estimate
+that is published to render snapshots on a coarse cadence.
 """
 @kwdef mutable struct GameState
     thrust::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
     acceleration_ship_frame::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
     acceleration_space_map_frame::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
     ticks::Int64 = 0
+    estimated_min_delta_v::Float64 = 0.0
 end
 
 # ===============================================================

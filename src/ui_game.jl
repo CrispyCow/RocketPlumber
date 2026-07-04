@@ -11,6 +11,7 @@ using ImPlot
 using HexFlowProcGen
 using HexFlowCalculator
 using HexFlowControl
+using HexFlowTelemetry
 
 const PIPE_TYPES = (
     ("Scrap Pipe", ScrapPipeBehav),
@@ -502,7 +503,7 @@ function ui_velocity_tracker_render(
     CImGui.Text(@sprintf("Velocity:     %.2f", vel_mag))
     CImGui.Text(@sprintf("Acceleration: %.4f", accel_mag))
     CImGui.Text(@sprintf("Mass:         %.1f", get_mass(gamemap)))
-    CImGui.Text(@sprintf("Ship delta-V: %.1f", estimate_min_delta_v(gamemap)))
+    CImGui.Text(@sprintf("Ship delta-V: %.1f", gamestate.estimated_min_delta_v))
 
     # Choose axis labels and colours
     if show_dv_mode
@@ -974,7 +975,7 @@ function render_spacemap_left_panel!(
 
     CImGui.Text(@sprintf("Position: (%.0f, %.0f)", player_pos[1], player_pos[2]))
     CImGui.Text(@sprintf("Velocity: %.1f", norm(player_vel)))
-    CImGui.Text(@sprintf("Ship delta-V: %.1f", estimate_min_delta_v(gamemap)))
+    CImGui.Text(@sprintf("Ship delta-V: %.1f", gamestate.estimated_min_delta_v))
     CImGui.Spacing()
 
     selected_idx = validate_spacemap_selection!(inputstate, encounter_points)

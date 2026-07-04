@@ -284,6 +284,7 @@ function enter_gameloop(window::GLFW.Window;
     learning_state = build_learning_runtime_state(loaded_gamemap; initial_active_tutorial_id)
     initial_snapshot::FlowCalculatorSnapshot = FlowCalculatorSnapshot(
         gamemap = loaded_gamemap,
+        gamestate = GameState(estimated_min_delta_v = estimate_min_delta_v(loaded_gamemap)),
         timestamp = time()
     )
 

@@ -48,7 +48,7 @@ end
 
 # Pre-configured diagnostic instances for each timer
 const render_loop_diagnostic_config::DiagnosticConfig = DiagnosticConfig(
-    false,                               # enabled
+    true,                               # enabled
     render_loop_timer,                   # timer
     1000,                                # interval (frames)
     "RENDER LOOP (Main Thread)"         # name

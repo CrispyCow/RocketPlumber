@@ -41,6 +41,8 @@ export collect_primary_map_inputs!, update_map_from_inputs!, solve_from_inputs!
 # Constant exports - Manoeuvre thresholds
 export MANOEUVRE_THRUST_THRESHOLD, MANOEUVRE_COMPLETION_THRESHOLD
 
+const DELTA_V_CACHE_TICK_DIVISOR::Int64 = 30
+
 # ===============================================================
 # Data Structures
 # ===============================================================
@@ -362,6 +364,15 @@ function snapshot!(dest::GameState, src::GameState)
     dest.acceleration_ship_frame = src.acceleration_ship_frame
     dest.acceleration_space_map_frame = src.acceleration_space_map_frame
     dest.ticks = src.ticks
+    dest.estimated_min_delta_v = src.estimated_min_delta_v
+    return nothing
+end
+
+"Refresh the cached conservative delta-V estimate when the cadence or caller requires it."
+function refresh_estimated_min_delta_v!(gamestate::GameState, gamemap::GameMap; force::Bool = false)
+    if force || gamestate.ticks == 0 || gamestate.ticks % DELTA_V_CACHE_TICK_DIVISOR == 0
+        @timeit flowcalc_loop_timer "Update Delta-V Cache" gamestate.estimated_min_delta_v = estimate_min_delta_v(gamemap)
+    end
     return nothing
 end
 
@@ -2254,6 +2265,7 @@ function flowcalculator_loop!(
                     @timeit flowcalc_loop_timer "Thruster Handling" handle_thrusters!(gamestate, gamemap, derivedmapstate, mna_state)
                     target_time = @atomic shared_state.target_spacemap_time
                     step_space_map_time!(gamemap.space_map, target_time)
+                    refresh_estimated_min_delta_v!(gamestate, gamemap)
 
                     _publish_snapshot!(publish_snapshot, gamemap, derivedmapstate, mna_state, gamestate, timing.current_time)
 
@@ -2261,6 +2273,7 @@ function flowcalculator_loop!(
                     # Paused with pending commands: rebuild derived state without advancing time
                     collect_primary_map_inputs!(gamemap, derivedmapstate)
                     solve_from_inputs!(derivedmapstate, mna_state, scratchpad, gamestate.ticks)
+                    refresh_estimated_min_delta_v!(gamestate, gamemap; force = true)
 
                     _publish_snapshot!(publish_snapshot, gamemap, derivedmapstate, mna_state, gamestate, timing.current_time)
                 end

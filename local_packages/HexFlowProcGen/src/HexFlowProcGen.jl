@@ -1336,36 +1336,100 @@ end
 # Delta V Estimation
 # ===============================================================
 
-"""
-Estimate the minimum remaining delta V for a ship using the Tsiolkovsky rocket equation.
+const _BIPROP_DELTA_V_ESTIMATE_OPTIMAL_VOL_RATIO = 2.5
+const _BIPROP_DELTA_V_ESTIMATE_TEMPERATURE_K = 2000.0
+const _BIPROP_DELTA_V_ESTIMATE_NONCOMBUSTION_TEMPERATURE_K = 50.0
 
-Computes a lower bound by staging fuels in decreasing exhaust velocity order (burning
-more efficient fuel first, when the ship is heaviest). Two fuel paths are modelled:
+"Mutable running totals for the conservative delta-V estimate."
+Base.@kwdef mutable struct _DeltaVInventoryTotals
+    dry_mass::Float64 = 0.0
+    total_wet_mass::Float64 = 0.0
+    cold_gas_mass::Float64 = 0.0
+    monoprop_mass::Float64 = 0.0
+    fuel_mass::Float64 = 0.0
+    oxid_mass::Float64 = 0.0
+end
+
+"Split stored bipropellant into a matched hot stage and a leftover low-temperature stage."
+function _estimate_biprop_stage_masses(
+        fuel_mass::Float64,
+        oxid_mass::Float64;
+        optimal_vol_ratio::Float64 = _BIPROP_DELTA_V_ESTIMATE_OPTIMAL_VOL_RATIO,
+    )::Tuple{Float64, Float64}
+    total_biprop_mass = fuel_mass + oxid_mass
+    total_biprop_mass <= 0.0 && return (0.0, 0.0)
+    fuel_mass <= 0.0 && return (0.0, oxid_mass)
+    oxid_mass <= 0.0 && return (0.0, fuel_mass)
+
+    fuel_density = something(lookup_fluid_density(HexFluids.FUEL_LIQUID), 0.0)
+    oxid_density = something(lookup_fluid_density(HexFluids.OXIDISER_LIQUID), 0.0)
+    (fuel_density <= 0.0 || oxid_density <= 0.0) && return (0.0, total_biprop_mass)
+
+    mass_ratio = optimal_vol_ratio * oxid_density / fuel_density
+    mass_ratio <= 0.0 && return (0.0, total_biprop_mass)
+
+    matched_fuel_mass = min(fuel_mass, oxid_mass / mass_ratio)
+    matched_total_mass = matched_fuel_mass * (1.0 + mass_ratio)
+    leftover_mass = max(total_biprop_mass - matched_total_mass, 0.0)
+    return (matched_total_mass, leftover_mass)
+end
+
+"Accumulate one placed component's delta-V-relevant mass inventory behind a typed function barrier."
+@inline function _accumulate_delta_v_inventory!(inventory::_DeltaVInventoryTotals, comp::ComponentOnTile{T}) where {T <: ComponentBehavior}
+    component = comp.component
+    inventory.dry_mass += get_component_dry_mass(component)
+
+    component_wet_mass = get_component_wet_mass(component)
+    inventory.total_wet_mass += component_wet_mass
+    component_wet_mass <= 0.0 && return nothing
+
+    inventory.cold_gas_mass += get_component_wet_mass(component; fluid = HexFluids.COLD_GAS)
+    inventory.monoprop_mass += get_component_wet_mass(component; fluid = HexFluids.MONOPROP_LIQUID)
+    inventory.fuel_mass += get_component_wet_mass(component; fluid = HexFluids.FUEL_LIQUID)
+    inventory.oxid_mass += get_component_wet_mass(component; fluid = HexFluids.OXIDISER_LIQUID)
+    return nothing
+end
+
+"""
+Estimate a conservative remaining delta V for the current `GameMap`.
+
+Computes a lower-bound estimate by staging recognised propellants in decreasing exhaust
+velocity order (burning the most efficient fuel first, while the ship is heaviest).
+The estimate is inventory-based and whole-`GameMap`, and models:
 - Cold gas: direct use (`COLD_GAS` tanks, `COLD_GAS` exhaust velocity)
 - Monopropellant: liquid decomposed to gas (`MONOPROP_LIQUID` tanks, `MONOPROP_GAS` exhaust velocity)
+- Bipropellant: the matched `FUEL_LIQUID` / `OXIDISER_LIQUID` mass burns at the assumed
+    ideal ratio using `BIPROP_EXHAUST` at `2000 K`, and any unmatched remainder is expelled
+    on its own using `BIPROP_EXHAUST` at the `50 K` non-combustion floor
 
-Returns 0.0 if the ship has no fuel or no dry mass.
+Returns `0.0` if the map has no usable propellant or no dry mass.
 """
 function estimate_min_delta_v(gamemap::GameMap)::Float64
-    dry_mass = get_dry_mass(gamemap)
-    dry_mass <= 0.0 && return 0.0
+    inventory = _DeltaVInventoryTotals(dry_mass = length(gamemap.surface_shiptags) * get_tile_mass())
+    for (_, comp) in gamemap.components
+        _accumulate_delta_v_inventory!(inventory, comp)
+    end
 
-    # Define fuel paths: (wet mass of fuel, effective exhaust velocity)
-    cold_gas_mass = get_wet_mass(gamemap; fluid = HexFluids.COLD_GAS)
+    inventory.dry_mass <= 0.0 && return 0.0
+
     cold_gas_ve = something(lookup_fluid_exhaust_velocity(HexFluids.COLD_GAS), 0.0)
-
-    monoprop_mass = get_wet_mass(gamemap; fluid = HexFluids.MONOPROP_LIQUID)
     monoprop_ve = something(lookup_fluid_exhaust_velocity(HexFluids.MONOPROP_GAS), 0.0)
 
-    # Collect non-empty fuel stages and sort by DECREASING exhaust velocity (minimum delta V order)
+    biprop_hot_mass, biprop_cold_mass = _estimate_biprop_stage_masses(inventory.fuel_mass, inventory.oxid_mass)
+    biprop_hot_ve = something(lookup_fluid_exhaust_velocity(HexFluids.BIPROP_EXHAUST, _BIPROP_DELTA_V_ESTIMATE_TEMPERATURE_K), 0.0)
+    biprop_cold_ve = something(lookup_fluid_exhaust_velocity(HexFluids.BIPROP_EXHAUST, _BIPROP_DELTA_V_ESTIMATE_NONCOMBUSTION_TEMPERATURE_K), 0.0)
+
     fuels = Tuple{Float64, Float64}[]
-    cold_gas_mass > 0.0 && cold_gas_ve > 0.0 && push!(fuels, (cold_gas_mass, cold_gas_ve))
-    monoprop_mass > 0.0 && monoprop_ve > 0.0 && push!(fuels, (monoprop_mass, monoprop_ve))
+    sizehint!(fuels, 4)
+    inventory.cold_gas_mass > 0.0 && cold_gas_ve > 0.0 && push!(fuels, (inventory.cold_gas_mass, cold_gas_ve))
+    inventory.monoprop_mass > 0.0 && monoprop_ve > 0.0 && push!(fuels, (inventory.monoprop_mass, monoprop_ve))
+    biprop_hot_mass > 0.0 && biprop_hot_ve > 0.0 && push!(fuels, (biprop_hot_mass, biprop_hot_ve))
+    biprop_cold_mass > 0.0 && biprop_cold_ve > 0.0 && push!(fuels, (biprop_cold_mass, biprop_cold_ve))
+    isempty(fuels) && return 0.0
+
     sort!(fuels; by = last, rev = true)
 
-    # Sequential Tsiolkovsky rocket equation: for each fuel stage, the remaining
-    # unburnt fuels act as additional dry mass
-    remaining_mass = dry_mass + sum(first, fuels; init = 0.0)
+    remaining_mass = inventory.dry_mass + inventory.total_wet_mass
     total_dv = 0.0
 
     for (fuel_mass, ve) in fuels
