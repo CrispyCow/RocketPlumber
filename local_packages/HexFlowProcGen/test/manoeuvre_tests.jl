@@ -4,8 +4,15 @@ using StaticArrays
 # Simple manoeuvre-planning unit tests (headless, deterministic)
 @testset "Manoeuvre planning (unit)" begin
 
-    function simulate_plan(player_pos::SVector{2, Float64}, player_vel::SVector{2, Float64}, ep::EncounterPoint, current_time::Float64, total_dv::Float64)
-        m = plan_intercept_manoeuvre(player_pos, player_vel, ep, current_time, total_dv)
+    function simulate_plan(
+            player_pos::SVector{2, Float64},
+            player_vel::SVector{2, Float64},
+            ep::EncounterPoint,
+            current_time::Float64,
+            total_dv::Float64;
+            kwargs...
+        )
+        m = plan_intercept_manoeuvre(player_pos, player_vel, ep, current_time, total_dv; kwargs...)
         @test !isnothing(m)
         m = m::ManoeuvreData
 
@@ -28,6 +35,19 @@ using StaticArrays
 
         return separation, vel_diff
     end
+
+    "Build a deterministic encounter point for manoeuvre-planning tests."
+    function make_test_encounter_point(
+            index::Int;
+            base_velocity::Float64,
+            position::SVector{2, Float64},
+            velocity::SVector{2, Float64},
+            spawn_time::Float64 = 0.0,
+        )::EncounterPoint
+        return EncounterPoint(index = index, base_velocity = base_velocity, position = position, velocity = velocity, spawn_time = spawn_time)
+    end
+
+
 
     @testset "direct intercept helpers" begin
         separation = SVector(100.0, 0.0)
@@ -67,12 +87,11 @@ using StaticArrays
     end
 
     @testset "planner initialises immediate burn state" begin
-        ep = EncounterPoint(
-            index = 5,
+        ep = make_test_encounter_point(
+            5;
             base_velocity = 80.0,
             position = SVector(1000.0, 0.0),
             velocity = SVector(80.0, 0.0),
-            spawn_time = 0.0,
         )
         plan = plan_intercept_manoeuvre(SVector(0.0, 0.0), SVector(100.0, 0.0), ep, 0.0, 30.0)
         @test !isnothing(plan)
@@ -87,12 +106,11 @@ using StaticArrays
     end
 
     @testset "zero-separation degenerate case" begin
-        ep = EncounterPoint(
-            index = 6,
+        ep = make_test_encounter_point(
+            6;
             base_velocity = 100.0,
             position = SVector(0.0, 0.0),
             velocity = SVector(110.0, -5.0),
-            spawn_time = 0.0,
         )
         plan = plan_intercept_manoeuvre(SVector(0.0, 0.0), SVector(100.0, 10.0), ep, 0.0, 30.0)
         @test !isnothing(plan)
@@ -103,5 +121,96 @@ using StaticArrays
         @test plan.capture_burn_dv ≈ SVector(0.0, 0.0)
         @test plan.approach_burn_dv ≈ ep.velocity - SVector(100.0, 10.0)
         @test plan.burn_target_dv ≈ SVector(norm(plan.approach_burn_dv), 0.0)
+    end
+
+    @testset "relaxed surplus supports recovery-style replans" begin
+        ep = make_test_encounter_point(
+            7;
+            base_velocity = 120.0,
+            position = SVector(330.0, 0.0),
+            velocity = SVector(120.0, 0.0),
+        )
+
+        player_pos = SVector(650.0, 0.0)
+        player_vel = SVector(100.0, 0.0)
+        current_time = 3.0
+        total_dv = 20.5
+
+        @test isnothing(plan_intercept_manoeuvre(player_pos, player_vel, ep, current_time, total_dv))
+
+        relaxed_plan = plan_intercept_manoeuvre(
+            player_pos,
+            player_vel,
+            ep,
+            current_time,
+            total_dv;
+            min_surplus_fraction = 0.0,
+        )
+        @test !isnothing(relaxed_plan)
+
+        relaxed_plan = relaxed_plan::ManoeuvreData
+        @test relaxed_plan.phase == PHASE_APPROACH_BURN
+        @test relaxed_plan.approach_burn_time == current_time
+        @test relaxed_plan.intercept_time > current_time
+        @test relaxed_plan.burn_target_dv ≈ relaxed_plan.burn_remaining_dv
+        @test relaxed_plan.burn_target_dv ≈ SVector(norm(relaxed_plan.approach_burn_dv), 0.0)
+
+        sep, vdiff = simulate_plan(
+            player_pos,
+            player_vel,
+            ep,
+            current_time,
+            total_dv;
+            min_surplus_fraction = 0.0,
+        )
+        @test isapprox(sep, 0.0; atol = 1.0e-6)
+        @test isapprox(vdiff, 0.0; atol = 1.0e-6)
+    end
+
+    @testset "fixed-time replans minimise coast recovery burns" begin
+        player_pos_0 = SVector(0.0, 0.0)
+        player_vel_0 = SVector(100.0, 0.0)
+        ep = make_test_encounter_point(
+            8;
+            base_velocity = 80.0,
+            position = SVector(1000.0, 0.0),
+            velocity = SVector(80.0, 0.0),
+        )
+
+        initial_plan = plan_intercept_manoeuvre(player_pos_0, player_vel_0, ep, 0.0, 30.0)
+        @test !isnothing(initial_plan)
+
+        initial_plan = initial_plan::ManoeuvreData
+        coast_velocity = player_vel_0 + initial_plan.approach_burn_dv
+        current_time = initial_plan.intercept_time / 2.0
+        player_pos_mid = player_pos_0 + coast_velocity * current_time
+
+        on_trajectory_plan = plan_intercept_manoeuvre_at_time(
+            player_pos_mid,
+            coast_velocity,
+            ep,
+            current_time,
+            initial_plan.intercept_time,
+        )
+        @test !isnothing(on_trajectory_plan)
+
+        on_trajectory_plan = on_trajectory_plan::ManoeuvreData
+        @test norm(on_trajectory_plan.approach_burn_dv) ≤ 1.0e-9
+        @test on_trajectory_plan.intercept_time == initial_plan.intercept_time
+
+        corrected_velocity = coast_velocity + SVector(0.5, 0.0)
+        recovery_plan = plan_intercept_manoeuvre_at_time(
+            player_pos_mid,
+            corrected_velocity,
+            ep,
+            current_time,
+            initial_plan.intercept_time,
+        )
+        @test !isnothing(recovery_plan)
+
+        recovery_plan = recovery_plan::ManoeuvreData
+        @test recovery_plan.intercept_time == initial_plan.intercept_time
+        @test recovery_plan.approach_burn_dv ≈ SVector(-0.5, 0.0)
+        @test recovery_plan.burn_target_dv ≈ SVector(0.5, 0.0)
     end
 end

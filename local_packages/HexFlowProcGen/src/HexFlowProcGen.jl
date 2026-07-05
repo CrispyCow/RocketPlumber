@@ -25,7 +25,7 @@ export check_departure_pipe_connections
 export EncounterSystemConfig, initialise_encounter_system!
 export spawn_encounter_point!, get_encounter_position, check_encounter_bounds!
 export step_space_map_time!
-export calculate_minimum_intercept_dv, plan_intercept_manoeuvre
+export calculate_minimum_intercept_dv, plan_intercept_manoeuvre, plan_intercept_manoeuvre_at_time
 export get_encounter_ship_seed
 export generate_base_velocities
 export HullSizeConfig, FuelTagConfig, EncounterClassConfig
@@ -1192,6 +1192,31 @@ function calculate_minimum_intercept_dv(
     return norm(target_vel - player_vel) * (1.0 + min_surplus_fraction)
 end
 
+"Collect the current intercept geometry between the player and an encounter point."
+function _direct_intercept_geometry(
+        player_pos::SVector{2, Float64},
+        player_vel::SVector{2, Float64},
+        ep::EncounterPoint,
+        current_time::Float64,
+    )::Tuple{SVector{2, Float64}, SVector{2, Float64}}
+    target_pos = get_encounter_position(ep, current_time)
+    separation = target_pos - player_pos
+    relative_vel = ep.velocity - player_vel
+    return separation, relative_vel
+end
+
+"Compute the direct-intercept approach and capture burns for a fixed coast duration."
+function _direct_intercept_burn_pair(
+        separation::SVector{2, Float64},
+        relative_vel::SVector{2, Float64},
+        coast_time::Float64,
+    )::Tuple{SVector{2, Float64}, SVector{2, Float64}}
+    closing_velocity = separation / coast_time
+    approach_burn_dv = relative_vel + closing_velocity
+    capture_burn_dv = -closing_velocity
+    return approach_burn_dv, capture_burn_dv
+end
+
 """
 Compute the total ΔV for a direct intercept with coast duration `coast_time`.
 
@@ -1205,9 +1230,32 @@ function compute_direct_intercept_dv(
     )::Float64
     coast_time <= 1.0e-12 && return Inf
 
-    capture_dv = norm(separation) / coast_time
-    approach_dv = norm(separation / coast_time + relative_vel)
-    return approach_dv + capture_dv
+    approach_burn_dv, capture_burn_dv = _direct_intercept_burn_pair(separation, relative_vel, coast_time)
+    return norm(approach_burn_dv) + norm(capture_burn_dv)
+end
+
+"Build `ManoeuvreData` from a planned direct-intercept burn pair."
+function _build_intercept_manoeuvre(
+        ep::EncounterPoint,
+        current_time::Float64,
+        intercept_time::Float64,
+        approach_burn_dv::SVector{2, Float64},
+        capture_burn_dv::SVector{2, Float64},
+    )::ManoeuvreData
+    ship_space_approach_dv = SVector(norm(approach_burn_dv), 0.0)
+    capture_burn_position = get_encounter_position(ep, intercept_time)
+
+    return ManoeuvreData(
+        phase = PHASE_APPROACH_BURN,
+        burn_target_dv = ship_space_approach_dv,
+        burn_remaining_dv = ship_space_approach_dv,
+        approach_burn_dv = approach_burn_dv,
+        capture_burn_dv = capture_burn_dv,
+        approach_burn_time = current_time,
+        intercept_time = intercept_time,
+        target_encounter_index = ep.index,
+        capture_burn_position = capture_burn_position,
+    )
 end
 
 """
@@ -1250,6 +1298,23 @@ function find_direct_intercept_time(
     return coast_time_hi
 end
 
+"Plan a direct intercept that reaches the target at a fixed `intercept_time`."
+function plan_intercept_manoeuvre_at_time(
+        player_pos::SVector{2, Float64},
+        player_vel::SVector{2, Float64},
+        ep::EncounterPoint,
+        current_time::Float64,
+        intercept_time::Float64,
+    )::Union{Nothing, ManoeuvreData}
+    coast_time = intercept_time - current_time
+    coast_time <= 1.0e-12 && return nothing
+
+    separation, relative_vel = _direct_intercept_geometry(player_pos, player_vel, ep, current_time)
+    approach_burn_dv, capture_burn_dv = _direct_intercept_burn_pair(separation, relative_vel, coast_time)
+
+    return _build_intercept_manoeuvre(ep, current_time, intercept_time, approach_burn_dv, capture_burn_dv)
+end
+
 """
 Plan an intercept manoeuvre at the given total ΔV budget.
 
@@ -1260,37 +1325,28 @@ The approach burn sets the ship on a trajectory to reach the target's future pos
     capture_burn_dv = -separation / coast_time
 
 Returns `ManoeuvreData` or `nothing` if the total ΔV is insufficient.
+
+`min_surplus_fraction` controls the minimum closing surplus required by the
+initial feasibility guard before the direct-intercept solve is attempted.
 """
 function plan_intercept_manoeuvre(
         player_pos::SVector{2, Float64},
         player_vel::SVector{2, Float64},
         ep::EncounterPoint,
         current_time::Float64,
-        total_dv::Float64,
+        total_dv::Float64;
+        min_surplus_fraction::Float64 = 0.05,
     )::Union{Nothing, ManoeuvreData}
     # Check minimum ΔV feasibility
-    min_dv = calculate_minimum_intercept_dv(player_vel, ep.velocity)
+    min_dv = calculate_minimum_intercept_dv(player_vel, ep.velocity; min_surplus_fraction)
     total_dv < min_dv && return nothing
 
-    target_pos = get_encounter_position(ep, current_time)
-    separation = target_pos - player_pos
-    relative_vel = ep.velocity - player_vel
+    separation, relative_vel = _direct_intercept_geometry(player_pos, player_vel, ep, current_time)
     separation_magnitude = norm(separation)
 
     if separation_magnitude < 1.0e-9
         approach_burn_dv = relative_vel
-        ship_space_approach_dv = SVector(norm(approach_burn_dv), 0.0)
-        return ManoeuvreData(
-            phase = PHASE_APPROACH_BURN,
-            burn_target_dv = ship_space_approach_dv,
-            burn_remaining_dv = ship_space_approach_dv,
-            approach_burn_dv = approach_burn_dv,
-            capture_burn_dv = SVector(0.0, 0.0),
-            approach_burn_time = current_time,
-            intercept_time = current_time,
-            target_encounter_index = ep.index,
-            capture_burn_position = target_pos,
-        )
+        return _build_intercept_manoeuvre(ep, current_time, current_time, approach_burn_dv, SVector(0.0, 0.0))
     end
 
     velocity_match_dv = norm(relative_vel)
@@ -1306,25 +1362,11 @@ function plan_intercept_manoeuvre(
     #= The immediate approach burn adds the exact closing velocity needed to meet the
        target at `intercept_coast_time`, while the capture burn removes that closing component
        at intercept so the post-burn relative velocity is zero. =#
-    closing_velocity = separation / intercept_coast_time
-    approach_burn_dv = relative_vel + closing_velocity
-    capture_burn_dv = -closing_velocity
+    approach_burn_dv, capture_burn_dv = _direct_intercept_burn_pair(separation, relative_vel, intercept_coast_time)
 
-    ship_space_approach_dv = SVector(norm(approach_burn_dv), 0.0)
     intercept_time = current_time + intercept_coast_time
-    capture_burn_position = get_encounter_position(ep, intercept_time)
 
-    return ManoeuvreData(
-        phase = PHASE_APPROACH_BURN,
-        burn_target_dv = ship_space_approach_dv,
-        burn_remaining_dv = ship_space_approach_dv,
-        approach_burn_dv = approach_burn_dv,
-        capture_burn_dv = capture_burn_dv,
-        approach_burn_time = current_time,
-        intercept_time = intercept_time,
-        target_encounter_index = ep.index,
-        capture_burn_position = capture_burn_position,
-    )
+    return _build_intercept_manoeuvre(ep, current_time, intercept_time, approach_burn_dv, capture_burn_dv)
 end
 
 "Get the seed for procedural ship generation for this encounter point."

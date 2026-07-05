@@ -1977,6 +1977,48 @@ function cancel_if_target_time_past!(
     return true
 end
 
+"Return the targeted encounter point or `nothing` when the manoeuvre target is stale."
+function _get_target_encounter(sm::SpaceMapState, target_index::Int)
+    1 <= target_index <= length(sm.encounter_points) || return nothing
+    return sm.encounter_points[target_index]
+end
+
+"Replan the active manoeuvre when thrust is detected during `PHASE_COAST`."
+function recover_if_coast_thrust!(gamemap::GameMap, gamestate::GameState, man::ManoeuvreData, sm::SpaceMapState, ipc::FlowCalculatorIPC)::Bool
+    norm(gamestate.thrust) <= MANOEUVRE_THRUST_THRESHOLD && return false
+
+    console_push = ipc.console_push
+    current_time = sm.time_years
+    set_target_time!(gamemap, current_time)
+    @atomic :monotonic ipc.shared_state.target_spacemap_time = current_time
+
+    ep = _get_target_encounter(sm, man.target_encounter_index)
+    if isnothing(ep)
+        clear_active_manoeuvre!(gamemap)
+        console_push("Manoeuvre cancelled: target encounter is no longer available.")
+        return true
+    end
+    ep = ep::EncounterPoint
+
+    new_manoeuvre = plan_intercept_manoeuvre_at_time(
+        get_position(gamemap),
+        get_velocity(gamemap),
+        ep,
+        current_time,
+        man.intercept_time,
+    )
+
+    if isnothing(new_manoeuvre)
+        clear_active_manoeuvre!(gamemap)
+        console_push("Manoeuvre cancelled: unable to recover the planned intercept window after off-course thrust.")
+        return true
+    end
+
+    set_active_manoeuvre!(gamemap, new_manoeuvre)
+    console_push("Manoeuvre recalculated: thrust during coast restored the planned intercept window.")
+    return true
+end
+
 # ===============================================================
 # Manoeuvre phase state machine
 # ===============================================================
@@ -1990,14 +2032,14 @@ function trigger_ready_encounter!(
     )::Bool
     console_push = ipc.console_push
     max_view_bounds = get_max_reachable_bounds(ipc.shared_state)
-    target_index = man.target_encounter_index
-    if !(1 <= target_index <= length(sm.encounter_points))
+    ep = _get_target_encounter(sm, man.target_encounter_index)
+    if isnothing(ep)
         clear_active_manoeuvre!(gamemap)
         console_push("Manoeuvre cancelled: target encounter is no longer available.")
         return false
     end
+    ep = ep::EncounterPoint
 
-    ep = sm.encounter_points[target_index]
     enc_seed = get_encounter_ship_seed(ep, sm.seed)
 
     enc_config = get_encounter_config(sm)
@@ -2006,7 +2048,7 @@ function trigger_ready_encounter!(
 
     cmd = create_add_encounter_ship_command(
         ipc.command_queue, new_shipmap, ep.display_name, enc_seed;
-        target_encounter_index = target_index,
+        target_encounter_index = man.target_encounter_index,
         max_view_bounds = max_view_bounds
     )
     try_enqueue_command!(ipc.command_queue, cmd, console_push)
@@ -2023,7 +2065,9 @@ Advance the manoeuvre state machine one step.
 
 New manoeuvres enter `PHASE_APPROACH_BURN` with the approach burn already loaded
 into `burn_target_dv` and `burn_remaining_dv`. The only runtime burn initialisation
-that remains is the capture burn transition at intercept time.
+that remains is the capture burn transition at intercept time. Coast-phase thrust
+can also replace the active manoeuvre with a freshly replanned approach burn for
+the same target.
 
 All phase transitions are centralised here so the UI is purely a display layer.
 Must be called once per tick near the start of the simulation pipeline, before
@@ -2053,8 +2097,8 @@ function update_manoeuvre_phase!(gamestate::GameState, gamemap::GameMap, ipc::Fl
         end
 
     elseif man.phase == PHASE_COAST
-        # Guards: thrust between burns, or time warp that skips the capture burn
-        cancel_if_thrust!(gamemap, gamestate; console_push) && return nothing
+        # Recovery: thrust between burns restarts the manoeuvre from a replanned approach burn
+        recover_if_coast_thrust!(gamemap, gamestate, man, sm, ipc) && return nothing
         cancel_if_target_time_past!(gamemap, man.intercept_time; console_push) && return nothing
 
         # Transition: rotate the capture burn ΔV into ship space when intercept time is reached

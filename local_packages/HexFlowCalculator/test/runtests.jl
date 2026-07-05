@@ -336,15 +336,43 @@ function process_and_log!(cmd, gamemap)
 end
 
 "Minimal FlowCalculatorIPC for unit tests that call update_manoeuvre_phase! directly."
-function make_test_ipc(; shared_state::FlowCalculatorSharedState = FlowCalculatorSharedState())
+function make_test_ipc(
+        ;
+        shared_state::FlowCalculatorSharedState = FlowCalculatorSharedState(),
+        console_push::Function = silent_console,
+    )
     return FlowCalculatorIPC(
         shared_state = shared_state,
         command_queue = create_command_queue(),
         publish_snapshot = (args...) -> nothing,
         get_snapshot = () -> FlowCalculatorSnapshot(),
-        console_push = silent_console,
+        console_push = console_push,
         console_see = () -> String[],
     )
+end
+
+"Build a deterministic encounter point for manoeuvre tests."
+function make_test_encounter_point(
+        index::Int;
+        base_velocity::Float64,
+        position::SVector{2, Float64},
+        velocity::SVector{2, Float64},
+        spawn_time::Float64 = 0.0,
+    )::EncounterPoint
+    return EncounterPoint(index = index, base_velocity = base_velocity, position = position, velocity = velocity, spawn_time = spawn_time)
+end
+
+"Return the halfway coast state for a planned intercept." 
+function make_midcoast_state(
+        player_pos_0::SVector{2, Float64},
+        player_vel_0::SVector{2, Float64},
+        plan::ManoeuvreData;
+        velocity_offset::SVector{2, Float64} = SVector(0.0, 0.0),
+    )::Tuple{Float64, SVector{2, Float64}, SVector{2, Float64}}
+    coast_velocity = player_vel_0 + plan.approach_burn_dv
+    current_time = plan.intercept_time / 2.0
+    player_pos_mid = player_pos_0 + coast_velocity * current_time
+    return current_time, player_pos_mid, coast_velocity + velocity_offset
 end
 
 "Create a basic game map with a primary surface tile at the origin."
@@ -2162,9 +2190,11 @@ end
     initialise_spacemap!(gm, UInt32(1), _test_enc_config)
 
     # Add a dummy encounter point so the encounter index lookup succeeds
-    ep = EncounterPoint(
-        index = 1, base_velocity = 100.0,
-        position = SVector(500.0, 0.0), velocity = SVector(-100.0, 0.0), spawn_time = 0.0
+    ep = make_test_encounter_point(
+        1;
+        base_velocity = 100.0,
+        position = SVector(500.0, 0.0),
+        velocity = SVector(-100.0, 0.0),
     )
     push!(get_encounter_points(gm), ep)
 
@@ -2190,6 +2220,135 @@ end
     @test updated_man.phase == PHASE_APPROACH_BURN
     @test updated_man.burn_remaining_dv ≈ SVector(10.0, 0.0)
     @test updated_man.burn_target_dv ≈ SVector(10.0, 0.0)
+end
+
+@testset "update_manoeuvre_phase! — COAST thrust replans the approach burn" begin
+    logs, console = make_log_console()
+    shared_state = FlowCalculatorSharedState(target_spacemap_time = 25.0)
+
+    gs = GameState()
+    gs.thrust = SVector(5.0, 0.0)
+
+    gm = GameMap()
+    ipc = make_test_ipc(shared_state = shared_state, console_push = console)
+    initialise_spacemap!(gm, UInt32(1), _test_enc_config)
+
+    ep = make_test_encounter_point(
+        1;
+        base_velocity = 80.0,
+        position = SVector(1000.0, 0.0),
+        velocity = SVector(80.0, 0.0),
+    )
+    push!(get_encounter_points(gm), ep)
+
+    player_pos_0 = SVector(0.0, 0.0)
+    player_vel_0 = SVector(100.0, 0.0)
+    initial_plan = plan_intercept_manoeuvre(player_pos_0, player_vel_0, ep, 0.0, 30.0)
+    @test !isnothing(initial_plan)
+    initial_plan = initial_plan::ManoeuvreData
+
+    current_time, player_pos_mid, current_velocity = make_midcoast_state(
+        player_pos_0,
+        player_vel_0,
+        initial_plan;
+        velocity_offset = SVector(0.5, 0.0),
+    )
+
+    set_position!(gm, player_pos_mid)
+    set_velocity!(gm, current_velocity)
+    set_time_years!(gm, current_time)
+    set_target_time!(gm, 25.0)
+
+    initial_plan.phase = PHASE_COAST
+    initial_plan.burn_target_dv = SVector(0.0, 0.0)
+    initial_plan.burn_remaining_dv = SVector(0.0, 0.0)
+    set_active_manoeuvre!(gm, initial_plan)
+
+    @test HexFlowCalculator.update_manoeuvre_phase!(gs, gm, ipc) === nothing
+    @test has_active_manoeuvre(gm)
+
+    updated_man = get_active_manoeuvre(gm)
+    @test updated_man.phase == PHASE_APPROACH_BURN
+    @test updated_man.target_encounter_index == 1
+    @test updated_man.approach_burn_time == current_time
+    @test updated_man.intercept_time == initial_plan.intercept_time
+    @test updated_man.burn_target_dv ≈ updated_man.burn_remaining_dv
+    @test updated_man.approach_burn_dv ≈ SVector(-0.5, 0.0)
+    @test updated_man.burn_target_dv ≈ SVector(0.5, 0.0)
+    @test get_target_time(gm) == current_time
+    @test (@atomic shared_state.target_spacemap_time) == current_time
+    @test any(occursin("Manoeuvre recalculated", msg) for msg in logs)
+
+    time_before = get_time_years(gm)
+    @test !HexFlowProcGen.step_space_map_time!(gm.space_map, @atomic shared_state.target_spacemap_time)
+    @test get_time_years(gm) == time_before
+end
+
+@testset "update_manoeuvre_phase! — COAST thrust with invalid target cancels" begin
+    logs, console = make_log_console()
+    shared_state = FlowCalculatorSharedState(target_spacemap_time = 8.0)
+
+    gs = GameState()
+    gs.thrust = SVector(5.0, 0.0)
+
+    gm = GameMap()
+    ipc = make_test_ipc(shared_state = shared_state, console_push = console)
+    initialise_spacemap!(gm, UInt32(1), _test_enc_config)
+    set_time_years!(gm, 3.0)
+    set_target_time!(gm, 8.0)
+
+    man = ManoeuvreData(
+        phase = PHASE_COAST,
+        approach_burn_dv = SVector(1.0, 0.0),
+        capture_burn_dv = SVector(1.0, 0.0),
+        target_encounter_index = 1,
+    )
+    set_active_manoeuvre!(gm, man)
+
+    @test HexFlowCalculator.update_manoeuvre_phase!(gs, gm, ipc) === nothing
+    @test !has_active_manoeuvre(gm)
+    @test get_target_time(gm) == 3.0
+    @test (@atomic shared_state.target_spacemap_time) == 3.0
+    @test any(occursin("target encounter is no longer available", msg) for msg in logs)
+end
+
+@testset "update_manoeuvre_phase! — COAST reaches CAPTURE_BURN at intercept" begin
+    gs = GameState()
+    gm = GameMap()
+    ipc = make_test_ipc()
+    initialise_spacemap!(gm, UInt32(1), _test_enc_config)
+
+    push!(get_encounter_points(gm), make_test_encounter_point(
+        1;
+        base_velocity = 80.0,
+        position = SVector(100.0, 0.0),
+        velocity = SVector(80.0, 0.0),
+    ))
+
+    set_time_years!(gm, 5.0)
+    set_target_time!(gm, 5.0)
+    gs.thrust = SVector(0.0, 0.0)
+
+    man = ManoeuvreData(
+        phase = PHASE_COAST,
+        approach_burn_dv = SVector(6.0, 0.0),
+        capture_burn_dv = SVector(-3.0, 4.0),
+        burn_target_dv = SVector(0.0, 0.0),
+        burn_remaining_dv = SVector(0.0, 0.0),
+        approach_burn_time = 0.0,
+        intercept_time = 5.0,
+        target_encounter_index = 1,
+        capture_burn_position = SVector(0.0, 0.0),
+    )
+    set_active_manoeuvre!(gm, man)
+
+    @test HexFlowCalculator.update_manoeuvre_phase!(gs, gm, ipc) === nothing
+    @test has_active_manoeuvre(gm)
+
+    updated_man = get_active_manoeuvre(gm)
+    @test updated_man.phase == PHASE_CAPTURE_BURN
+    @test updated_man.burn_target_dv ≈ SVector(5.0, 0.0)
+    @test updated_man.burn_remaining_dv ≈ SVector(5.0, 0.0)
 end
 
 @testset "update_manoeuvre_phase! — ENCOUNTER_READY with thrust cancels" begin
