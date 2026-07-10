@@ -18,6 +18,7 @@ HexComponentsAPI.get_conductance(::MockPipeBehav) = 1.0
 HexComponentsAPI.get_pipe_tunables(::MockPipeBehav) = ()
 HexComponentsAPI.set_pipe_tunables(behaviour::MockPipeBehav, ::Any) = behaviour
 HexComponentsAPI.render_pipe_base!(::Any, ::MockPipeBehav; kwargs...) = nothing
+HexComponentsAPI.get_pipe_click_radius(::MockPipeBehav) = 0.1
 
 # ===============================================================
 # Test Helpers
@@ -165,7 +166,9 @@ end
         @test !(placement_state(is) isa PlacementMoveState)
         @test !(placement_state(is) isa PlacementPipeChainState)
 
-        set_placement_state!(is, PlacementMoveState(move_target = TilePipeMoveTarget(TileCoord(1, 2), HexFrame.Q_POS)))
+        set_placement_state!(is, PlacementMoveState(move_target = PipeMoveTarget(
+            PipeCoord(VertexCoord(TileCoord(1, 2), HexFrame.Q_POS), VertexCoord(TileCoord(1, 2), HexFrame.Q_NEG)),
+        )))
         state = placement_state(is)
         @test state isa PlacementMoveState
 

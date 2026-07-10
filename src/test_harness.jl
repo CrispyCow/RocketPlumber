@@ -5,15 +5,13 @@
 using HexFlowCalculator: MapEditCommand, SetTileCommand, DeleteAtCommand,
     SetPipeBehaviorCommand, MoveCommand, ClickTileCommand, DoActionCommand,
     AddShipSurfaceCommand, RemoveShipSurfaceCommand, RedockShipCommand,
-    AddEncounterShipCommand, MapOverrideCommand, ModifyTilePipeCommand,
-    MoveTilePipeCommand, CommandQueue, try_enqueue_command!,
+    AddEncounterShipCommand, MapOverrideCommand, CommandQueue, try_enqueue_command!,
     CommandStatus, APPLIED, REJECTED, QUEUED_FAILED, INVALID
 using Accessors
 using HexFlowControl: EXIT_QUIT, InputState
-using HexFrame: TileCoord, EdgeCoord, HexAxis, CartesianCoord
+using HexFrame: TileCoord, PipeCoord, HexAxis, CartesianCoord
 using HexComponentsAPI: ComponentBehavior
 using FlowMap: PipeBehavior, ShipBlueprint, GameMap, get_ship_blueprint
-using HexFlowPipeComponents: TilePipeFrag
 
 "Single scheduled test-harness step consumed by `test_system_tick!`."
 Base.@kwdef struct TestCommandStep
@@ -50,17 +48,16 @@ make_test_set_tile(coord::TileCoord, component::ComponentBehavior, rotation::Hex
         rotation = rotation, mirrored = mirrored, response_channel = nothing)
 
 "Build a `DeleteAtCommand` for harness use."
-make_test_delete(coord::T) where {T <: Union{TileCoord, EdgeCoord}} =
-    DeleteAtCommand{T}(id = UInt64(0), coord = coord, response_channel = nothing)
+make_test_delete(coord::T) where {T <: Union{TileCoord, PipeCoord}} =
+    create_delete_command(create_command_queue(1), coord; response_channel = nothing)
 
 "Build a `SetPipeBehaviorCommand` for harness use."
-make_test_set_pipe(coord::EdgeCoord, pipe::PipeBehavior) =
-    SetPipeBehaviorCommand(id = UInt64(0), coord = coord, pipe_behavior = pipe, response_channel = nothing)
+make_test_set_pipe(coord::PipeCoord, pipe::PipeBehavior) =
+    create_set_pipe_behavior_command(create_command_queue(1), coord, pipe; response_channel = nothing)
 
 "Build a `MoveCommand` for harness use."
-make_test_move(src::T, dst::T, delta_rotation::HexAxis, delta_mirror::Bool = false) where {T <: Union{TileCoord, EdgeCoord}} =
-    MoveCommand{T}(id = UInt64(0), source_coord = src, dest_coord = dst,
-        delta_rotation = delta_rotation, delta_mirror = delta_mirror, response_channel = nothing)
+make_test_move(src::T, dst::T, delta_rotation::HexAxis, delta_mirror::Bool = false) where {T <: Union{TileCoord, PipeCoord}} =
+    create_move_command(create_command_queue(1), src, dst, delta_rotation, delta_mirror; response_channel = nothing)
 
 "Build a `ClickTileCommand` for harness use."
 make_test_click(coord::TileCoord, clicksite::CartesianCoord = CartesianCoord(0.0, 0.0)) =
@@ -93,14 +90,6 @@ make_test_add_encounter_ship(blueprint::ShipBlueprint, name_base::AbstractString
 "Build a `MapOverrideCommand` for harness use."
 make_test_map_override(new_map::GameMap) =
     MapOverrideCommand(id = UInt64(0), new_map = new_map, response_channel = nothing)
-
-"Build a `ModifyTilePipeCommand` for harness use."
-make_test_modify_tile_pipe(tile::TileCoord, axis::HexAxis, frag::TilePipeFrag) =
-    ModifyTilePipeCommand(id = UInt64(0), tile = tile, axis = axis, frag = frag, response_channel = nothing)
-
-"Build a `MoveTilePipeCommand` for harness use."
-make_test_move_tile_pipe(src_tile::TileCoord, src_axis::HexAxis, dst_tile::TileCoord, dst_axis::HexAxis) =
-    MoveTilePipeCommand(id = UInt64(0), src_tile = src_tile, src_axis = src_axis, dst_tile = dst_tile, dst_axis = dst_axis, response_channel = nothing)
 
 #= ---------- Response verification ----------- =#
 

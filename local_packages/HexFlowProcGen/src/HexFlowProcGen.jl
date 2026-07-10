@@ -259,7 +259,7 @@ function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::
             # Clustered: identical components, assumes all rotations can be mapped to a valid one
             comp_behav = roll_component(spawn_option.kind, first(component_location_list), seed)
             comp_rotation = map_rotation(comp_behav, pick_element_from_rng(instances(HexFrame.HexAxis), prng))
-            tilecomp = ComponentOnTile(comp_behav, comp_rotation, :primary)
+            tilecomp = PlacedComponent(comp_behav, comp_rotation, :primary)
 
             for selected_coord in component_location_list
                 set_component!(map, selected_coord, deepcopy(tilecomp))
@@ -270,7 +270,7 @@ function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::
             for selected_coord in component_location_list
                 comp_behav = roll_component(spawn_option.kind, selected_coord, seed)
                 comp_rotation = map_rotation(comp_behav, pick_element_from_rng(instances(HexFrame.HexAxis), prng))
-                tilecomp = ComponentOnTile(comp_behav, comp_rotation, :primary)
+                tilecomp = PlacedComponent(comp_behav, comp_rotation, :primary)
 
                 set_component!(map, selected_coord, deepcopy(tilecomp))
             end
@@ -289,7 +289,7 @@ function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::
                     # Check if placement is valid
                     valid_pick, reason = placement_valid(comp_behav, selected_coord, map; rotation = chosen_axis)
                     if valid_pick
-                        set_component!(map, selected_coord, ComponentOnTile(comp_behav, chosen_axis, :primary))
+                        set_component!(map, selected_coord, PlacedComponent(comp_behav, chosen_axis, :primary))
                         break
                     end
                 end
@@ -327,113 +327,119 @@ roll_pipe(kind::Symbol, point, seed) =
 roll_pipe(::Val{K}, point, seed) where {K} =
     error("Unknown pipe kind: $K")
 
-"Return the set of all `EdgeCoord`s belonging to the given tiles."
-function get_all_edgecoords_of_tiles(tiles::Set{TileCoord})
-    edgecoords = Set{EdgeCoord}()
+"Return the set of all pipe segments touching or crossing the given tiles."
+function get_all_pipes_of_tiles(tiles::Set{TileCoord})
+    pipes = Set{PipeCoord}()
 
     for tile in tiles
-        union!(edgecoords, get_edges(tile))
+        union!(pipes, get_pipe_segments(tile))
     end
 
-    return edgecoords
+    return pipes
 end
 
-"Hash an edge with a pipe kind to produce a deterministic UInt32 noise key."
-hash_pipe_edge(edge::EdgeCoord, pipe_kind::Symbol) = UInt32(hash(edge, hash(pipe_kind)) & typemax(UInt32))
+"Hash a pipe coordinate with a pipe kind to produce a deterministic UInt32 noise key."
+hash_pipe(pipe::PipeCoord, pipe_kind::Symbol) = UInt32(hash(pipe, hash(pipe_kind)) & typemax(UInt32))
 
-"Remove edges that fail the noise density check for `pipe_kind`. Mutates `edges` in-place."
-function noise_filter_pipe_edges!(edges::Set{EdgeCoord}, pipe_kind::Symbol, seed::UInt32; pipe_density)
+"Relative probability for non-side pipe spans compared with side spans."
+const NON_SIDE_PIPE_PROBABILITY_FACTOR = 1 / 5.0
+
+"Remove pipes that fail the noise density check for `pipe_kind`. Mutates `pipes` in-place."
+function noise_filter_pipes!(pipes::Set{PipeCoord}, pipe_kind::Symbol, seed::UInt32; pipe_density)
     used_pipe_density = clamp(pipe_density, 0.0, 1.0)
-    filter!(edges) do edge
-        roll = get_noise_zero_to_one(hash_pipe_edge(edge, pipe_kind), seed)
-        roll <= used_pipe_density
+    filter!(pipes) do pipe
+        roll = get_noise_zero_to_one(hash_pipe(pipe, pipe_kind), seed)
+        effective_density = is_side_span(pipe) ? used_pipe_density : used_pipe_density * NON_SIDE_PIPE_PROBABILITY_FACTOR
+        roll <= effective_density
     end
-    return edges
+    return pipes
 end
 
-"Remove edges that share a vertex with any other edge in the set."
-function filter_mutually_connected_edges!(edges::Set{EdgeCoord})
-    to_remove = EdgeCoord[]
-    for edge in edges
+"Remove pipes that share a vertex with any other pipe in the set."
+function filter_mutually_connected_pipes!(pipes::Set{PipeCoord})
+    to_remove = PipeCoord[]
+    for pipe in pipes
         is_connected = false
-        for adj in get_edges(edge.v1)
-            if adj != edge && adj in edges
+        for adj in get_pipe_segments(pipe.v1)
+            if adj != pipe && adj in pipes
                 is_connected = true
                 break
             end
         end
         if !is_connected
-            for adj in get_edges(edge.v2)
-                if adj != edge && adj in edges
+            for adj in get_pipe_segments(pipe.v2)
+                if adj != pipe && adj in pipes
                     is_connected = true
                     break
                 end
             end
         end
-        is_connected && push!(to_remove, edge)
+        is_connected && push!(to_remove, pipe)
     end
-    for edge in to_remove
-        delete!(edges, edge)
+    for pipe in to_remove
+        delete!(pipes, pipe)
     end
-    return edges
+    return pipes
 end
 
-"Place pipes on candidate edges connecting to exactly one existing node, filtered by `pipe_density`."
+"Place pipes on candidate segments connecting to exactly one existing node, filtered by `pipe_density`."
 function place_connected_pipes!(map::GameMap, pipe_kind::Symbol, seed::UInt32; pipe_density)
     ship_tiles = collect_surface_tiles!(Set{TileCoord}(), map)
-    available_edgecoords = get_all_edgecoords_of_tiles(ship_tiles)
+    available_pipes = get_all_pipes_of_tiles(ship_tiles)
     # all_nodes covers component AND pipe-endpoint nodes (via list_elements), preventing a
     # second pipe-placement call from bridging through an existing-pipe vertex.
     all_nodes = Set(keys(list_nodes(list_elements(map))))
 
-    # Keep only edges that would connect to exactly one existing node
-    for edgecoord in available_edgecoords
-        v1_is_connected = to_nodecoord(edgecoord.v1) in all_nodes
-        v2_is_connected = to_nodecoord(edgecoord.v2) in all_nodes
+    # Keep only pipes that would connect to exactly one existing node.
+    for pipe in available_pipes
+        v1_is_connected = to_nodecoord(pipe.v1) in all_nodes
+        v2_is_connected = to_nodecoord(pipe.v2) in all_nodes
         if v1_is_connected == v2_is_connected  # both or neither connected — remove
-            delete!(available_edgecoords, edgecoord)
+            delete!(available_pipes, pipe)
+        elseif has_pipe_component_conflict(pipe, map)
+            delete!(available_pipes, pipe)
         end
     end
 
-    # Filter by noise density, then remove edges that would interconnect
-    noise_filter_pipe_edges!(available_edgecoords, pipe_kind, seed; pipe_density)
-    filter_mutually_connected_edges!(available_edgecoords)
+    # Filter by noise density, then remove pipes that would interconnect.
+    noise_filter_pipes!(available_pipes, pipe_kind, seed; pipe_density)
+    filter_mutually_connected_pipes!(available_pipes)
 
-    # Place surviving edges
-    for edgecoord in available_edgecoords
-        pipe_behav = roll_pipe(pipe_kind, hash_pipe_edge(edgecoord, pipe_kind), seed)
-        set_pipe!(map, edgecoord, pipe_behav; ship_name = :primary)
+    # Place surviving pipes.
+    for pipe in available_pipes
+        pipe_behav = roll_pipe(pipe_kind, hash_pipe(pipe, pipe_kind), seed)
+        set_pipe!(map, pipe, pipe_behav; ship_name = :primary)
     end
 
     return nothing
 end
 
-"Place pipes on candidate edges that do not bridge two existing nodes, filtered by `pipe_density`."
+"Place pipes on candidate segments that do not bridge two existing nodes, filtered by `pipe_density`."
 function place_random_pipes!(map::GameMap, pipe_kind::Symbol, seed::UInt32; pipe_density)
     ship_tiles = collect_surface_tiles!(Set{TileCoord}(), map)
-    available_edgecoords = get_all_edgecoords_of_tiles(ship_tiles)
+    available_pipes = get_all_pipes_of_tiles(ship_tiles)
     # all_nodes covers component AND pipe-endpoint nodes (via list_elements), preventing a
     # second pipe-placement call from bridging through an existing-pipe vertex.
     all_nodes = Set(keys(list_nodes(list_elements(map))))
 
-    # Remove any edges that would bridge two existing nodes
-    for edgecoord in available_edgecoords
-        v1_is_connected = to_nodecoord(edgecoord.v1) in all_nodes
-        v2_is_connected = to_nodecoord(edgecoord.v2) in all_nodes
+    # Remove any pipes that would bridge two existing nodes.
+    for pipe in available_pipes
+        v1_is_connected = to_nodecoord(pipe.v1) in all_nodes
+        v2_is_connected = to_nodecoord(pipe.v2) in all_nodes
 
-        if v1_is_connected && v2_is_connected
-            delete!(available_edgecoords, edgecoord)
+        if (v1_is_connected && v2_is_connected) || has_pipe_component_conflict(pipe, map)
+            delete!(available_pipes, pipe)
         end
     end
 
-    # Filter by noise density, then remove edges that would interconnect
-    noise_filter_pipe_edges!(available_edgecoords, pipe_kind, seed; pipe_density)
-    filter_mutually_connected_edges!(available_edgecoords)
+    # Filter by noise density, then remove pipes that would interconnect.
+    noise_filter_pipes!(available_pipes, pipe_kind, seed; pipe_density)
+    filter_mutually_connected_pipes!(available_pipes)
 
-    # Place surviving edges
-    for edgecoord in available_edgecoords
-        pipe_behav = roll_pipe(pipe_kind, hash_pipe_edge(edgecoord, pipe_kind), seed)
-        set_pipe!(map, edgecoord, pipe_behav; ship_name = :primary)
+    # Place surviving pipes.
+    for pipe in available_pipes
+        pipe_behav = roll_pipe(pipe_kind, hash_pipe(pipe, pipe_kind), seed)
+        set_pipe!(map, pipe, pipe_behav; ship_name = :primary)
     end
 
     return nothing
@@ -811,26 +817,26 @@ end
 
 """
 Check whether a ship can depart by verifying no pipe chain still bridges it to another ship.
-Collects all off-surface pipe edges (relative to the departing ship), flood-fills outward
+Collects all off-surface pipe coordinates (relative to the departing ship), flood-fills outward
 from the departing ship's surface boundary, and checks whether any component reaches another
 ship's surface.
 
 Returns `(can_depart::Bool, reason::String)`.
 """
 function check_departure_pipe_connections(gamemap::GameMap, ship_name::Symbol)::Tuple{Bool, String}
-    offship_edges = Set{EdgeCoord}()
-    for (edge, _) in gamemap.pipe_behaviors
-        v1_on = is_node_on_ship_surface(to_nodecoord(edge.v1), gamemap; ship_name)
-        v2_on = is_node_on_ship_surface(to_nodecoord(edge.v2), gamemap; ship_name)
-        !(v1_on && v2_on) && push!(offship_edges, edge)
+    offship_coords = Set{PipeCoord}()
+    for (coord, _) in gamemap.pipe_behaviors
+        v1_on = is_node_on_ship_surface(to_nodecoord(coord.v1), gamemap; ship_name)
+        v2_on = is_node_on_ship_surface(to_nodecoord(coord.v2), gamemap; ship_name)
+        !(v1_on && v2_on) && push!(offship_coords, coord)
     end
 
-    isempty(offship_edges) && return (true, "")
+    isempty(offship_coords) && return (true, "")
 
     # Starting nodes: endpoints of off-surface pipes that sit on the departing ship's surface
     starting_nodes = Set{NodeCoord}()
-    for edge in offship_edges
-        for vertex in (edge.v1, edge.v2)
+    for coord in offship_coords
+        for vertex in (coord.v1, coord.v2)
             node = to_nodecoord(vertex)
             if is_node_on_ship_surface(node, gamemap; ship_name = ship_name)
                 push!(starting_nodes, node)
@@ -841,17 +847,17 @@ function check_departure_pipe_connections(gamemap::GameMap, ship_name::Symbol)::
     isempty(starting_nodes) && return (true, "")
 
     # Flood from each starting node, checking if any component reaches another ship
-    visited_edges = Set{EdgeCoord}()
+    visited_coords = Set{PipeCoord}()
     for start_node in starting_nodes
         # Skip if this node's component was already explored
-        any(e -> to_nodecoord(e.v1) == start_node || to_nodecoord(e.v2) == start_node, visited_edges) && continue
+        any(e -> to_nodecoord(e.v1) == start_node || to_nodecoord(e.v2) == start_node, visited_coords) && continue
 
-        reachable = Set{EdgeCoord}()
-        flood_search_pipes_from_node!(reachable, offship_edges, start_node)
-        union!(visited_edges, reachable)
+        reachable = Set{PipeCoord}()
+        flood_search_pipes_from_node!(reachable, offship_coords, start_node)
+        union!(visited_coords, reachable)
 
-        for edge in reachable
-            for vertex in (edge.v1, edge.v2)
+        for coord in reachable
+            for vertex in (coord.v1, coord.v2)
                 node = to_nodecoord(vertex)
                 for (sname, _) in gamemap.ships
                     sname == ship_name && continue
@@ -1417,7 +1423,7 @@ function _estimate_biprop_stage_masses(
 end
 
 "Accumulate one placed component's delta-V-relevant mass inventory behind a typed function barrier."
-@inline function _accumulate_delta_v_inventory!(inventory::_DeltaVInventoryTotals, comp::ComponentOnTile{T}) where {T <: ComponentBehavior}
+@inline function _accumulate_delta_v_inventory!(inventory::_DeltaVInventoryTotals, comp::PlacedComponent{T}) where {T <: ComponentBehavior}
     component = comp.component
     inventory.dry_mass += get_component_dry_mass(component)
 

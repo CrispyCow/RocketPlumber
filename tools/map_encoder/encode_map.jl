@@ -74,8 +74,8 @@ format_coord(tc::TileCoord) = "TileCoord($(Int(tc.q)), $(Int(tc.r)))"
 "Format a VertexCoord as a readable constructor call."
 format_coord(vc::VertexCoord) = "VertexCoord($(format_coord(vc.tile)), HexFrame.$(vc.dir))"
 
-"Format an EdgeCoord as a readable constructor call."
-format_coord(ec::EdgeCoord) = "EdgeCoord($(format_coord(ec.v1)), $(format_coord(ec.v2)))"
+"Format a PipeCoord as a readable constructor call."
+format_coord(pc::PipeCoord) = "PipeCoord($(format_coord(pc.v1)), $(format_coord(pc.v2)))"
 
 "Sanitise a ship name symbol into a valid Julia variable suffix."
 function ship_var_name(ship_name::Symbol)
@@ -117,8 +117,9 @@ function generate_mapgen_code(gamemap::GameMap, funcname::String; mapnote="")
         end
 
         push!(lines, "")
-        push!(lines, "    gamemap = GameMap()")
+        push!(lines, "    gamemap = GameMap($(ship_var_name(:primary)))")
         for (ship_name, _) in ship_entries
+            ship_name === :primary && continue
             var = ship_var_name(ship_name)
             raw = string(ship_name)
             push!(lines, "    merge_ship!(gamemap, Symbol($(repr(raw))), $var)")
@@ -133,24 +134,24 @@ end
 "Emit component, pipe, and surface lines for a ShipBlueprint from a GameMap."
 function emit_ship_contents_blueprint!(lines::Vector{String}, var::String, gamemap::GameMap, ship_name::Symbol)
     # Collect components for this ship only
-    ship_components = [(coord, cot) for (coord, cot) in gamemap.components if cot.ship === ship_name]
+    ship_components = [(coord, placed_component) for (coord, placed_component) in gamemap.components if placed_component.ship === ship_name]
 
     # Components
     if !isempty(ship_components)
         push!(lines, "    # Components")
-        for (coord, cot) in ship_components
-            push!(lines, "    $var.components[$(format_coord(coord))] = ComponentOnTile($(repr(cot.component)), HexFrame.$(cot.rotation), $(cot.mirrored), :_blueprint)")
+        for (coord, placed_component) in ship_components
+            push!(lines, "    $var.components[$(format_coord(coord))] = PlacedComponent($(repr(placed_component.component)), HexFrame.$(placed_component.rotation), $(placed_component.mirrored), :_blueprint)")
         end
     end
 
     # Collect pipes for this ship only
-    ship_pipes = [(ec, poe) for (ec, poe) in gamemap.pipe_behaviors if poe.ship === ship_name]
+    ship_pipes = [(pipe_coord, placed_pipe) for (pipe_coord, placed_pipe) in gamemap.pipe_behaviors if placed_pipe.ship === ship_name]
 
     # Pipes
     if !isempty(ship_pipes)
         push!(lines, "    # Pipes")
-        for (ec, poe) in ship_pipes
-            push!(lines, "    $var.pipe_behaviors[$(format_coord(ec))] = $(repr(poe.pipe))")
+        for (pipe_coord, placed_pipe) in ship_pipes
+            push!(lines, "    $var.pipe_behaviors[$(format_coord(pipe_coord))] = $(repr(placed_pipe.pipe))")
         end
     end
 
@@ -178,20 +179,20 @@ function encode_map(map_input::String, output_file::Union{String,Nothing}=nothin
         push!(lines, "  Ship( :$(ship_name) )")
 
         # Format components dictionary for this ship (from global dict, filtered by ship tag)
-        push!(lines, "    components = Dict{TileCoord, ComponentOnTile}([")
-        for (coord, comp_on_tile) in gamemap.components
-            comp_on_tile.ship === ship_name || continue
-            comp_str = repr(comp_on_tile)
+        push!(lines, "    components = Dict{TileCoord, PlacedComponent}([")
+        for (coord, placed_component) in gamemap.components
+            placed_component.ship === ship_name || continue
+            comp_str = repr(placed_component)
             push!(lines, "      $(format_coord(coord)) => $comp_str,")
         end
         push!(lines, "    ]),")
 
         # Format pipe_behaviors dictionary for this ship (from global dict, filtered by ship tag)
-        push!(lines, "    pipe_behaviors = Dict{EdgeCoord, PipeOnEdge}([")
-        for (edge_coord, pipe_on_edge) in gamemap.pipe_behaviors
-            pipe_on_edge.ship === ship_name || continue
-            pipe_str = repr(pipe_on_edge)
-            push!(lines, "      $(format_coord(edge_coord)) => $pipe_str,")
+        push!(lines, "    pipe_behaviors = Dict{PipeCoord, PlacedPipe}([")
+        for (pipe_coord, placed_pipe) in gamemap.pipe_behaviors
+            placed_pipe.ship === ship_name || continue
+            pipe_str = repr(placed_pipe)
+            push!(lines, "      $(format_coord(pipe_coord)) => $pipe_str,")
         end
         push!(lines, "    ]),")
 

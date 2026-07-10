@@ -82,7 +82,7 @@ function ElementID(source::TileCoord, index::Integer)
 end
 
 "ElementID constructor for pipe elements (enforces index = 1)."
-function ElementID(pipe::EdgeCoord)
+function ElementID(pipe::PipeCoord)
     return ElementID(hash(pipe), UInt8(1))
 end
 

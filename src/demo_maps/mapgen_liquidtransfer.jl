@@ -53,15 +53,15 @@ function mapgen_liquidtransfer()
             TileCoord(0, 0),
             TileCoord(1, 0),
         )
-        primary_blueprint.components[coord] = ComponentOnTile(deepcopy(empty_liquid_tank_template), HexFrame.Q_POS, :_blueprint)
+        primary_blueprint.components[coord] = PlacedComponent(deepcopy(empty_liquid_tank_template), HexFrame.Q_POS, :_blueprint)
     end
 
     for coord in (TileCoord(-3, 2), TileCoord(-3, 1), TileCoord(-4, 2))
-        primary_blueprint.components[coord] = ComponentOnTile(deepcopy(gas_tank_template), HexFrame.S_POS, :_blueprint)
+        primary_blueprint.components[coord] = PlacedComponent(deepcopy(gas_tank_template), HexFrame.S_POS, :_blueprint)
     end
 
     for coord in (TileCoord(-4, 3), TileCoord(-4, 1))
-        primary_blueprint.components[coord] = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_POS, :_blueprint)
+        primary_blueprint.components[coord] = PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_POS, :_blueprint)
     end
 
     union!(primary_blueprint.ship_tiles, Set{TileCoord}([
@@ -92,7 +92,7 @@ function mapgen_liquidtransfer()
             TileCoord(6, -5),
             TileCoord(6, -7),
         )
-        tanker_blueprint.components[coord] = ComponentOnTile(deepcopy(full_liquid_tank_template), HexFrame.Q_POS, :_blueprint)
+        tanker_blueprint.components[coord] = PlacedComponent(deepcopy(full_liquid_tank_template), HexFrame.Q_POS, :_blueprint)
     end
 
     union!(tanker_blueprint.ship_tiles, Set{TileCoord}([
@@ -111,7 +111,7 @@ function mapgen_liquidtransfer()
 
     # Debris hulk: contains the transfer pump needed to move propellant across the gap.
     pump_holder_blueprint = ShipBlueprint()
-    pump_holder_blueprint.components[TileCoord(-1, -4)] = ComponentOnTile(
+    pump_holder_blueprint.components[TileCoord(-1, -4)] = PlacedComponent(
         ElectricPumpCompBehav(
             ElectricTransferPump;
             pump_voltage = 2.0,

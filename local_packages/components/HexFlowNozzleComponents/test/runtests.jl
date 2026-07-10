@@ -63,7 +63,7 @@ end
     comp = BipropChamberCompBehav()
     @test map_mirroring(comp, true)
 
-    mirrored = ComponentOnTile(comp, TEST_ROTATION, true, :primary)
+    mirrored = PlacedComponent(comp, TEST_ROTATION, true, :primary)
     abs_elements = produce_abs_elements(mirrored, TEST_TILE)
     @test abs_elements[5].connections.v1 == map_element(HexFrame.NODE_S_NEG, TEST_TILE, TEST_ROTATION)
     @test abs_elements[6].connections.v1 == map_element(HexFrame.NODE_R_NEG, TEST_TILE, TEST_ROTATION)
@@ -244,7 +244,7 @@ end
 
     @test get_component_temperature(basic) === get_component_temperature(basic.nozzle)
 
-    tile_component = ComponentOnTile(basic, TEST_ROTATION, :primary)
+    tile_component = PlacedComponent(basic, TEST_ROTATION, :primary)
     @test get_component_temperature(tile_component) === get_component_temperature(basic)
 
     switched = make_switched_nozzle()

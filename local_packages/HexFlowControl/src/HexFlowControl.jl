@@ -7,7 +7,7 @@ using StaticArrays, GLFW, Dates
 export SimSpeed, SIM_1X, SIM_2X, SIM_4X, SIM_MAX
 export ExitReason, EXIT_QUIT, EXIT_MENU, EXIT_SANDBOX_COMPLETED, EXIT_SANDBOX_STARTED
 export AbstractPopupTarget, ComponentPopupTarget, ShipPopupTarget
-export AbstractPlacementMoveTarget, TileComponentMoveTarget, TilePipeMoveTarget, EdgePipeMoveTarget
+export AbstractPlacementMoveTarget, TileComponentMoveTarget, PipeMoveTarget
 export AbstractPlacementState, AbstractEditorPlacementState
 export PlacementReadyState, PlacementPressedState, PlacementMoveState, PlacementPipeChainState
 export PlacementDeleteState, PlacementTileState, PlacementSurfaceEditState, PlacementRedockState
@@ -146,18 +146,12 @@ struct TileComponentMoveTarget <: AbstractPlacementMoveTarget
     coord::TileCoord
 end
 
-"Move target representing a single tile-pipe fragment on a tile axis."
-struct TilePipeMoveTarget <: AbstractPlacementMoveTarget
-    coord::TileCoord
-    axis::HexAxis
+"Move target representing a unified pipe segment."
+struct PipeMoveTarget <: AbstractPlacementMoveTarget
+    coord::PipeCoord
 end
 
-"Move target representing an edge pipe."
-struct EdgePipeMoveTarget <: AbstractPlacementMoveTarget
-    coord::EdgeCoord
-end
-
-const PlacementMoveTarget = Union{TileComponentMoveTarget, TilePipeMoveTarget, EdgePipeMoveTarget}
+const PlacementMoveTarget = Union{TileComponentMoveTarget, PipeMoveTarget}
 
 "Idle placement state: inspect-hover plus click classification."
 struct PlacementReadyState <: AbstractPlacementState end

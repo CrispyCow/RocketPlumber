@@ -74,6 +74,7 @@ HexComponentsAPI.get_conductance(b::MockPipeBehav) = b.conductance
 HexComponentsAPI.get_pipe_tunables(::MockPipeBehav) = ()
 HexComponentsAPI.set_pipe_tunables(b::MockPipeBehav, ::NTuple{0, Real}) = b
 HexComponentsAPI.render_pipe_base!(::AbstractVector, ::MockPipeBehav; kwargs...) = nothing
+HexComponentsAPI.get_pipe_click_radius(::MockPipeBehav) = 0.1
 
 # Register mock roll_component / roll_pipe dispatches
 HexFlowProcGen.roll_component(::Val{:MockComp}, point, seed) = MockCompBehav(1.0)
@@ -134,7 +135,7 @@ function add_mock_mass_component!(
     set_component!(
         gm,
         coord,
-        ComponentOnTile(
+        PlacedComponent(
             MockMassCompBehav(dry_mass, cold_gas_mass, monoprop_mass, fuel_mass, oxid_mass, unmodelled_mass),
             HexFrame.Q_POS,
             :primary,
@@ -512,17 +513,20 @@ end
         end
     end
 
-    @testset "get_all_edgecoords_of_tiles" begin
+    @testset "get_all_pipes_of_tiles" begin
         tiles = Set{TileCoord}([TileCoord(0, 0)])
-        edges = HexFlowProcGen.get_all_edgecoords_of_tiles(tiles)
+        pipes = HexFlowProcGen.get_all_pipes_of_tiles(tiles)
 
-        @test edges isa Set{EdgeCoord}
-        @test length(edges) == 6  # single hex has 6 edges
+        @test pipes isa Set{PipeCoord}
+        @test length(pipes) == 15
+        @test count(is_side_span, pipes) == 6
+        @test count(pipe -> !is_side_span(pipe), pipes) == 9
 
-        # Two adjacent tiles share an edge → fewer total edges than 12
+        # Two adjacent tiles share a side span, so the total is less than 30.
         tiles2 = Set{TileCoord}([TileCoord(0, 0), TileCoord(1, -1)])
-        edges2 = HexFlowProcGen.get_all_edgecoords_of_tiles(tiles2)
-        @test length(edges2) < 12
+        pipes2 = HexFlowProcGen.get_all_pipes_of_tiles(tiles2)
+        @test pipes2 isa Set{PipeCoord}
+        @test length(pipes2) < 30
     end
 
     @testset "roll_component dispatches correctly" begin
@@ -547,7 +551,7 @@ end
 
         comps = get_components(gm)
         @test length(comps) >= 1
-        @test all(cot.component isa MockCompBehav for (_, cot) in comps)
+        @test all(placed_component.component isa MockCompBehav for (_, placed_component) in comps)
     end
 
     @testset "place_shipset! with CLUSTERED_PLACE" begin
@@ -579,10 +583,27 @@ end
         @test_throws ErrorException HexFlowProcGen.roll_pipe(:NonExistent, 1, UInt32(0))
     end
 
+    @testset "noise_filter_pipes! applies non-side pipe probability factor" begin
+        seed = UInt32(0xFACE)
+        pipes = Set(get_pipe_segments(TileCoord(0, 0)))
+        filtered = HexFlowProcGen.noise_filter_pipes!(copy(pipes), :MockPipe, seed; pipe_density = 1.0)
+
+        expected = Set(filter(pipes) do pipe
+            effective_density = is_side_span(pipe) ? 1.0 : HexFlowProcGen.NON_SIDE_PIPE_PROBABILITY_FACTOR
+            get_noise_zero_to_one(HexFlowProcGen.hash_pipe(pipe, :MockPipe), seed) <= effective_density
+        end)
+
+        @test filtered == expected
+        @test all(pipe -> pipe in filtered, filter(is_side_span, collect(pipes)))
+
+        empty_filtered = HexFlowProcGen.noise_filter_pipes!(copy(pipes), :MockPipe, seed; pipe_density = 0.0)
+        @test isempty(empty_filtered)
+    end
+
     @testset "place_random_pipes!" begin
         surface = make_pipe_test_surface()
         gm = make_test_gamemap(surface)
-        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
+        set_component!(gm, TileCoord(0, 0), PlacedComponent(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
 
         place_random_pipes!(gm, :MockPipe, UInt32(0xAAAA); pipe_density = 0.3)
 
@@ -601,8 +622,8 @@ end
     @testset "place_connected_pipes!" begin
         surface = make_pipe_test_surface()
         gm = make_test_gamemap(surface)
-        set_component!(gm, TileCoord(-2, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
-        set_component!(gm, TileCoord(2, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
+        set_component!(gm, TileCoord(-2, 0), PlacedComponent(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
+        set_component!(gm, TileCoord(2, 0), PlacedComponent(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
 
         place_connected_pipes!(gm, :MockPipe, UInt32(0xBBBB); pipe_density = 0.2)
 
@@ -618,7 +639,7 @@ end
     @testset "place_pipeset! single" begin
         surface = make_pipe_test_surface()
         gm = make_test_gamemap(surface)
-        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
+        set_component!(gm, TileCoord(0, 0), PlacedComponent(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
 
         opts = PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES, 0.3)
         place_pipeset!(gm, opts, UInt32(0xCCCC))
@@ -628,7 +649,7 @@ end
     @testset "place_pipeset! vector" begin
         surface = make_small_surface()
         gm = make_test_gamemap(surface)
-        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
+        set_component!(gm, TileCoord(0, 0), PlacedComponent(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
 
         opts_vec = [
             PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES, 0.5),
@@ -641,10 +662,21 @@ end
     @testset "zero density places no pipes" begin
         surface = make_small_surface()
         gm = make_test_gamemap(surface)
-        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
+        set_component!(gm, TileCoord(0, 0), PlacedComponent(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
 
         place_random_pipes!(gm, :MockPipe, UInt32(0xEEEE); pipe_density = 0.0)
         @test isempty(gm.pipe_behaviors)
+    end
+
+    @testset "non-side pipes do not cross occupied component tiles" begin
+        surface = make_small_surface()
+        component_tile = TileCoord(0, 0)
+        gm = make_test_gamemap(surface)
+        set_component!(gm, component_tile, PlacedComponent(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
+
+        place_random_pipes!(gm, :MockPipe, UInt32(0xFFFF); pipe_density = 1.0)
+
+        @test all(pipe -> get_tile_containing_pipe(pipe) != component_tile, keys(gm.pipe_behaviors))
     end
 end
 
@@ -891,9 +923,9 @@ end
     ISP_V3 = to_proper(VertexCoord(TileCoord(1, 0), HexFrame.Q_POS))   # tiles: (2,-1), (1,0), (2,0) → neither
     ISP_V4 = to_proper(VertexCoord(TileCoord(3, -1), HexFrame.Q_NEG))  # tiles: (3,-1), (2,-1), (2,0) → secondary
 
-    ISP_E1 = to_proper(EdgeCoord(ISP_V1, ISP_V2))  # attached to primary via V1
-    ISP_E2 = to_proper(EdgeCoord(ISP_V2, ISP_V3))  # floating (no ship surface)
-    ISP_E3 = to_proper(EdgeCoord(ISP_V3, ISP_V4))  # attached to secondary via V4
+    ISP_E1 = PipeCoord(ISP_V1, ISP_V2)  # attached to primary via V1
+    ISP_E2 = PipeCoord(ISP_V2, ISP_V3)  # floating (no ship surface)
+    ISP_E3 = PipeCoord(ISP_V3, ISP_V4)  # attached to secondary via V4
 
     """
     Create a GameMap with primary at tile (0,0) and secondary at tile (3,-1).
@@ -920,7 +952,7 @@ end
     @testset "can_place_pipe_offship — connected via existing pipe" begin
         gm = make_two_ship_gamemap()
         # Place E1 on primary, then E2 should connect through E1
-        set_pipe!(gm, ISP_E1, PipeOnEdge(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E1, PlacedPipe(MockPipeBehav(), :primary))
         valid, target, _ = can_place_pipe_offship(ISP_E2, gm)
         @test valid == true
         @test target == :primary
@@ -937,9 +969,9 @@ end
     @testset "validate_offship_pipe_deletion — middle of chain" begin
         gm = make_two_ship_gamemap()
         # Full bridge chain stored on their respective ships
-        set_pipe!(gm, ISP_E1, PipeOnEdge(MockPipeBehav(), :primary))
-        set_pipe!(gm, ISP_E2, PipeOnEdge(MockPipeBehav(), :primary))
-        set_pipe!(gm, ISP_E3, PipeOnEdge(MockPipeBehav(), :secondary))
+        set_pipe!(gm, ISP_E1, PlacedPipe(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E2, PlacedPipe(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E3, PlacedPipe(MockPipeBehav(), :secondary))
 
         # Deleting E2 (middle) splits into E1 (reaches primary via V1) and E3 (reaches secondary
         # via V4). Both components still connect to a ship → valid deletion.
@@ -949,8 +981,8 @@ end
     @testset "validate_offship_pipe_deletion — would orphan" begin
         gm = make_two_ship_gamemap()
         # E1 (on primary) → E2 (floating, stored on primary)
-        set_pipe!(gm, ISP_E1, PipeOnEdge(MockPipeBehav(), :primary))
-        set_pipe!(gm, ISP_E2, PipeOnEdge(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E1, PlacedPipe(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E2, PlacedPipe(MockPipeBehav(), :primary))
 
         # Deleting E1 would orphan E2 (E2's vertices touch no ship surface)
         @test validate_offship_pipe_deletion(ISP_E1, gm) == false
@@ -961,9 +993,9 @@ end
     @testset "reassign_pipe_ownership! — chain split" begin
         gm = make_two_ship_gamemap()
         # Full chain all stored on primary
-        set_pipe!(gm, ISP_E1, PipeOnEdge(MockPipeBehav(), :primary))
-        set_pipe!(gm, ISP_E2, PipeOnEdge(MockPipeBehav(), :primary))
-        set_pipe!(gm, ISP_E3, PipeOnEdge(MockPipeBehav(2.0), :primary))
+        set_pipe!(gm, ISP_E1, PlacedPipe(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E2, PlacedPipe(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E3, PlacedPipe(MockPipeBehav(2.0), :primary))
 
         # Delete E2 to split the chain
         delete_pipe!(gm, ISP_E2)
@@ -975,9 +1007,9 @@ end
         # E3 should have moved to secondary (V4 is on secondary's surface)
         e3 = get_pipe(gm, ISP_E3)
         @test !isnothing(e3) && e3.ship === :secondary
-        pipe_on_edge = e3
-        @test !isnothing(pipe_on_edge)
-        @test get_conductance(pipe_on_edge.pipe) ≈ 2.0
+        placed_pipe = e3
+        @test !isnothing(placed_pipe)
+        @test get_conductance(placed_pipe.pipe) ≈ 2.0
     end
 
     @testset "check_departure_pipe_connections — no off-surface pipes" begin
@@ -989,9 +1021,9 @@ end
     @testset "check_departure_pipe_connections — pipe bridge blocks departure" begin
         gm = make_two_ship_gamemap()
         # Full chain bridging primary ↔ secondary
-        set_pipe!(gm, ISP_E1, PipeOnEdge(MockPipeBehav(), :primary))
-        set_pipe!(gm, ISP_E2, PipeOnEdge(MockPipeBehav(), :primary))
-        set_pipe!(gm, ISP_E3, PipeOnEdge(MockPipeBehav(), :secondary))
+        set_pipe!(gm, ISP_E1, PlacedPipe(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E2, PlacedPipe(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E3, PlacedPipe(MockPipeBehav(), :secondary))
 
         can_depart, reason = check_departure_pipe_connections(gm, :secondary)
         @test can_depart == false
@@ -1001,7 +1033,7 @@ end
     @testset "check_departure_pipe_connections — pipe only on departing ship" begin
         gm = make_two_ship_gamemap()
         # E3 only touches secondary, stored on secondary
-        set_pipe!(gm, ISP_E3, PipeOnEdge(MockPipeBehav(), :secondary))
+        set_pipe!(gm, ISP_E3, PlacedPipe(MockPipeBehav(), :secondary))
 
         can_depart, _ = check_departure_pipe_connections(gm, :secondary)
         @test can_depart == true
@@ -1009,9 +1041,9 @@ end
 
     @testset "depart_ship! blocked by pipe bridge" begin
         gm = make_two_ship_gamemap()
-        set_pipe!(gm, ISP_E1, PipeOnEdge(MockPipeBehav(), :primary))
-        set_pipe!(gm, ISP_E2, PipeOnEdge(MockPipeBehav(), :primary))
-        set_pipe!(gm, ISP_E3, PipeOnEdge(MockPipeBehav(), :secondary))
+        set_pipe!(gm, ISP_E1, PlacedPipe(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E2, PlacedPipe(MockPipeBehav(), :primary))
+        set_pipe!(gm, ISP_E3, PlacedPipe(MockPipeBehav(), :secondary))
 
         success, reason = depart_ship!(gm, :secondary)
         @test success == false
@@ -1029,7 +1061,7 @@ end
     @testset "depart_ship! succeeds without pipe bridge" begin
         gm = make_two_ship_gamemap()
         # Pipe only on secondary, no bridge
-        set_pipe!(gm, ISP_E3, PipeOnEdge(MockPipeBehav(), :secondary))
+        set_pipe!(gm, ISP_E3, PlacedPipe(MockPipeBehav(), :secondary))
 
         success, _ = depart_ship!(gm, :secondary)
         @test success == true
@@ -1052,13 +1084,13 @@ end
 
         # Flood from V1 — should reach all 3
         start_node = to_nodecoord(ISP_V1)
-        reachable = Set{EdgeCoord}()
+        reachable = Set{PipeCoord}()
         flood_search_pipes_from_node!(reachable, all_edges, start_node)
         @test length(reachable) == 3
 
         # Flood from an unconnected node — should reach nothing
         far_node = to_nodecoord(to_proper(VertexCoord(TileCoord(10, 10), HexFrame.Q_POS)))
-        reachable2 = Set{EdgeCoord}()
+        reachable2 = Set{PipeCoord}()
         flood_search_pipes_from_node!(reachable2, all_edges, far_node)
         @test isempty(reachable2)
     end

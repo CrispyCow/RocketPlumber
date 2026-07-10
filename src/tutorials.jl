@@ -42,8 +42,8 @@ end
 # Tutorial Helper Functions
 # ===============================================================
 
-"True if any component on the gamemap satisfies `predicate(component_on_tile)`."
-has_component_on_tile_matching(gamemap::GameMap, predicate::Function)::Bool =
+"True if any component on the gamemap satisfies `predicate(placed_component)`."
+has_placed_component_matching(gamemap::GameMap, predicate::Function)::Bool =
     any(predicate, values(get_components(gamemap)))
 
 "True if any component on the gamemap has a component behaviour satisfying `predicate(behaviour)`."
@@ -180,11 +180,10 @@ function get_entry_basic_controls()::LearningEntry
                         TutorialStep(
                             heading = "HOW TO PLACE PIPES AND CONNECT THE NOZZLE",
                             text = tutorial_dedent(
-                                "To connect the nozzle you'll need some pipes! Pipes can be placed on the edges between hex tiles, or on the tiles themselves.\n
+                                "To connect the nozzle you'll need some pipes! Pipes connect pressure nodes, so they can run along a tile side or straight through a tile.\n
                                 Press 3 to enter Pipe Editing mode. This places 'scrap' pipes. There's always plenty of scrap lying around to make these! \
-                                You can press R to rotate the tile-placed pipes. No need to rotate edge-placed ones, there's only one way they can go!\n
-                                To actually place the pipes just click. If you misplace an edge pipe, just click on it again to delete it. \
-                                If you need to remove a tile pipe, right-click on it to access the actions menu.\n
+                                Move the cursor away from a source node to choose the highlighted segment, then click to place it.\n
+                                If you misplace a pipe, just click on it again to delete it.\n
                                 Try to place pipes connecting the tank to the nozzle!"
                             ),
                             step_blocker = function(inputs::LearningInputs)
@@ -216,8 +215,8 @@ function get_entry_basic_controls()::LearningEntry
                                 Start by moving the nozzle so it is in a better spot and pointing towards the left!"
                             ),
                             step_blocker = function(inputs::LearningInputs)
-                                has_left_facing_nozzle = has_component_on_tile_matching(inputs.gamemap, function(component_on_tile)
-                                    return component_on_tile.component isa BasicNozzleCompBehav && component_on_tile.rotation == HexFrame.Q_POS
+                                has_left_facing_nozzle = has_placed_component_matching(inputs.gamemap, function(placed_component)
+                                    return placed_component.component isa BasicNozzleCompBehav && placed_component.rotation == HexFrame.Q_POS
                                 end)
 
                                 has_left_facing_nozzle && return nothing
@@ -791,14 +790,14 @@ function get_entry_fluid_transfer()::LearningEntry
                             ),
                             step_blocker = function(inputs::LearningInputs)
                                 # The transfer pump must be moved from the debris hulk onto the tanker, with its output facing left toward the primary ship.
-                                pump_in_place = any(each_component_of_type(inputs.gamemap, ElectricPumpCompBehav{ElectricTransferPump})) do component_on_tile
-                                    ship_name = component_on_tile.ship
+                                pump_in_place = any(each_component_of_type(inputs.gamemap, ElectricPumpCompBehav{ElectricTransferPump})) do placed_component
+                                    ship_name = placed_component.ship
                                     ship_name === :primary && return false
 
                                     is_on_tanker = any(each_component_of_ship(inputs.gamemap, ship_name)) do ship_component
                                         ship_component.component isa ThevininTankCompBehav{LiquidTankBehavFrag}
                                     end
-                                    faces_left = component_on_tile.rotation in (HexFrame.S_NEG, HexFrame.Q_POS, HexFrame.R_NEG)
+                                    faces_left = placed_component.rotation in (HexFrame.S_NEG, HexFrame.Q_POS, HexFrame.R_NEG)
                                     return is_on_tanker && faces_left
                                 end
 
@@ -817,11 +816,11 @@ function get_entry_fluid_transfer()::LearningEntry
                             step_blocker = function(inputs::LearningInputs)
                                 # The plumbing is complete once both transfer-pump ports are connected into the monoprop liquid network.
                                 pump_is_plumbed = any(get_components(inputs.gamemap)) do entry
-                                    coord, component_on_tile = entry
-                                    component_on_tile.component isa ElectricPumpCompBehav{ElectricTransferPump} || return false
+                                    coord, placed_component = entry
+                                    placed_component.component isa ElectricPumpCompBehav{ElectricTransferPump} || return false
 
-                                    pump_input_node = map_element(HexFrame.NODE_Q_NEG, coord, component_on_tile.rotation)
-                                    pump_output_node = map_element(HexFrame.NODE_Q_POS, coord, component_on_tile.rotation)
+                                    pump_input_node = map_element(HexFrame.NODE_Q_NEG, coord, placed_component.rotation)
+                                    pump_output_node = map_element(HexFrame.NODE_Q_POS, coord, placed_component.rotation)
                                     input_fluid = get(inputs.derivedmapstate.nodeactualfluids, pump_input_node, nothing)
                                     output_fluid = get(inputs.derivedmapstate.nodeactualfluids, pump_output_node, nothing)
                                     return input_fluid == HexFluids.MONOPROP_LIQUID && output_fluid == HexFluids.MONOPROP_LIQUID
@@ -842,16 +841,16 @@ function get_entry_fluid_transfer()::LearningEntry
                             ),
                             step_blocker = function(inputs::LearningInputs)
                                 # Finish only when the primary ship's liquid tanks are effectively full and the transfer pump has been switched back off.
-                                primary_tanks_full = all(each_component_of_ship(inputs.gamemap, :primary)) do component_on_tile
-                                    component = component_on_tile.component
+                                primary_tanks_full = all(each_component_of_ship(inputs.gamemap, :primary)) do placed_component
+                                    component = placed_component.component
                                     component isa ThevininTankCompBehav || return true
                                     component.tank isa LiquidTankBehavFrag || return true
                                     # Liquid tanks store their charge inside ThevininTankCompBehav -> LiquidTankBehavFrag -> TankBehavFrag.
                                     return component.tank.tank.state.charge >= 0.99 * component.tank.tank.max_charge
                                 end
 
-                                pump_is_off = any(each_component_of_type(inputs.gamemap, ElectricPumpCompBehav{ElectricTransferPump})) do component_on_tile
-                                    return get_target_percentage(component_on_tile.component.switch) ≈ 0.0
+                                pump_is_off = any(each_component_of_type(inputs.gamemap, ElectricPumpCompBehav{ElectricTransferPump})) do placed_component
+                                    return get_target_percentage(placed_component.component.switch) ≈ 0.0
                                 end
 
                                 primary_tanks_full && pump_is_off && return nothing
@@ -899,10 +898,10 @@ function get_entry_pressure_fed_intro()::LearningEntry
                             ),
                             step_blocker = function(inputs::LearningInputs)
                                 target_coord = TileCoord(-4, 1)
-                                component_on_tile = get_component(inputs.gamemap, target_coord)
-                                decomp_in_position = !isnothing(component_on_tile) &&
-                                    component_on_tile.component isa typeof(BasicDecompChamber) &&
-                                    component_on_tile.rotation == HexFrame.Q_POS
+                                placed_component = get_component(inputs.gamemap, target_coord)
+                                decomp_in_position = !isnothing(placed_component) &&
+                                    placed_component.component isa typeof(BasicDecompChamber) &&
+                                    placed_component.rotation == HexFrame.Q_POS
 
                                 decomp_in_position && return nothing
                                 return "Move the decomposition chamber into position (-4, 1) with the wider end facing the nozzle."
@@ -949,10 +948,10 @@ function get_entry_pressure_fed_intro()::LearningEntry
                             ),
                             step_blocker = function(inputs::LearningInputs)
                                 tanks_empty = all((TileCoord(0, -1), TileCoord(0, 0))) do coord
-                                    component_on_tile = get(get_components(inputs.gamemap), coord, nothing)
-                                    !isnothing(component_on_tile) || return false
-                                    component_on_tile.component isa PressureFedTankCompBehav || return false
-                                    return component_on_tile.component.tank.liquid_state.charge <= 0.0
+                                    placed_component = get(get_components(inputs.gamemap), coord, nothing)
+                                    !isnothing(placed_component) || return false
+                                    placed_component.component isa PressureFedTankCompBehav || return false
+                                    return placed_component.component.tank.liquid_state.charge <= 0.0
                                 end
 
                                 tanks_empty && return nothing
@@ -974,11 +973,11 @@ function get_entry_pressure_fed_intro()::LearningEntry
                             ),
                             step_blocker = function(inputs::LearningInputs)
                                 tanks_refilled = all((TileCoord(0, -1), TileCoord(0, 0))) do coord
-                                    component_on_tile = get(get_components(inputs.gamemap), coord, nothing)
-                                    !isnothing(component_on_tile) || return false
-                                    component_on_tile.component isa PressureFedTankCompBehav || return false
+                                    placed_component = get(get_components(inputs.gamemap), coord, nothing)
+                                    !isnothing(placed_component) || return false
+                                    placed_component.component isa PressureFedTankCompBehav || return false
 
-                                    tank = component_on_tile.component.tank
+                                    tank = placed_component.component.tank
                                     return tank.liquid_state.charge >= 0.98 * tank.max_liquid_charge
                                 end
 
@@ -1048,10 +1047,10 @@ function get_entry_turbo_pump_intro()::LearningEntry
                             step_blocker = function(inputs::LearningInputs)
                                 # if the valve has monoprop gas in its input, then the tap-off cycle is plumbed up correctly
                                 valve_input_has_monoprop_gas = any(get_components(inputs.gamemap)) do entry
-                                    coord, component_on_tile = entry
-                                    component_on_tile.component isa StandardValveCompBehav{SteppedSwitchBehavFrag} || return false
+                                    coord, placed_component = entry
+                                    placed_component.component isa StandardValveCompBehav{SteppedSwitchBehavFrag} || return false
 
-                                    valve_input_node = map_element(HexFrame.NODE_Q_NEG, coord, component_on_tile.rotation)
+                                    valve_input_node = map_element(HexFrame.NODE_Q_NEG, coord, placed_component.rotation)
                                     fluid = get(inputs.derivedmapstate.nodeactualfluids, valve_input_node, nothing)
                                     return fluid == HexFluids.MONOPROP_GAS
                                 end

@@ -6,7 +6,7 @@ using TimerOutputs, StaticArrays
 # Custom Packages
 using HexFrame, HexElements, HexFluids, HexFlowTelemetry
 using FlowEngine, FlowMap, HexComponentsAPI, HexFlowControl
-using HexFlowProcGen, HexFlowPipeComponents
+using HexFlowProcGen
 
 # Type exports - Data Structures
 export FlowCalculatorSnapshot, FlowCalculatorSharedState, FlowCalculatorIPC, TimingState
@@ -16,7 +16,6 @@ export CommandStatus, APPLIED, REJECTED, QUEUED_FAILED, INVALID
 export MapEditCommand, SetTileCommand, SetPipeBehaviorCommand, MoveCommand
 export DeleteAtCommand, ClickTileCommand, DoActionCommand, AddShipSurfaceCommand, RemoveShipSurfaceCommand
 export MapOverrideCommand, AddEncounterShipCommand, RedockShipCommand
-export ModifyTilePipeCommand, MoveTilePipeCommand
 export CommandQueue
 
 # Function exports - Setup
@@ -171,17 +170,17 @@ end
 end
 @struct_hash_equal SetTileCommand
 
-"Place a pipe behaviour at an edge coordinate."
+"Place a pipe behaviour at a pipe coordinate."
 @kwdef struct SetPipeBehaviorCommand <: MapEditCommand
     id::UInt64
-    coord::EdgeCoord
+    coord::PipeCoord
     pipe_behavior::PipeBehavior
     response_channel::Union{Nothing, Channel{CommandStatus}}
 end
 @struct_hash_equal SetPipeBehaviorCommand
 
 "Move a component or pipe across the map."
-@kwdef struct MoveCommand{T <: Union{TileCoord, EdgeCoord}} <: MapEditCommand
+@kwdef struct MoveCommand{T <: Union{TileCoord, PipeCoord}} <: MapEditCommand
     id::UInt64
     source_coord::T
     dest_coord::T
@@ -192,7 +191,7 @@ end
 @struct_hash_equal MoveCommand
 
 "Delete element at coordinate. Type parameter selects tile vs edge dispatch."
-@kwdef struct DeleteAtCommand{T <: Union{TileCoord, EdgeCoord}} <: MapEditCommand
+@kwdef struct DeleteAtCommand{T <: Union{TileCoord, PipeCoord}} <: MapEditCommand
     id::UInt64
     coord::T
     response_channel::Union{Nothing, Channel{CommandStatus}}
@@ -262,27 +261,6 @@ end
     response_channel::Union{Nothing, Channel{CommandStatus}}
 end
 @struct_hash_equal RedockShipCommand
-
-"Modify a single tile pipe at a given axis, adding, replacing, or deleting the fragment."
-@kwdef struct ModifyTilePipeCommand <: MapEditCommand
-    id::UInt64
-    tile::TileCoord
-    axis::HexFrame.HexAxis
-    frag::TilePipeFrag
-    response_channel::Union{Nothing, Channel{CommandStatus}}
-end
-@struct_hash_equal ModifyTilePipeCommand
-
-"Move a tile pipe fragment from one location/axis to another."
-@kwdef struct MoveTilePipeCommand <: MapEditCommand
-    id::UInt64
-    src_tile::TileCoord
-    src_axis::HexFrame.HexAxis
-    dst_tile::TileCoord
-    dst_axis::HexFrame.HexAxis
-    response_channel::Union{Nothing, Channel{CommandStatus}}
-end
-@struct_hash_equal MoveTilePipeCommand
 
 # ===============================================================
 # Snapshot Refill Methods
@@ -544,7 +522,7 @@ function apply_mapedit_command!(
         return false
     end
 
-    set_component!(gamemap, command.coord, ComponentOnTile(deepcopy(command.component), mapped_rotation, mapped_mirror, target_ship))
+    set_component!(gamemap, command.coord, PlacedComponent(deepcopy(command.component), mapped_rotation, mapped_mirror, target_ship))
     threadsafe_console_push("Component placed at $(command.coord) on $(target_ship)")
     return true
 end
@@ -562,10 +540,16 @@ function apply_mapedit_command!(
     end
 
     # Try on-surface placement first, then off-ship fallback
-    target_ship = find_ship_containing_edge(gamemap, command.coord)
+    target_ship = find_ship_containing(gamemap, command.coord)
 
     if !isnothing(target_ship)
-        set_pipe!(gamemap, command.coord, PipeOnEdge(deepcopy(command.pipe_behavior), target_ship))
+        can_place, reason = can_place_pipe_at(command.coord, gamemap; ship_name = target_ship)
+        if !can_place
+            threadsafe_console_push("Cannot place pipe: $(reason)")
+            return false
+        end
+
+        set_pipe!(gamemap, command.coord, PlacedPipe(deepcopy(command.pipe_behavior), target_ship))
         threadsafe_console_push("Pipe placed at $(command.coord) on $(target_ship)")
         return true
     end
@@ -573,7 +557,7 @@ function apply_mapedit_command!(
     # Not on any single ship — try off-ship pipe placement (extending from a ship into space)
     can_place, offship_target, reason = can_place_pipe_offship(command.coord, gamemap)
     if can_place
-        set_pipe!(gamemap, command.coord, PipeOnEdge(deepcopy(command.pipe_behavior), offship_target))
+        set_pipe!(gamemap, command.coord, PlacedPipe(deepcopy(command.pipe_behavior), offship_target))
         threadsafe_console_push("Off-ship pipe placed at $(command.coord) on $(offship_target)")
         return true
     end
@@ -608,7 +592,7 @@ function apply_mapedit_command!(
 
     # Same-coord move: rotate component in place
     if command.source_coord == command.dest_coord
-        rotated_comptile = ComponentOnTile(source_comptile.component, new_rotation, new_mirrored, source_ship)
+        rotated_comptile = PlacedComponent(source_comptile.component, new_rotation, new_mirrored, source_ship)
         is_valid, reason = placement_valid(rotated_comptile, command.source_coord, gamemap; ship_name = source_ship)
         if !is_valid
             threadsafe_console_push("Cannot rotate in place: $reason")
@@ -639,7 +623,7 @@ function apply_mapedit_command!(
     end
 
     # Perform move (potentially cross-ship)
-    dest_comptile = ComponentOnTile(source_comptile.component, new_rotation, new_mirrored, dest_ship)
+    dest_comptile = PlacedComponent(source_comptile.component, new_rotation, new_mirrored, dest_ship)
     set_component!(gamemap, command.dest_coord, dest_comptile)
     delete_component!(gamemap, command.source_coord)
 
@@ -653,7 +637,7 @@ end
 
 function apply_mapedit_command!(
         gamemap::GameMap,
-        command::MoveCommand{EdgeCoord},
+        command::MoveCommand{PipeCoord},
         threadsafe_console_push::Function
     )::Bool
     source_pipe = get_pipe(gamemap, command.source_coord)
@@ -675,9 +659,15 @@ function apply_mapedit_command!(
     end
 
     # Determine destination ship — try on-surface first, then off-ship fallback
-    dest_ship = find_ship_containing_edge(gamemap, command.dest_coord)
+    dest_ship = find_ship_containing(gamemap, command.dest_coord)
 
-    if isnothing(dest_ship)
+    if !isnothing(dest_ship)
+        can_place, reason = can_place_pipe_at(command.dest_coord, gamemap; ship_name = dest_ship)
+        if !can_place
+            threadsafe_console_push("Cannot move pipe: $(reason)")
+            return false
+        end
+    else
         # Try off-ship placement
         can_place, offship_target, reason = can_place_pipe_offship(command.dest_coord, gamemap)
         if can_place
@@ -690,13 +680,13 @@ function apply_mapedit_command!(
 
     # Check destination not already occupied (across all ships)
     if has_pipe(gamemap, command.dest_coord)
-        threadsafe_console_push("Cannot move pipe: Destination edge already occupied")
+        threadsafe_console_push("Cannot move pipe: destination coordinate already occupied")
         return false
     end
 
     # Perform move
     delete_pipe!(gamemap, command.source_coord)
-    set_pipe!(gamemap, command.dest_coord, PipeOnEdge(source_pipe.pipe, dest_ship))
+    set_pipe!(gamemap, command.dest_coord, PlacedPipe(source_pipe.pipe, dest_ship))
 
     # Reassign ownership if source was off-surface (removing it may have split a chain)
     if source_is_offship
@@ -725,7 +715,7 @@ end
 
 function apply_mapedit_command!(
         gamemap::GameMap,
-        command::DeleteAtCommand{EdgeCoord},
+        command::DeleteAtCommand{PipeCoord},
         threadsafe_console_push::Function
     )::Bool
     existing_pipe = get_pipe(gamemap, command.coord)
@@ -956,125 +946,6 @@ function apply_mapedit_command!(
     return true
 end
 
-"Modify a single tile pipe at a specified axis, adding, replacing, or deleting the fragment."
-function apply_mapedit_command!(
-        gamemap::GameMap,
-        command::ModifyTilePipeCommand,
-        threadsafe_console_push::Function
-    )::Bool
-    # Canonicalise axis
-    axis = normalise_tile_pipe_axis(command.axis)
-    
-    # Resolve ownership
-    ship = find_tile_pipe_host_ship(gamemap, command.tile)
-    
-    if isnothing(ship)
-        threadsafe_console_push("Tile not on any ship surface")
-        return false
-    end
-    
-    # Get existing component at tile, or start with empty
-    existing_comp = get_component(gamemap, command.tile)
-    current_behav = if !isnothing(existing_comp)
-        existing_comp.component
-    else
-        MultiPipeTileCompBehav()
-    end
-    
-    # Reject if not a multi-pipe component
-    if !isa(current_behav, MultiPipeTileCompBehav)
-        threadsafe_console_push("Tile occupied by non-pipe component")
-        return false
-    end
-    
-    # Update with new fragment at axis
-    updated_behav = set_tile_pipe(current_behav, axis, command.frag)
-    
-    # Apply changes
-    if isempty(updated_behav)
-        delete_component!(gamemap, command.tile)
-        threadsafe_console_push("Tile pipe removed at $(command.tile)")
-    else
-        set_component!(gamemap, command.tile, ComponentOnTile(updated_behav, HexFrame.Q_POS, ship))
-        threadsafe_console_push("Tile pipe modified at $(command.tile)")
-    end
-
-    return true
-end
-
-"Move a tile pipe fragment from one location/axis to another."
-function apply_mapedit_command!(
-        gamemap::GameMap,
-        command::MoveTilePipeCommand,
-        threadsafe_console_push::Function
-    )::Bool
-    # Canonicalise both axes
-    src_axis = normalise_tile_pipe_axis(command.src_axis)
-    dst_axis = normalise_tile_pipe_axis(command.dst_axis)
-    
-    src_comp = get_component(gamemap, command.src_tile)
-    if isnothing(src_comp) || !isa(src_comp.component, MultiPipeTileCompBehav)
-        threadsafe_console_push("Source tile has no multi-pipe component")
-        return false
-    end
-    src_ship = src_comp.ship
-    
-    src_behav = src_comp.component
-    src_frag = get_tile_pipe(src_behav, src_axis)
-    if isempty(src_frag)
-        threadsafe_console_push("Source axis is empty")
-        return false
-    end
-    
-    # Resolve destination ship
-    dst_ship = find_tile_pipe_host_ship(gamemap, command.dst_tile)
-    
-    if isnothing(dst_ship)
-        threadsafe_console_push("Destination tile not on any ship")
-        return false
-    end
-    
-    # Get or create destination component
-    dst_comp = get_component(gamemap, command.dst_tile)
-    dst_behav = if isnothing(dst_comp)
-        MultiPipeTileCompBehav()
-    else
-        dst_comp.component
-    end
-    
-    if !isa(dst_behav, MultiPipeTileCompBehav)
-        threadsafe_console_push("Destination occupied by non-pipe component")
-        return false
-    end
-    
-    # Check destination axis is empty
-    if !isempty(get_tile_pipe(dst_behav, dst_axis))
-        threadsafe_console_push("Destination axis already occupied")
-        return false
-    end
-
-    if command.src_tile == command.dst_tile && src_ship == dst_ship
-        updated_behav = set_tile_pipe(set_tile_pipe(src_behav, src_axis, NoPipeBehavFrag()), dst_axis, src_frag)
-        set_component!(gamemap, command.src_tile, ComponentOnTile(updated_behav, HexFrame.Q_POS, src_ship))
-    else
-        # Apply move: remove from source, add to destination
-        updated_src = set_tile_pipe(src_behav, src_axis, NoPipeBehavFrag())
-        updated_dst = set_tile_pipe(dst_behav, dst_axis, src_frag)
-
-        if isempty(updated_src)
-            delete_component!(gamemap, command.src_tile)
-        else
-            set_component!(gamemap, command.src_tile, ComponentOnTile(updated_src, HexFrame.Q_POS, src_ship))
-        end
-
-        set_component!(gamemap, command.dst_tile, ComponentOnTile(updated_dst, HexFrame.Q_POS, dst_ship))
-    end
-
-    threadsafe_console_push("Tile pipe moved from $(command.src_tile) to $(command.dst_tile)")
-
-    return true
-end
-
 "Write `status` to a command's response channel if one is attached.\nSwallows put! errors so a closed channel cannot crash the calculator loop."
 function _try_put_status!(command::MapEditCommand, status::CommandStatus)
     command.response_channel === nothing && return nothing
@@ -1162,7 +1033,7 @@ end
 "Create a `SetPipeBehaviorCommand` for placing a pipe."
 function create_set_pipe_behavior_command(
         cq::CommandQueue,
-        coord::EdgeCoord,
+    coord::PipeCoord,
         pipe_behavior::PipeBehavior;
         response_channel::Union{Nothing, Channel} = nothing
     )::SetPipeBehaviorCommand
@@ -1182,7 +1053,7 @@ function create_move_command(
         delta_rotation::HexAxis,
         delta_mirror::Bool = false;
         response_channel::Union{Nothing, Channel} = nothing
-    ) where {T <: Union{TileCoord, EdgeCoord}}
+    ) where {T <: Union{TileCoord, PipeCoord}}
     return MoveCommand{T}(
         id = cq.next_command_id(),
         source_coord = source_coord,
@@ -1198,7 +1069,7 @@ function create_delete_command(
         cq::CommandQueue,
         coord::T;
         response_channel::Union{Nothing, Channel} = nothing
-    ) where {T <: Union{TileCoord, EdgeCoord}}
+    ) where {T <: Union{TileCoord, PipeCoord}}
     return DeleteAtCommand{T}(
         id = cq.next_command_id(),
         coord = coord,
@@ -1423,7 +1294,7 @@ can preserve their component-local numbering.
 function append_reactivation_probe!(
         probe_elements::Vector{AbsoluteElement},
         probe_declarations::Vector{AbsFluidDecl},
-        comp::ComponentOnTile,
+        comp::PlacedComponent,
         coord::TileCoord
     )
     probe = get_reactivation_probe(comp)
@@ -1446,7 +1317,7 @@ end
 function load_reactivation_probe!(
         probe_elements::Vector{AbsoluteElement},
         probe_declarations::Vector{AbsFluidDecl},
-        comp::ComponentOnTile,
+        comp::PlacedComponent,
         coord::TileCoord
     )
     empty!(probe_elements)
@@ -1466,7 +1337,7 @@ and restoring the original lengths afterwards.
 """
 function load_reactivation_probe!(
         scheduler::ReactivationScheduler,
-        comp::ComponentOnTile,
+        comp::PlacedComponent,
         coord::TileCoord
     )
     load_reactivation_probe!(scheduler.probe_elements, scheduler.probe_declarations, comp, coord)
@@ -1516,7 +1387,7 @@ function solve_reactivation_trial!(scheduler::ReactivationScheduler, derivedmaps
 end
 
 "Classify one component against the scheduler's current speculative trial state." 
-function classify_trial_outcome(comp::ComponentOnTile, coord::TileCoord, gamemap::GameMap, scheduler::ReactivationScheduler)::ReactivationProbeOutcome
+function classify_trial_outcome(comp::PlacedComponent, coord::TileCoord, gamemap::GameMap, scheduler::ReactivationScheduler)::ReactivationProbeOutcome
     return classify_reactivation_probe(comp;
         tile = coord,
         ship_name = comp.ship,
@@ -1527,7 +1398,7 @@ function classify_trial_outcome(comp::ComponentOnTile, coord::TileCoord, gamemap
 end
 
 "Commit one useful component against the scheduler's current speculative trial state." 
-function commit_trial_outcome!(comp::ComponentOnTile, coord::TileCoord, gamemap::GameMap, scheduler::ReactivationScheduler)
+function commit_trial_outcome!(comp::PlacedComponent, coord::TileCoord, gamemap::GameMap, scheduler::ReactivationScheduler)
     commit_reactivation_probe!(comp;
         tile = coord,
         ship_name = comp.ship,
@@ -2044,10 +1915,10 @@ function trigger_ready_encounter!(
 
     enc_config = get_encounter_config(sm)
     class_config = enc_config.encounter_class_configs[ep.encounter_class]
-    new_shipmap = generate_encounter(ep.encounter_class, ep.fuel_tag, ep.richness, enc_seed, class_config)
+    encounter_blueprint = generate_encounter(ep.encounter_class, ep.fuel_tag, ep.richness, enc_seed, class_config)
 
     cmd = create_add_encounter_ship_command(
-        ipc.command_queue, new_shipmap, ep.display_name, enc_seed;
+        ipc.command_queue, encounter_blueprint, ep.display_name, enc_seed;
         target_encounter_index = man.target_encounter_index,
         max_view_bounds = max_view_bounds
     )

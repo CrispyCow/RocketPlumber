@@ -26,7 +26,7 @@ using HexFlowControl, HexFlowCalculator
 using SquirrelNoise
 using HexFlowBasicComponents, HexFlowTankComponents, HexFlowSwitchComponents
 using HexFlowNozzleComponents, HexFlowPumpComponents
-using HexFlowPipeComponents, HexFlowBasicPipes
+using HexFlowBasicPipes
 
 const _src_dir = normpath(joinpath(@__DIR__, "..", "..", "src"))
 include(joinpath(_src_dir, "components.jl"))
@@ -202,11 +202,11 @@ function print_valve_summary(gamemap::GameMap)
     println("===========================================================")
 
     valve_rows = Tuple{Symbol, TileCoord, String}[]
-    for (coord, comp_on_tile) in get_components(gamemap)
-        comp = comp_on_tile.component
+    for (coord, placed_component) in get_components(gamemap)
+        comp = placed_component.component
         comp isa HexFlowSwitchComponents.StandardValveCompBehav || continue
         state = component_state_summary(comp)
-        push!(valve_rows, (comp_on_tile.ship, coord, "$(component_type_name(comp))$state"))
+        push!(valve_rows, (placed_component.ship, coord, "$(component_type_name(comp))$state"))
     end
 
     sort!(valve_rows; by = row -> (string(row[1]), row[2].q, row[2].r))
@@ -221,10 +221,10 @@ function print_reactivation_candidates(gamemap::GameMap)
     println("===========================================================")
 
     candidate_rows = Tuple{Symbol, TileCoord, String}[]
-    for (coord, comp_on_tile) in get_components(gamemap)
-        isnothing(get_reactivation_probe(comp_on_tile)) && continue
-        desc = "$(component_type_name(comp_on_tile.component))$(component_state_summary(comp_on_tile.component))"
-        push!(candidate_rows, (comp_on_tile.ship, coord, desc))
+    for (coord, placed_component) in get_components(gamemap)
+        isnothing(get_reactivation_probe(placed_component)) && continue
+        desc = "$(component_type_name(placed_component.component))$(component_state_summary(placed_component.component))"
+        push!(candidate_rows, (placed_component.ship, coord, desc))
     end
 
     if isempty(candidate_rows)
@@ -245,13 +245,13 @@ function print_component_context(gamemap::GameMap, focus_coord::TileCoord)
     println("===========================================================")
     println("Tile: $(focus_coord)")
 
-    comp_on_tile = get_component(gamemap, focus_coord)
-    if isnothing(comp_on_tile)
+    placed_component = get_component(gamemap, focus_coord)
+    if isnothing(placed_component)
         println("  No component at focus tile")
     else
-        comp = comp_on_tile.component
+        comp = placed_component.component
         println("  Component: $(component_type_name(comp))")
-        println("  Ship: $(comp_on_tile.ship)    Rotation: $(comp_on_tile.rotation)    Mirrored: $(comp_on_tile.mirrored)")
+        println("  Ship: $(placed_component.ship)    Rotation: $(placed_component.rotation)    Mirrored: $(placed_component.mirrored)")
         state = component_state_summary(comp)
         isempty(state) || println("  State: $(strip(state))")
     end

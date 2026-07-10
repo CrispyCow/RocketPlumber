@@ -46,7 +46,7 @@ using SquirrelNoise
 # Component packages — needed for JLD2 deserialisation of saved components
 using HexFlowBasicComponents, HexFlowTankComponents, HexFlowSwitchComponents
 using HexFlowNozzleComponents, HexFlowPumpComponents
-using HexFlowPipeComponents, HexFlowBasicPipes
+using HexFlowBasicPipes
 
 # ===============================================================
 # Include Game Source Files
@@ -343,9 +343,9 @@ function print_activation_states(gamemap::GameMap)
     println("ACTIVATION / STATE FLAGS (singularity-relevant)")
     println("===========================================================")
     for (name, ship) in gamemap.ships
-        for (coord, comp_on_tile) in get_components(gamemap)
-            comp_on_tile.ship === name || continue
-            comp = comp_on_tile.component
+        for (coord, placed_component) in get_components(gamemap)
+            placed_component.ship === name || continue
+            comp = placed_component.component
             type_name = replace(string(typeof(comp)), r"^.*\." => "")
             flags = String[]
 
@@ -404,11 +404,11 @@ function print_map_summary(gamemap::GameMap)
         println("  Docking status: $(typeof(ship.docking_status))")
 
         # List components with type, rotation, and key state info
-        for (coord, comp_on_tile) in gamemap.components
-            comp_on_tile.ship === name || continue
-            comp = comp_on_tile.component
-            rot = comp_on_tile.rotation
-            mirrored = comp_on_tile.mirrored
+        for (coord, placed_component) in gamemap.components
+            placed_component.ship === name || continue
+            comp = placed_component.component
+            rot = placed_component.rotation
+            mirrored = placed_component.mirrored
             type_name = replace(string(typeof(comp)), r"^.*\." => "")
 
             extra = ""

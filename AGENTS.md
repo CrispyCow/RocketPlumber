@@ -80,7 +80,7 @@ Section dividers:
 - The background thread publishes a deep-copied `FlowCalculatorSnapshot`; render
   code should read snapshots rather than live simulation state.
 - `GameMap` stores components and pipes in global dictionaries. Ownership is on
-  `ComponentOnTile.ship` and `PipeOnEdge.ship`.
+  `PlacedComponent.ship` and `PlacedPipe.ship`.
 - Adding fields to saved structs may require JLD2 reconstruction hooks in
   `src/map_loading.jl`; defaults alone are not enough for old saves.
 - Preserve FlowEngine graph update ordering unless the task explicitly changes
@@ -125,4 +125,5 @@ bindings; headless environments may fail even when code is correct.
 
 Run `src/auto_test_launch.jl` after most gameplay changes. If the change affects
 behaviour that needs manual inspection, follow with `src/repl_launch.jl`.
-
+`src/auto_test_launch.jl` can take longer than 3 minutes to boot and complete;
+use a timeout of at least 6 minutes before treating it as hung.

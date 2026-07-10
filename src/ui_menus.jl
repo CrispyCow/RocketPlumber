@@ -568,13 +568,13 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             end
 
             if CImGui.Button("Generate & Dock", ImVec2(-1, 30))
-                new_shipmap = generate_encounter(
+                encounter_blueprint = generate_encounter(
                     enc_class, enc_fuel, enc_richness,
                     enc_seed, class_config
                 )
                 display_name = generate_encounter_name(enc_seed, enc_class)
                 cmd = create_add_encounter_ship_command(
-                    flowcalc_ipc.command_queue, new_shipmap, display_name, enc_seed;
+                    flowcalc_ipc.command_queue, encounter_blueprint, display_name, enc_seed;
                     dir = enc_dir, max_view_bounds = max_view_bounds
                 )
                 try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
@@ -582,13 +582,13 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             end
 
             if CImGui.Button("Generate & Dock (Optimal)", ImVec2(-1, 30))
-                new_shipmap = generate_encounter(
+                encounter_blueprint = generate_encounter(
                     enc_class, enc_fuel, enc_richness,
                     enc_seed, class_config
                 )
                 display_name = generate_encounter_name(enc_seed, enc_class)
                 cmd = create_add_encounter_ship_command(
-                    flowcalc_ipc.command_queue, new_shipmap, display_name, enc_seed;
+                    flowcalc_ipc.command_queue, encounter_blueprint, display_name, enc_seed;
                     dir = nothing,
                     target_encounter_index = nothing,
                     max_view_bounds = max_view_bounds

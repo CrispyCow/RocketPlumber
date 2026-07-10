@@ -9,9 +9,10 @@ using FlowEngine
 using HexElements
 using HexFlowProcGen
 using HexFluids
-using HexFlowPipeComponents
 using StaticArrays
 using LinearAlgebra
+
+include(joinpath(@__DIR__, "..", "..", "..", "src", "map_loading.jl"))
 
 "Minimal encounter config for tests that only need a SpaceMapState."
 const _test_enc_config = EncounterSystemConfig()
@@ -50,6 +51,9 @@ function make_trigger_test_encounter_point()
     )
 end
 
+"Return the indexed side-span pipe bordering a tile."
+side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
+
 # ===============================================================
 # Mock Implementations
 # ===============================================================
@@ -78,6 +82,7 @@ HexComponentsAPI.get_conductance(::MockPipeBehav) = 1.0
 HexComponentsAPI.get_pipe_tunables(::MockPipeBehav) = ()
 HexComponentsAPI.set_pipe_tunables(::MockPipeBehav, ::NTuple{0, Real}) = MockPipeBehav()
 HexComponentsAPI.render_pipe_base!(queue, ::MockPipeBehav; kwargs...) = nothing
+HexComponentsAPI.get_pipe_click_radius(::MockPipeBehav) = 0.1
 
 struct InvalidFluidBridgeCompBehav <: ComponentBehavior end
 HexComponentsAPI.produce_rel_elements(::InvalidFluidBridgeCompBehav) = (
@@ -396,12 +401,12 @@ function make_encounter_test_blueprint(; include_component::Bool = true, include
     blueprint = ShipBlueprint(ship_tiles = Set([TileCoord(0, 0), TileCoord(1, 0)]))
 
     if include_component
-        blueprint.components[TileCoord(0, 0)] = ComponentOnTile(MockCompBehav(), Q_POS, :_blueprint)
+        blueprint.components[TileCoord(0, 0)] = PlacedComponent(MockCompBehav(), Q_POS, :_blueprint)
     end
 
     if include_pipe
-        edge = EdgeCoord(VertexCoord(TileCoord(0, 0), Q_POS), VertexCoord(TileCoord(1, 0), HexFrame.Q_NEG))
-        blueprint.pipe_behaviors[edge] = MockPipeBehav()
+        pipe = PipeCoord(VertexCoord(TileCoord(0, 0), Q_POS), VertexCoord(TileCoord(1, 0), HexFrame.Q_NEG))
+        blueprint.pipe_behaviors[pipe] = MockPipeBehav()
     end
 
     return blueprint
@@ -517,12 +522,27 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
     #= ---------- SetPipeBehaviorCommand ----------- =#
     @testset "SetPipeBehaviorCommand" begin
         gamemap = make_gamemap()
-        edge = get_edges(TileCoord(0, 0))[1]
+        pipe = side_pipe(TileCoord(0, 0), 1)
 
-        cmd = create_set_pipe_behavior_command(cq, edge, MockPipeBehav())
+        cmd = create_set_pipe_behavior_command(cq, pipe, MockPipeBehav())
         process_and_log!(cmd, gamemap)
 
-        @test !isnothing(get_pipe(gamemap, edge))
+        @test !isnothing(get_pipe(gamemap, pipe))
+    end
+
+    @testset "SetPipeBehaviorCommand rejects component-crossing pipe segments" begin
+        for pipe in (
+                PipeCoord(VertexCoord(TileCoord(0, 0), HexFrame.Q_POS), VertexCoord(TileCoord(0, 0), HexFrame.S_POS)),
+                PipeCoord(VertexCoord(TileCoord(0, 0), HexFrame.Q_POS), VertexCoord(TileCoord(0, 0), HexFrame.Q_NEG)),
+            )
+            gamemap = make_gamemap()
+            set_component!(gamemap, TileCoord(0, 0), PlacedComponent(MockCompBehav(), Q_POS, :primary))
+
+            logs = process_and_log!(create_set_pipe_behavior_command(cq, pipe, MockPipeBehav()), gamemap)
+
+            @test isnothing(get_pipe(gamemap, pipe))
+            @test any(contains(l, "crosses an occupied tile") for l in logs)
+        end
     end
 
     #= ---------- MoveCommand{TileCoord} ----------- =#
@@ -658,7 +678,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
             create_set_tile_command(cq, src, MockCompBehav(), Q_POS),
             gamemap
         )
-        set_component!(gamemap, dst, ComponentOnTile(MockCompBehav(), Q_POS, :asteroid))
+        set_component!(gamemap, dst, PlacedComponent(MockCompBehav(), Q_POS, :asteroid))
 
         logs = process_and_log!(
             create_move_command(cq, src, dst, Q_POS),
@@ -668,55 +688,76 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         @test any(contains(l, "occupied on asteroid") for l in logs)
     end
 
-    #= ---------- MoveCommand{EdgeCoord} ----------- =#
-    @testset "MoveCommand{EdgeCoord}" begin
+    #= ---------- MoveCommand{PipeCoord} ----------- =#
+    @testset "MoveCommand{PipeCoord}" begin
         gamemap = make_gamemap()
         set_surface_tile!(gamemap, TileCoord(0, 1); ship_name = :primary)
 
-        src_edge = get_edges(TileCoord(0, 0))[1]
-        dst_edge = get_edges(TileCoord(0, 1))[1]
+        src_pipe = side_pipe(TileCoord(0, 0), 1)
+        dst_pipe = side_pipe(TileCoord(0, 1), 1)
 
         # Place a pipe first
         process_and_log!(
-            create_set_pipe_behavior_command(cq, src_edge, MockPipeBehav()),
+            create_set_pipe_behavior_command(cq, src_pipe, MockPipeBehav()),
             gamemap
         )
-        @test !isnothing(get_pipe(gamemap, src_edge))
+        @test !isnothing(get_pipe(gamemap, src_pipe))
 
         # Move it
-        cmd = create_move_command(cq, src_edge, dst_edge, Q_POS)
+        cmd = create_move_command(cq, src_pipe, dst_pipe, Q_POS)
         process_and_log!(cmd, gamemap)
 
-        @test isnothing(get_pipe(gamemap, src_edge))
-        @test !isnothing(get_pipe(gamemap, dst_edge))
+        @test isnothing(get_pipe(gamemap, src_pipe))
+        @test !isnothing(get_pipe(gamemap, dst_pipe))
 
     end
 
-    @testset "MoveCommand{EdgeCoord} — re-tags pipe on cross-ship move" begin
+    @testset "MoveCommand{PipeCoord} — re-tags pipe on cross-ship move" begin
         gamemap = make_two_ship_map()
 
-        src_edge = get_edges(TileCoord(0, 0))[1]
-        dst_edge = get_edges(TileCoord(20, 0))[1]
+        src_pipe = side_pipe(TileCoord(0, 0), 1)
+        dst_pipe = side_pipe(TileCoord(20, 0), 1)
 
         process_and_log!(
-            create_set_pipe_behavior_command(cq, src_edge, MockPipeBehav()),
+            create_set_pipe_behavior_command(cq, src_pipe, MockPipeBehav()),
             gamemap
         )
 
-        source_pipe = get_pipe(gamemap, src_edge)
+        source_pipe = get_pipe(gamemap, src_pipe)
         @test !isnothing(source_pipe)
         @test source_pipe.ship === :primary
 
         logs = process_and_log!(
-            create_move_command(cq, src_edge, dst_edge, Q_POS),
+            create_move_command(cq, src_pipe, dst_pipe, Q_POS),
             gamemap
         )
 
-        moved_pipe = get_pipe(gamemap, dst_edge)
-        @test isnothing(get_pipe(gamemap, src_edge))
+        moved_pipe = get_pipe(gamemap, dst_pipe)
+        @test isnothing(get_pipe(gamemap, src_pipe))
         @test !isnothing(moved_pipe)
         @test moved_pipe.ship === :asteroid
         @test any(contains(l, "Pipe moved") for l in logs)
+    end
+
+    @testset "MoveCommand{PipeCoord} rejects component-crossing destinations" begin
+        blocked_destinations = (
+            PipeCoord(VertexCoord(TileCoord(0, 0), HexFrame.Q_POS), VertexCoord(TileCoord(0, 0), HexFrame.S_POS)),
+            PipeCoord(VertexCoord(TileCoord(0, 0), HexFrame.Q_POS), VertexCoord(TileCoord(0, 0), HexFrame.Q_NEG)),
+        )
+
+        for dst_pipe in blocked_destinations
+            gamemap = make_gamemap()
+            set_surface_tile!(gamemap, TileCoord(1, 0); ship_name = :primary)
+            src_pipe = side_pipe(TileCoord(1, 0), 1)
+            set_pipe!(gamemap, src_pipe, PlacedPipe(MockPipeBehav(), :primary))
+            set_component!(gamemap, TileCoord(0, 0), PlacedComponent(MockCompBehav(), Q_POS, :primary))
+
+            logs = process_and_log!(create_move_command(cq, src_pipe, dst_pipe, Q_POS), gamemap)
+
+            @test !isnothing(get_pipe(gamemap, src_pipe))
+            @test isnothing(get_pipe(gamemap, dst_pipe))
+            @test any(contains(l, "crosses an occupied tile") for l in logs)
+        end
     end
 
     #= ---------- DeleteAtCommand{TileCoord} ----------- =#
@@ -780,33 +821,33 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         @test any(contains(l, "No component") for l in logs)
     end
 
-    #= ---------- DeleteAtCommand{EdgeCoord} ----------- =#
-    @testset "DeleteAtCommand{EdgeCoord}" begin
+    #= ---------- DeleteAtCommand{PipeCoord} ----------- =#
+    @testset "DeleteAtCommand{PipeCoord}" begin
         gamemap = make_two_ship_map()
-        edge = get_edges(TileCoord(20, 0))[1]
+        pipe = side_pipe(TileCoord(20, 0), 1)
 
         # Place then delete
         process_and_log!(
-            create_set_pipe_behavior_command(cq, edge, MockPipeBehav()),
+            create_set_pipe_behavior_command(cq, pipe, MockPipeBehav()),
             gamemap
         )
-        @test !isnothing(get_pipe(gamemap, edge))
+        @test !isnothing(get_pipe(gamemap, pipe))
 
-        cmd = create_delete_command(cq, edge)
-        @test cmd isa DeleteAtCommand{EdgeCoord}
+        cmd = create_delete_command(cq, pipe)
+        @test cmd isa DeleteAtCommand{PipeCoord}
 
         logs = process_and_log!(cmd, gamemap)
-        @test isnothing(get_pipe(gamemap, edge))
+        @test isnothing(get_pipe(gamemap, pipe))
         @test any(contains(l, "deleted") || contains(l, "Deleted") for l in logs)
         @test any(contains(l, "from asteroid") for l in logs)
     end
 
-    @testset "DeleteAtCommand{EdgeCoord} — missing pipe" begin
+    @testset "DeleteAtCommand{PipeCoord} — missing pipe" begin
         gamemap = GameMap()
-        edge = get_edges(TileCoord(0, 0))[1]
+        pipe = side_pipe(TileCoord(0, 0), 1)
 
         logs = process_and_log!(
-            create_delete_command(cq, edge),
+            create_delete_command(cq, pipe),
             gamemap
         )
 
@@ -816,14 +857,14 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
     #= ---------- DeleteAtCommand — type parameter correctness ----------- =#
     @testset "DeleteAtCommand type parameter" begin
         cmd_tile = create_delete_command(cq, TileCoord(0, 0))
-        cmd_edge = create_delete_command(cq, get_edges(TileCoord(0, 0))[1])
+        cmd_pipe = create_delete_command(cq, side_pipe(TileCoord(0, 0), 1))
 
         @test cmd_tile isa DeleteAtCommand{TileCoord}
-        @test cmd_edge isa DeleteAtCommand{EdgeCoord}
+        @test cmd_pipe isa DeleteAtCommand{PipeCoord}
 
         # Both are subtypes of MapEditCommand
         @test cmd_tile isa MapEditCommand
-        @test cmd_edge isa MapEditCommand
+        @test cmd_pipe isa MapEditCommand
     end
 
     #= ---------- ClickTileCommand ----------- =#
@@ -1304,8 +1345,8 @@ end
     probe_tile = TileCoord(1, 0)
     set_surface_tile!(gamemap, probe_tile; ship_name = :primary)
 
-    set_component!(gamemap, TileCoord(0, 0), ComponentOnTile(GroundedAnchorCompBehav(), Q_POS, :primary))
-    set_component!(gamemap, probe_tile, ComponentOnTile(SingularProbeCompBehav(false), Q_POS, :primary))
+    set_component!(gamemap, TileCoord(0, 0), PlacedComponent(GroundedAnchorCompBehav(), Q_POS, :primary))
+    set_component!(gamemap, probe_tile, PlacedComponent(SingularProbeCompBehav(false), Q_POS, :primary))
 
     live_derived = DerivedMapState()
     live_mna = MNA_State()
@@ -1346,7 +1387,7 @@ end
     gamemap = make_gamemap()
     probe_tile = TileCoord(0, 0)
     probe_comp = BootstrapProbeCompBehav(0.0, 5.0, false, false)
-    set_component!(gamemap, probe_tile, ComponentOnTile(probe_comp, Q_POS, :primary))
+    set_component!(gamemap, probe_tile, PlacedComponent(probe_comp, Q_POS, :primary))
 
     live_derived = DerivedMapState()
     live_mna = MNA_State()
@@ -1380,9 +1421,9 @@ end
     peer_comp = GroupedNeutralProbeCompBehav(2, false, false, false)
     neutral_comp = GroupedNeutralProbeCompBehav(99, false, false, true)
 
-    set_component!(gamemap, anchor_tile, ComponentOnTile(anchor_comp, Q_POS, :primary))
-    set_component!(gamemap, peer_tile, ComponentOnTile(peer_comp, Q_POS, :primary))
-    set_component!(gamemap, neutral_tile, ComponentOnTile(neutral_comp, Q_POS, :primary))
+    set_component!(gamemap, anchor_tile, PlacedComponent(anchor_comp, Q_POS, :primary))
+    set_component!(gamemap, peer_tile, PlacedComponent(peer_comp, Q_POS, :primary))
+    set_component!(gamemap, neutral_tile, PlacedComponent(neutral_comp, Q_POS, :primary))
 
     live_derived = DerivedMapState()
     live_mna = MNA_State()
@@ -1415,8 +1456,8 @@ end
     anchor_comp = GroupedNeutralProbeCompBehav(2, false, false, false)
     harmful_comp = HarmfulGroupedProbeCompBehav(false)
 
-    set_component!(gamemap, anchor_tile, ComponentOnTile(anchor_comp, Q_POS, :primary))
-    set_component!(gamemap, harmful_tile, ComponentOnTile(harmful_comp, Q_POS, :primary))
+    set_component!(gamemap, anchor_tile, PlacedComponent(anchor_comp, Q_POS, :primary))
+    set_component!(gamemap, harmful_tile, PlacedComponent(harmful_comp, Q_POS, :primary))
 
     live_derived = DerivedMapState()
     live_mna = MNA_State()
@@ -1722,321 +1763,6 @@ end
     end
 end
 
-#= ---------- ModifyTilePipeCommand ----------- =#
-
-@testset "ModifyTilePipeCommand" begin
-    cq = create_command_queue(16)
-    
-    @testset "place new axis on empty surface tile" begin
-        gm = GameMap()
-        set_surface_tile!(gm, surface_rect_tiles(0, -1, 2, 1))
-        
-        cmd = HexFlowCalculator.ModifyTilePipeCommand(
-            1,
-            TileCoord(0, -1),
-            HexFrame.Q_POS,
-            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
-            nothing
-        )
-        logs = process_and_log!(cmd, gm)
-        
-        comp = get_component(gm, TileCoord(0, -1))
-        @test !isnothing(comp)
-        @test isa(comp.component, HexFlowPipeComponents.MultiPipeTileCompBehav)
-        @test any(contains(l, "modified") || contains(l, "Modified") for l in logs)
-    end
-    
-    @testset "add second axis to existing multi-pipe" begin
-        gm = GameMap()
-        set_surface_tile!(gm, surface_rect_tiles(0, -1, 2, 1))
-        
-        cmd1 = HexFlowCalculator.ModifyTilePipeCommand(
-            1,
-            TileCoord(0, -1),
-            HexFrame.Q_POS,
-            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
-            nothing
-        )
-        process_and_log!(cmd1, gm)
-        
-        cmd2 = HexFlowCalculator.ModifyTilePipeCommand(
-            2,
-            TileCoord(0, -1),
-            HexFrame.R_POS,
-            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
-            nothing
-        )
-        process_and_log!(cmd2, gm)
-        
-        comp = get_component(gm, TileCoord(0, -1))
-        behav = comp.component
-        @test !isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.Q_POS))
-        @test !isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.R_POS))
-    end
-    
-    @testset "delete targeted axis only" begin
-        gm = GameMap()
-        set_surface_tile!(gm, surface_rect_tiles(0, -1, 2, 1))
-        
-        cmd1 = HexFlowCalculator.ModifyTilePipeCommand(
-            1,
-            TileCoord(0, -1),
-            HexFrame.Q_POS,
-            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
-            nothing
-        )
-        process_and_log!(cmd1, gm)
-        
-        cmd2 = HexFlowCalculator.ModifyTilePipeCommand(
-            2,
-            TileCoord(0, -1),
-            HexFrame.R_POS,
-            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
-            nothing
-        )
-        process_and_log!(cmd2, gm)
-        
-        cmd3 = HexFlowCalculator.ModifyTilePipeCommand(
-            3,
-            TileCoord(0, -1),
-            HexFrame.Q_POS,
-            HexFlowPipeComponents.NoPipeBehavFrag(),
-            nothing
-        )
-        process_and_log!(cmd3, gm)
-        
-        comp = get_component(gm, TileCoord(0, -1))
-        behav = comp.component
-        @test isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.Q_POS))
-        @test !isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.R_POS))
-    end
-    
-    @testset "delete last axis removes component" begin
-        gm = GameMap()
-        set_surface_tile!(gm, surface_rect_tiles(0, -1, 2, 1))
-        
-        cmd1 = HexFlowCalculator.ModifyTilePipeCommand(
-            1,
-            TileCoord(0, -1),
-            HexFrame.R_POS,
-            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
-            nothing
-        )
-        process_and_log!(cmd1, gm)
-        
-        cmd2 = HexFlowCalculator.ModifyTilePipeCommand(
-            2,
-            TileCoord(0, -1),
-            HexFrame.R_POS,
-            HexFlowPipeComponents.NoPipeBehavFrag(),
-            nothing
-        )
-        process_and_log!(cmd2, gm)
-        
-        comp = get_component(gm, TileCoord(0, -1))
-        @test isnothing(comp)
-    end
-end
-
-#= ---------- MoveTilePipeCommand ----------- =#
-
-@testset "MoveTilePipeCommand" begin
-    cq = create_command_queue(16)
-    
-    @testset "move to empty tile" begin
-        gm = GameMap()
-        set_surface_tile!(gm, surface_rect_tiles(0, -2, 3, 1))
-        
-        cmd_init = HexFlowCalculator.ModifyTilePipeCommand(
-            10,
-            TileCoord(0, -2),
-            HexFrame.Q_POS,
-            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
-            nothing
-        )
-        process_and_log!(cmd_init, gm)
-        
-        cmd_move = HexFlowCalculator.MoveTilePipeCommand(
-            11,
-            TileCoord(0, -2),
-            HexFrame.Q_POS,
-            TileCoord(1, -2),
-            HexFrame.Q_POS,
-            nothing
-        )
-        logs = process_and_log!(cmd_move, gm)
-        
-        @test isnothing(get_component(gm, TileCoord(0, -2)))
-        comp = get_component(gm, TileCoord(1, -2))
-        @test !isempty(HexFlowPipeComponents.get_tile_pipe(comp.component, HexFrame.Q_POS))
-        @test any(contains(l, "moved") || contains(l, "Moved") for l in logs)
-    end
-    
-    @testset "merge onto existing multi-pipe" begin
-        gm = GameMap()
-        set_surface_tile!(gm, surface_rect_tiles(0, -2, 3, 1))
-        
-        # Create pipes on three tiles
-        cmd_init1 = HexFlowCalculator.ModifyTilePipeCommand(
-            10,
-            TileCoord(0, -2),
-            HexFrame.Q_POS,
-            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
-            nothing
-        )
-        process_and_log!(cmd_init1, gm)
-        
-        cmd_init2 = HexFlowCalculator.ModifyTilePipeCommand(
-            11,
-            TileCoord(1, -2),
-            HexFrame.R_POS,
-            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
-            nothing
-        )
-        process_and_log!(cmd_init2, gm)
-        
-        cmd_init3 = HexFlowCalculator.ModifyTilePipeCommand(
-            12,
-            TileCoord(2, -2),
-            HexFrame.Q_POS,
-            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
-            nothing
-        )
-        process_and_log!(cmd_init3, gm)
-        
-        # Move from tile 2 to tile 1 on a different axis
-        cmd_move = HexFlowCalculator.MoveTilePipeCommand(
-            13,
-            TileCoord(2, -2),
-            HexFrame.Q_POS,
-            TileCoord(1, -2),
-            HexFrame.S_POS,
-            nothing
-        )
-        logs = process_and_log!(cmd_move, gm)
-        
-        @test isnothing(get_component(gm, TileCoord(2, -2)))
-        comp = get_component(gm, TileCoord(1, -2))
-        behav = comp.component
-        @test isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.Q_POS))
-        @test !isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.R_POS))
-        @test !isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.S_POS))
-    end
-    
-    @testset "rejects move from empty source axis" begin
-        gm = GameMap()
-        set_surface_tile!(gm, surface_rect_tiles(0, -2, 3, 1))
-        
-        cmd_init = HexFlowCalculator.ModifyTilePipeCommand(
-            10,
-            TileCoord(0, -2),
-            HexFrame.Q_POS,
-            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
-            nothing
-        )
-        process_and_log!(cmd_init, gm)
-        
-        # Try to move from an empty axis
-        cmd_move = HexFlowCalculator.MoveTilePipeCommand(
-            11,
-            TileCoord(0, -2),
-            HexFrame.R_POS,
-            TileCoord(1, -2),
-            HexFrame.Q_POS,
-            nothing
-        )
-        logs = process_and_log!(cmd_move, gm)
-        
-        @test any(contains(l, "empty") || contains(l, "Empty") for l in logs)
-    end
-    
-    @testset "rejects move to occupied destination axis" begin
-        gm = GameMap()
-        set_surface_tile!(gm, surface_rect_tiles(0, -2, 3, 1))
-        
-        # Create two pipes on the same tile, different axes
-        cmd_init1 = HexFlowCalculator.ModifyTilePipeCommand(
-            10,
-            TileCoord(0, -2),
-            HexFrame.Q_POS,
-            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
-            nothing
-        )
-        process_and_log!(cmd_init1, gm)
-        
-        cmd_init2 = HexFlowCalculator.ModifyTilePipeCommand(
-            11,
-            TileCoord(0, -2),
-            HexFrame.R_POS,
-            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
-            nothing
-        )
-        process_and_log!(cmd_init2, gm)
-        
-        # Try to move Q_POS to R_POS (which is already occupied)
-        cmd_move = HexFlowCalculator.MoveTilePipeCommand(
-            12,
-            TileCoord(0, -2),
-            HexFrame.Q_POS,
-            TileCoord(0, -2),
-            HexFrame.R_POS,
-            nothing
-        )
-        logs = process_and_log!(cmd_move, gm)
-        
-        @test any(contains(l, "occupied") || contains(l, "Occupied") for l in logs)
-    end
-
-    @testset "retargets within the same tile without duplication" begin
-        gm = GameMap()
-        set_surface_tile!(gm, surface_rect_tiles(0, -2, 3, 1))
-
-        cmd_init = HexFlowCalculator.ModifyTilePipeCommand(
-            20,
-            TileCoord(0, -2),
-            HexFrame.Q_POS,
-            HexFlowPipeComponents.ScrapTilePipeBehavFrag(2.0),
-            nothing
-        )
-        process_and_log!(cmd_init, gm)
-
-        cmd_move = HexFlowCalculator.MoveTilePipeCommand(
-            21,
-            TileCoord(0, -2),
-            HexFrame.Q_POS,
-            TileCoord(0, -2),
-            HexFrame.S_POS,
-            nothing
-        )
-        logs = process_and_log!(cmd_move, gm)
-
-        comp = get_component(gm, TileCoord(0, -2))
-        behav = comp.component
-        @test isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.Q_POS))
-        @test isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.R_POS))
-        @test !isempty(HexFlowPipeComponents.get_tile_pipe(behav, HexFrame.S_POS))
-        @test any(contains(l, "moved") || contains(l, "Moved") for l in logs)
-    end
-
-    @testset "rejects non-multi-pipe source with precise message" begin
-        gm = GameMap()
-        set_surface_tile!(gm, surface_rect_tiles(0, -2, 3, 1))
-        set_component!(gm, TileCoord(0, -2), ComponentOnTile(MockCompBehav(), HexFrame.Q_POS, :primary))
-
-        cmd_move = HexFlowCalculator.MoveTilePipeCommand(
-            22,
-            TileCoord(0, -2),
-            HexFrame.Q_POS,
-            TileCoord(1, -2),
-            HexFrame.Q_POS,
-            nothing
-        )
-        logs = process_and_log!(cmd_move, gm)
-
-        @test any(contains(l, "Source tile has no multi-pipe component") for l in logs)
-    end
-end
-
 @testset "process_command! rejects invalid fluid bridge placements" begin
     gm = GameMap()
     set_surface_tile!(gm, TileCoord(0, 0))
@@ -2067,7 +1793,7 @@ end
     @testset "writes INVALID when apply method refuses" begin
         gm = make_gamemap()
         set_component!(gm, TileCoord(0, 0),
-            ComponentOnTile(MockCompBehav(), Q_POS, false, :primary))
+            PlacedComponent(MockCompBehav(), Q_POS, false, :primary))
 
         cq = create_command_queue(4)
         ch = Channel{CommandStatus}(1)
@@ -2081,7 +1807,7 @@ end
     @testset "writes INVALID for unrecognised action" begin
         gm = make_gamemap()
         set_component!(gm, TileCoord(0, 0),
-            ComponentOnTile(ActionCompBehav(), Q_POS, false, :primary))
+            PlacedComponent(ActionCompBehav(), Q_POS, false, :primary))
 
         cq = create_command_queue(4)
         ch = Channel{CommandStatus}(1)
@@ -2440,7 +2166,7 @@ end
 @testset "replace_by_mutation!" begin
     src = GameMap()
     set_surface_tile!(src, TileCoord(5, 5))
-    set_component!(src, TileCoord(0, 0), ComponentOnTile(MockCompBehav(), Q_POS, :primary))
+    set_component!(src, TileCoord(0, 0), PlacedComponent(MockCompBehav(), Q_POS, :primary))
 
     dest = GameMap()
     @test !is_on_surface_tile(TileCoord(5, 5), dest)

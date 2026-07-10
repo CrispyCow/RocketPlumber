@@ -23,7 +23,7 @@ using HexFlowProcGen, HexFluids, FlowMap
 using HexFrame, HexElements, HexComponentsAPI
 using HexFlowBasicComponents, HexFlowTankComponents, HexFlowSwitchComponents
 using HexFlowNozzleComponents, HexFlowPumpComponents
-using HexFlowPipeComponents, HexFlowBasicPipes
+using HexFlowBasicPipes
 
 # Load the encounter config definitions from the game
 include(joinpath(@__DIR__, "..", "..", "..", "src", "components.jl"))

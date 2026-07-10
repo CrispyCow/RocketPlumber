@@ -158,8 +158,8 @@ const BasicDecompChamber = DecompChamberCompBehav()
      ```julia
      # This causes both nozzles to share the same state object!
      switched_nozzle = SwitchedNozzleCompBehav(...)
-map.components[TileCoord(1, 1)] = ComponentOnTile(switched_nozzle, HexFrame.S_POS)
-map.components[TileCoord(1, -2)] = ComponentOnTile(switched_nozzle, HexFrame.R_POS)
+map.components[TileCoord(1, 1)] = PlacedComponent(switched_nozzle, HexFrame.S_POS)
+map.components[TileCoord(1, -2)] = PlacedComponent(switched_nozzle, HexFrame.R_POS)
 # Opening one nozzle will open BOTH - they point to the same object!
 ```
 
@@ -168,16 +168,16 @@ map.components[TileCoord(1, -2)] = ComponentOnTile(switched_nozzle, HexFrame.R_P
 # Create separate instances with descriptive names
 switched_nozzle_1 = SwitchedNozzleCompBehav(...)
 switched_nozzle_2 = SwitchedNozzleCompBehav(...)
-map.components[TileCoord(1, 1)] = ComponentOnTile(switched_nozzle_1, HexFrame.S_POS)
-map.components[TileCoord(1, -2)] = ComponentOnTile(switched_nozzle_2, HexFrame.R_POS)
+map.components[TileCoord(1, 1)] = PlacedComponent(switched_nozzle_1, HexFrame.S_POS)
+map.components[TileCoord(1, -2)] = PlacedComponent(switched_nozzle_2, HexFrame.R_POS)
 ```
 
 **✅ CORRECT - Inline Creation (Best for simple components with few constuctor arguments):**
 ```julia
-# Create directly in ComponentOnTile - no variables needed
-map.components[TileCoord(1, 1)] = ComponentOnTile(
+# Create directly in PlacedComponent - no variables needed
+map.components[TileCoord(1, 1)] = PlacedComponent(
     SwitchedNozzleCompBehav(...), HexFrame.S_POS)
-map.components[TileCoord(1, -2)] = ComponentOnTile(
+map.components[TileCoord(1, -2)] = PlacedComponent(
     SwitchedNozzleCompBehav(...), HexFrame.R_POS)
 ```
 
@@ -185,9 +185,9 @@ map.components[TileCoord(1, -2)] = ComponentOnTile(
 ```julia
 # Define template and copy for each use
 nozzle_template = SwitchedNozzleCompBehav(...)
-map.components[TileCoord(1, 1)] = ComponentOnTile(deepcopy(nozzle_template), HexFrame.S_POS)
-map.components[TileCoord(1, -2)] = ComponentOnTile(deepcopy(nozzle_template), HexFrame.R_POS)
-map.components[TileCoord(2, 0)] = ComponentOnTile(deepcopy(nozzle_template), HexFrame.Q_POS)
+map.components[TileCoord(1, 1)] = PlacedComponent(deepcopy(nozzle_template), HexFrame.S_POS)
+map.components[TileCoord(1, -2)] = PlacedComponent(deepcopy(nozzle_template), HexFrame.R_POS)
+map.components[TileCoord(2, 0)] = PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_POS)
 ```
 
 **Which approach to use:**
@@ -204,21 +204,21 @@ map.components[TileCoord(2, 0)] = ComponentOnTile(deepcopy(nozzle_template), Hex
 #### Map Structure (Multi-Ship example):
    ```julia
    function mapgen_<mapname>()
-       # Create ShipMap for the first ship
-       ship_primary = ShipMap()
-       ship_primary.components[TileCoord(0, 0)] = ComponentOnTile(SomeCompBehav(...), HexFrame.S_POS)
-       ship_primary.pipe_behaviors[EdgeCoord(TileCoord(0,0), TileCoord(1,0))] = ScrapPipeBehav()
-       ship_primary.ship_tiles = Set([TileCoord(0,0), TileCoord(1,0)])
+      # Create ShipBlueprint for the first ship
+      ship_primary = ShipBlueprint()
+      ship_primary.components[TileCoord(0, 0)] = PlacedComponent(SomeCompBehav(...), HexFrame.S_POS, false, :_blueprint)
+      ship_primary.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(0, 0), HexFrame.Q_POS), VertexCoord(TileCoord(0, 0), HexFrame.R_NEG))] = ScrapPipeBehav()
+      ship_primary.ship_tiles = Set([TileCoord(0,0), TileCoord(1,0)])
 
-       # Create another ShipMap for the second ship
-       ship_secondary = ShipMap()
-       ship_secondary.components[TileCoord(2, 0)] = ComponentOnTile(AnotherCompBehav(...), HexFrame.Q_POS)
-       ship_secondary.ship_tiles = Set([TileCoord(2,0), TileCoord(2,1)])
+      # Create another ShipBlueprint for the second ship
+      ship_secondary = ShipBlueprint()
+      ship_secondary.components[TileCoord(2, 0)] = PlacedComponent(AnotherCompBehav(...), HexFrame.Q_POS, false, :_blueprint)
+      ship_secondary.ship_tiles = Set([TileCoord(2,0), TileCoord(2,1)])
 
-       # Combine into a GameMap
+      # Combine into a GameMap
        map = GameMap()
-       map.ships[:primary] = ship_primary
-       map.ships[:secondary] = ship_secondary
+      merge_ship!(map, :primary, ship_primary)
+      merge_ship!(map, :secondary, ship_secondary)
 
        return map
    end
@@ -231,19 +231,19 @@ map.components[TileCoord(2, 0)] = ComponentOnTile(deepcopy(nozzle_template), Hex
 
 4. **Coordinate Handling**:
    - `TileCoord(q, r)` for hex tile positions
-   - `EdgeCoord(vertex1, vertex2)` for pipe connections
+   - `PipeCoord(vertex1, vertex2)` for pipe connections
    - Rotations use `HexFrame.Q_POS`, `HexFrame.Q_NEG`, etc.
 
 5. **Pipe Behaviors**:
-   - Edge-based pipes use `PipeBehavior` types like `ScrapPipeBehav()` or `BigPipeBehav()`
+   - Pipes use `PipeBehavior` types like `ScrapPipeBehav()` or `BigPipeBehav()`
    - Default constructors use standard conductance values (ScrapPipeBehav = 2.0 S, BigPipeBehav = 10.0 S)
    - Custom conductance: `ScrapPipeBehav(5.0)` or `BigPipeBehav(15.0)`
-   - Tile-based multi-pipe components also exist (for example `single_tile_pipe(HexFrame.Q_POS, ScrapTilePipeBehavFrag())`)
+   - `PipeCoord`s can represent side spans, short diagonals, and long diagonals
 
 6. **Ship Surface**:
    - The `ship_tiles` field defines where components can be placed
    - It's a `Set{TileCoord}` containing all valid placement locations
-   - **Important**: `ShipMap()` defaults to `ship_tiles = Set([TileCoord(0,0)])`. Use direct assignment (`ship.ship_tiles = Set{TileCoord}([...])`) rather than `set_surface_tile!` to avoid keeping the default `(0,0)` tile
+   - **Important**: `ShipBlueprint()` defaults to `ship_tiles = Set([TileCoord(0,0)])`. Use direct assignment (`ship.ship_tiles = Set{TileCoord}([...])`) rather than `set_surface_tile!` to avoid keeping the default `(0,0)` tile
 
 ## Save Loading Note
 
@@ -354,20 +354,18 @@ Based on the project structure, you'll likely encounter:
 - **TurboPumpCompBehav**: Gas-driven turbopumps with voltage, turbine, and inertia parameters. Const instance: `TurboPump`
 - **ElectricPumpCompBehav**: Electric pumps (turbopump or transfer pump variants) with energy storage. Const instances: `ElecTurboPump`, `ElecTransferPump`
 - **StandardValveCompBehav**: Parameterised valves. Takes a switch fragment type (`SteppedSwitchBehavFrag` for adjustable, `BoolSwitchBehavFrag` for on/off) and a valve size type (`LargeValve` or `TinyValve`). Const instances: `LargeAdjValve`, `TinyAdjValve`, `LargeOnOffValve`, `TinyOnOffValve`
-- **MultiPipeTileCompBehav**: Tile-based multi-pipe container holding up to one straight-through fragment on each Q/R/S axis
-- **ScrapTilePipeBehavFrag / BigTilePipeBehavFrag**: Tile-pipe fragments inserted into `MultiPipeTileCompBehav` via `single_tile_pipe` or `set_tile_pipe`
 
-**Edge-Based Pipes (PipeBehavior):**
+**Pipes (PipeBehavior):**
 - **ScrapPipeBehav**: Low conductance pipe (2.0 S default)
 - **BigPipeBehav**: High conductance pipe (10.0 S default) with fluid-aware rendering
 
-Edge-based pipes are placed on edges between hex tiles, while tile-based components occupy tile positions.
+Pipes are keyed by `PipeCoord` and can run along tile sides, short diagonals, or long diagonals.
 
 **Note:** `BoolSwitchCompBehav` and `BigAdjustableValveCompBehav` from earlier versions of this document no longer exist. They have been replaced by `StandardValveCompBehav` with appropriate fragment/size type parameters.
 
 ## File Organization
 Save your generated function as:
-- `tutorials/mapgen_<mapname>.jl` (recommended)
+- `src/demo_maps/mapgen_<mapname>.jl` (recommended)
 - Or any location that's convenient for testing
 
 ## Example Usage
@@ -381,10 +379,10 @@ julia --project=. tools/map_encoder/encode_map.jl src/demo_maps/basicplumbing.jl
 # 2. Create mapgen_<mapname>.jl based on the output
 
 # 3. Test the generated function (map name)
-julia --project=. tools/map_encoder/compare_maps.jl simplemap1 tutorials/mapgen_simplemap1.jl
+julia --project=. tools/map_encoder/compare_maps.jl simplemap1 src/demo_maps/mapgen_simplemap1.jl
 
 # Or test using path
-julia --project=. tools/map_encoder/compare_maps.jl src/demo_maps/basicplumbing.jld2 tutorials/mapgen_basicplumbing.jl
+julia --project=. tools/map_encoder/compare_maps.jl src/demo_maps/basicplumbing.jld2 src/demo_maps/mapgen_basicplumbing.jl
 ```
 
 ## Troubleshooting
@@ -393,7 +391,7 @@ julia --project=. tools/map_encoder/compare_maps.jl src/demo_maps/basicplumbing.
 
 **Component constructor errors**: Check `src/components.jl` for the correct constructor syntax
 
-**Coordinate mismatches**: Verify that TileCoord and EdgeCoord are constructed correctly
+**Coordinate mismatches**: Verify that TileCoord and PipeCoord are constructed correctly
 
 **Parameter mismatches**: Use the comparison tool output to identify which specific values need adjustment
 

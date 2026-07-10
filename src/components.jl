@@ -4,7 +4,6 @@ using HexFlowTankComponents
 using HexFlowSwitchComponents
 using HexFlowNozzleComponents
 using HexFlowPumpComponents
-using HexFlowPipeComponents
 using HexFlowBasicPipes
 using HexComponentsAPI
 
@@ -159,7 +158,7 @@ const TinyOnOffValve = StandardValveCompBehav(BoolSwitchBehavFrag, TinyValve;
     growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS)
 )
 
-# Edge-based pipes
+# Pipe-segment behaviours
 const ScrapPipe = ScrapPipeBehav()
 
 const BigPipe = BigPipeBehav()
@@ -726,8 +725,8 @@ function starter_ship_is_playable(blueprint::ShipBlueprint)::Bool
     has_thruster = false
     has_tank = false
 
-    for (_, component_on_tile) in blueprint.components
-        component = component_on_tile.component
+    for (_, placed_component) in blueprint.components
+        component = placed_component.component
 
         # Check for thruster components (nozzles)
         if component isa BasicNozzleCompBehav || component isa SwitchedNozzleCompBehav || component isa DecompChamberCompBehav

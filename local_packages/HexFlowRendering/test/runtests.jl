@@ -43,9 +43,9 @@ end
 
 pm = ParticleManager()
 # Primary
-set_component!(gm, TileCoord(10,0), ComponentOnTile(DummyParticleComp(), HexFrame.Q_POS, :primary))
+set_component!(gm, TileCoord(10,0), PlacedComponent(DummyParticleComp(), HexFrame.Q_POS, :primary))
 # Secondary
-set_component!(gm, TileCoord(20,0), ComponentOnTile(DummyParticleComp(), HexFrame.Q_POS, :sec))
+set_component!(gm, TileCoord(20,0), PlacedComponent(DummyParticleComp(), HexFrame.Q_POS, :sec))
 
 using HexFlowControl
 
@@ -172,6 +172,110 @@ end
 
 println("HexFlowRendering fractional offset culling tests passed")
 
+struct TestPipeRenderBehav <: PipeBehavior end
+
+import HexComponentsAPI: render_pipe_map!, render_pipe_base!, get_pipe_click_radius
+
+get_pipe_click_radius(::TestPipeRenderBehav) = 0.1
+
+function _test_pipe_sprite(position::PipeCoord)::Symbol
+    span_class = pipe_span_class(position)
+    if span_class === SIDE_SPAN
+        return :TestPipe_Side
+    elseif span_class === SHORT_DIAGONAL_SPAN
+        return :TestPipe_ShortDiagonal
+    elseif span_class === LONG_DIAGONAL_SPAN
+        return :TestPipe_LongDiagonal
+    else
+        error("unknown pipe span class")
+    end
+end
+
+function _test_pipe_sprite_height(position::PipeCoord, render_height_offset::Integer)::Int32
+    return Int32(get_stacking_rank(position)) * HexFlowRendering.RENDER_HEIGHT_PIPE_RANK_MULTIPLIER +
+           Int32(1) + Int32(render_height_offset)
+end
+
+function render_pipe_map!(queue::AbstractVector, ::TestPipeRenderBehav; glmap::GLObjectMap, rotation::HexAxis, position, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
+    position isa PipeCoord || error("pipe_queued_render! should pass PipeCoord, got $(typeof(position))")
+
+    push!(
+        queue,
+        render_basic_pipe(
+            glmap, _test_pipe_sprite(position), position;
+            pos_offset = pos_offset,
+            draw_height = _test_pipe_sprite_height(position, render_height_offset),
+        )
+    )
+    return nothing
+end
+
+function render_pipe_base!(
+        queue::AbstractVector, ::TestPipeRenderBehav;
+        glmap::GLObjectMap,
+        rotation::HexAxis,
+        position,
+        pos_offset = nothing,
+        transparency::Float64 = 1.0,
+        colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0),
+        render_height_offset::Integer = 0,
+        kwargs...
+    )
+    position isa PipeCoord || error("render_pipe_base! should be called with a PipeCoord, got $(typeof(position))")
+
+    push!(
+        queue,
+        render_basic_pipe(
+            glmap, _test_pipe_sprite(position), position;
+            pos_offset = pos_offset,
+            transparency = transparency,
+            colour = colour,
+            draw_height = _test_pipe_sprite_height(position, render_height_offset),
+        )
+    )
+    return nothing
+end
+
+function _mock_pipe_glmap()
+    glmap = GLObjectMap()
+    glmap.textures[:TestAtlas] = RenderEngine.GLtexData(RenderEngine.GLtexID(0), UInt32(0), UInt(1024), UInt(1024))
+
+    for sprite in (:TestPipe_Side, :TestPipe_ShortDiagonal, :TestPipe_LongDiagonal)
+        glmap.sprites[sprite] = GLspriteData(
+            :TestAtlas,
+            SVector{2, Float32}(0.1f0, 0.1f0),
+            SVector{2, Float32}(0.0f0, 0.0f0),
+            SVector{2, Float32}(256.0f0, 64.0f0),
+            SVector{2, Float32}(256.0f0, 64.0f0),
+            SVector{2, Float32}(0.0f0, 0.0f0),
+        )
+    end
+
+    return glmap
+end
+
+@testset "pipe_queued_render! renders every PipeCoord span class" begin
+    gm_pipes = GameMap()
+    test_pipe = TestPipeRenderBehav()
+
+    pipes = collect(get_pipe_segments(TileCoord(0, 0)))
+    side_pipe = first(filter(p -> pipe_span_class(p) === SIDE_SPAN, pipes))
+    short_pipe = first(filter(p -> pipe_span_class(p) === SHORT_DIAGONAL_SPAN, pipes))
+    long_pipe = first(filter(p -> pipe_span_class(p) === LONG_DIAGONAL_SPAN, pipes))
+
+    set_pipe!(gm_pipes, side_pipe, test_pipe)
+    set_pipe!(gm_pipes, short_pipe, test_pipe)
+    set_pipe!(gm_pipes, long_pipe, test_pipe)
+
+    queue = SpriteRenderCommand[]
+    pipe_queued_render!(queue, _mock_pipe_glmap(), gm_pipes, DerivedMapState(), HexFlowControl.GameState(ticks = 1))
+
+    @test length(queue) == 3
+    @test Set(command.uniforms.object_translation for command in queue) == Set(glvec(pipe) for pipe in (side_pipe, short_pipe, long_pipe))
+    @test length(Set(command.uniforms.object_rotation for command in queue)) >= 2
+    @test Set(command.draw_height for command in queue) == Set(_test_pipe_sprite_height(pipe, 0) for pipe in (side_pipe, short_pipe, long_pipe))
+end
+
 # ===============================================================
 # Catch-up particle spawning (missed ticks / sim speed > 1x)
 # ===============================================================
@@ -180,7 +284,7 @@ println("HexFlowRendering fractional offset culling tests passed")
     # Build a minimal map with one DummyParticleComp on a single-tile ship
     gm_catchup = GameMap()
     set_surface_tile!(gm_catchup, TileCoord(0, 0))
-    set_component!(gm_catchup, TileCoord(0, 0), ComponentOnTile(DummyParticleComp(), HexFrame.Q_POS, :primary))
+    set_component!(gm_catchup, TileCoord(0, 0), PlacedComponent(DummyParticleComp(), HexFrame.Q_POS, :primary))
 
     pm_catchup = ParticleManager()
 

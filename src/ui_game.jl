@@ -227,13 +227,13 @@ function inspect_ui!(vert::VertexCoord, gamemap::GameMap, derivedmapstate::Deriv
     return nothing
 end
 
-"Inspect an edge coordinate, displaying pipe information."
-function inspect_ui!(edge::EdgeCoord, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot)
+"Inspect a pipe coordinate, displaying pipe information."
+function inspect_ui!(pipe_coord::PipeCoord, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot)
     CImGui.Text("Pipe Between:")
-    CImGui.Text("$(coord_description(edge.v1)) and $(coord_description(edge.v2))")
+    CImGui.Text("$(coord_description(pipe_coord.v1)) and $(coord_description(pipe_coord.v2))")
 
     # Check for pipe behaviours
-    pipe = get_pipe(gamemap, edge)
+    pipe = get_pipe(gamemap, pipe_coord)
     if !isnothing(pipe)
         pipe_behav = pipe
         CImGui.Text("Type: $(nameof(typeof(pipe_behav.pipe)))")
@@ -251,7 +251,7 @@ function inspect_ui!(edge::EdgeCoord, gamemap::GameMap, derivedmapstate::Derived
         CImGui.Text("\nElement Details:")
         CImGui.Separator()
         CImGui.Indent()
-        elements = produce_abs_elements(pipe_behav, edge)
+        elements = produce_abs_elements(pipe_behav, pipe_coord)
         display_element_details!(collect(elements), derivedmapstate, mna_state)
         CImGui.Unindent()
     else

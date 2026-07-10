@@ -25,6 +25,7 @@ export add_ship!, remove_ship!, get_all_ship_names, has_ship, get_ship_state, of
 #= ---------- GameMap Abstraction Functions ----------- =#
 export get_component, has_component, set_component!, delete_component!, delete_all_components!
 export get_pipe, has_pipe, set_pipe!, delete_pipe!, delete_all_pipes!
+export is_click_on_pipe, get_clicked_pipe
 export get_components, get_pipes, each_component_of_ship, each_component_of_type, each_pipe_of_ship, each_pipe_of_type
 export count_components, count_pipes, count_surface_tiles
 export delete_all_surface_tiles!
@@ -34,7 +35,7 @@ export can_place_component_at, can_place_pipe_at, can_remove_surface_at, is_node
 export each_surface_owner, collect_surface_tiles!, collect_surface_edge_tiles!, expand_tileset!, expand_tileset
 export get_axial_bounds, get_cartesian_bounds, get_surface_centroid
 export get_surface_shiptag, get_component_shiptag, get_pipe_shiptag
-export find_ships_adjacent_to_coord, find_ship_for_placement, find_ship_containing_edge, find_tile_pipe_host_ship
+export find_ships_adjacent_to_coord, find_ship_for_placement, find_ship_containing
 export find_ship_surface_containing_node, find_ship_pipes_containing_node, find_ship_for_node
 
 #= ---------- Learning System Exports ----------- =#
@@ -43,6 +44,7 @@ export get_learning_system, set_learning_system!, has_learning_system, is_sandbo
 #= ---------- Off-Ship Pipe Exports ----------- =#
 export can_place_pipe_offship, validate_offship_pipe_deletion, reassign_pipe_ownership!
 export is_node_on_any_ship_surface, flood_search_pipes_from_node!
+export has_pipe_component_conflict
 
 #= ---------- Ship Render and Docking Exports ----------- =#
 export get_ship_render_offset, get_render_offset, update_render_offset!, compute_departure_axis
@@ -293,8 +295,8 @@ Transient container for a ship under construction by procgen or demo-map generat
 Not stored to disk. Use `merge_ship!` to insert into a live `GameMap`.
 """
 @kwdef mutable struct ShipBlueprint
-    components::Dict{TileCoord, ComponentOnTile} = Dict{TileCoord, ComponentOnTile}()
-    pipe_behaviors::Dict{EdgeCoord, PipeBehavior} = Dict{EdgeCoord, PipeBehavior}()
+    components::Dict{TileCoord, PlacedComponent} = Dict{TileCoord, PlacedComponent}()
+    pipe_behaviors::Dict{PipeCoord, PipeBehavior} = Dict{PipeCoord, PipeBehavior}()
     ship_tiles::Set{TileCoord} = Set{TileCoord}()
 end
 
@@ -304,19 +306,16 @@ function offset_ship!(blueprint::ShipBlueprint, offset::TileCoord)
     moved_c = [(coord, comp) for (coord, comp) in blueprint.components]
     empty!(blueprint.components)
     for (coord, comp) in moved_c
-        new_coord = TileCoord(coord.q + offset.q, coord.r + offset.r)
-        blueprint.components[new_coord] = comp
+        blueprint.components[offset_by_tile(coord, offset)] = comp
     end
     # Pipes
-    moved_p = [(edge, pipe) for (edge, pipe) in blueprint.pipe_behaviors]
+    moved_p = [(pipe_coord, pipe) for (pipe_coord, pipe) in blueprint.pipe_behaviors]
     empty!(blueprint.pipe_behaviors)
-    for (edge, pipe) in moved_p
-        v1n = VertexCoord(TileCoord(edge.v1.tile.q + offset.q, edge.v1.tile.r + offset.r), edge.v1.dir)
-        v2n = VertexCoord(TileCoord(edge.v2.tile.q + offset.q, edge.v2.tile.r + offset.r), edge.v2.dir)
-        blueprint.pipe_behaviors[EdgeCoord(v1n, v2n)] = pipe
+    for (coord, pipe) in moved_p
+        blueprint.pipe_behaviors[offset_by_tile(coord, offset)] = pipe
     end
     # Tiles
-    new_tiles = Set(TileCoord(t.q + offset.q, t.r + offset.r) for t in blueprint.ship_tiles)
+    new_tiles = Set(offset_by_tile(t, offset) for t in blueprint.ship_tiles)
     empty!(blueprint.ship_tiles)
     union!(blueprint.ship_tiles, new_tiles)
     return nothing
@@ -371,8 +370,8 @@ end
 
 "Top-level game map. Global component/pipe dicts tagged by ship; per-ship metadata in `ships`. Initialises with a single surface tile at (0,0) for the primary ship to enable tile placement."
 @kwdef mutable struct GameMap
-    components::Dict{TileCoord, ComponentOnTile} = Dict{TileCoord, ComponentOnTile}()
-    pipe_behaviors::Dict{EdgeCoord, PipeOnEdge} = Dict{EdgeCoord, PipeOnEdge}()
+    components::Dict{TileCoord, PlacedComponent} = Dict{TileCoord, PlacedComponent}()
+    pipe_behaviors::Dict{PipeCoord, PlacedPipe} = Dict{PipeCoord, PlacedPipe}()
     surface_shiptags::Dict{TileCoord, Symbol} = Dict{TileCoord, Symbol}(TileCoord(0, 0) => :primary)
     ships::Dict{Symbol, ShipState} = Dict(:primary => ShipState())
     space_map::AbstractSpaceMap = SpaceMapEmpty()
@@ -406,21 +405,21 @@ is created.
 Errors if:
 - `ship_name` already exists in the gamemap (checked at start)
 - any coordinate in `blueprint.components` is already occupied (collision guard)
-- any edge in `blueprint.pipe_behaviors` is already occupied (collision guard)
+- any coordinate in `blueprint.pipe_behaviors` is already occupied (collision guard)
 """
 function merge_ship!(gamemap::GameMap, ship_name::Symbol, blueprint::ShipBlueprint;
         docking_status::DockingStatus = ConnectedDockStat())
     has_ship(gamemap, ship_name) && error("Ship '$ship_name' already exists in gamemap")
 
-    # Validate no coordinate/edge collisions before mutation
+    # Validate no coordinate collisions before mutation
     for coord in keys(blueprint.components)
         haskey(gamemap.components, coord) && error(
             "Cannot merge ship '$ship_name': component already exists at $coord (from ship '$(gamemap.components[coord].ship)')"
         )
     end
-    for edge in keys(blueprint.pipe_behaviors)
-        haskey(gamemap.pipe_behaviors, edge) && error(
-            "Cannot merge ship '$ship_name': pipe already exists on edge $edge (from ship '$(gamemap.pipe_behaviors[edge].ship)')"
+    for coord in keys(blueprint.pipe_behaviors)
+        haskey(gamemap.pipe_behaviors, coord) && error(
+            "Cannot merge ship '$ship_name': pipe already exists at $coord (from ship '$(gamemap.pipe_behaviors[coord].ship)')"
         )
     end
     for tile in blueprint.ship_tiles
@@ -431,10 +430,10 @@ function merge_ship!(gamemap::GameMap, ship_name::Symbol, blueprint::ShipBluepri
 
     # Safe to merge after validation passes
     for (coord, comp) in blueprint.components
-        gamemap.components[coord] = ComponentOnTile(comp.component, comp.rotation, comp.mirrored, ship_name)
+        gamemap.components[coord] = PlacedComponent(comp.component, comp.rotation, comp.mirrored, ship_name)
     end
-    for (edge, pipe) in blueprint.pipe_behaviors
-        gamemap.pipe_behaviors[edge] = PipeOnEdge(pipe, ship_name)
+    for (coord, pipe) in blueprint.pipe_behaviors
+        gamemap.pipe_behaviors[coord] = PlacedPipe(pipe, ship_name)
     end
     for tile in blueprint.ship_tiles
         gamemap.surface_shiptags[tile] = ship_name
@@ -499,7 +498,7 @@ has_ship(gamemap::GameMap, name::Symbol)::Bool = haskey(gamemap.ships, name)
 get_ship_state(gamemap::GameMap, name::Symbol)::ShipState = _get_ship_state(gamemap, name)
 
 #= ---------- GameMap: Component Access ----------- =#
-"Get the `ComponentOnTile` at `coord`, or `nothing`. Read `.ship` on the result to determine ownership."
+"Get the `PlacedComponent` at `coord`, or `nothing`. Read `.ship` on the result to determine ownership."
 function get_component(gamemap::GameMap, coord::TileCoord)
     return get(gamemap.components, coord, nothing)
 end
@@ -510,13 +509,13 @@ function has_component(gamemap::GameMap, coord::TileCoord)::Bool
 end
 
 "Place `component` at `coord`. Ownership is taken from `component.ship` — construct the wrapper with the desired ship tag."
-function set_component!(gamemap::GameMap, coord::TileCoord, component::ComponentOnTile)
+function set_component!(gamemap::GameMap, coord::TileCoord, component::PlacedComponent)
     gamemap.components[coord] = component
     return nothing
 end
 
-"Bulk-place components. Each entry's ship tag is taken from its `ComponentOnTile.ship`."
-function set_component!(gamemap::GameMap, components::AbstractDict{TileCoord, <:ComponentOnTile})
+"Bulk-place components. Each entry's ship tag is taken from its `PlacedComponent.ship`."
+function set_component!(gamemap::GameMap, components::AbstractDict{TileCoord, <:PlacedComponent})
     for (coord, comp) in components
         set_component!(gamemap, coord, comp)
     end
@@ -532,38 +531,38 @@ end
 "Return the components dict shared with the gamemap. Do not mutate; use `set_component!` / `delete_component!`, `each_component_of_ship`, or `each_component_of_type`."
 get_components(gamemap::GameMap) = gamemap.components
 
-"Lazy iterator over `ComponentOnTile` values belonging to `ship_name`."
+"Lazy iterator over `PlacedComponent` values belonging to `ship_name`."
 each_component_of_ship(gamemap::GameMap, ship_name::Symbol) =
     Iterators.filter(c -> c.ship === ship_name, values(get_components(gamemap)))
 
-"Lazy iterator over `ComponentOnTile` values whose component behaviour is of type `T`."
+"Lazy iterator over `PlacedComponent` values whose component behaviour is of type `T`."
 each_component_of_type(gamemap::GameMap, ::Type{T}) where {T} =
     Iterators.filter(c -> c.component isa T, values(get_components(gamemap)))
 
 #= ---------- GameMap: Pipe Access ----------- =#
-"Get the `PipeOnEdge` at `coord`, or `nothing`. Read `.ship` on the result to determine ownership."
-function get_pipe(gamemap::GameMap, coord::EdgeCoord)
+"Get the `PlacedPipe` at `coord`, or `nothing`. Read `.ship` on the result to determine ownership."
+function get_pipe(gamemap::GameMap, coord::PipeCoord)
     return get(gamemap.pipe_behaviors, coord, nothing)
 end
 
 "Whether any pipe exists at `coord`. To check ownership, fetch with `get_pipe` and compare `.ship`."
-function has_pipe(gamemap::GameMap, coord::EdgeCoord)::Bool
+function has_pipe(gamemap::GameMap, coord::PipeCoord)::Bool
     return haskey(gamemap.pipe_behaviors, coord)
 end
 
-"Place `pipe` at `coord`. Ownership is taken from `pipe.ship` — construct the `PipeOnEdge` with the desired ship tag."
-function set_pipe!(gamemap::GameMap, coord::EdgeCoord, pipe::PipeOnEdge)
+"Place `pipe` at `coord`. Ownership is taken from `pipe.ship` — construct the `PlacedPipe` with the desired ship tag."
+function set_pipe!(gamemap::GameMap, coord::PipeCoord, pipe::PlacedPipe)
     gamemap.pipe_behaviors[coord] = pipe
     return nothing
 end
 
 "Place raw `pipe` at `coord`, tagging it with `ship_name` before insertion."
-function set_pipe!(gamemap::GameMap, coord::EdgeCoord, pipe::PipeBehavior; ship_name::Symbol = :primary)
-    return set_pipe!(gamemap, coord, PipeOnEdge(pipe, ship_name))
+function set_pipe!(gamemap::GameMap, coord::PipeCoord, pipe::PipeBehavior; ship_name::Symbol = :primary)
+    return set_pipe!(gamemap, coord, PlacedPipe(pipe, ship_name))
 end
 
 "Delete the pipe at `coord` if present. To delete only when owned by a particular ship, gate the call externally."
-function delete_pipe!(gamemap::GameMap, coord::EdgeCoord)
+function delete_pipe!(gamemap::GameMap, coord::PipeCoord)
     delete!(gamemap.pipe_behaviors, coord)
     return nothing
 end
@@ -571,11 +570,56 @@ end
 "Return the pipe-behaviors dict shared with the gamemap. Do not mutate; use `set_pipe!` / `delete_pipe!`, `each_pipe_of_ship`, or `each_pipe_of_type`."
 get_pipes(gamemap::GameMap) = gamemap.pipe_behaviors
 
-"Lazy iterator over `PipeOnEdge` values belonging to `ship_name`."
+"Shortest distance from a point to a line segment defined by endpoints `a` and `b`."
+function _point_to_segment_distance(p::CartesianCoord, a::CartesianCoord, b::CartesianCoord)::Float64
+    ab = b - a
+    ap = p - a
+    len_sq = ab.x^2 + ab.y^2
+    len_sq == 0.0 && return sqrt(ap.x^2 + ap.y^2)
+
+    t = clamp((ap.x * ab.x + ap.y * ab.y) / len_sq, 0.0, 1.0)
+    closest = CartesianCoord(a.x + t * ab.x, a.y + t * ab.y)
+    delta = p - closest
+    return sqrt(delta.x^2 + delta.y^2)
+end
+
+"Return whether a click lies inside the rendered width of a placed pipe."
+function is_click_on_pipe(click::CartesianCoord, coord::PipeCoord, pipe)::Bool
+    radius = get_pipe_click_radius(pipe)
+    distance = _point_to_segment_distance(click, to_cartesian(coord.v1), to_cartesian(coord.v2))
+    return distance <= radius + 1.0e-12
+end
+
+"Return the highest rendered real pipe under a click, or `nothing` if no pipe was hit."
+function get_clicked_pipe(click::CartesianCoord, gamemap::GameMap)::Union{Nothing, PipeCoord}
+    clicked_tile = round_to_tile(click)
+    candidate_tiles = (clicked_tile, get_adjacent_tiles_for_tile(clicked_tile)...)
+    selected::Union{Nothing, PipeCoord} = nothing
+    selected_rank = typemin(Int)
+
+    for tile in candidate_tiles
+        for coord in get_pipe_segments(tile)
+            pipe = get_pipe(gamemap, coord)
+            isnothing(pipe) && continue
+
+            rank = get_stacking_rank(coord)
+            rank <= selected_rank && continue
+
+            is_click_on_pipe(click, coord, pipe) || continue
+
+            selected = coord
+            selected_rank = rank
+        end
+    end
+
+    return selected
+end
+
+"Lazy iterator over `PlacedPipe` values belonging to `ship_name`."
 each_pipe_of_ship(gamemap::GameMap, ship_name::Symbol) =
     Iterators.filter(p -> p.ship === ship_name, values(get_pipes(gamemap)))
 
-"Lazy iterator over `PipeOnEdge` values whose pipe behaviour is of type `T`."
+"Lazy iterator over `PlacedPipe` values whose pipe behaviour is of type `T`."
 each_pipe_of_type(gamemap::GameMap, ::Type{T}) where {T} =
     Iterators.filter(p -> p.pipe isa T, values(get_pipes(gamemap)))
 
@@ -917,11 +961,18 @@ function can_place_component_at(coord::TileCoord, gamemap::GameMap; ship_name::S
     if !is_on_surface_tile(coord, gamemap; ship_name = ship_name)
         return (false, "Not on ship surface")
     end
+    if has_pipe_component_conflict(coord, gamemap)
+        return (false, "Tile contains a pipe segment")
+    end
     return (true, "")
 end
 
-"Check if a pipe can be placed at an edge coordinate (both endpoint nodes must be on ship surface)."
-function can_place_pipe_at(coord::EdgeCoord, gamemap::GameMap; ship_name::Symbol = :primary)::Tuple{Bool, String}
+"Check if a pipe can be placed at a pipe coordinate (both endpoint nodes must be on ship surface)."
+function can_place_pipe_at(coord::PipeCoord, gamemap::GameMap; ship_name::Symbol = :primary)::Tuple{Bool, String}
+    if has_pipe_component_conflict(coord, gamemap)
+        return (false, "Pipe segment crosses an occupied tile")
+    end
+
     v1_node = to_nodecoord(coord.v1)
     v2_node = to_nodecoord(coord.v2)
     if !is_node_on_ship_surface(v1_node, gamemap; ship_name = ship_name)
@@ -931,6 +982,21 @@ function can_place_pipe_at(coord::EdgeCoord, gamemap::GameMap; ship_name::Symbol
         return (false, "Pipe endpoint node at $(coord.v2.tile) is not connected to ship surface")
     end
     return (true, "")
+end
+
+"Return true when a pipe segment would cross an occupied component tile."
+function has_pipe_component_conflict(subject::PipeCoord, gamemap::GameMap)::Bool
+    tile = get_tile_containing_pipe(subject)
+    isnothing(tile) && return false
+    return !isnothing(get_component(gamemap, tile))
+end
+
+"Return true when an existing non-side pipe segment crosses `subject`."
+function has_pipe_component_conflict(subject::TileCoord, gamemap::GameMap)::Bool
+    for pipe in keys(gamemap.pipe_behaviors)
+        get_tile_containing_pipe(pipe) == subject && return true
+    end
+    return false
 end
 
 "Check if a surface tile can be removed (must not have a component on it)."
@@ -991,13 +1057,13 @@ function get_component_shiptag(gamemap::GameMap, coord::TileCoord)::Union{Symbol
 end
 
 "Read the stored ship tag from the pipe wrapper at `coord`, if present."
-function get_pipe_shiptag(gamemap::GameMap, coord::EdgeCoord)::Union{Symbol, Nothing}
+function get_pipe_shiptag(gamemap::GameMap, coord::PipeCoord)::Union{Symbol, Nothing}
     p = get(gamemap.pipe_behaviors, coord, nothing)
     return isnothing(p) ? nothing : p.ship
 end
 
 "Find which ship surface contains both endpoints of `coord`. Returns `nothing` when no single ship contains both nodes."
-function find_ship_containing_edge(gamemap::GameMap, coord::EdgeCoord)::Union{Symbol, Nothing}
+function find_ship_containing(coord::PipeCoord, gamemap::GameMap)::Union{Symbol, Nothing}
     v1_node = to_nodecoord(coord.v1)
     v2_node = to_nodecoord(coord.v2)
     for (ship_name, _) in gamemap.ships
@@ -1009,12 +1075,7 @@ function find_ship_containing_edge(gamemap::GameMap, coord::EdgeCoord)::Union{Sy
     return nothing
 end
 
-"Component owner first, then surface owner."
-function find_tile_pipe_host_ship(gamemap::GameMap, coord::TileCoord)::Union{Symbol, Nothing}
-    sn = get_component_shiptag(gamemap, coord)
-    isnothing(sn) || return sn
-    return get_surface_shiptag(gamemap, coord)
-end
+find_ship_containing(gamemap::GameMap, coord::PipeCoord)::Union{Symbol, Nothing} = find_ship_containing(coord, gamemap)
 
 "Find a ship by adjacent surface ownership only. Returns `default` if no adjacent surface is found."
 function find_ship_surface_containing_node(node::NodeCoord, gamemap::GameMap;
@@ -1032,8 +1093,8 @@ function find_ship_pipes_containing_node(node::NodeCoord, gamemap::GameMap;
     is_axis(node.dir) || return default
 
     vertex = to_vertex(node)
-    for edge in get_edges(vertex)
-        sn = get_pipe_shiptag(gamemap, edge)
+    for pipe in get_pipe_segments(vertex)
+        sn = get_pipe_shiptag(gamemap, pipe)
         !isnothing(sn) && return sn
     end
     return default
@@ -1061,9 +1122,9 @@ function get_ship_blueprint(gamemap::GameMap, ship_name::Symbol)::ShipBlueprint
         comp.ship === ship_name || continue
         blueprint.components[coord] = comp
     end
-    for (edge, pipe) in gamemap.pipe_behaviors
+    for (coord, pipe) in gamemap.pipe_behaviors
         pipe.ship === ship_name || continue
-        blueprint.pipe_behaviors[edge] = pipe.pipe  # unwrap PipeOnEdge to raw PipeBehavior
+        blueprint.pipe_behaviors[coord] = pipe.pipe  # unwrap PlacedPipe to raw PipeBehavior
     end
     collect_surface_tiles!(blueprint.ship_tiles, gamemap; ship_name = ship_name)
     return blueprint
@@ -1076,16 +1137,16 @@ end
 #= ---------- Placement & Deletion Validation ----------- =#
 
 """
-    flood_search_pipes_from_node!(reachable, all_pipe_edges, start_node)
+    flood_search_pipes_from_node!(reachable, all_pipe_coords, start_node)
 
-Flood-fill through pipe edges starting from `start_node`, collecting all reachable edges into
-`reachable`. Only traverses edges present in `all_pipe_edges`. Uses BFS over the hex vertex
-graph, following edges from vertex to vertex via shared pipe endpoints.
+Flood-fill through pipe segments starting from `start_node`, collecting all reachable coordinates into
+`reachable`. Only traverses coordinates present in `all_pipe_coords`. Uses BFS over the hex vertex
+graph, following pipe segments from vertex to vertex via shared endpoints.
 
 Placed in FlowMap (rather than FlowEngine) because it depends only on HexFrame primitives and
 is needed by FlowMap's own validation logic.
 """
-function flood_search_pipes_from_node!(reachable::Set{EdgeCoord}, all_pipe_edges, start_node::NodeCoord)
+function flood_search_pipes_from_node!(reachable::Set{PipeCoord}, all_pipe_coords, start_node::NodeCoord)
     visited_nodes = Set{NodeCoord}()
     queue = Deque{NodeCoord}()
     push!(queue, start_node)
@@ -1095,13 +1156,13 @@ function flood_search_pipes_from_node!(reachable::Set{EdgeCoord}, all_pipe_edges
         node in visited_nodes && continue
         push!(visited_nodes, node)
 
-        vertex = to_vertex(node)
-        for edge in get_edges(vertex) # 3 edges radiating from this vertex
-            if edge in all_pipe_edges && edge ∉ reachable
-                push!(reachable, edge)
-                other_vertex = edge.v1 == vertex ? edge.v2 : edge.v1
+        vertex = to_proper(to_vertex(node))
+        for coord in get_pipe_segments(vertex)
+            if coord in all_pipe_coords && !(coord in reachable)
+                push!(reachable, coord)
+                other_vertex = coord.v1 == vertex ? coord.v2 : coord.v1
                 other_node = to_nodecoord(other_vertex)
-                if other_node ∉ visited_nodes
+                if !(other_node in visited_nodes)
                     push!(queue, other_node)
                 end
             end
@@ -1117,7 +1178,11 @@ Check if a pipe can be placed at `coord` when it doesn't fit entirely on a singl
 surface. Requires at least one endpoint to be connected to a ship (via surface adjacency
 or an existing pipe). Returns the target ship to store the pipe on.
 """
-function can_place_pipe_offship(coord::EdgeCoord, gamemap::GameMap)::Tuple{Bool, Union{Symbol, Nothing}, String}
+function can_place_pipe_offship(coord::PipeCoord, gamemap::GameMap)::Tuple{Bool, Union{Symbol, Nothing}, String}
+    if has_pipe_component_conflict(coord, gamemap)
+        return (false, nothing, "Pipe segment crosses an occupied tile")
+    end
+
     v1_node = to_nodecoord(coord.v1)
     v2_node = to_nodecoord(coord.v2)
 
@@ -1137,18 +1202,18 @@ end
 
 Validate that deleting an off-surface pipe won't orphan any remaining off-surface pipes.
 """
-function validate_offship_pipe_deletion(coord::EdgeCoord, gamemap::GameMap)::Bool
-    remaining_offship = Set{EdgeCoord}()
-    for (edge, _) in gamemap.pipe_behaviors
-        edge == coord && continue
-        v1_on = is_node_on_any_ship_surface(to_nodecoord(edge.v1), gamemap)
-        v2_on = is_node_on_any_ship_surface(to_nodecoord(edge.v2), gamemap)
-        !(v1_on && v2_on) && push!(remaining_offship, edge)
+function validate_offship_pipe_deletion(coord::PipeCoord, gamemap::GameMap)::Bool
+    remaining_offship = Set{PipeCoord}()
+    for (pipe_coord, _) in gamemap.pipe_behaviors
+        pipe_coord == coord && continue
+        v1_on = is_node_on_any_ship_surface(to_nodecoord(pipe_coord.v1), gamemap)
+        v2_on = is_node_on_any_ship_surface(to_nodecoord(pipe_coord.v2), gamemap)
+        !(v1_on && v2_on) && push!(remaining_offship, pipe_coord)
     end
     isempty(remaining_offship) && return true
 
     for start_node in (to_nodecoord(coord.v1), to_nodecoord(coord.v2))
-        reachable = Set{EdgeCoord}()
+        reachable = Set{PipeCoord}()
         flood_search_pipes_from_node!(reachable, remaining_offship, start_node)
         isempty(reachable) && continue
         has_ship_connection = any(
@@ -1167,19 +1232,19 @@ end
 After deleting an off-surface pipe, flood-fill through remaining off-surface pipes
 and rewrite each connected component's ship tag to the ship its touching endpoint belongs to.
 """
-function reassign_pipe_ownership!(deleted_coord::EdgeCoord, gamemap::GameMap)
-    offship_edges = Set{EdgeCoord}()
-    for (edge, _) in gamemap.pipe_behaviors
-        v1_on = is_node_on_any_ship_surface(to_nodecoord(edge.v1), gamemap)
-        v2_on = is_node_on_any_ship_surface(to_nodecoord(edge.v2), gamemap)
-        !(v1_on && v2_on) && push!(offship_edges, edge)
+function reassign_pipe_ownership!(deleted_coord::PipeCoord, gamemap::GameMap)
+    offship_coords = Set{PipeCoord}()
+    for (pipe_coord, _) in gamemap.pipe_behaviors
+        v1_on = is_node_on_any_ship_surface(to_nodecoord(pipe_coord.v1), gamemap)
+        v2_on = is_node_on_any_ship_surface(to_nodecoord(pipe_coord.v2), gamemap)
+        !(v1_on && v2_on) && push!(offship_coords, pipe_coord)
     end
-    isempty(offship_edges) && return nothing
+    isempty(offship_coords) && return nothing
 
-    visited_all = Set{EdgeCoord}()
+    visited_all = Set{PipeCoord}()
     for start_node in (to_nodecoord(deleted_coord.v1), to_nodecoord(deleted_coord.v2))
-        reachable = Set{EdgeCoord}()
-        flood_search_pipes_from_node!(reachable, offship_edges, start_node)
+        reachable = Set{PipeCoord}()
+        flood_search_pipes_from_node!(reachable, offship_coords, start_node)
         isempty(reachable) && continue
         any(e -> e ∈ visited_all, reachable) && continue
         union!(visited_all, reachable)
@@ -1187,8 +1252,8 @@ function reassign_pipe_ownership!(deleted_coord::EdgeCoord, gamemap::GameMap)
         # Pipe-fallback disabled: the chain we're about to retag is itself the source
         # of stale tags, so we must anchor only on actual surface ownership.
         target_ship = nothing
-        for edge in reachable
-            for v in (edge.v1, edge.v2)
+        for coord in reachable
+            for v in (coord.v1, coord.v2)
                 target_ship = find_ship_surface_containing_node(to_nodecoord(v), gamemap;
                     default = nothing)
                 !isnothing(target_ship) && break
@@ -1197,10 +1262,10 @@ function reassign_pipe_ownership!(deleted_coord::EdgeCoord, gamemap::GameMap)
         end
         isnothing(target_ship) && continue
 
-        for edge in reachable
-            p = gamemap.pipe_behaviors[edge]
+        for coord in reachable
+            p = gamemap.pipe_behaviors[coord]
             if p.ship !== target_ship
-                gamemap.pipe_behaviors[edge] = PipeOnEdge(p.pipe, target_ship)
+                gamemap.pipe_behaviors[coord] = PlacedPipe(p.pipe, target_ship)
             end
         end
     end
@@ -1297,12 +1362,12 @@ function swap_primary!(gamemap::GameMap, new_primary_name::Symbol)::Tuple{Bool, 
     for coord in collect(keys(gamemap.components))
         c = gamemap.components[coord]
         haskey(rename_to, c.ship) || continue
-        gamemap.components[coord] = ComponentOnTile(c.component, c.rotation, c.mirrored, rename_to[c.ship])
+        gamemap.components[coord] = PlacedComponent(c.component, c.rotation, c.mirrored, rename_to[c.ship])
     end
-    for edge in collect(keys(gamemap.pipe_behaviors))
-        p = gamemap.pipe_behaviors[edge]
+    for coord in collect(keys(gamemap.pipe_behaviors))
+        p = gamemap.pipe_behaviors[coord]
         haskey(rename_to, p.ship) || continue
-        gamemap.pipe_behaviors[edge] = PipeOnEdge(p.pipe, rename_to[p.ship])
+        gamemap.pipe_behaviors[coord] = PlacedPipe(p.pipe, rename_to[p.ship])
     end
     for tile in collect(keys(gamemap.surface_shiptags))
         owner = gamemap.surface_shiptags[tile]
@@ -1315,7 +1380,7 @@ end
 
 """
 Offset all coordinates belonging to `ship_name` in `gamemap` by a `TileCoord` offset, in-place.
-Rewrites component keys, pipe edge keys, and surface tiles for the given ship.
+Rewrites component keys, pipe coordinate keys, and surface tiles for the given ship.
 """
 function offset_ship!(gamemap::GameMap, ship_name::Symbol, offset::TileCoord)
     # Components — collect, clear, reinsert
@@ -1324,18 +1389,16 @@ function offset_ship!(gamemap::GameMap, ship_name::Symbol, offset::TileCoord)
         delete!(gamemap.components, old_coord)
     end
     for (coord, comp) in moved_c
-        gamemap.components[TileCoord(coord.q + offset.q, coord.r + offset.r)] = comp
+        gamemap.components[offset_by_tile(coord, offset)] = comp
     end
 
     # Pipes
-    moved_p = [(edge, pipe) for (edge, pipe) in gamemap.pipe_behaviors if pipe.ship === ship_name]
-    for (old_edge, _) in moved_p
-        delete!(gamemap.pipe_behaviors, old_edge)
+    moved_p = [(coord, pipe) for (coord, pipe) in gamemap.pipe_behaviors if pipe.ship === ship_name]
+    for (old_coord, _) in moved_p
+        delete!(gamemap.pipe_behaviors, old_coord)
     end
-    for (edge, pipe) in moved_p
-        v1n = VertexCoord(TileCoord(edge.v1.tile.q + offset.q, edge.v1.tile.r + offset.r), edge.v1.dir)
-        v2n = VertexCoord(TileCoord(edge.v2.tile.q + offset.q, edge.v2.tile.r + offset.r), edge.v2.dir)
-        gamemap.pipe_behaviors[EdgeCoord(v1n, v2n)] = pipe
+    for (coord, pipe) in moved_p
+        gamemap.pipe_behaviors[offset_by_tile(coord, offset)] = pipe
     end
 
     # Surface tiles
@@ -1345,8 +1408,7 @@ function offset_ship!(gamemap::GameMap, ship_name::Symbol, offset::TileCoord)
         delete!(gamemap.surface_shiptags, tile)
     end
     for tile in moved_tiles
-        moved_tile = TileCoord(tile.q + offset.q, tile.r + offset.r)
-        gamemap.surface_shiptags[moved_tile] = ship_name
+        gamemap.surface_shiptags[offset_by_tile(tile, offset)] = ship_name
     end
 
     return nothing

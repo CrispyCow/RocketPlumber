@@ -21,6 +21,7 @@ HexComponentsAPI.get_conductance(::MockPipeBehav) = 1.0
 HexComponentsAPI.get_pipe_tunables(::MockPipeBehav) = ()
 HexComponentsAPI.set_pipe_tunables(behaviour::MockPipeBehav, ::Any) = behaviour
 HexComponentsAPI.render_pipe_base!(::Any, ::MockPipeBehav; kwargs...) = nothing
+HexComponentsAPI.get_pipe_click_radius(::MockPipeBehav) = 0.1
 
 # ===============================================================
 # Test Helpers

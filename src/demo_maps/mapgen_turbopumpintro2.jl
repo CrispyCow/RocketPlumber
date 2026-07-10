@@ -17,14 +17,14 @@ function mapgen_turbopumpintro2()
         initial_charge = 30.0,
         series_conductance = 5.0
     )
-    blueprint.components[TileCoord(2, 0)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
-    blueprint.components[TileCoord(2, -1)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
-    blueprint.components[TileCoord(2, -2)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
-    blueprint.components[TileCoord(3, -1)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
-    blueprint.components[TileCoord(3, -2)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(2, 0)] = PlacedComponent(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(2, -1)] = PlacedComponent(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(2, -2)] = PlacedComponent(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(3, -1)] = PlacedComponent(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(3, -2)] = PlacedComponent(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
 
     # Engine core
-    blueprint.components[TileCoord(0, 0)] = ComponentOnTile(
+    blueprint.components[TileCoord(0, 0)] = PlacedComponent(
         TurboPumpCompBehav(
             max_pump_voltage = 50.0,
             series_conductance = 1.0,
@@ -38,7 +38,7 @@ function mapgen_turbopumpintro2()
         HexFrame.Q_POS,
         :_blueprint
     )
-    blueprint.components[TileCoord(-1, 0)] = ComponentOnTile(
+    blueprint.components[TileCoord(-1, 0)] = PlacedComponent(
         StandardValveCompBehav(SteppedSwitchBehavFrag, TinyValve;
             max_conductance = 1.0,
             min_conductance = 0.0,
@@ -50,8 +50,8 @@ function mapgen_turbopumpintro2()
         HexFrame.Q_POS,
         :_blueprint
     )
-    blueprint.components[TileCoord(-2, 1)] = ComponentOnTile(DecompChamberCompBehav(), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(-4, 2)] = ComponentOnTile(
+    blueprint.components[TileCoord(-2, 1)] = PlacedComponent(DecompChamberCompBehav(), HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(-4, 2)] = PlacedComponent(
         BasicNozzleCompBehav(
             connected_node = HexFrame.NODE_Q_POS,
             throat_area = 0.5,
@@ -62,15 +62,15 @@ function mapgen_turbopumpintro2()
     )
 
     # Pipes
-    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(-4, 2), HexFrame.Q_POS), VertexCoord(TileCoord(-2, 1), HexFrame.Q_NEG))] = BigPipeBehav(10.0)
-    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(-2, 1), HexFrame.Q_POS), VertexCoord(TileCoord(0, 0), HexFrame.Q_NEG))] = ScrapPipeBehav(2.0)
-    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(0, 0), HexFrame.Q_POS), VertexCoord(TileCoord(2, -1), HexFrame.Q_NEG))] = ScrapPipeBehav(2.0)
-    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(2, -2), HexFrame.Q_NEG), VertexCoord(TileCoord(1, -1), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
-    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(2, -1), HexFrame.Q_NEG), VertexCoord(TileCoord(1, -1), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
-    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(2, 0), HexFrame.Q_NEG), VertexCoord(TileCoord(1, 0), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
-    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(2, -1), HexFrame.Q_NEG), VertexCoord(TileCoord(1, 0), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
-    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(1, -1), HexFrame.Q_POS), VertexCoord(TileCoord(3, -2), HexFrame.Q_NEG))] = ScrapPipeBehav(2.0)
-    blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(1, 0), HexFrame.Q_POS), VertexCoord(TileCoord(3, -1), HexFrame.Q_NEG))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(-4, 2), HexFrame.Q_POS), VertexCoord(TileCoord(-2, 1), HexFrame.Q_NEG))] = BigPipeBehav(10.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(-2, 1), HexFrame.Q_POS), VertexCoord(TileCoord(0, 0), HexFrame.Q_NEG))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(0, 0), HexFrame.Q_POS), VertexCoord(TileCoord(2, -1), HexFrame.Q_NEG))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(2, -2), HexFrame.Q_NEG), VertexCoord(TileCoord(1, -1), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(2, -1), HexFrame.Q_NEG), VertexCoord(TileCoord(1, -1), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(2, 0), HexFrame.Q_NEG), VertexCoord(TileCoord(1, 0), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(2, -1), HexFrame.Q_NEG), VertexCoord(TileCoord(1, 0), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(1, -1), HexFrame.Q_POS), VertexCoord(TileCoord(3, -2), HexFrame.Q_NEG))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(1, 0), HexFrame.Q_POS), VertexCoord(TileCoord(3, -1), HexFrame.Q_NEG))] = ScrapPipeBehav(2.0)
 
     union!(blueprint.ship_tiles, Set([
         TileCoord(-3, 1),

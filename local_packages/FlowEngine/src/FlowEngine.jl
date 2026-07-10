@@ -251,9 +251,9 @@ function grounded_element_node(element::AbsoluteElement)::Union{NodeCoord, Nothi
     return is_grounded(v2) ? v1 : nothing
 end
 
-function add_pipes_abs_element!(abs_vector::Vector{AbsoluteElement}, edge::EdgeCoord, conductance::Float64)
-    connections = AbsoluteElementConnections(to_nodecoord(edge.v1), to_nodecoord(edge.v2))
-    absolute_element = AbsoluteElement(connections, conductance, CONST_RESISTOR, ElementID(edge))
+function add_pipes_abs_element!(abs_vector::Vector{AbsoluteElement}, coord::PipeCoord, conductance::Float64)
+    connections = AbsoluteElementConnections(to_nodecoord(coord.v1), to_nodecoord(coord.v2))
+    absolute_element = AbsoluteElement(connections, conductance, CONST_RESISTOR, ElementID(coord))
     return push!(abs_vector, absolute_element)
 end
 
@@ -267,18 +267,19 @@ function update_components!(gamemap::GameMap, mna_state::MNA_State, derivedmapst
     return nothing
 end
 
-"Push active absolute elements from a ComponentOnTile directly into the output vector."
-function push_mapped_elements!(out::Vector{AbsoluteElement}, tilecomp::ComponentOnTile, tile::TileCoord)
+"Push active absolute elements from a PlacedComponent directly into the output vector."
+function push_mapped_elements!(out::Vector{AbsoluteElement}, tilecomp::PlacedComponent, tile::TileCoord)
     for abs_elem in produce_abs_elements(tilecomp, tile)
         abs_elem.active && push!(out, abs_elem)
     end
     return nothing
 end
 
-"Push the single pipe resistor element directly into the output vector."
-function push_pipe_element!(out::Vector{AbsoluteElement}, pipe::PipeOnEdge, edge::EdgeCoord)
-    connections = AbsoluteElementConnections(to_nodecoord(edge.v1), to_nodecoord(edge.v2))
-    push!(out, AbsoluteElement(connections, get_conductance(pipe), CONST_RESISTOR, ElementID(edge)))
+"Push active absolute elements from a PlacedPipe directly into the output vector."
+function push_pipe_element!(out::Vector{AbsoluteElement}, pipe::PlacedPipe, coord::PipeCoord)
+    for abs_elem in produce_abs_elements(pipe, coord)
+        abs_elem.active && push!(out, abs_elem)
+    end
     return nothing
 end
 
@@ -615,7 +616,7 @@ end
 # ===============================================================
 
 "Push mapped declarations from a single component"
-function push_mapped_declarations!(out::Vector{AbsFluidDecl}, tilecomp::ComponentOnTile, tile::TileCoord)
+function push_mapped_declarations!(out::Vector{AbsFluidDecl}, tilecomp::PlacedComponent, tile::TileCoord)
     rel_decls = produce_rel_fluid_declarations(tilecomp.component)
     rot = tilecomp.rotation
     mirrored = tilecomp.mirrored

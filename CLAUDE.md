@@ -74,7 +74,7 @@ Minor sections:
 
 - `*BehavFrag` — reusable behavioural fragments (do not subtype `ComponentBehavior`/`PipeBehavior`)
 - `*CompBehav` — concrete tile-placed component behaviours (subtype `ComponentBehavior`)
-- `*PipeBehav` — concrete edge-placed pipe behaviours (subtype `PipeBehavior`)
+- `*PipeBehav` — concrete pipe-segment behaviours (subtype `PipeBehavior`)
 - `*DockStat` — docking status subtypes
 - `*State` — mutable state containers (e.g., `TankState`, `SwitchState`, `LearningSystemState`)
 

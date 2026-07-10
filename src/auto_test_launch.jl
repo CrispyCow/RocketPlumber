@@ -93,29 +93,29 @@ set_learning_system!(
 #  200 ticks ≈ 3.3 s   - redock (covers redock animation duration)
 # =====================================================================
 
-# Pre-define off-ship pipe edges for Phase E. Defined once so the same
-# edge can be referenced for place + delete reliably.
-const EDGE_EXISTING_PRIMARY = EdgeCoord(
+# Pre-define off-ship pipe coordinates for Phase E. Defined once so the same
+# coordinate can be referenced for place + delete reliably.
+const PIPE_EXISTING_PRIMARY = PipeCoord(
     VertexCoord(TileCoord(3, -8), HexFrame.Q_NEG),
     VertexCoord(TileCoord(2, -7), HexFrame.Q_POS),
 )
-const EDGE_MOVE_DESTINATION = EdgeCoord(
+const PIPE_MOVE_DESTINATION = PipeCoord(
+    VertexCoord(TileCoord(4, -10), HexFrame.Q_NEG),
     VertexCoord(TileCoord(3, -9), HexFrame.Q_POS),
-    VertexCoord(TileCoord(3, -8), HexFrame.Q_NEG),
 )
-const EDGE_OFFSHIP_A = EdgeCoord(
+const PIPE_OFFSHIP_A = PipeCoord(
     VertexCoord(TileCoord(2, -5), HexFrame.Q_NEG),
     VertexCoord(TileCoord(1, -4), HexFrame.Q_POS),
 )
-const EDGE_OFFSHIP_B = EdgeCoord(
+const PIPE_OFFSHIP_B = PipeCoord(
     VertexCoord(TileCoord(1, -4), HexFrame.Q_POS),
-    VertexCoord(TileCoord(0, -3), HexFrame.Q_NEG),
+    VertexCoord(TileCoord(2, -4), HexFrame.Q_NEG),
 )
-const EDGE_ORPHAN = EdgeCoord(
+const PIPE_ORPHAN = PipeCoord(
     VertexCoord(TileCoord(99, 99), HexFrame.Q_NEG),
     VertexCoord(TileCoord(98, 100), HexFrame.Q_POS),
 )
-const EDGE_OCCUPIED_TARGET = EdgeCoord(
+const PIPE_OCCUPIED_TARGET = PipeCoord(
     VertexCoord(TileCoord(4, -9), HexFrame.Q_NEG),
     VertexCoord(TileCoord(3, -8), HexFrame.Q_POS),
 )
@@ -362,48 +362,48 @@ test_commands::TestCommandSchedule = [
     # ----- Phase E: Pipe lifecycle -----------------------------------
     # Delete + re-place an existing teaser pipe on primary, then build a
     # verified off-ship chain to exercise orphan protection and pipe moves.
-    make_test_step(3600, make_test_delete(EDGE_EXISTING_PRIMARY);
+    make_test_step(3600, make_test_delete(PIPE_EXISTING_PRIMARY);
         expected_status = APPLIED,
-        description = "Delete existing primary pipe edge"),
-    make_test_step(3690, make_test_set_pipe(EDGE_EXISTING_PRIMARY, deepcopy(ScrapPipe));
+        description = "Delete existing primary pipe"),
+    make_test_step(3690, make_test_set_pipe(PIPE_EXISTING_PRIMARY, deepcopy(ScrapPipe));
         expected_status = APPLIED,
-        description = "Re-place primary pipe edge"),
-    make_test_step(3780, make_test_set_pipe(EDGE_OFFSHIP_A, deepcopy(ScrapPipe));
+        description = "Re-place primary pipe"),
+    make_test_step(3780, make_test_set_pipe(PIPE_OFFSHIP_A, deepcopy(ScrapPipe));
         expected_status = APPLIED,
         description = "Place off-ship pipe A"),
-    make_test_step(3870, make_test_set_pipe(EDGE_OFFSHIP_B, deepcopy(ScrapPipe));
+    make_test_step(3870, make_test_set_pipe(PIPE_OFFSHIP_B, deepcopy(ScrapPipe));
         expected_status = APPLIED,
         description = "Place off-ship pipe B chained from A"),
-    make_test_step(3930, make_test_delete(EDGE_OFFSHIP_A);
+    make_test_step(3930, make_test_delete(PIPE_OFFSHIP_A);
         expected_status = APPLIED,
         description = "Delete off-ship pipe A while pipe B remains surface-connected"),
-    make_test_step(3990, make_test_set_pipe(EDGE_OFFSHIP_A, deepcopy(ScrapPipe));
+    make_test_step(3990, make_test_set_pipe(PIPE_OFFSHIP_A, deepcopy(ScrapPipe));
         expected_status = APPLIED,
         description = "Re-place off-ship pipe A"),
-    make_test_step(4020, make_test_set_pipe(EDGE_OFFSHIP_A, deepcopy(ScrapPipe));
+    make_test_step(4020, make_test_set_pipe(PIPE_OFFSHIP_A, deepcopy(ScrapPipe));
         expected_status = INVALID,
         description = "Attempt re-place occupied off-ship pipe A"),
-    make_test_step(4050, make_test_set_pipe(EDGE_ORPHAN, deepcopy(ScrapPipe));
+    make_test_step(4050, make_test_set_pipe(PIPE_ORPHAN, deepcopy(ScrapPipe));
         expected_status = INVALID,
         description = "Attempt orphan deep-space pipe placement"),
-    make_test_step(4140, make_test_delete(EDGE_OFFSHIP_B);
+    make_test_step(4140, make_test_delete(PIPE_OFFSHIP_B);
         expected_status = APPLIED,
         description = "Delete off-ship pipe B"),
-    make_test_step(4200, make_test_delete(EDGE_OFFSHIP_A);
+    make_test_step(4200, make_test_delete(PIPE_OFFSHIP_A);
         expected_status = APPLIED,
         description = "Delete off-ship pipe A"),
-    make_test_step(4260, make_test_delete(EDGE_OFFSHIP_A);
+    make_test_step(4260, make_test_delete(PIPE_OFFSHIP_A);
         expected_status = INVALID,
         description = "Attempt delete already-removed off-ship pipe A"),
-    make_test_step(4320, make_test_move(EDGE_EXISTING_PRIMARY, EDGE_MOVE_DESTINATION, HexFrame.Q_POS);
+    make_test_step(4320, make_test_move(PIPE_EXISTING_PRIMARY, PIPE_MOVE_DESTINATION, HexFrame.Q_POS);
         expected_status = APPLIED,
-        description = "Move primary pipe to empty surface edge"),
-    make_test_step(4380, make_test_move(EDGE_EXISTING_PRIMARY, EDGE_OCCUPIED_TARGET, HexFrame.Q_POS);
+        description = "Move primary pipe to empty surface coordinate"),
+    make_test_step(4380, make_test_move(PIPE_EXISTING_PRIMARY, PIPE_OCCUPIED_TARGET, HexFrame.Q_POS);
         expected_status = INVALID,
-        description = "Attempt move from empty primary pipe source edge"),
-    make_test_step(4440, make_test_move(EDGE_MOVE_DESTINATION, EDGE_OCCUPIED_TARGET, HexFrame.Q_POS);
+        description = "Attempt move from empty primary pipe source coordinate"),
+    make_test_step(4440, make_test_move(PIPE_MOVE_DESTINATION, PIPE_OCCUPIED_TARGET, HexFrame.Q_POS);
         expected_status = INVALID,
-        description = "Attempt move of primary pipe into occupied destination edge"),
+        description = "Attempt move of primary pipe into occupied destination coordinate"),
 
     # ----- Phase F: Ship surface management --------------------------
     # (0,-7) is adjacent only to primary via (1,-7); Platform's (-2,-7) is two hexes away.
@@ -472,29 +472,6 @@ test_commands::TestCommandSchedule = [
     );
         expected_status = APPLIED,
         description = "Spawn repeated primary encounter ship"),
-
-    # ----- Phase I: Tile-pipe commands -------------------------------
-    make_test_step(6100, make_test_modify_tile_pipe(TileCoord(-3, -1), HexFrame.S_POS, ScrapTilePipeBehavFrag());
-        expected_status = APPLIED,
-        description = "Modify tile pipe at (-3,-1) on S_POS"),
-    make_test_step(6130, make_test_modify_tile_pipe(TileCoord(99, 99), HexFrame.S_POS, ScrapTilePipeBehavFrag());
-        expected_status = INVALID,
-        description = "Attempt tile-pipe modify at off-map tile (99,99)"),
-    make_test_step(6160, make_test_modify_tile_pipe(TileCoord(5, -8), HexFrame.S_POS, ScrapTilePipeBehavFrag());
-        expected_status = INVALID,
-        description = "Attempt tile-pipe modify on non-pipe component at (5,-8)"),
-    make_test_step(6190, make_test_move_tile_pipe(TileCoord(-3, -1), HexFrame.S_POS, TileCoord(-3, -1), HexFrame.Q_POS);
-        expected_status = APPLIED,
-        description = "Move tile pipe on (-3,-1) from S_POS to Q_POS"),
-    make_test_step(6220, make_test_move_tile_pipe(TileCoord(-3, -1), HexFrame.S_POS, TileCoord(-3, -1), HexFrame.R_POS);
-        expected_status = INVALID,
-        description = "Attempt tile-pipe move from empty S_POS axis at (-3,-1)"),
-    make_test_step(6250, make_test_move_tile_pipe(TileCoord(-3, -1), HexFrame.Q_POS, TileCoord(5, -8), HexFrame.Q_POS);
-        expected_status = INVALID,
-        description = "Attempt tile-pipe move into non-pipe destination at (5,-8)"),
-    make_test_step(6280, make_test_move_tile_pipe(TileCoord(-3, -1), HexFrame.Q_POS, TileCoord(99, 99), HexFrame.Q_POS);
-        expected_status = INVALID,
-        description = "Attempt tile-pipe move to off-map tile (99,99)"),
 
     # ----- Phase J: Map override -------------------------------------
     # Replaces the entire GameMap. MUST be the last functional command

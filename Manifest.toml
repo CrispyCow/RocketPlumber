@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "35cb1559d7bc0daa9f6bd486a70abcd077052fea"
+project_hash = "1c3dfcd6117a6f327d7b35237da464a64d1eea61"
 
 [[deps.ATK_jll]]
 deps = ["Artifacts", "Glib_jll", "JLLWrappers", "Libdl"]
@@ -421,13 +421,13 @@ uuid = "32458d45-9755-4715-857d-57f99caca23f"
 version = "0.1.0"
 
 [[deps.HexFlowBasicPipes]]
-deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowPipeComponents", "HexFlowRendering", "HexFluids", "HexFrame", "RenderEngine", "StaticArrays"]
+deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowRendering", "HexFluids", "HexFrame", "RenderEngine", "StaticArrays"]
 path = "local_packages/components/HexFlowBasicPipes"
 uuid = "a5bfb9cd-4dce-4d41-851e-e34bf63bcb54"
 version = "0.1.0"
 
 [[deps.HexFlowCalculator]]
-deps = ["Dates", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowControl", "HexFlowPipeComponents", "HexFlowProcGen", "HexFlowTelemetry", "HexFluids", "HexFrame", "JLD2", "LinearAlgebra", "StaticArrays", "StructEquality", "TimerOutputs"]
+deps = ["Dates", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowControl", "HexFlowProcGen", "HexFlowTelemetry", "HexFluids", "HexFrame", "JLD2", "LinearAlgebra", "StaticArrays", "StructEquality", "TimerOutputs"]
 path = "local_packages/HexFlowCalculator"
 uuid = "d8e9f3a2-7b4c-4e1d-9f3a-2c5b8e7d9f1a"
 version = "0.1.0"
@@ -448,12 +448,6 @@ version = "0.1.0"
 deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowRendering", "HexFlowSwitchComponents", "HexFluids", "HexFrame", "RenderEngine", "StaticArrays"]
 path = "local_packages/components/HexFlowNozzleComponents"
 uuid = "50144448-a4f3-475c-b61f-abbe157c0594"
-version = "0.1.0"
-
-[[deps.HexFlowPipeComponents]]
-deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowRendering", "HexFluids", "HexFrame", "RenderEngine"]
-path = "local_packages/components/HexFlowPipeComponents"
-uuid = "994b1c28-7126-425a-9af0-3768b98dec97"
 version = "0.1.0"
 
 [[deps.HexFlowProcGen]]

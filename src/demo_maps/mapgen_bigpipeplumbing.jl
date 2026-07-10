@@ -4,10 +4,10 @@
 Advanced plumbing tutorial demonstrating high-flow pipe systems.
 
 This map teaches:
-- Using BigPipeBehav for high-conductance edge-based pipes (10.0 S)
-- Tile-based multi-pipe components for hex tile connections
+- Using BigPipeBehav for high-conductance pipe segments (10.0 S)
+- Mixing side-span and tile-crossing pipe routes
 - Multiple gas tanks feeding into a common pipe network
-- Complex pipe routing with both edge-based and tile-based pipes
+- Complex pipe routing across several pipe segment spans
 """
 function mapgen_bigpipeplumbing()
     blueprint = ShipBlueprint()
@@ -24,13 +24,13 @@ function mapgen_bigpipeplumbing()
     )
 
     # Place four separate tank instances
-    blueprint.components[TileCoord(2, -1)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
-    blueprint.components[TileCoord(3, -1)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
-    blueprint.components[TileCoord(3, -2)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
-    blueprint.components[TileCoord(4, -2)] = ComponentOnTile(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(2, -1)] = PlacedComponent(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(3, -1)] = PlacedComponent(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(3, -2)] = PlacedComponent(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(4, -2)] = PlacedComponent(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
 
     # Place a tile-based big pipe component on Q axis
-    blueprint.components[TileCoord(0, -1)] = single_tile_pipe_on_tile(HexFrame.Q_POS, BigTilePipeBehavFrag(10.0))
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(0, -1), HexFrame.Q_POS), VertexCoord(TileCoord(0, -1), HexFrame.Q_NEG))] = BigPipeBehav(10.0)
 
     # Create a nozzle for thrust output
     nozzle = BasicNozzleCompBehav(
@@ -38,25 +38,25 @@ function mapgen_bigpipeplumbing()
         throat_area = Float64(0.3f0),
         sprite = Symbol("AllNozzles_SmallNozzle")
     )
-    blueprint.components[TileCoord(2, -3)] = ComponentOnTile(nozzle, HexFrame.R_POS, :_blueprint)
+    blueprint.components[TileCoord(2, -3)] = PlacedComponent(nozzle, HexFrame.R_POS, :_blueprint)
 
-    # Add edge-based big pipes for high flow connections
+    # Add big pipes for high flow connections
     blueprint.pipe_behaviors[
-        EdgeCoord(
+        PipeCoord(
             VertexCoord(TileCoord(0, 1), HexFrame.Q_NEG),
             VertexCoord(TileCoord(-1, 1), HexFrame.Q_POS)
         ),
     ] = BigPipeBehav(10.0)
 
     blueprint.pipe_behaviors[
-        EdgeCoord(
+        PipeCoord(
             VertexCoord(TileCoord(2, 0), HexFrame.Q_NEG),
             VertexCoord(TileCoord(1, 1), HexFrame.Q_POS)
         ),
     ] = BigPipeBehav(10.0)
 
     blueprint.pipe_behaviors[
-        EdgeCoord(
+        PipeCoord(
             VertexCoord(TileCoord(2, -2), HexFrame.Q_NEG),
             VertexCoord(TileCoord(1, -1), HexFrame.Q_POS)
         ),

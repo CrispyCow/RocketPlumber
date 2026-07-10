@@ -325,7 +325,7 @@ end
     comp = make_turbopump()
     @test map_mirroring(comp, true)
 
-    mirrored = ComponentOnTile(comp, TEST_ROTATION, true, :primary)
+    mirrored = PlacedComponent(comp, TEST_ROTATION, true, :primary)
     abs_elements = produce_abs_elements(mirrored, TEST_TILE)
     @test abs_elements[3].connections.v1 == map_element(HexFrame.NODE_R_POS, TEST_TILE, TEST_ROTATION)
 

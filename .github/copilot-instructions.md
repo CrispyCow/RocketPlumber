@@ -82,7 +82,7 @@ Do not excessively break function signatures across multiple lines. Follow these
 
 - `*BehavFrag` — reusable behavioural fragments (do not subtype `ComponentBehavior`/`PipeBehavior`)
 - `*CompBehav` — concrete tile-placed component behaviours (subtype `ComponentBehavior`)
-- `*PipeBehav` — concrete edge-placed pipe behaviours (subtype `PipeBehavior`)
+- `*PipeBehav` — concrete pipe-segment behaviours (subtype `PipeBehavior`)
 - `*DockStat` — docking status subtypes
 - `*State` — mutable state containers (e.g., `TankState`, `SwitchState`, `LearningSystemState`)
 
@@ -102,7 +102,7 @@ Organised in dependency layers (each layer depends only on those above it):
 
 **Core Logic:**
 - `HexComponentsAPI` — abstract interfaces for `ComponentBehavior` and `PipeBehavior`, `ComponentOnTile` wrapper, `TunableProps`, `ActionInfo`
-- `FlowMap` — data model (`GameMap`, `ShipMap`), ship management, docking system, space map, encounter/manoeuvre types, placement validation, bounds/geometry
+- `FlowMap` — data model (`GameMap`, `ShipBlueprint`), ship management, docking system, space map, encounter/manoeuvre types, placement validation, bounds/geometry
 - `FlowEngine` — MNA (Modified Nodal Analysis) circuit solver, `DerivedMapState`, `MNA_State`, graph pruning, fluid type propagation, region temperature computation. Depends on `FlowMap` (does not re-export it)
 
 **Application State:**
@@ -129,8 +129,7 @@ Organised in dependency layers (each layer depends only on those above it):
 - `HexFlowNozzleComponents` — nozzles, switched nozzles, decomp chambers with thrust calculation and particle exhaust
 - `HexFlowPumpComponents` — turbopumps (gas-driven) and electric pumps (battery-powered) with energy management
 - `HexFlowSwitchComponents` — bool switches, stepped adjustable valves, and on/off valves in two sizes (`LargeValve`, `TinyValve`)
-- `HexFlowPipeComponents` — tile-based multi-pipe component fragments and container (`MultiPipeTileCompBehav`, `ScrapTilePipeBehavFrag`, `BigTilePipeBehavFrag`)
-- `HexFlowBasicPipes` — edge-based pipe behaviours (`ScrapPipeBehav`, `BigPipeBehav`)
+- `HexFlowBasicPipes` — pipe-segment behaviours (`ScrapPipeBehav`, `BigPipeBehav`)
 
 ### Tools
 - `tools/TexturePacker/` — sprite atlas generator: trims transparency, packs PNGs into atlas + JSON metadata
@@ -164,7 +163,7 @@ Organised in dependency layers (each layer depends only on those above it):
 
 ### Game Map (Multi-Ship)
 
-- **`GameMap`** (in `FlowMap`): top-level container with global `components::Dict{TileCoord, ComponentOnTile}`, `pipe_behaviors::Dict{EdgeCoord, PipeOnEdge}`, `surface_shiptags::Dict{TileCoord, Symbol}`, `ships::Dict{Symbol, ShipState}` (always containing `:primary`), plus `space_map::AbstractSpaceMap` and `learning_system::AbstractLearningSystem`
+- **`GameMap`** (in `FlowMap`): top-level container with global `components::Dict{TileCoord, ComponentOnTile}`, `pipe_behaviors::Dict{PipeCoord, PipeOnEdge}`, `surface_shiptags::Dict{TileCoord, Symbol}`, `ships::Dict{Symbol, ShipState}` (always containing `:primary`), plus `space_map::AbstractSpaceMap` and `learning_system::AbstractLearningSystem`
 - **`ShipState`**: per-ship metadata and docking animation state. Component, pipe, and surface ownership now lives in the shared `GameMap` stores rather than inside per-ship submaps
 
 Ship management: `add_ship!`, `remove_ship!`, `get_all_ship_names`, `has_ship`, `get_ship_state`, `offset_ship!`.
@@ -180,7 +179,7 @@ Six coordinate types for flat-top hexagonal grids:
 - **`TileCoord`** — integer axial, identifies a hex tile
 - **`AxialCoord`** — continuous axial for sub-tile precision
 - **`VertexCoord`** — hex vertex, canonicalised via `to_proper`
-- **`EdgeCoord`** — hex edge between two vertices
+- **`PipeCoord`** — canonical pipe segment between two vertices
 - **`NodeCoord`** — circuit node (6 axis directions + `NODE_INTERNAL` + `GROUND`)
 
 `HexAxis` enum: `Q_POS=0, R_NEG=1, S_POS=2, Q_NEG=3, R_POS=4, S_NEG=5` -- forms Z/6Z rotation group. Each increment = 60 degrees.
@@ -292,7 +291,7 @@ Ghost previews use `render_height_offset = Int32(100000)`. See `src/render_heigh
 
 ## Component System
 
-Components use a **fragment composition** pattern. Complex behaviours are built from small reusable `*BehavFrag` structs. Concrete types (`*CompBehav` for tiles, `*PipeBehav` for edges) compose fragments and delegate interface methods. See `local_packages/components/component_module_guide.md` for the full authoring guide.
+Components use a **fragment composition** pattern. Complex behaviours are built from small reusable `*BehavFrag` structs. Concrete types (`*CompBehav` for tiles, `*PipeBehav` for pipe segments) compose fragments and delegate interface methods. See `local_packages/components/component_module_guide.md` for the full authoring guide.
 
 ### ComponentBehavior Interface (tile-placed)
 
@@ -304,11 +303,11 @@ Components use a **fragment composition** pattern. Complex behaviours are built 
 
 **Optional methods** (with sensible defaults): `render_map_elem!`, `produce_rel_fluid_declarations`, `update_flowbehav!`, `on_click!`, `get_thrust`, `get_component_temperature`, `collect_effect_particles!`, `map_rotation`, `can_be_moved`, `placement_valid`, `get_component_dry_mass`, `get_component_wet_mass`, `get_component_mass`, `get_actions`, `do_action!`.
 
-### PipeBehavior Interface (edge-placed)
+### PipeBehavior Interface (pipe-segment placed)
 
 **Mandatory methods:** `get_conductance`, `get_pipe_tunables`, `set_pipe_tunables`, `render_pipe_base!`
 
-**Optional methods:** `render_pipe_map!`, `produce_rel_fluid_declarations`, `can_pipe_be_moved`, `produce_abs_elements`, `get_tile_pipe_equivalent`.
+**Optional methods:** `render_pipe_map!`, `produce_rel_fluid_declarations`, `can_pipe_be_moved`, `produce_abs_elements`.
 
 ### Existing Components
 
@@ -317,7 +316,7 @@ Concrete instances defined in `src/components.jl` (`component_list` has 15 entri
 - **Nozzles**: `TinyNozzle`, `SmallNozzle`, `MediumNozzle`, `SwitchedTinyNozzle`, `BasicDecompChamber`
 - **Pumps**: `TurboPump`, `ElecTurboPump`, `ElecTransferPump`
 - **Valves**: `LargeAdjValve`, `TinyAdjValve` (stepped), `LargeOnOffValve`, `TinyOnOffValve` (bool) — all `StandardValveCompBehav{S,V}`
-- **Pipes (edge)**: `ScrapPipe` (2.0 S), `BigPipe` (10.0 S)
+- **Pipes**: `ScrapPipe` (2.0 S), `BigPipe` (10.0 S)
 
 ---
 

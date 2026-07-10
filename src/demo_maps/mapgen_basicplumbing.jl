@@ -29,8 +29,8 @@ function mapgen_basicplumbing()
     )
 
     # Place components on blueprint
-    blueprint.components[TileCoord(2, -1)] = ComponentOnTile(gas_tank, HexFrame.R_NEG, :_blueprint)
-    blueprint.components[TileCoord(-4, 2)] = ComponentOnTile(nozzle, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(2, -1)] = PlacedComponent(gas_tank, HexFrame.R_NEG, :_blueprint)
+    blueprint.components[TileCoord(-4, 2)] = PlacedComponent(nozzle, HexFrame.Q_POS, :_blueprint)
 
     # Define ship surface
     union!(blueprint.ship_tiles, Set([

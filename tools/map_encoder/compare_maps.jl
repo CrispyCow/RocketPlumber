@@ -79,7 +79,7 @@ function compare_pipe_behaviors(pipe1::PipeBehavior, pipe2::PipeBehavior; tolera
         end
         
         for (i, (t1, t2)) in enumerate(zip(tunables1, tunables2))
-            if abs(t1.current_val - t2.current_val) > tolerance
+            if !_tunable_values_match(t1.current_val, t2.current_val; tolerance=tolerance)
                 return false, "Tunable $i differs: $(t1.current_val) vs $(t2.current_val)"
             end
         end
@@ -90,6 +90,13 @@ function compare_pipe_behaviors(pipe1::PipeBehavior, pipe2::PipeBehavior; tolera
     end
 end
 
+    "Return whether two tunable values match, using tolerance only for numeric values."
+    function _tunable_values_match(value1, value2; tolerance=1e-6)
+        if value1 isa Real && value2 isa Real
+            return isapprox(Float64(value1), Float64(value2); atol=tolerance, rtol=tolerance)
+        end
+        return value1 == value2
+    end
 """
     elements_approximately_equal(elem1::AbsoluteElement, elem2::AbsoluteElement; tolerance=1e-9)
 
@@ -218,20 +225,17 @@ function check_component_identity(map::GameMap)
     # Build map from component object_id to list of (ship, tile) using it
     component_locations = Dict{UInt, Vector{Tuple{Symbol, TileCoord}}}()
 
-    for (ship_name, ship) in map.ships
-        for (coord, cot) in ship.components
-            # Skip types that are safe to share
-            comp_type = typeof(cot.component)
-            if is_safe_to_share(comp_type)
-                continue
-            end
-
-            obj_id = objectid(cot.component)
-            if !haskey(component_locations, obj_id)
-                component_locations[obj_id] = Tuple{Symbol, TileCoord}[]
-            end
-            push!(component_locations[obj_id], (ship_name, coord))
+    for (coord, placed_component) in map.components
+        comp_type = typeof(placed_component.component)
+        if is_safe_to_share(comp_type)
+            continue
         end
+
+        obj_id = objectid(placed_component.component)
+        if !haskey(component_locations, obj_id)
+            component_locations[obj_id] = Tuple{Symbol, TileCoord}[]
+        end
+        push!(component_locations[obj_id], (placed_component.ship, coord))
     end
 
     # Find any components used at multiple locations
@@ -240,7 +244,7 @@ function check_component_identity(map::GameMap)
     if !isempty(shared_components)
         for (obj_id, locs) in shared_components
             (s0, c0) = locs[1]
-            comp = map.ships[s0].components[c0].component
+            comp = map.components[c0].component
             comp_type = typeof(comp)
             coord_str = join([string("(:", s, ", TileCoord(", c.q, ", ", c.r, "))") for (s,c) in locs], ", ")
             push!(messages, "  ⚠️  $(comp_type) shared between components: $coord_str")
@@ -248,31 +252,28 @@ function check_component_identity(map::GameMap)
     end
 
     # Check for shared pipe behaviors (only for types that aren't safe to share)
-    pipe_locations = Dict{UInt, Vector{Tuple{Symbol, EdgeCoord}}}()
-    for (ship_name, ship) in map.ships
-        for (edge, pipe) in ship.pipe_behaviors
-            # Skip types that are safe to share
-            pipe_type = typeof(pipe)
-            if is_safe_to_share(pipe_type)
-                continue
-            end
-
-            obj_id = objectid(pipe)
-            if !haskey(pipe_locations, obj_id)
-                pipe_locations[obj_id] = Tuple{Symbol, EdgeCoord}[]
-            end
-            push!(pipe_locations[obj_id], (ship_name, edge))
+    pipe_locations = Dict{UInt, Vector{Tuple{Symbol, PipeCoord}}}()
+    for (coord, placed_pipe) in map.pipe_behaviors
+        pipe_type = typeof(placed_pipe.pipe)
+        if is_safe_to_share(pipe_type)
+            continue
         end
+
+        obj_id = objectid(placed_pipe.pipe)
+        if !haskey(pipe_locations, obj_id)
+            pipe_locations[obj_id] = Tuple{Symbol, PipeCoord}[]
+        end
+        push!(pipe_locations[obj_id], (placed_pipe.ship, coord))
     end
 
     shared_pipes = filter(p -> length(p.second) > 1, pipe_locations)
 
     if !isempty(shared_pipes)
         for (obj_id, locs) in shared_pipes
-            (s0, e0) = locs[1]
-            pipe = map.ships[s0].pipe_behaviors[e0]
+            (_, p0) = locs[1]
+            pipe = map.pipe_behaviors[p0].pipe
             pipe_type = typeof(pipe)
-            push!(messages, "  ⚠️  $(pipe_type) shared between $(length(locs)) edges")
+            push!(messages, "  ⚠️  $(pipe_type) shared between $(length(locs)) pipes")
         end
     end
 
@@ -296,7 +297,7 @@ function compare_component_tunables(comp1::ComponentBehavior, comp2::ComponentBe
         end
         
         for (i, (t1, t2)) in enumerate(zip(tunables1, tunables2))
-            if abs(t1.current_val - t2.current_val) > tolerance
+                if !_tunable_values_match(t1.current_val, t2.current_val; tolerance=tolerance)
                 return false, "Tunable $i differs: $(t1.current_val) vs $(t2.current_val)"
             end
         end
@@ -324,7 +325,7 @@ function compare_maps(original_map::GameMap, generated_map::GameMap; tolerance=1
 
     # Flatten components and pipes across ships, keyed by (ship, coord)
     function flatten_components(map::GameMap)
-        comps = Dict{Tuple{Symbol, TileCoord}, ComponentOnTile}()
+        comps = Dict{Tuple{Symbol, TileCoord}, PlacedComponent}()
         for (coord, comp) in map.components
             comps[(comp.ship, coord)] = comp
         end
@@ -332,9 +333,9 @@ function compare_maps(original_map::GameMap, generated_map::GameMap; tolerance=1
     end
 
     function flatten_pipes(map::GameMap)
-        pipes = Dict{Tuple{Symbol, EdgeCoord}, PipeOnEdge}()
-        for (edge, pipe) in map.pipe_behaviors
-            pipes[(pipe.ship, edge)] = pipe
+        pipes = Dict{Tuple{Symbol, PipeCoord}, PipeBehavior}()
+        for (coord, placed_pipe) in map.pipe_behaviors
+            pipes[(placed_pipe.ship, coord)] = placed_pipe.pipe
         end
         return pipes
     end
@@ -408,22 +409,22 @@ function compare_maps(original_map::GameMap, generated_map::GameMap; tolerance=1
     missing_pipes = []
     extra_pipes = []
 
-    for ((s, edge_coord), orig_pipe_behav) in orig_pipes
-        key = (s, edge_coord)
+    for ((s, pipe_coord), orig_pipe_behav) in orig_pipes
+        key = (s, pipe_coord)
         if haskey(gen_pipes, key)
             gen_pipe_behav = gen_pipes[key]
             pipe_match, pipe_msg = compare_pipe_behaviors(orig_pipe_behav, gen_pipe_behav; tolerance=tolerance)
             if !pipe_match
-                push!(pipe_mismatches, (s, edge_coord, pipe_msg, typeof(orig_pipe_behav), typeof(gen_pipe_behav)))
+                push!(pipe_mismatches, (s, pipe_coord, pipe_msg, typeof(orig_pipe_behav), typeof(gen_pipe_behav)))
             end
         else
-            push!(missing_pipes, (s, edge_coord, orig_pipe_behav))
+            push!(missing_pipes, (s, pipe_coord, orig_pipe_behav))
         end
     end
 
-    for ((s, edge_coord), gen_pipe_behav) in gen_pipes
-        if !haskey(orig_pipes, (s, edge_coord))
-            push!(extra_pipes, (s, edge_coord, gen_pipe_behav))
+    for ((s, pipe_coord), gen_pipe_behav) in gen_pipes
+        if !haskey(orig_pipes, (s, pipe_coord))
+            push!(extra_pipes, (s, pipe_coord, gen_pipe_behav))
         end
     end
 
@@ -562,8 +563,8 @@ function print_comparison_results(results::Dict)
     
     if !isempty(results["pipe_mismatches"])
         println("\n❌ PIPE BEHAVIOR MISMATCHES:")
-        for (ship, edge_coord, msg, orig_type, gen_type) in results["pipe_mismatches"]
-            println("  :$ship $edge_coord: $msg")
+        for (ship, pipe_coord, msg, orig_type, gen_type) in results["pipe_mismatches"]
+            println("  :$ship $pipe_coord: $msg")
             println("    Original: $orig_type")
             println("    Generated: $gen_type")
         end
@@ -571,15 +572,15 @@ function print_comparison_results(results::Dict)
     
     if !isempty(results["missing_pipes"])
         println("\n❌ MISSING PIPES IN GENERATED MAP:")
-        for (ship, edge_coord, pipe_behav) in results["missing_pipes"]
-            println("  :$ship $edge_coord: $(typeof(pipe_behav))")
+        for (ship, pipe_coord, pipe_behav) in results["missing_pipes"]
+            println("  :$ship $pipe_coord: $(typeof(pipe_behav))")
         end
     end
     
     if !isempty(results["extra_pipes"])
         println("\n⚠️  EXTRA PIPES IN GENERATED MAP:")
-        for (ship, edge_coord, pipe_behav) in results["extra_pipes"]
-            println("  :$ship $edge_coord: $(typeof(pipe_behav))")
+        for (ship, pipe_coord, pipe_behav) in results["extra_pipes"]
+            println("  :$ship $pipe_coord: $(typeof(pipe_behav))")
         end
     end
     

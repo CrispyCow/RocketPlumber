@@ -74,8 +74,9 @@ const NODE_VOLTAGE_COLORSCHEME = ColorSchemes.inferno  # Color scheme for node v
 
 #= Render height layers (see src/render_height.md) =#
 const RENDER_HEIGHT_BACKGROUND::Int32 = -1000
-const RENDER_HEIGHT_PIPE_BASE::Int32 = -10             # base pipe sprite (beneath fluid mask)
-const RENDER_HEIGHT_PIPE::Int32 = 0                    # pipes drawn above background but beneath nodes/components
+const RENDER_HEIGHT_PIPE_RANK_MULTIPLIER::Int32 = 10  # spacing between pipe stacking ranks
+const RENDER_HEIGHT_PIPE_BASE::Int32 = -10             # legacy flat pipe layer beneath RENDER_HEIGHT_PIPE
+const RENDER_HEIGHT_PIPE::Int32 = 0                    # legacy flat pipe layer; rank-based pipes use RENDER_HEIGHT_PIPE_RANK_MULTIPLIER
 const RENDER_HEIGHT_NODE::Int32 = 100000               # nodes drawn above pipes and components, below overlays
 const RENDER_HEIGHT_COMPONENT_BEHIND::Int32 = 1000    # for parts sitting behind main sprites (fluidmasks, energy bars)
 const RENDER_HEIGHT_COMPONENT_STATIC::Int32 = 2000    # static elements of component sprite
@@ -393,23 +394,26 @@ function render_basic_tile(
     return render_basic_sprite(glmap, sprite, tile_orientation_matrix(rotation, mirrored), position; pos_offset = pos_offset, kwargs...)
 end
 
-"Returns a RenderCommand for a basic pipe sprite at the given edge position and rotation."
+"Returns a RenderCommand for a basic pipe sprite at the given pipe segment position."
 function render_basic_pipe(
-        glmap::GLObjectMap, sprite::Symbol, rotation::HexAxis, position::EdgeCoord;
+        glmap::GLObjectMap, sprite::Symbol, position::PipeCoord;
         pos_offset = nothing,
         kwargs...
     )::RenderCommand
-    # Transpose rotation matrix to convert from column-vector to row-vector convention
     rotation_matrix = get_rotmat(position)'
     position_vec = glvec(position)
-    # Apply position offset if provided
-    if !isnothing(pos_offset)
-        offset_vec = glvec(pos_offset)
-        position_vec = position_vec .+ offset_vec
-    end
-
-    return render_basic_sprite(glmap, sprite, rotation_matrix, position_vec; kwargs...)
+    return render_basic_sprite(glmap, sprite, rotation_matrix, position_vec; pos_offset = pos_offset, kwargs...)
 end
+
+"Returns a RenderCommand for a basic pipe sprite at the given pipe segment position."
+function render_basic_pipe(
+        glmap::GLObjectMap, sprite::Symbol, rotation::HexAxis, position::PipeCoord;
+        pos_offset = nothing,
+        kwargs...
+    )::RenderCommand
+    return render_basic_pipe(glmap, sprite, position; pos_offset = pos_offset, kwargs...)
+end
+
 
 
 
@@ -495,65 +499,6 @@ function render_gas_tile(
         kwargs...
     )::RenderCommand
     return render_gas_sprite(glmap, sprite, tile_orientation_matrix(rotation, mirrored), position; pos_offset = pos_offset, gameticks = gameticks, kwargs...)
-end
-
-"Returns RenderCommands for a pipe using sprite-based rendering with base pipe and fluid effects."
-function render_pipe(glmap::GLObjectMap, pipe::EdgeCoord, colour::ColourType; transparency::AbstractFloat = 1.0f0, gameticks::Integer = 0)
-    # Transpose rotation matrix to convert from column-vector to row-vector convention
-    rotation_matrix = get_rotmat(pipe)'
-    position = glvec(pipe)
-
-    base_cmd = render_basic_sprite(
-        glmap, :BigPipes_Edge, rotation_matrix, position;
-        colour = SVector{4, Float32}(1.0, 1.0, 1.0, 1.0), transparency = transparency, draw_height = RENDER_HEIGHT_PIPE_BASE
-    )
-
-    fluid_cmd = render_basic_sprite(
-        glmap, :BigPipes_Edge_fluidmask, rotation_matrix, position;
-        colour = colour, transparency = transparency, draw_height = RENDER_HEIGHT_PIPE
-    )
-
-    return [base_cmd, fluid_cmd]
-end
-
-"Returns RenderCommands for a pipe by deriving its fluid type and colour from `derivedmapstate`."
-function render_pipe(glmap::GLObjectMap, pipe::EdgeCoord, derivedmapstate::DerivedMapState; transparency::AbstractFloat = 1.0f0, gameticks::Integer = 0)
-    v1_node = to_nodecoord(pipe.v1)
-    v2_node = to_nodecoord(pipe.v2)
-    fluid = get(derivedmapstate.nodeactualfluids, v1_node, get(derivedmapstate.nodeactualfluids, v2_node, nothing))
-    # Use temperature from the node where the fluid was found, or ambient as fallback
-    fluid_node = haskey(derivedmapstate.nodeactualfluids, v1_node) ? v1_node : v2_node
-    temperature = get(derivedmapstate.node_temperatures, fluid_node, HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
-    colour = get_fluid_colour(fluid, temperature; default = DEFAULT_PIPE_COLOUR)
-
-    rotation_matrix = get_rotmat(pipe)'
-    position = glvec(pipe)
-
-    base_cmd = render_basic_sprite(
-        glmap, :BigPipes_Edge, rotation_matrix, position;
-        colour = SVector{4, Float32}(1.0, 1.0, 1.0, 1.0), transparency = transparency, draw_height = RENDER_HEIGHT_PIPE_BASE
-    )
-
-    # Render fluid effect based on fluid type
-    fluid_cmd = if !isnothing(fluid) && is_liquid(fluid)
-        render_liquid_sprite(
-            glmap, :BigPipes_Edge_fluidmask, rotation_matrix, position;
-            colour = colour, transparency = transparency, draw_height = RENDER_HEIGHT_PIPE, gameticks = gameticks
-        )
-    elseif !isnothing(fluid) && is_gas(fluid)
-        render_gas_sprite(
-            glmap, :BigPipes_Edge_fluidmask, rotation_matrix, position;
-            colour = colour, transparency = transparency, draw_height = RENDER_HEIGHT_PIPE, gameticks = gameticks
-        )
-    else
-        # No fluid or unknown - use basic sprite
-        render_basic_sprite(
-            glmap, :BigPipes_Edge_fluidmask, rotation_matrix, position;
-            colour = colour, transparency = transparency, draw_height = RENDER_HEIGHT_PIPE
-        )
-    end
-
-    return [base_cmd, fluid_cmd]
 end
 
 "Render a dotted beam between two coordinates using repeated sprites with animated noise."
@@ -701,11 +646,11 @@ function pipe_queued_render!(queue::Vector{<:RenderCommand}, map::GLObjectMap,
         gamemap::GameMap, derivedmapstate::DerivedMapState, gamestate::GameState)
     isempty(gamemap.ships) && return nothing
 
-    for (edge, pipe) in gamemap.pipe_behaviors
+    for (coord, pipe) in gamemap.pipe_behaviors
         ship_state = get_ship_state(gamemap, pipe.ship)
         render_pipe_map!(
             queue, pipe;
-            glmap = map, rotation = HexFrame.Q_POS, position = edge, transparency = 1.0,
+            glmap = map, rotation = HexFrame.Q_POS, position = coord, transparency = 1.0,
             derivedmapstate, gameticks = gamestate.ticks,
             pos_offset = get_render_offset(ship_state),
             render_height_offset = _ship_render_height_offset(ship_state),

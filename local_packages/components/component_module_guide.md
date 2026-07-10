@@ -260,7 +260,7 @@ Notes:
 
 ### Mandatory Methods
 
-All edge-based pipes must implement:
+All pipe-segment behaviours must implement:
 
 ```julia
 # Return pipe conductance
@@ -278,6 +278,9 @@ render_pipe_base!(queue::AbstractVector, behav::MyPipe;
                   glmap, rotation, position, pos_offset = nothing,
                   scale = 1.0, transparency = 1.0,
                   render_height_offset::Integer = 0, kwargs...)::Nothing
+
+# Return half the rendered pipe width in map coordinate units
+get_pipe_click_radius(behav::MyPipe)::Float64
 ```
 
 ### Optional Methods
@@ -295,10 +298,7 @@ get_pipe_fluidtags(behav)::FluidTags
 can_pipe_be_moved(behav; kwargs...)::(Bool, String)
 
 # Custom element generation (default: creates resistor from conductance)
-produce_abs_elements(behav, edge::EdgeCoord)
-
-# Tile-based equivalent (default: nothing)
-get_tile_pipe_equivalent(behav)::Union{ComponentBehavior, Nothing}
+produce_abs_elements(behav, pipe::PipeCoord)
 ```
 
 ## Common Patterns
@@ -367,8 +367,7 @@ end
 HexFlowRendering.RENDER_HEIGHT_BACKGROUND      # -1000
 
 # Pipe layers
-HexFlowRendering.RENDER_HEIGHT_PIPE_BASE       # -10 (pipe base sprite)
-HexFlowRendering.RENDER_HEIGHT_PIPE            # 0 (fluid mask)
+HexFlowRendering.RENDER_HEIGHT_PIPE_RANK_MULTIPLIER # 10 (rank-band spacing)
 
 # Component layers
 HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND   # 1000 (fluid masks, energy bars)

@@ -96,7 +96,7 @@ Do not excessively break function signatures across multiple lines. I have a wid
 
 - **Short signatures** (positional args + a few kwargs that fit comfortably on one line): keep everything on a single line
   ```julia
-  function render_pipe(glmap::GLObjectMap, pipe::EdgeCoord, colour::ColourType; transparency::AbstractFloat = 1.0f0, gameticks::Integer = 0)
+  function render_pipe(glmap::GLObjectMap, pipe::PipeCoord, colour::ColourType; transparency::AbstractFloat = 1.0f0, gameticks::Integer = 0)
   ```
 - **Medium signatures**: if a line break is needed, prefer breaking at the `;` between positional and keyword arguments. Positional args go on the first line; kwargs start on the next, each on its own indented line
   ```julia

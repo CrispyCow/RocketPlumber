@@ -28,20 +28,20 @@ end
 
 #= ---------- JLD2 Upgrade Converters ----------- =#
 
-function rconvert(::Type{HexComponentsAPI.ComponentOnTile}, nt::NamedTuple)
+function rconvert(::Type{HexComponentsAPI.PlacedComponent}, nt::NamedTuple)
     component = get(nt, :component, nothing)
-    isnothing(component) && error("Stored ComponentOnTile is missing :component")
+    isnothing(component) && error("Stored PlacedComponent is missing :component")
     rotation = get(nt, :rotation, HexFrame.Q_POS)
     mirrored = get(nt, :mirrored, false)
     ship = get(nt, :ship, :primary)
-    return HexComponentsAPI.ComponentOnTile(component, rotation, mirrored, ship)
+    return HexComponentsAPI.PlacedComponent(component, rotation, mirrored, ship)
 end
 
-function rconvert(::Type{HexComponentsAPI.PipeOnEdge}, nt::NamedTuple)
+function rconvert(::Type{HexComponentsAPI.PlacedPipe}, nt::NamedTuple)
     pipe = get(nt, :pipe, nothing)
-    isnothing(pipe) && error("Stored PipeOnEdge is missing :pipe")
+    isnothing(pipe) && error("Stored PlacedPipe is missing :pipe")
     ship = get(nt, :ship, :primary)
-    return HexComponentsAPI.PipeOnEdge(pipe, ship)
+    return HexComponentsAPI.PlacedPipe(pipe, ship)
 end
 
 function rconvert(::Type{FlowMap.ShipState}, nt::NamedTuple)
@@ -208,8 +208,10 @@ function _build_map_typemap()::Dict{String, Any}
     typemap = Dict{String, Any}()
 
     # Add `JLD2.Upgrade(...)` entries here when a persisted type changes package path or layout.
-    # typemap["HexComponentsAPI.ComponentOnTile"] = JLD2.Upgrade(HexComponentsAPI.ComponentOnTile)
-    # typemap["HexComponentsAPI.PipeOnEdge"] = JLD2.Upgrade(HexComponentsAPI.PipeOnEdge)
+    typemap["HexComponentsAPI.ComponentOnTile"] = JLD2.Upgrade(HexComponentsAPI.PlacedComponent)
+    typemap["HexComponentsAPI.PipeOnEdge"] = JLD2.Upgrade(HexComponentsAPI.PlacedPipe)
+    # typemap["HexComponentsAPI.PlacedComponent"] = JLD2.Upgrade(HexComponentsAPI.PlacedComponent)
+    # typemap["HexComponentsAPI.PlacedPipe"] = JLD2.Upgrade(HexComponentsAPI.PlacedPipe)
     # typemap["FlowMap.ShipState"] = JLD2.Upgrade(FlowMap.ShipState)
     # typemap["FlowMap.GameMap"] = JLD2.Upgrade(FlowMap.GameMap)
     # typemap["FlowMap.LearningProgress"] = JLD2.Upgrade(FlowMap.LearningProgress)
@@ -231,7 +233,9 @@ function loadmap(mappath::Union{Nothing, String})::GameMap
     isnothing(mappath) && (@info "No map path provided; starting empty."; return GameMap())
     try
         typemap = _build_map_typemap()
-        result = JLD2.load(mappath, "stored_gamemap"; typemap = typemap)
+        result = isempty(typemap) ?
+            JLD2.load(mappath, "stored_gamemap") :
+            JLD2.load(mappath, "stored_gamemap"; typemap = typemap)
         result isa GameMap && return result
         @warn "Loaded object was not a GameMap; returning empty." loaded_type = typeof(result)
     catch e

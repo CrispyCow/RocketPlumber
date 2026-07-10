@@ -23,6 +23,10 @@ HexComponentsAPI.get_conductance(::MockPipeBehav) = 1.0
 HexComponentsAPI.get_pipe_tunables(::MockPipeBehav) = ()
 HexComponentsAPI.set_pipe_tunables(::MockPipeBehav, ::NTuple{0, Real}) = MockPipeBehav()
 HexComponentsAPI.render_pipe_base!(queue, ::MockPipeBehav; kwargs...) = nothing
+HexComponentsAPI.get_pipe_click_radius(::MockPipeBehav) = 0.1
+
+"Mock pipe intentionally missing mandatory click-radius implementation."
+struct MissingClickRadiusPipe <: PipeBehavior end
 
 #= ---------- Test Helpers ----------- =#
 
@@ -58,8 +62,11 @@ function origin_neighbourhood()
     return tiles
 end
 
+"Return the indexed side-span pipe bordering a tile."
+side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
+
 # ===============================================================
-# Tests — ShipMap Direct Operations
+# Tests — direct map operations
 # ===============================================================
 
 @testset "FlowMap" begin
@@ -67,7 +74,7 @@ end
     @testset "GameMap — Component Operations" begin
         gm = GameMap()
         coord = TileCoord(0, 0)
-        comp = ComponentOnTile(MockCompBehav(), Q_POS, :primary)
+        comp = PlacedComponent(MockCompBehav(), Q_POS, :primary)
 
         # Initially empty
         @test count_components(gm; ship_name = :primary) == 0
@@ -81,15 +88,15 @@ end
         @test get_component(gm, coord) === comp
 
         # Overwrite
-        comp2 = ComponentOnTile(MockCompBehav(), R_NEG, :primary)
+        comp2 = PlacedComponent(MockCompBehav(), R_NEG, :primary)
         set_component!(gm, coord, comp2)
         @test count_components(gm; ship_name = :primary) == 1
         @test get_component(gm, coord) === comp2
 
         # Set multiple
         batch = Dict(
-            TileCoord(1, 0) => ComponentOnTile(MockCompBehav(), Q_POS, :primary),
-            TileCoord(0, 1) => ComponentOnTile(MockCompBehav(), Q_POS, :primary),
+            TileCoord(1, 0) => PlacedComponent(MockCompBehav(), Q_POS, :primary),
+            TileCoord(0, 1) => PlacedComponent(MockCompBehav(), Q_POS, :primary),
         )
         set_component!(gm, batch)
         @test count_components(gm; ship_name = :primary) == 3
@@ -106,31 +113,31 @@ end
 
     @testset "GameMap — Pipe Operations" begin
         gm = GameMap()
-        edge = get_edges(TileCoord(0, 0))[1]
-        pipe = MockPipeBehav()
+        pipe_coord_1 = side_pipe(TileCoord(0, 0), 1)
+        pipe_behaviour = MockPipeBehav()
 
         # Initially empty
         @test count_pipes(gm; ship_name = :primary) == 0
-        @test !has_pipe(gm, edge)
-        @test isnothing(get_pipe(gm, edge))
+        @test !has_pipe(gm, pipe_coord_1)
+        @test isnothing(get_pipe(gm, pipe_coord_1))
 
         # Set a pipe
-        set_pipe!(gm, edge, PipeOnEdge(pipe, :primary))
-        @test has_pipe(gm, edge)
+        set_pipe!(gm, pipe_coord_1, PlacedPipe(pipe_behaviour, :primary))
+        @test has_pipe(gm, pipe_coord_1)
         @test count_pipes(gm; ship_name = :primary) == 1
-        @test get_pipe(gm, edge) isa PipeOnEdge
-        @test get_pipe(gm, edge).pipe isa MockPipeBehav
+        @test get_pipe(gm, pipe_coord_1) isa PlacedPipe
+        @test get_pipe(gm, pipe_coord_1).pipe isa MockPipeBehav
 
         # Delete
-        delete_pipe!(gm, edge)
-        @test !has_pipe(gm, edge)
+        delete_pipe!(gm, pipe_coord_1)
+        @test !has_pipe(gm, pipe_coord_1)
         @test count_pipes(gm; ship_name = :primary) == 0
 
         # Set multiple
-        edge2 = get_edges(TileCoord(0, 0))[2]
-        batch = Dict{EdgeCoord, PipeBehavior}(edge => MockPipeBehav(), edge2 => MockPipeBehav())
-        set_pipe!(gm, edge, PipeOnEdge(batch[edge], :primary))
-        set_pipe!(gm, edge2, PipeOnEdge(batch[edge2], :primary))
+        pipe_coord_2 = side_pipe(TileCoord(0, 0), 2)
+        batch = Dict{PipeCoord, PipeBehavior}(pipe_coord_1 => MockPipeBehav(), pipe_coord_2 => MockPipeBehav())
+        set_pipe!(gm, pipe_coord_1, PlacedPipe(batch[pipe_coord_1], :primary))
+        set_pipe!(gm, pipe_coord_2, PlacedPipe(batch[pipe_coord_2], :primary))
         @test count_pipes(gm; ship_name = :primary) == 2
 
         # Delete all
@@ -186,8 +193,8 @@ end
 
     @testset "GameMap — Iteration" begin
         gm = GameMap()
-        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(), Q_POS, :primary))
-        set_component!(gm, TileCoord(1, 0), ComponentOnTile(MockCompBehav(), Q_POS, :primary))
+        set_component!(gm, TileCoord(0, 0), PlacedComponent(MockCompBehav(), Q_POS, :primary))
+        set_component!(gm, TileCoord(1, 0), PlacedComponent(MockCompBehav(), Q_POS, :primary))
 
         @test count_components(gm; ship_name = :primary) == 2
         @test has_component(gm, TileCoord(0, 0))
@@ -196,8 +203,8 @@ end
         @test count(_ -> true, each_component_of_type(gm, MockCompBehav)) == 2
         @test count_surface_tiles(gm; ship_name = :primary) == 1  # Default origin tile
 
-        edge = get_edges(TileCoord(0, 0))[1]
-        set_pipe!(gm, edge, PipeOnEdge(MockPipeBehav(), :primary))
+        pipe_coord_1 = side_pipe(TileCoord(0, 0), 1)
+        set_pipe!(gm, pipe_coord_1, PlacedPipe(MockPipeBehav(), :primary))
         @test count_pipes(gm; ship_name = :primary) == 1
         @test get_pipes(gm) === gm.pipe_behaviors
         @test count(_ -> true, each_pipe_of_ship(gm, :primary)) == 1
@@ -249,8 +256,8 @@ end
 
     @testset "GameMap — Constructor from ShipBlueprint" begin
         blueprint = ShipBlueprint(ship_tiles = Set([TileCoord(0, 0), TileCoord(1, 0)]))
-        blueprint.components[TileCoord(0, 0)] = ComponentOnTile(MockCompBehav(), Q_POS, :_blueprint)
-        blueprint.pipe_behaviors[EdgeCoord(VertexCoord(TileCoord(0, 0), Q_POS), VertexCoord(TileCoord(1, 0), Q_NEG))] = MockPipeBehav()
+        blueprint.components[TileCoord(0, 0)] = PlacedComponent(MockCompBehav(), Q_POS, :_blueprint)
+        blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(0, 0), Q_POS), VertexCoord(TileCoord(1, 0), Q_NEG))] = MockPipeBehav()
 
         gm = GameMap(blueprint)
 
@@ -271,7 +278,7 @@ end
     @testset "GameMap — Component Access (routed)" begin
         gm = make_two_ship_map()
         coord = TileCoord(0, 0)
-        comp = ComponentOnTile(MockCompBehav(), Q_POS, :primary)
+        comp = PlacedComponent(MockCompBehav(), Q_POS, :primary)
 
         # Set on primary
         set_component!(gm, coord, comp)
@@ -294,14 +301,14 @@ end
 
     @testset "GameMap — Pipe Access (routed)" begin
         gm = make_gamemap()
-        edge = get_edges(TileCoord(0, 0))[1]
+        pipe_coord_1 = side_pipe(TileCoord(0, 0), 1)
 
-        set_pipe!(gm, edge, PipeOnEdge(MockPipeBehav(), :primary))
-        @test has_pipe(gm, edge)
+        set_pipe!(gm, pipe_coord_1, PlacedPipe(MockPipeBehav(), :primary))
+        @test has_pipe(gm, pipe_coord_1)
         @test count_pipes(gm; ship_name = :primary) == 1
 
-        delete_pipe!(gm, edge)
-        @test !has_pipe(gm, edge)
+        delete_pipe!(gm, pipe_coord_1)
+        @test !has_pipe(gm, pipe_coord_1)
     end
 
     @testset "GameMap — Surface Tile Access (routed)" begin
@@ -328,8 +335,8 @@ end
 
     @testset "GameMap — Batch Operations" begin
         gm = make_gamemap()
-        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(), Q_POS, :primary))
-        set_pipe!(gm, get_edges(TileCoord(0, 0))[1], PipeOnEdge(MockPipeBehav(), :primary))
+        set_component!(gm, TileCoord(0, 0), PlacedComponent(MockCompBehav(), Q_POS, :primary))
+        set_pipe!(gm, side_pipe(TileCoord(0, 0), 1), PlacedPipe(MockPipeBehav(), :primary))
 
         @test count_components(gm) == 1
         @test count_pipes(gm) == 1
@@ -345,14 +352,14 @@ end
     @testset "GameMap — Multiple component/pipe set" begin
         gm = make_gamemap()
         comps = Dict(
-            TileCoord(0, 0) => ComponentOnTile(MockCompBehav(), Q_POS, :primary),
+            TileCoord(0, 0) => PlacedComponent(MockCompBehav(), Q_POS, :primary),
         )
         set_component!(gm, comps)
         @test has_component(gm, TileCoord(0, 0))
 
-        edge = get_edges(TileCoord(0, 0))[1]
-        set_pipe!(gm, edge, PipeOnEdge(MockPipeBehav(), :primary))
-        @test has_pipe(gm, edge)
+        pipe_coord_1 = side_pipe(TileCoord(0, 0), 1)
+        set_pipe!(gm, pipe_coord_1, PlacedPipe(MockPipeBehav(), :primary))
+        @test has_pipe(gm, pipe_coord_1)
     end
 
     # ===============================================================
@@ -363,8 +370,8 @@ end
         gm = make_two_ship_map()
         coord_primary = TileCoord(0, 0)
         coord_second = TileCoord(20, 0)
-        comp_primary = ComponentOnTile(MockCompBehav(), Q_POS, :primary)
-        comp_second = ComponentOnTile(MockCompBehav(), Q_POS, :second)
+        comp_primary = PlacedComponent(MockCompBehav(), Q_POS, :primary)
+        comp_second = PlacedComponent(MockCompBehav(), Q_POS, :second)
 
         set_component!(gm, coord_primary, comp_primary)
         set_component!(gm, coord_second, comp_second)
@@ -382,52 +389,56 @@ end
 
     @testset "Cross-Ship Queries — Pipes" begin
         gm = make_two_ship_map()
-        edge = get_edges(TileCoord(0, 0))[1]
-        set_pipe!(gm, edge, PipeOnEdge(MockPipeBehav(), :primary))
+        pipe_coord_1 = side_pipe(TileCoord(0, 0), 1)
+        set_pipe!(gm, pipe_coord_1, PlacedPipe(MockPipeBehav(), :primary))
 
-        @test get_pipe_shiptag(gm, edge) == :primary
-        @test !isnothing(get_pipe(gm, edge))
-        @test get_pipe(gm, edge).ship == :primary
+        @test get_pipe_shiptag(gm, pipe_coord_1) == :primary
+        @test !isnothing(get_pipe(gm, pipe_coord_1))
+        @test get_pipe(gm, pipe_coord_1).ship == :primary
 
-        # Non-existent
-        edge2 = get_edges(TileCoord(99, 99))[1]
-        @test isnothing(get_pipe_shiptag(gm, edge2))
-        @test isnothing(get_pipe(gm, edge2))
+        pipe_coord_2 = side_pipe(TileCoord(99, 99), 1)
+        @test isnothing(get_pipe_shiptag(gm, pipe_coord_2))
+        @test isnothing(get_pipe(gm, pipe_coord_2))
     end
 
     @testset "Cross-Ship Queries — Surface Tiles" begin
         gm = make_two_ship_map()
 
-        found, ship = is_on_surface_tile_any_ship(TileCoord(0, 0), gm)
-        @test found == true
-        @test ship == :primary
+        found1, ship1 = is_on_surface_tile_any_ship(TileCoord(0, 0), gm)
+        @test found1
+        @test ship1 == :primary
 
         found2, ship2 = is_on_surface_tile_any_ship(TileCoord(20, 0), gm)
-        @test found2 == true
+        @test found2
         @test ship2 == :second
 
         found3, ship3 = is_on_surface_tile_any_ship(TileCoord(99, 99), gm)
-        @test found3 == false
+        @test !found3
         @test isnothing(ship3)
+    end
+
+    @testset "find_ship_containing" begin
+        gm = make_two_ship_map()
+
+        @test find_ship_containing(gm, side_pipe(TileCoord(0, 0), 1)) == :primary
+        @test find_ship_containing(gm, side_pipe(TileCoord(20, 0), 1)) == :second
+        @test isnothing(find_ship_containing(gm, side_pipe(TileCoord(99, 99), 1)))
     end
 
     @testset "collect_surface_tiles!" begin
         gm = make_two_ship_map()
-        combined = collect_surface_tiles!(Set{TileCoord}(), gm)
-        @test TileCoord(0, 0) in combined
-        @test TileCoord(20, 0) in combined
-        @test length(combined) == 2
 
         primary_tiles = collect_surface_tiles!(Set{TileCoord}(), gm; ship_name = :primary)
         @test primary_tiles == Set([TileCoord(0, 0)])
 
-        other_tiles = collect_surface_tiles!(Set{TileCoord}(), gm; exclude_ship = :primary)
-        @test other_tiles == Set([TileCoord(20, 0)])
+        non_primary_tiles = collect_surface_tiles!(Set{TileCoord}(), gm; exclude_ship = :primary)
+        @test non_primary_tiles == Set([TileCoord(20, 0)])
     end
 
     @testset "each_surface_owner" begin
         gm = make_two_ship_map()
         owners = Dict(each_surface_owner(gm))
+
         @test owners[TileCoord(0, 0)] == :primary
         @test owners[TileCoord(20, 0)] == :second
     end
@@ -485,8 +496,8 @@ end
 
     @testset "get_component_shiptag" begin
         gm = make_two_ship_map()
-        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(), Q_POS, :primary))
-        set_component!(gm, TileCoord(20, 0), ComponentOnTile(MockCompBehav(), Q_POS, :second))
+        set_component!(gm, TileCoord(0, 0), PlacedComponent(MockCompBehav(), Q_POS, :primary))
+        set_component!(gm, TileCoord(20, 0), PlacedComponent(MockCompBehav(), Q_POS, :second))
 
         @test get_component_shiptag(gm, TileCoord(0, 0)) == :primary
         @test get_component_shiptag(gm, TileCoord(20, 0)) == :second
@@ -495,31 +506,21 @@ end
 
     @testset "get_pipe_shiptag" begin
         gm = make_two_ship_map()
-        edge = get_edges(TileCoord(0, 0))[1]
-        set_pipe!(gm, edge, PipeOnEdge(MockPipeBehav(), :primary))
+        pipe_coord_1 = side_pipe(TileCoord(0, 0), 1)
+        set_pipe!(gm, pipe_coord_1, PlacedPipe(MockPipeBehav(), :primary))
 
-        @test get_pipe_shiptag(gm, edge) == :primary
+        @test get_pipe_shiptag(gm, pipe_coord_1) == :primary
 
-        edge2 = get_edges(TileCoord(99, 99))[1]
-        @test isnothing(get_pipe_shiptag(gm, edge2))
+        pipe_coord_2 = side_pipe(TileCoord(99, 99), 1)
+        @test isnothing(get_pipe_shiptag(gm, pipe_coord_2))
     end
 
-    @testset "find_ship_containing_edge" begin
+    @testset "find_ship_containing" begin
         gm = make_two_ship_map()
 
-        @test find_ship_containing_edge(gm, get_edges(TileCoord(0, 0))[1]) == :primary
-        @test find_ship_containing_edge(gm, get_edges(TileCoord(20, 0))[1]) == :second
-        @test isnothing(find_ship_containing_edge(gm, get_edges(TileCoord(99, 99))[1]))
-    end
-
-    @testset "find_tile_pipe_host_ship" begin
-        gm = make_two_ship_map()
-
-        @test find_tile_pipe_host_ship(gm, TileCoord(20, 0)) == :second
-        @test isnothing(find_tile_pipe_host_ship(gm, TileCoord(99, 99)))
-
-        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(), Q_POS, :second))
-        @test find_tile_pipe_host_ship(gm, TileCoord(0, 0)) == :second
+        @test find_ship_containing(gm, side_pipe(TileCoord(0, 0), 1)) == :primary
+        @test find_ship_containing(gm, side_pipe(TileCoord(20, 0), 1)) == :second
+        @test isnothing(find_ship_containing(gm, side_pipe(TileCoord(99, 99), 1)))
     end
 
     # ===============================================================
@@ -528,7 +529,7 @@ end
 
     @testset "placement_valid" begin
         gm = make_gamemap()
-        comp = ComponentOnTile(MockCompBehav(), Q_POS, :primary)
+        comp = PlacedComponent(MockCompBehav(), Q_POS, :primary)
 
         # On surface — valid
         valid, reason = placement_valid(comp, TileCoord(0, 0), gm)
@@ -576,16 +577,99 @@ end
 
     @testset "can_place_pipe_at" begin
         gm = make_gamemap_with_surface(origin_neighbourhood())
-        edge = get_edges(TileCoord(0, 0))[1]
+        pipe_coord_1 = side_pipe(TileCoord(0, 0), 1)
 
-        valid, _ = can_place_pipe_at(edge, gm; ship_name = :primary)
+        valid, _ = can_place_pipe_at(pipe_coord_1, gm; ship_name = :primary)
         @test valid
 
-        # Edge far off surface
-        far_edge = get_edges(TileCoord(99, 99))[1]
-        invalid, reason = can_place_pipe_at(far_edge, gm; ship_name = :primary)
+        # Pipe far off surface
+        far_pipe = side_pipe(TileCoord(99, 99), 1)
+        invalid, reason = can_place_pipe_at(far_pipe, gm; ship_name = :primary)
         @test !invalid
         @test !isempty(reason)
+    end
+
+    @testset "PipeCoord placement and component conflicts" begin
+        gm = make_gamemap_with_surface(origin_neighbourhood())
+        tile = TileCoord(0, 0)
+        side = get_pipe_segments(tile)[1]
+        short_diag = get_pipe_segments(tile)[7]
+        long_diag = get_pipe_segments(tile)[13]
+
+        @test can_place_pipe_at(side, gm; ship_name = :primary)[1]
+        @test can_place_pipe_at(short_diag, gm; ship_name = :primary)[1]
+        @test can_place_pipe_at(long_diag, gm; ship_name = :primary)[1]
+
+        set_component!(gm, tile, PlacedComponent(MockCompBehav(), Q_POS, :primary))
+        @test can_place_pipe_at(side, gm; ship_name = :primary)[1]
+        valid_short, reason_short = can_place_pipe_at(short_diag, gm; ship_name = :primary)
+        valid_long, reason_long = can_place_pipe_at(long_diag, gm; ship_name = :primary)
+        @test !valid_short
+        @test reason_short == "Pipe segment crosses an occupied tile"
+        @test !valid_long
+        @test reason_long == "Pipe segment crosses an occupied tile"
+
+        gm2 = make_gamemap_with_surface(origin_neighbourhood())
+        set_pipe!(gm2, short_diag, PlacedPipe(MockPipeBehav(), :primary))
+        valid_component, component_reason = can_place_component_at(tile, gm2; ship_name = :primary)
+        @test !valid_component
+        @test component_reason == "Tile contains a pipe segment"
+
+        gm3 = make_gamemap_with_surface(origin_neighbourhood())
+        set_pipe!(gm3, side, PlacedPipe(MockPipeBehav(), :primary))
+        @test can_place_component_at(tile, gm3; ship_name = :primary)[1]
+    end
+
+    @testset "Pipe click hit-testing" begin
+        tile = TileCoord(0, 0)
+        side = get_pipe_segments(tile)[1]
+        long_diag = get_pipe_segments(tile)[13]
+        higher_long_diag = get_pipe_segments(tile)[15]
+        pipe = PlacedPipe(MockPipeBehav(), :primary)
+
+        centre = to_cartesian(side)
+        a = to_cartesian(side.v1)
+        b = to_cartesian(side.v2)
+        segment_vec = b - a
+        segment_len = sqrt(segment_vec.x^2 + segment_vec.y^2)
+        normal = CartesianCoord(-segment_vec.y / segment_len, segment_vec.x / segment_len)
+
+        @test is_click_on_pipe(centre, side, pipe)
+        @test is_click_on_pipe(CartesianCoord(centre.x + normal.x * 0.1, centre.y + normal.y * 0.1), side, pipe)
+        @test is_click_on_pipe(CartesianCoord(centre.x - normal.x * 0.1, centre.y - normal.y * 0.1), side, pipe)
+        @test !is_click_on_pipe(CartesianCoord(centre.x + normal.x * 0.1001, centre.y + normal.y * 0.1001), side, pipe)
+        @test !is_click_on_pipe(CartesianCoord(centre.x - normal.x * 0.1001, centre.y - normal.y * 0.1001), side, pipe)
+
+        gm_empty = GameMap()
+        @test isnothing(get_clicked_pipe(centre, gm_empty))
+
+        gm = GameMap()
+        set_pipe!(gm, long_diag, pipe)
+        @test get_clicked_pipe(to_cartesian(long_diag), gm) == long_diag
+
+        set_pipe!(gm, higher_long_diag, pipe)
+        @test get_clicked_pipe(to_cartesian(tile), gm) == higher_long_diag
+
+        short_rank_4 = get_pipe_segments(tile)[7]
+        long_rank_2 = get_pipe_segments(tile)[14]
+        gm_short_over_long = GameMap()
+        set_pipe!(gm_short_over_long, long_rank_2, pipe)
+        set_pipe!(gm_short_over_long, short_rank_4, pipe)
+        @test get_clicked_pipe(to_cartesian(short_rank_4), gm_short_over_long) == short_rank_4
+
+        short_rank_5 = get_pipe_segments(tile)[8]
+        short_rank_6 = get_pipe_segments(tile)[9]
+        gm_short_over_short = GameMap()
+        set_pipe!(gm_short_over_short, short_rank_5, pipe)
+        set_pipe!(gm_short_over_short, short_rank_6, pipe)
+        @test get_clicked_pipe(CartesianCoord(-0.5, sqrt(3) / 6), gm_short_over_short) == short_rank_6
+    end
+
+    @testset "Pipe click radius API" begin
+        @test_throws ErrorException get_pipe_click_radius(MissingClickRadiusPipe())
+
+        pipe = PlacedPipe(MockPipeBehav(), :primary)
+        @test get_pipe_click_radius(pipe) == 0.1
     end
 
     @testset "can_remove_surface_at" begin
@@ -597,7 +681,7 @@ end
         @test valid
 
         # Cannot remove surface under a component
-        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(), Q_POS, :primary))
+        set_component!(gm, TileCoord(0, 0), PlacedComponent(MockCompBehav(), Q_POS, :primary))
         invalid, reason = can_remove_surface_at(TileCoord(0, 0), gm; ship_name = :primary)
         @test !invalid
         @test contains(lowercase(reason), "component")
@@ -746,9 +830,9 @@ end
 
     @testset "can_place_pipe_offship" begin
         gm = make_gamemap()
-        # Completely disconnected edge — neither endpoint connected
-        far_edge = get_edges(TileCoord(50, 50))[1]
-        valid, _, reason = can_place_pipe_offship(far_edge, gm)
+        # Completely disconnected pipe — neither endpoint connected
+        far_pipe = side_pipe(TileCoord(50, 50), 1)
+        valid, _, reason = can_place_pipe_offship(far_pipe, gm)
         @test !valid
         @test !isempty(reason)
     end
@@ -757,33 +841,49 @@ end
         # Build a simple chain of pipes and verify flood fill finds them all
         gm = make_gamemap_with_surface(origin_neighbourhood())
 
-        # Place two connected pipes on edges of (0,0)
-        edges = get_edges(TileCoord(0, 0))
-        e1 = edges[1]
-        e2 = edges[2]
-        set_pipe!(gm, e1, PipeOnEdge(MockPipeBehav(), :primary))
-        set_pipe!(gm, e2, PipeOnEdge(MockPipeBehav(), :primary))
+        # Place two connected side-span pipes on (0,0)
+        pipe_coord_1 = side_pipe(TileCoord(0, 0), 1)
+        pipe_coord_2 = side_pipe(TileCoord(0, 0), 2)
+        set_pipe!(gm, pipe_coord_1, PlacedPipe(MockPipeBehav(), :primary))
+        set_pipe!(gm, pipe_coord_2, PlacedPipe(MockPipeBehav(), :primary))
 
-        all_pipe_edges = Set([e1, e2])
-        start_node = to_nodecoord(e1.v1)
+        all_pipe_coords = Set([pipe_coord_1, pipe_coord_2])
+        start_node = to_nodecoord(pipe_coord_1.v1)
 
-        reachable = Set{EdgeCoord}()
-        flood_search_pipes_from_node!(reachable, all_pipe_edges, start_node)
+        reachable = Set{PipeCoord}()
+        flood_search_pipes_from_node!(reachable, all_pipe_coords, start_node)
 
-        # Should find at least the edge we started from
-        @test e1 in reachable
+        # Should find at least the pipe we started from
+        @test pipe_coord_1 in reachable
 
         # Empty pipe set should yield empty reachable
-        empty_reachable = Set{EdgeCoord}()
-        flood_search_pipes_from_node!(empty_reachable, Set{EdgeCoord}(), start_node)
+        empty_reachable = Set{PipeCoord}()
+        flood_search_pipes_from_node!(empty_reachable, Set{PipeCoord}(), start_node)
         @test isempty(empty_reachable)
+    end
+
+    @testset "PipeCoord flood fill and off-ship deletion" begin
+        source = VertexCoord(TileCoord(0, 0), Q_POS)
+        anchor = get_pipe_segments(source)[1]
+        anchor_end = anchor.v1 == to_proper(source) ? anchor.v2 : anchor.v1
+        branch = first(pipe for pipe in get_pipe_segments(anchor_end) if pipe != anchor && !is_side_span(pipe))
+
+        gm = make_gamemap()
+        set_pipe!(gm, anchor, PlacedPipe(MockPipeBehav(), :primary))
+        set_pipe!(gm, branch, PlacedPipe(MockPipeBehav(), :primary))
+
+        reachable = Set{PipeCoord}()
+        flood_search_pipes_from_node!(reachable, Set([anchor, branch]), to_nodecoord(source))
+        @test reachable == Set([anchor, branch])
+        @test find_ship_pipes_containing_node(to_nodecoord(anchor_end), gm; default = nothing) == :primary
+        @test !validate_offship_pipe_deletion(anchor, gm)
     end
 
     @testset "validate_offship_pipe_deletion" begin
         gm = make_gamemap()
         # No off-ship pipes — deletion always valid
-        edge = get_edges(TileCoord(0, 0))[1]
-        @test validate_offship_pipe_deletion(edge, gm) == true
+        pipe_coord_1 = side_pipe(TileCoord(0, 0), 1)
+        @test validate_offship_pipe_deletion(pipe_coord_1, gm) == true
     end
 
     # ===============================================================
@@ -792,9 +892,9 @@ end
 
     @testset "offset_ship!" begin
         gm = make_gamemap()
-        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(), Q_POS, :primary))
-        edge = get_edges(TileCoord(0, 0))[1]
-        set_pipe!(gm, edge, PipeOnEdge(MockPipeBehav(), :primary))
+        set_component!(gm, TileCoord(0, 0), PlacedComponent(MockCompBehav(), Q_POS, :primary))
+        pipe_coord_1 = side_pipe(TileCoord(0, 0), 1)
+        set_pipe!(gm, pipe_coord_1, PlacedPipe(MockPipeBehav(), :primary))
 
         offset = TileCoord(5, 3)
         offset_ship!(gm, :primary, offset)
@@ -808,18 +908,18 @@ end
         @test has_component(gm, TileCoord(5, 3))
 
         # Pipe should no longer be at original edge
-        @test !has_pipe(gm, edge)
+        @test !has_pipe(gm, pipe_coord_1)
         @test count_pipes(gm; ship_name = :primary) == 1  # still has the pipe, just at new edge
     end
 
     @testset "offset_ship! — preserves counts" begin
         gm = GameMap()
-        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(), Q_POS, :primary))
+        set_component!(gm, TileCoord(0, 0), PlacedComponent(MockCompBehav(), Q_POS, :primary))
         set_surface_tile!(gm, TileCoord(1, 0); ship_name = :primary)
-        e1 = get_edges(TileCoord(0, 0))[1]
-        e2 = get_edges(TileCoord(0, 0))[2]
-        set_pipe!(gm, e1, PipeOnEdge(MockPipeBehav(), :primary))
-        set_pipe!(gm, e2, PipeOnEdge(MockPipeBehav(), :primary))
+        pipe_coord_1 = side_pipe(TileCoord(0, 0), 1)
+        pipe_coord_2 = side_pipe(TileCoord(0, 0), 2)
+        set_pipe!(gm, pipe_coord_1, PlacedPipe(MockPipeBehav(), :primary))
+        set_pipe!(gm, pipe_coord_2, PlacedPipe(MockPipeBehav(), :primary))
 
         comps_before = count_components(gm; ship_name = :primary)
         pipes_before = count_pipes(gm; ship_name = :primary)
@@ -830,6 +930,49 @@ end
         @test count_components(gm; ship_name = :primary) == comps_before
         @test count_pipes(gm; ship_name = :primary) == pipes_before
         @test count_surface_tiles(gm; ship_name = :primary) == tiles_before
+    end
+
+    @testset "offset_ship! translates blueprint coordinates" begin
+        blueprint = ShipBlueprint()
+        component_coord = TileCoord(1, -2)
+        surface_tile = TileCoord(2, -3)
+        pipe_coord_1 = side_pipe(component_coord, 1)
+        offset = TileCoord(-4, 7)
+
+        blueprint.components[component_coord] = PlacedComponent(MockCompBehav(), Q_POS, :primary)
+        blueprint.pipe_behaviors[pipe_coord_1] = MockPipeBehav()
+        push!(blueprint.ship_tiles, surface_tile)
+
+        offset_ship!(blueprint, offset)
+
+        @test haskey(blueprint.components, offset_by_tile(component_coord, offset))
+        @test offset_by_tile(surface_tile, offset) in blueprint.ship_tiles
+        @test haskey(blueprint.pipe_behaviors, offset_by_tile(pipe_coord_1, offset))
+    end
+
+    @testset "offset_ship! preserves diagonal pipe keys" begin
+        gm = GameMap()
+        short_diag = get_pipe_segments(TileCoord(0, 0))[7]
+        long_diag = get_pipe_segments(TileCoord(0, 0))[13]
+        set_pipe!(gm, short_diag, PlacedPipe(MockPipeBehav(), :primary))
+        set_pipe!(gm, long_diag, PlacedPipe(MockPipeBehav(), :primary))
+
+        offset = TileCoord(3, -2)
+        offset_ship!(gm, :primary, offset)
+
+        moved_short = PipeCoord(
+            VertexCoord(short_diag.v1.tile + offset, short_diag.v1.dir),
+            VertexCoord(short_diag.v2.tile + offset, short_diag.v2.dir),
+        )
+        moved_long = PipeCoord(
+            VertexCoord(long_diag.v1.tile + offset, long_diag.v1.dir),
+            VertexCoord(long_diag.v2.tile + offset, long_diag.v2.dir),
+        )
+
+        @test !has_pipe(gm, short_diag)
+        @test !has_pipe(gm, long_diag)
+        @test has_pipe(gm, moved_short)
+        @test has_pipe(gm, moved_long)
     end
 
     # ===============================================================
@@ -1010,7 +1153,7 @@ end
 
         @test_throws ErrorException set_docking_status!(gm, :nonexistent, ConnectedDockStat())
 
-        # ShipMap-level
+        # ShipState-level
         ship = get_ship_state(gm, :primary)
         @test get_docking_status(ship) isa ConnectedDockStat
         set_docking_status!(ship, ConnectedDockStat())
@@ -1072,10 +1215,10 @@ end
 
     @testset "swap_primary! — round-trip" begin
         gm = GameMap()
-        set_component!(gm, TileCoord(0, 0), ComponentOnTile(MockCompBehav(), Q_POS, :primary))
+        set_component!(gm, TileCoord(0, 0), PlacedComponent(MockCompBehav(), Q_POS, :primary))
         add_ship!(gm, :visitor, ShipState())
         set_surface_tile!(gm, TileCoord(10, 0); ship_name = :visitor)
-        set_component!(gm, TileCoord(10, 0), ComponentOnTile(MockCompBehav(), R_NEG, :visitor))
+        set_component!(gm, TileCoord(10, 0), PlacedComponent(MockCompBehav(), R_NEG, :visitor))
 
         # Swap to visitor
         success1, _ = swap_primary!(gm, :visitor)
@@ -1108,10 +1251,10 @@ end
 
     @testset "find_ship_pipes_containing_node" begin
         gm = make_two_ship_map()
-        offsurface_edge = get_edges(TileCoord(99, 99))[1]
-        set_pipe!(gm, offsurface_edge, PipeOnEdge(MockPipeBehav(), :second))
+        offsurface_pipe = side_pipe(TileCoord(99, 99), 1)
+        set_pipe!(gm, offsurface_pipe, PlacedPipe(MockPipeBehav(), :second))
 
-        axis_node = to_nodecoord(offsurface_edge.v1)
+        axis_node = to_nodecoord(offsurface_pipe.v1)
         @test find_ship_pipes_containing_node(axis_node, gm; default = nothing) == :second
 
         non_axis_node = NodeCoord(TileCoord(99, 99), HexFrame.NODE_INTERNAL_1)
@@ -1130,13 +1273,13 @@ end
         @test find_ship_for_node(node_second, gm) == :second
         @test find_ship_for_node(non_axis_surface_node, gm; default = nothing) == :primary
 
-        precedence_edge = get_edges(TileCoord(0, 0))[1]
-        set_pipe!(gm, precedence_edge, PipeOnEdge(MockPipeBehav(), :second))
-        @test find_ship_for_node(to_nodecoord(precedence_edge.v1), gm; default = nothing) == :primary
+        precedence_pipe = side_pipe(TileCoord(0, 0), 1)
+        set_pipe!(gm, precedence_pipe, PlacedPipe(MockPipeBehav(), :second))
+        @test find_ship_for_node(to_nodecoord(precedence_pipe.v1), gm; default = nothing) == :primary
 
-        offsurface_edge = get_edges(TileCoord(99, 99))[1]
-        set_pipe!(gm, offsurface_edge, PipeOnEdge(MockPipeBehav(), :second))
-        @test find_ship_for_node(to_nodecoord(offsurface_edge.v1), gm; default = nothing) == :second
+        offsurface_pipe = side_pipe(TileCoord(99, 99), 1)
+        set_pipe!(gm, offsurface_pipe, PlacedPipe(MockPipeBehav(), :second))
+        @test find_ship_for_node(to_nodecoord(offsurface_pipe.v1), gm; default = nothing) == :second
 
         @test find_ship_for_node(node_nowhere, gm) == :primary
     end

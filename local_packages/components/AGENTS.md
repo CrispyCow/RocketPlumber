@@ -5,7 +5,7 @@ root `AGENTS.md`, `local_packages/AGENTS.md`, and
 `local_packages/components/CLAUDE.md`.
 
 Components use fragment composition. Reusable fragments are named `*BehavFrag`.
-Concrete tile components are named `*CompBehav`; edge pipes are named
+Concrete tile components are named `*CompBehav`; pipe-segment behaviours are named
 `*PipeBehav`.
 
 ## Component Packages
@@ -15,8 +15,7 @@ Concrete tile components are named `*CompBehav`; edge pipes are named
 - `HexFlowNozzleComponents`: nozzles, switched nozzles, decomp chambers
 - `HexFlowPumpComponents`: turbopumps and electric pumps
 - `HexFlowSwitchComponents`: adjustable and on/off valves
-- `HexFlowPipeComponents`: tile-based multi-pipe components
-- `HexFlowBasicPipes`: edge-based pipes
+- `HexFlowBasicPipes`: pipe-segment behaviours
 
 ## Tile Component Interface
 
@@ -42,10 +41,11 @@ Mandatory methods:
 - `get_pipe_tunables`
 - `set_pipe_tunables`
 - `render_pipe_base!`
+- `get_pipe_click_radius`
 
 Optional methods include `render_pipe_map!`,
 `produce_rel_fluid_declarations`, `can_pipe_be_moved`,
-`produce_abs_elements`, and `get_tile_pipe_equivalent`.
+and `produce_abs_elements`.
 
 ## Adding Components
 

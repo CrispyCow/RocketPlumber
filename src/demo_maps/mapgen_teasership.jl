@@ -159,14 +159,14 @@ function mapgen_teasership()
         TileCoord(3, -12),
         TileCoord(2, -14),
     ]
-        blueprint_av_551.components[tile] = ComponentOnTile(deepcopy(av_gas_tank), HexFrame.Q_POS, :_blueprint)
+        blueprint_av_551.components[tile] = PlacedComponent(deepcopy(av_gas_tank), HexFrame.Q_POS, :_blueprint)
     end
 
     # Two nozzles start closed; one preserves the armed save-state.
     for tile in [TileCoord(0, -12), TileCoord(0, -11)]
-        blueprint_av_551.components[tile] = ComponentOnTile(deepcopy(switched_tiny_nozzle), HexFrame.Q_POS, :_blueprint)
+        blueprint_av_551.components[tile] = PlacedComponent(deepcopy(switched_tiny_nozzle), HexFrame.Q_POS, :_blueprint)
     end
-    blueprint_av_551.components[TileCoord(1, -14)] = ComponentOnTile(deepcopy(armed_switched_tiny_nozzle), HexFrame.S_NEG, :_blueprint)
+    blueprint_av_551.components[TileCoord(1, -14)] = PlacedComponent(deepcopy(armed_switched_tiny_nozzle), HexFrame.S_NEG, :_blueprint)
     for (tile_a, axis_a, tile_b, axis_b) in [
         (TileCoord(3, -14), HexFrame.Q_NEG, TileCoord(2, -14), HexFrame.Q_POS),
         (TileCoord(4, -14), HexFrame.Q_NEG, TileCoord(3, -13), HexFrame.Q_POS),
@@ -189,7 +189,7 @@ function mapgen_teasership()
         (TileCoord(0, -11), HexFrame.Q_POS, TileCoord(2, -12), HexFrame.Q_NEG),
         (TileCoord(3, -14), HexFrame.Q_NEG, TileCoord(2, -13), HexFrame.Q_POS),
     ]
-        blueprint_av_551.pipe_behaviors[EdgeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = scrap_pipe
+        blueprint_av_551.pipe_behaviors[PipeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = scrap_pipe
     end
 
     union!(blueprint_av_551.ship_tiles, Set{TileCoord}([
@@ -211,7 +211,7 @@ function mapgen_teasership()
         (TileCoord(4, -6), HexFrame.R_NEG),
         (TileCoord(1, -5), HexFrame.Q_POS),
     ]
-        blueprint_primary.components[tile] = ComponentOnTile(deepcopy(transfer_pump), rotation, :_blueprint)
+        blueprint_primary.components[tile] = PlacedComponent(deepcopy(transfer_pump), rotation, :_blueprint)
     end
 
     for tile in [
@@ -224,7 +224,7 @@ function mapgen_teasership()
         TileCoord(4, -7),
         TileCoord(2, -7),
     ]
-        blueprint_primary.components[tile] = ComponentOnTile(deepcopy(transfer_liquid_tank), HexFrame.Q_NEG, :_blueprint)
+        blueprint_primary.components[tile] = PlacedComponent(deepcopy(transfer_liquid_tank), HexFrame.Q_NEG, :_blueprint)
     end
     for (tile_a, axis_a, tile_b, axis_b) in [
         (TileCoord(1, -5), HexFrame.Q_POS, TileCoord(3, -6), HexFrame.Q_NEG),
@@ -257,7 +257,7 @@ function mapgen_teasership()
         (TileCoord(-1, -5), HexFrame.Q_NEG, TileCoord(-2, -4), HexFrame.Q_POS),
         (TileCoord(3, -6), HexFrame.Q_POS, TileCoord(5, -7), HexFrame.Q_NEG),
     ]
-        blueprint_primary.pipe_behaviors[EdgeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = scrap_pipe
+        blueprint_primary.pipe_behaviors[PipeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = scrap_pipe
     end
 
     union!(blueprint_primary.ship_tiles, Set{TileCoord}([
@@ -302,21 +302,21 @@ function mapgen_teasership()
         TileCoord(2, -1),
         TileCoord(1, -2),
     ]
-        blueprint_old_primary.components[tile] = ComponentOnTile(deepcopy(legacy_liquid_tank), HexFrame.Q_POS, :_blueprint)
+        blueprint_old_primary.components[tile] = PlacedComponent(deepcopy(legacy_liquid_tank), HexFrame.Q_POS, :_blueprint)
     end
 
     for tile in [TileCoord(-5, -1), TileCoord(-5, 0), TileCoord(-5, 1)]
-        blueprint_old_primary.components[tile] = ComponentOnTile(deepcopy(small_nozzle), HexFrame.Q_POS, :_blueprint)
+        blueprint_old_primary.components[tile] = PlacedComponent(deepcopy(small_nozzle), HexFrame.Q_POS, :_blueprint)
     end
 
-    blueprint_old_primary.components[TileCoord(-4, 0)] = ComponentOnTile(DecompChamberCompBehav(), HexFrame.Q_POS, :_blueprint)
-    blueprint_old_primary.components[TileCoord(-4, 3)] = ComponentOnTile(DecompChamberCompBehav(), HexFrame.Q_POS, :_blueprint)
-    blueprint_old_primary.components[TileCoord(-3, -1)] = single_tile_pipe_on_tile(HexFrame.S_POS, ScrapTilePipeBehavFrag())
-    blueprint_old_primary.components[TileCoord(-3, 0)] = ComponentOnTile(deepcopy(turbo_pump), HexFrame.S_NEG, :_blueprint)
-    blueprint_old_primary.components[TileCoord(-2, 2)] = ComponentOnTile(deepcopy(turbo_pump), HexFrame.Q_POS, :_blueprint)
-    blueprint_old_primary.components[TileCoord(-4, -1)] = ComponentOnTile(deepcopy(tiny_on_off_valve), HexFrame.Q_POS, :_blueprint)
-    blueprint_old_primary.components[TileCoord(-3, 2)] = ComponentOnTile(deepcopy(partially_open_legacy_valve), HexFrame.Q_POS, :_blueprint)
-    blueprint_old_primary.components[TileCoord(-6, 4)] = ComponentOnTile(deepcopy(medium_nozzle), HexFrame.Q_POS, :_blueprint)
+    blueprint_old_primary.components[TileCoord(-4, 0)] = PlacedComponent(DecompChamberCompBehav(), HexFrame.Q_POS, :_blueprint)
+    blueprint_old_primary.components[TileCoord(-4, 3)] = PlacedComponent(DecompChamberCompBehav(), HexFrame.Q_POS, :_blueprint)
+    blueprint_old_primary.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(-3, -1), HexFrame.S_POS), VertexCoord(TileCoord(-3, -1), HexFrame.S_NEG))] = ScrapPipeBehav()
+    blueprint_old_primary.components[TileCoord(-3, 0)] = PlacedComponent(deepcopy(turbo_pump), HexFrame.S_NEG, :_blueprint)
+    blueprint_old_primary.components[TileCoord(-2, 2)] = PlacedComponent(deepcopy(turbo_pump), HexFrame.Q_POS, :_blueprint)
+    blueprint_old_primary.components[TileCoord(-4, -1)] = PlacedComponent(deepcopy(tiny_on_off_valve), HexFrame.Q_POS, :_blueprint)
+    blueprint_old_primary.components[TileCoord(-3, 2)] = PlacedComponent(deepcopy(partially_open_legacy_valve), HexFrame.Q_POS, :_blueprint)
+    blueprint_old_primary.components[TileCoord(-6, 4)] = PlacedComponent(deepcopy(medium_nozzle), HexFrame.Q_POS, :_blueprint)
     for (tile_a, axis_a, tile_b, axis_b, behaviour) in [
         (TileCoord(1, -2), HexFrame.Q_NEG, TileCoord(0, -2), HexFrame.Q_POS, scrap_pipe),
         (TileCoord(-1, 0), HexFrame.Q_NEG, TileCoord(-2, 1), HexFrame.Q_POS, scrap_pipe),
@@ -348,7 +348,7 @@ function mapgen_teasership()
         (TileCoord(1, -2), HexFrame.Q_POS, TileCoord(3, -3), HexFrame.Q_NEG, scrap_pipe),
         (TileCoord(-4, 0), HexFrame.Q_NEG, TileCoord(-5, 0), HexFrame.Q_POS, big_pipe),
     ]
-        blueprint_old_primary.pipe_behaviors[EdgeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = behaviour
+        blueprint_old_primary.pipe_behaviors[PipeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = behaviour
     end
 
     union!(blueprint_old_primary.ship_tiles, Set{TileCoord}([
@@ -399,11 +399,11 @@ function mapgen_teasership()
         TileCoord(-5, -5),
         TileCoord(-4, -6),
     ]
-        blueprint_platform_bs_301.components[tile] = ComponentOnTile(deepcopy(pressure_fed_tank), HexFrame.Q_POS, :_blueprint)
+        blueprint_platform_bs_301.components[tile] = PlacedComponent(deepcopy(pressure_fed_tank), HexFrame.Q_POS, :_blueprint)
     end
 
     for tile in [TileCoord(-2, -7), TileCoord(-2, -8)]
-        blueprint_platform_bs_301.components[tile] = ComponentOnTile(deepcopy(av_gas_tank), HexFrame.R_POS, :_blueprint)
+        blueprint_platform_bs_301.components[tile] = PlacedComponent(deepcopy(av_gas_tank), HexFrame.R_POS, :_blueprint)
     end
 
     for (tile, rotation) in [
@@ -415,14 +415,14 @@ function mapgen_teasership()
         (TileCoord(-3, -8), HexFrame.Q_NEG),
         (TileCoord(-3, -9), HexFrame.Q_NEG),
     ]
-        blueprint_platform_bs_301.components[tile] = ComponentOnTile(deepcopy(tiny_nozzle), rotation, :_blueprint)
+        blueprint_platform_bs_301.components[tile] = PlacedComponent(deepcopy(tiny_nozzle), rotation, :_blueprint)
     end
 
-    blueprint_platform_bs_301.components[TileCoord(-6, -6)] = ComponentOnTile(DecompChamberCompBehav(), HexFrame.Q_POS, :_blueprint)
-    blueprint_platform_bs_301.components[TileCoord(-4, -8)] = ComponentOnTile(DecompChamberCompBehav(), HexFrame.Q_NEG, :_blueprint)
-    blueprint_platform_bs_301.components[TileCoord(-3, -7)] = ComponentOnTile(deepcopy(open_tiny_on_off_valve), HexFrame.Q_POS, :_blueprint)
-    blueprint_platform_bs_301.components[TileCoord(-5, -6)] = ComponentOnTile(deepcopy(partially_open_platform_valve), HexFrame.S_NEG, :_blueprint)
-    blueprint_platform_bs_301.components[TileCoord(-5, -7)] = ComponentOnTile(deepcopy(tiny_adjustable_valve), HexFrame.S_NEG, :_blueprint)
+    blueprint_platform_bs_301.components[TileCoord(-6, -6)] = PlacedComponent(DecompChamberCompBehav(), HexFrame.Q_POS, :_blueprint)
+    blueprint_platform_bs_301.components[TileCoord(-4, -8)] = PlacedComponent(DecompChamberCompBehav(), HexFrame.Q_NEG, :_blueprint)
+    blueprint_platform_bs_301.components[TileCoord(-3, -7)] = PlacedComponent(deepcopy(open_tiny_on_off_valve), HexFrame.Q_POS, :_blueprint)
+    blueprint_platform_bs_301.components[TileCoord(-5, -6)] = PlacedComponent(deepcopy(partially_open_platform_valve), HexFrame.S_NEG, :_blueprint)
+    blueprint_platform_bs_301.components[TileCoord(-5, -7)] = PlacedComponent(deepcopy(tiny_adjustable_valve), HexFrame.S_NEG, :_blueprint)
     for (tile_a, axis_a, tile_b, axis_b, behaviour) in [
         (TileCoord(-3, -5), HexFrame.Q_NEG, TileCoord(-4, -5), HexFrame.Q_POS, scrap_pipe),
         (TileCoord(-6, -6), HexFrame.Q_NEG, TileCoord(-7, -5), HexFrame.Q_POS, big_pipe),
@@ -469,7 +469,7 @@ function mapgen_teasership()
         (TileCoord(-5, -5), HexFrame.Q_NEG, TileCoord(-6, -5), HexFrame.Q_POS, scrap_pipe),
         (TileCoord(-4, -4), HexFrame.Q_NEG, TileCoord(-5, -3), HexFrame.Q_POS, scrap_pipe),
     ]
-        blueprint_platform_bs_301.pipe_behaviors[EdgeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = behaviour
+        blueprint_platform_bs_301.pipe_behaviors[PipeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = behaviour
     end
 
     union!(blueprint_platform_bs_301.ship_tiles, Set{TileCoord}([

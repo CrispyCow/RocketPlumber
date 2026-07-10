@@ -18,13 +18,28 @@ using HexElements: CONST_RESISTOR, CONST_VOLTAGE, CONST_CURRENT, C_DEP_CURRENT, 
 
 # Minimal pipe implementation for producing elements
 struct TestPipe <: PipeBehavior end
-import HexComponentsAPI: get_conductance, get_pipe_tunables, set_pipe_tunables, render_pipe_base!
+struct MultiElementPipe <: PipeBehavior end
+struct InactiveElementPipe <: PipeBehavior end
+import HexComponentsAPI: get_conductance, get_pipe_tunables, set_pipe_tunables, render_pipe_base!, get_pipe_click_radius, produce_abs_elements
 get_conductance(::TestPipe) = 1.0
 get_pipe_tunables(::TestPipe) = ()
 set_pipe_tunables(::TestPipe, tunables) = TestPipe()
+get_pipe_click_radius(::TestPipe) = 0.1
 function render_pipe_base!(queue::AbstractVector, behav::TestPipe; kwargs...)
     return nothing
 end
+
+get_conductance(::MultiElementPipe) = 1.0
+get_pipe_tunables(::MultiElementPipe) = ()
+set_pipe_tunables(::MultiElementPipe, tunables) = MultiElementPipe()
+get_pipe_click_radius(::MultiElementPipe) = 0.1
+render_pipe_base!(queue::AbstractVector, behav::MultiElementPipe; kwargs...) = nothing
+
+get_conductance(::InactiveElementPipe) = 1.0
+get_pipe_tunables(::InactiveElementPipe) = ()
+set_pipe_tunables(::InactiveElementPipe, tunables) = InactiveElementPipe()
+get_pipe_click_radius(::InactiveElementPipe) = 0.1
+render_pipe_base!(queue::AbstractVector, behav::InactiveElementPipe; kwargs...) = nothing
 
 struct DummyCompUpdate <: ComponentBehavior end
 import HexComponentsAPI: update_flowbehav!
@@ -56,11 +71,32 @@ function make_element(tile::TileCoord, index::Integer, v1::NodeCoord, v2::NodeCo
                            id=id, dependent_id=dep_id, active=active)
 end
 
+function produce_abs_elements(::MultiElementPipe, coord::PipeCoord)
+    n1 = to_nodecoord(coord.v1)
+    n2 = to_nodecoord(coord.v2)
+    return (
+        make_element(TileCoord(90, 0), 1, n1, n2, 1.0, CONST_RESISTOR),
+        make_element(TileCoord(90, 0), 2, n1, n2, 2.0, CONST_RESISTOR),
+    )
+end
+
+function produce_abs_elements(::InactiveElementPipe, coord::PipeCoord)
+    n1 = to_nodecoord(coord.v1)
+    n2 = to_nodecoord(coord.v2)
+    return (
+        make_element(TileCoord(91, 0), 1, n1, n2, 1.0, CONST_RESISTOR; active = false),
+        make_element(TileCoord(91, 0), 2, n1, n2, 2.0, CONST_RESISTOR),
+    )
+end
+
 "Shorthand to make a grounded node (GROUND on a dummy tile)"
 ground_node() = NodeCoord(TileCoord(0, 0), HexFrame.GROUND)
 
 "Shorthand: make a NodeCoord"
 nc(q, r, dir) = NodeCoord(TileCoord(q, r), dir)
+
+"Return the indexed side-span pipe bordering a tile."
+side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
 
 
 # ===============================================================
@@ -70,31 +106,62 @@ nc(q, r, dir) = NodeCoord(TileCoord(q, r), dir)
 @testset "list_elements" begin
     # Multi-ship element collection
     gm = GameMap()
-    edge1 = EdgeCoord(VertexCoord(TileCoord(1,0), HexFrame.Q_POS), VertexCoord(TileCoord(2,0), HexFrame.Q_POS))
-    set_pipe!(gm, edge1, PipeOnEdge(TestPipe(), :primary))
+    pipe1 = side_pipe(TileCoord(1, 0), 1)
+    set_pipe!(gm, pipe1, PlacedPipe(TestPipe(), :primary))
     sec = ShipState()
     add_ship!(gm, :sec, sec)
-    edge2 = EdgeCoord(VertexCoord(TileCoord(5,0), HexFrame.Q_POS), VertexCoord(TileCoord(6,0), HexFrame.Q_POS))
-    set_pipe!(gm, edge2, PipeOnEdge(TestPipe(), :sec))
+    pipe2 = side_pipe(TileCoord(5, 0), 1)
+    set_pipe!(gm, pipe2, PlacedPipe(TestPipe(), :sec))
     els = list_elements(gm)
     ids = Set(e.id for e in els)
-    @test HexElements.ElementID(edge1) in ids
-    @test HexElements.ElementID(edge2) in ids
+    @test HexElements.ElementID(pipe1) in ids
+    @test HexElements.ElementID(pipe2) in ids
 
     # Per-ship should only include that ship's elements
     els_sec = list_elements(gm; ship_name = :sec)
     ids_sec = Set(e.id for e in els_sec)
-    @test HexElements.ElementID(edge2) in ids_sec
-    @test !(HexElements.ElementID(edge1) in ids_sec)
+    @test HexElements.ElementID(pipe2) in ids_sec
+    @test !(HexElements.ElementID(pipe1) in ids_sec)
+
+    @testset "default pipe elements cover all span classes" begin
+        gm_spans = GameMap()
+        side = get_pipe_segments(TileCoord(0, 0))[1]
+        short_diag = get_pipe_segments(TileCoord(0, 0))[7]
+        long_diag = get_pipe_segments(TileCoord(0, 0))[13]
+        for coord in (side, short_diag, long_diag)
+            set_pipe!(gm_spans, coord, PlacedPipe(TestPipe(), :primary))
+        end
+
+        elements = list_elements(gm_spans)
+        ids = Set(element.id for element in elements)
+        @test length(elements) == 3
+        @test all(coord -> ElementID(coord) in ids, (side, short_diag, long_diag))
+        @test all(element -> element.type === CONST_RESISTOR, elements)
+    end
+
+    @testset "pipe produce_abs_elements hook is honoured" begin
+        gm_multi = GameMap()
+        coord = get_pipe_segments(TileCoord(0, 0))[7]
+        set_pipe!(gm_multi, coord, PlacedPipe(MultiElementPipe(), :primary))
+        elements = list_elements(gm_multi)
+        @test length(elements) == 2
+        @test sort([element.value for element in elements]) == [1.0, 2.0]
+
+        gm_inactive = GameMap()
+        set_pipe!(gm_inactive, coord, PlacedPipe(InactiveElementPipe(), :primary))
+        active_elements = list_elements(gm_inactive)
+        @test length(active_elements) == 1
+        @test only(active_elements).value == 2.0
+    end
 end
 
 @testset "update_components!" begin
     # Per-GameMap: calls update_flowbehav! on all ships
     gm = GameMap()
-    set_component!(gm, TileCoord(0,0), ComponentOnTile(DummyCompUpdate(), HexFrame.Q_POS, :primary))
+    set_component!(gm, TileCoord(0,0), PlacedComponent(DummyCompUpdate(), HexFrame.Q_POS, :primary))
     sec = ShipState()
     add_ship!(gm, :two, sec)
-    set_component!(gm, TileCoord(5,5), ComponentOnTile(DummyCompUpdate(), HexFrame.Q_POS, :two))
+    set_component!(gm, TileCoord(5,5), PlacedComponent(DummyCompUpdate(), HexFrame.Q_POS, :two))
     ms = MNA_State()
     derived = DerivedMapState(
         nodeactualfluids = Dict(
@@ -113,7 +180,7 @@ end
     gm = GameMap()
     sec = ShipState()
     add_ship!(gm, :two, sec)
-    set_component!(gm, TileCoord(10,10), ComponentOnTile(DummyFluidComp(), HexFrame.Q_POS, :two))
+    set_component!(gm, TileCoord(10,10), PlacedComponent(DummyFluidComp(), HexFrame.Q_POS, :two))
     derived = DerivedMapState()
     list_fluid_declarations!(derived.primary_fluid_declarations, gm)
     @test length(derived.primary_fluid_declarations) == 1

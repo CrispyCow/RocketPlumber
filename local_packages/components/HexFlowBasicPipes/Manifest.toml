@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "cd832b88ff49d17e1cacbf57d189e587dedd4521"
+project_hash = "648b3afa70e0e9880c227a4cc0fb5d92463a168d"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "MacroTools"]
@@ -272,14 +272,8 @@ path = "../../HexElements"
 uuid = "2f6a9512-4d00-40fa-a3ea-0a7372983a4b"
 version = "0.1.0"
 
-[[deps.HexFlowBasicComponents]]
-deps = ["Accessors", "HexComponentsAPI", "HexElements", "HexFlowRendering", "HexFluids", "HexFrame", "RenderEngine", "StaticArrays"]
-path = "../HexFlowBasicComponents"
-uuid = "32458d45-9755-4715-857d-57f99caca23f"
-version = "0.1.0"
-
 [[deps.HexFlowBasicPipes]]
-deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowPipeComponents", "HexFlowRendering", "HexFluids", "HexFrame", "RenderEngine", "StaticArrays"]
+deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowRendering", "HexFluids", "HexFrame", "RenderEngine", "StaticArrays"]
 path = "."
 uuid = "a5bfb9cd-4dce-4d41-851e-e34bf63bcb54"
 version = "0.1.0"
@@ -288,12 +282,6 @@ version = "0.1.0"
 deps = ["Dates", "GLFW", "HexComponentsAPI", "HexFrame", "StaticArrays"]
 path = "../../HexFlowControl"
 uuid = "c4f7b3e2-9a5d-4c8e-b1f2-3e8d9a5c7f1b"
-version = "0.1.0"
-
-[[deps.HexFlowPipeComponents]]
-deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowRendering", "HexFluids", "HexFrame", "RenderEngine"]
-path = "../HexFlowPipeComponents"
-uuid = "994b1c28-7126-425a-9af0-3768b98dec97"
 version = "0.1.0"
 
 [[deps.HexFlowRendering]]

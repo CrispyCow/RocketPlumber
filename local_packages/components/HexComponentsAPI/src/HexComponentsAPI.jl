@@ -7,7 +7,7 @@ using StaticArrays, Accessors
 export BASE_UPS
 
 # General Exports
-export Sprite, Component, ComponentOnTile, PipeOnEdge, TunableProps, EnumTunableProps, AnyTunableProps, ActionInfo
+export Sprite, Component, PlacedComponent, PlacedPipe, TunableProps, EnumTunableProps, AnyTunableProps, ActionInfo
 
 # Tile Component Behavior Exports
 export ComponentBehavior
@@ -24,7 +24,7 @@ export get_reactivation_probe, classify_reactivation_probe, commit_reactivation_
 # Pipe Behavior Exports
 export PipeBehavior
 export get_conductance, get_pipe_tunables, set_pipe_tunables, render_pipe_base!, render_pipe_map!
-export can_pipe_be_moved, get_tile_pipe_equivalent_frag
+export get_pipe_click_radius, can_pipe_be_moved
 
 
 # ===============================================================
@@ -258,7 +258,7 @@ The scheduler only calls this hook after `classify_reactivation_probe` returned
 commit_reactivation_probe!(behav::T; kwargs...) where {T <: ComponentBehavior} = nothing
 
 # ===============================================================
-# ComponentOnTile Wrapper
+# PlacedComponent Wrapper
 # ===============================================================
 """
 A wrapper struct for a component that has been placed on the map.
@@ -266,25 +266,25 @@ Includes shared placement information: the placed rotation, mirror state, and th
 `ship` records which ship in a unified `GameMap` owns the component.
 All behavioural methods are delegated to the component.
 """
-struct ComponentOnTile{T <: ComponentBehavior}
+struct PlacedComponent{T <: ComponentBehavior}
     component::T
     rotation::HexAxis
     mirrored::Bool
     ship::Symbol
 end
 
-ComponentOnTile(component::T, rotation::HexAxis, ship::Symbol) where {T <: ComponentBehavior} = ComponentOnTile(component, rotation, false, ship)
+PlacedComponent(component::T, rotation::HexAxis, ship::Symbol) where {T <: ComponentBehavior} = PlacedComponent(component, rotation, false, ship)
 
 # ComponentBehavior Method Delegation
-produce_rel_elements(comp::ComponentOnTile) = produce_rel_elements(comp.component)
-produce_rel_fluid_declarations(comp::ComponentOnTile) = produce_rel_fluid_declarations(comp.component)
-get_tunables(comp::ComponentOnTile) = get_tunables(comp.component)
-set_tunables(comp::ComponentOnTile, tunables::NTuple{N, Real}) where {N} = set_tunables(comp.component, tunables)
-render_map_elem!(queue::AbstractVector, comp::ComponentOnTile; kwargs...) = render_map_elem!(queue, comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
-render_base_elem!(queue::AbstractVector, comp::ComponentOnTile; kwargs...) = render_base_elem!(queue, comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
-collect_effect_particles!(manager, comp::ComponentOnTile; kwargs...) = collect_effect_particles!(manager, comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
-update_flowbehav!(comp::ComponentOnTile; kwargs...) = update_flowbehav!(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
-function on_click!(comp::ComponentOnTile; unrotated_clicksite = nothing, kwargs...)
+produce_rel_elements(comp::PlacedComponent) = produce_rel_elements(comp.component)
+produce_rel_fluid_declarations(comp::PlacedComponent) = produce_rel_fluid_declarations(comp.component)
+get_tunables(comp::PlacedComponent) = get_tunables(comp.component)
+set_tunables(comp::PlacedComponent, tunables::NTuple{N, Real}) where {N} = set_tunables(comp.component, tunables)
+render_map_elem!(queue::AbstractVector, comp::PlacedComponent; kwargs...) = render_map_elem!(queue, comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
+render_base_elem!(queue::AbstractVector, comp::PlacedComponent; kwargs...) = render_base_elem!(queue, comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
+collect_effect_particles!(manager, comp::PlacedComponent; kwargs...) = collect_effect_particles!(manager, comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
+update_flowbehav!(comp::PlacedComponent; kwargs...) = update_flowbehav!(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
+function on_click!(comp::PlacedComponent; unrotated_clicksite = nothing, kwargs...)
     if unrotated_clicksite !== nothing
         relative_clicksite = tile_orientation_matrix(comp.rotation, comp.mirrored) * unrotated_clicksite
         on_click!(comp.component; relative_clicksite = relative_clicksite, kwargs...) # Forward with the rotated click site
@@ -293,23 +293,23 @@ function on_click!(comp::ComponentOnTile; unrotated_clicksite = nothing, kwargs.
     end
     return nothing
 end
-get_thrust(comp::ComponentOnTile; kwargs...) = get_thrust(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
-get_component_temperature(comp::ComponentOnTile; kwargs...) = get_component_temperature(comp.component; kwargs...)
-get_component_mass(comp::ComponentOnTile; kwargs...) = get_component_mass(comp.component; kwargs...)
-get_component_dry_mass(comp::ComponentOnTile; kwargs...) = get_component_dry_mass(comp.component; kwargs...)
-get_component_wet_mass(comp::ComponentOnTile; kwargs...) = get_component_wet_mass(comp.component; kwargs...)
-map_rotation(comp::ComponentOnTile, rotation::HexAxis) = map_rotation(comp.component, rotation)
-map_mirroring(comp::ComponentOnTile, mirrored::Bool) = map_mirroring(comp.component, mirrored)
-can_be_moved(comp::ComponentOnTile; kwargs...) = can_be_moved(comp.component; kwargs...)
-placement_valid(comp::ComponentOnTile, coord, surface; kwargs...) = placement_valid(comp.component, coord, surface; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
-get_actions(comp::ComponentOnTile; kwargs...) = get_actions(comp.component; kwargs...)
-do_action!(comp::ComponentOnTile, action_id::Symbol; kwargs...) = do_action!(comp.component, action_id; kwargs...)
-get_reactivation_probe(comp::ComponentOnTile; kwargs...) = get_reactivation_probe(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
-classify_reactivation_probe(comp::ComponentOnTile; kwargs...) = classify_reactivation_probe(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
-commit_reactivation_probe!(comp::ComponentOnTile; kwargs...) = commit_reactivation_probe!(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
+get_thrust(comp::PlacedComponent; kwargs...) = get_thrust(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
+get_component_temperature(comp::PlacedComponent; kwargs...) = get_component_temperature(comp.component; kwargs...)
+get_component_mass(comp::PlacedComponent; kwargs...) = get_component_mass(comp.component; kwargs...)
+get_component_dry_mass(comp::PlacedComponent; kwargs...) = get_component_dry_mass(comp.component; kwargs...)
+get_component_wet_mass(comp::PlacedComponent; kwargs...) = get_component_wet_mass(comp.component; kwargs...)
+map_rotation(comp::PlacedComponent, rotation::HexAxis) = map_rotation(comp.component, rotation)
+map_mirroring(comp::PlacedComponent, mirrored::Bool) = map_mirroring(comp.component, mirrored)
+can_be_moved(comp::PlacedComponent; kwargs...) = can_be_moved(comp.component; kwargs...)
+placement_valid(comp::PlacedComponent, coord, surface; kwargs...) = placement_valid(comp.component, coord, surface; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
+get_actions(comp::PlacedComponent; kwargs...) = get_actions(comp.component; kwargs...)
+do_action!(comp::PlacedComponent, action_id::Symbol; kwargs...) = do_action!(comp.component, action_id; kwargs...)
+get_reactivation_probe(comp::PlacedComponent; kwargs...) = get_reactivation_probe(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
+classify_reactivation_probe(comp::PlacedComponent; kwargs...) = classify_reactivation_probe(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
+commit_reactivation_probe!(comp::PlacedComponent; kwargs...) = commit_reactivation_probe!(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
 
 "General implementation which leverages the existing ComponentBehavior produce_rel_elements function"
-function produce_abs_elements(tilecomp::ComponentOnTile, tile::TileCoord)
+function produce_abs_elements(tilecomp::PlacedComponent, tile::TileCoord)
     rel_elements = produce_rel_elements(tilecomp.component)
     # Maps AbsoluteElement from each RelativeElement in the Component
     # Returns an NTuple to preserve previous API: handles variable-length tuples including zero-length
@@ -320,7 +320,7 @@ end
 # Pipe Behaviors
 # ===============================================================
 """
-A PipeBehavior encapsulates all of a pipe's behaviour on edges.
+A PipeBehavior encapsulates all of a pipe's behaviour on pipe coordinates.
 This includes its interaction with the flow engine, and its rendering.
 
 A type that subtypes PipeBehavior must implement all the mandatory functions listed,
@@ -341,44 +341,44 @@ MANDATORY METHODS:
     get_conductance(behav::T)::Float64
     get_pipe_tunables(behav::T)::NTuple{N, TunableProps}
     set_pipe_tunables(behav::T, tunables::NTuple{N, Real})::T
-    render_pipe_base!(queue::AbstractVector, behav::T; glmap, rotation, position, scale=1.0, transparency=1.0, render_height_offset::Integer=0, kwargs...)::Nothing
+    render_pipe_base!(queue::AbstractVector, behav::T; glmap, rotation, position::PipeCoord, scale=1.0, transparency=1.0, render_height_offset::Integer=0, kwargs...)::Nothing
+    get_pipe_click_radius(behav::T)::Float64
     
 
 There are suitable defaults, but concrete PipeBehavior types T can also implement the following 
 OPTIONAL METHODS:
 
-    render_pipe_map!(queue::AbstractVector, behav::T; glmap, rotation, position, kwargs...)::Nothing
+    render_pipe_map!(queue::AbstractVector, behav::T; glmap, rotation, position::PipeCoord, kwargs...)::Nothing
     can_pipe_be_moved(behav::T; kwargs...)::(Bool, String)
-    produce_abs_elements(behav::T, edge::EdgeCoord)::NTuple{N, AbsoluteElement}
-    get_tile_pipe_equivalent_frag(behav::T)::Union{TilePipeFrag, Nothing}
+    produce_abs_elements(behav::T, coord::PipeCoord)::NTuple{N, AbsoluteElement}
 
 """
 abstract type PipeBehavior end
 
 # ===============================================================
-# PipeOnEdge Wrapper
+# PlacedPipe Wrapper
 # ===============================================================
 
 """
 A `PipeBehavior` placed on the map. Carries the owning ship's `Symbol` tag.
 All behavioural methods delegate to the inner pipe.
 """
-struct PipeOnEdge{T <: PipeBehavior}
+struct PlacedPipe{T <: PipeBehavior}
     pipe::T
     ship::Symbol
 end
 
-get_conductance(p::PipeOnEdge) = get_conductance(p.pipe)
-get_pipe_tunables(p::PipeOnEdge) = get_pipe_tunables(p.pipe)
-"Return a new `PipeOnEdge` with updated tunables; preserves the ship tag."
-set_pipe_tunables(p::PipeOnEdge, tunables::NTuple{N, Real}) where {N} =
-    PipeOnEdge(set_pipe_tunables(p.pipe, tunables), p.ship)
-render_pipe_base!(queue, p::PipeOnEdge; kwargs...) = render_pipe_base!(queue, p.pipe; kwargs...)
-render_pipe_map!(queue, p::PipeOnEdge; kwargs...) = render_pipe_map!(queue, p.pipe; kwargs...)
-can_pipe_be_moved(p::PipeOnEdge; kwargs...) = can_pipe_be_moved(p.pipe; kwargs...)
-produce_abs_elements(p::PipeOnEdge, edge::EdgeCoord) = produce_abs_elements(p.pipe, edge)
-produce_rel_fluid_declarations(p::PipeOnEdge) = produce_rel_fluid_declarations(p.pipe)
-get_tile_pipe_equivalent_frag(p::PipeOnEdge) = get_tile_pipe_equivalent_frag(p.pipe)
+get_conductance(p::PlacedPipe) = get_conductance(p.pipe)
+get_pipe_tunables(p::PlacedPipe) = get_pipe_tunables(p.pipe)
+"Return a new `PlacedPipe` with updated tunables; preserves the ship tag."
+set_pipe_tunables(p::PlacedPipe, tunables::NTuple{N, Real}) where {N} =
+    PlacedPipe(set_pipe_tunables(p.pipe, tunables), p.ship)
+render_pipe_base!(queue, p::PlacedPipe; kwargs...) = render_pipe_base!(queue, p.pipe; kwargs...)
+render_pipe_map!(queue, p::PlacedPipe; kwargs...) = render_pipe_map!(queue, p.pipe; kwargs...)
+get_pipe_click_radius(p::PlacedPipe) = get_pipe_click_radius(p.pipe)
+can_pipe_be_moved(p::PlacedPipe; kwargs...) = can_pipe_be_moved(p.pipe; kwargs...)
+produce_abs_elements(p::PlacedPipe, coord::PipeCoord) = produce_abs_elements(p.pipe, coord)
+produce_rel_fluid_declarations(p::PlacedPipe) = produce_rel_fluid_declarations(p.pipe)
 
 # Mandatory Methods Errors
 
@@ -402,6 +402,11 @@ function render_pipe_base!(queue::AbstractVector, behav::T; kwargs...) where {T 
     error("Required method render_pipe_base! not implemented for $(nameof(T))")
 end
 
+"Error for concrete PipeBehavior without required method get_pipe_click_radius"
+function get_pipe_click_radius(behav::T) where {T <: PipeBehavior}
+    error("Required method get_pipe_click_radius not implemented for $(nameof(T))")
+end
+
 # Optional Method Defaults
 
 "Default optional method: render_pipe_map! forwards to render_pipe_base! The kwarg `pos_offset` may be any coordinate acceptable to `glvec()` or `nothing` to indicate no offset."
@@ -414,17 +419,14 @@ end
 can_pipe_be_moved(behav::T; kwargs...) where {T <: PipeBehavior} = (true, "")
 
 "Default produce_abs_elements creates a resistor element from conductance"
-function produce_abs_elements(behav::T, edge::EdgeCoord) where {T <: PipeBehavior}
-    connections = AbsoluteElementConnections(to_nodecoord(edge.v1), to_nodecoord(edge.v2))
+function produce_abs_elements(behav::T, coord::PipeCoord) where {T <: PipeBehavior}
+    connections = AbsoluteElementConnections(to_nodecoord(coord.v1), to_nodecoord(coord.v2))
     conductance = get_conductance(behav)
-    absolute_element = AbsoluteElement(connections, conductance, HexElements.CONST_RESISTOR, ElementID(edge))
+    absolute_element = AbsoluteElement(connections, conductance, HexElements.CONST_RESISTOR, ElementID(coord))
     return (absolute_element,)
 end
 
 "Convenience wrapper allowing set_tunables to be called on PipeBehavior"
 set_tunables(behav::T, tunables::NTuple{N, Real}) where {N, T <: PipeBehavior} = set_pipe_tunables(behav, tunables)
-
-"Default get_tile_pipe_equivalent_frag returns nothing, indicating no tile fragment equivalent"
-get_tile_pipe_equivalent_frag(behav::T) where {T <: PipeBehavior} = nothing
 
 end # module HexComponentsAPI

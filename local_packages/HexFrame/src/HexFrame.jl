@@ -5,16 +5,21 @@ import Base: +, -
 
 # Types
 export AbstractBasicCoordSystem, AbstractCartesianCoordSystem, AbstractAxialCoordSystem, AbstractDerivedCoordSystem
-export CartesianCoord, AxialCoord, TileCoord, VertexCoord, EdgeCoord, NodeCoord
+export CartesianCoord, AxialCoord, TileCoord, VertexCoord, PipeCoord, NodeCoord
 export HexAxis, NodePos
+export PipeSpanClass, SIDE_SPAN, SHORT_DIAGONAL_SPAN, LONG_DIAGONAL_SPAN
 export CartesianBounds, AxialBounds
 
 # Functions
 export glvec, to_cartesian, to_axial, round_to_tile, round_to_tile_cartesian, next_enum_val, rotmat_2D
 export get_rotmat, is_proper, is_axis, is_grounded, to_proper, to_vertex, to_nodecoord
-export to_hexaxis, to_nodepos, get_edges, round_to_edge, get_vertexes, rotate, rotate_reverse
+export to_hexaxis, to_nodepos, get_side_pipes, round_to_side_pipe, rotate, rotate_reverse
 export get_tiles, get_adjacent_tiles_for_node, get_adjacent_tiles_for_tile
 export nearest_hex_axis, mirror_q_axis, transform_tile_axis, tile_orientation_matrix
+export pipe_segment_length, pipe_span_class, is_side_span, is_short_diagonal_span, is_long_diagonal_span
+export is_valid_pipe_segment, get_pipe_segments, common_tile_count, get_tile_containing_pipe
+export get_stacking_rank, has_higher_stacking_rank
+export closest_vertex, nearest_pipe_segment_from_vertex, offset_by_tile
 
 # Lookups
 export hex_rotmats
@@ -81,6 +86,9 @@ glvec(coord::AbstractDerivedCoordSystem)::SVector{2, Float32} = to_cartesian(coo
 "Hex tile vertex/axis Enum, as shown in [cubic/axial coordinate frame](https://www.redblobgames.com/grids/hexagons/#coordinates). Order must match NodePos."
 @enum HexAxis::UInt8 Q_POS R_NEG S_POS Q_NEG R_POS S_NEG
 
+"Geometry class for a valid pipe segment."
+@enum PipeSpanClass::UInt8 SIDE_SPAN SHORT_DIAGONAL_SPAN LONG_DIAGONAL_SPAN
+
 "Dict of vectors to the vertices of a hexagon relative to its center."
 const hex_vert_vecs = Dict(
     Q_POS => AxialCoord(2 / 3, -1 / 3),
@@ -137,15 +145,27 @@ const CartesianBounds = NamedTuple{(:X_POS, :X_NEG, :Y_POS, :Y_NEG), NTuple{4, F
 "Type alias for axial bounds tuple (tile coordinates for each hex axis direction)"
 const AxialBounds = NamedTuple{(:Q_POS, :R_NEG, :S_POS, :Q_NEG, :R_POS, :S_NEG), NTuple{6, TileCoord}}
 """
-A composite datatype representing the coordinates of the edge of a hexagonal grid.
-Identified by the VertexCoord of the two vertices it connects.
-'Proper' convention edge goes from left to right.
+A canonical coordinate for a pipe segment between two valid hex vertices. A proper pipe has both endpoints in
+proper `VertexCoord` form, has distinct endpoints, is a valid side, short diagonal, or long diagonal span, and stores
+the endpoints in ascending `_vertex_proper_order_key` order.
 """
-struct EdgeCoord <: AbstractDerivedCoordSystem
+struct PipeCoord <: AbstractDerivedCoordSystem
     v1::VertexCoord
     v2::VertexCoord
+
+    function PipeCoord(v1::VertexCoord, v2::VertexCoord)
+        proper_v1 = to_proper(v1)
+        proper_v2 = to_proper(v2)
+        proper_v1 == proper_v2 && throw(ArgumentError("PipeCoord endpoints must be distinct"))
+        is_valid_pipe_segment(proper_v1, proper_v2) || throw(ArgumentError("vertices do not form a valid pipe segment"))
+
+        if _vertex_proper_order_key(proper_v2) < _vertex_proper_order_key(proper_v1)
+            return new(proper_v2, proper_v1)
+        end
+        return new(proper_v1, proper_v2)
+    end
 end
-@struct_hash_equal EdgeCoord
+@struct_hash_equal PipeCoord
 
 "Dict of offset vectors to neighbour hexes, keyed by the axis direction pointing towards the neighbour."
 const hex_neighbour_tiles = Dict(
@@ -224,8 +244,8 @@ function to_axial(vercoord::VertexCoord)::AxialCoord
     return delta + tile_coords
 end
 
-"Gets the axial coordinates of an edge."
-function to_axial(coord::EdgeCoord)::AxialCoord
+"Gets the axial coordinates of a pipe segment midpoint."
+function to_axial(coord::PipeCoord)::AxialCoord
     return (to_axial(coord.v1) + to_axial(coord.v2)) ./ 2
 end
 
@@ -235,19 +255,27 @@ function to_cartesian(coord::AbstractDerivedCoordSystem)
 end
 
 # ===============================================================
+# Coordinate Translation Functions
+# ===============================================================
+
+"Offset a coordinate by a whole-tile step."
+offset_by_tile(coord::TileCoord, offset::TileCoord)::TileCoord = coord + offset
+
+function offset_by_tile(coord::VertexCoord, offset::TileCoord)::VertexCoord
+    return VertexCoord(offset_by_tile(coord.tile, offset), coord.dir)
+end
+
+function offset_by_tile(coord::PipeCoord, offset::TileCoord)::PipeCoord
+    return PipeCoord(offset_by_tile(coord.v1, offset), offset_by_tile(coord.v2, offset))
+end
+
+# ===============================================================
 # Proper Form Functions
 # ===============================================================
 
 "Check if VertexCoord is proper."
 function is_proper(vertex::VertexCoord)::Bool
     return (vertex.dir == Q_POS) || (vertex.dir == Q_NEG)
-end
-
-"Check if edge is proper."
-function is_proper(edge::EdgeCoord)::Bool
-    v1_cart = to_cartesian(edge.v1)
-    v2_cart = to_cartesian(edge.v2)
-    return v1_cart.x < v2_cart.x
 end
 
 """
@@ -281,10 +309,138 @@ function to_proper(vertex::VertexCoord)::VertexCoord
     return VertexCoord(tile, dir)
 end
 
-"Return EdgeCoord in \"Proper\" form."
-function to_proper(edge::EdgeCoord)::EdgeCoord
-    # reverse if improper
-    return is_proper(edge) ? edge : EdgeCoord(edge.v2, edge.v1)
+"Return a pipe coordinate in canonical form."
+to_proper(pipe::PipeCoord)::PipeCoord = pipe
+
+"Return a proper vertex position as integer axial thirds, avoiding fractional axial offsets."
+function _vertex_axial_thirds(vertex::VertexCoord)::Tuple{Int, Int}
+    proper_vertex = to_proper(vertex)
+    q_offset, r_offset = if proper_vertex.dir === Q_POS
+        (2, -1)
+    elseif proper_vertex.dir === Q_NEG
+        (-2, 1)
+    else
+        error("to_proper returned an improper vertex in _vertex_axial_thirds")
+    end
+    q3 = 3 * Int(proper_vertex.tile.q) + q_offset
+    r3 = 3 * Int(proper_vertex.tile.r) + r_offset
+    return q3, r3
+end
+
+"""
+Return a stable ordering key for proper pipe endpoint canonicalisation.
+
+Vertices are first converted to proper form, so each physical vertex is represented as either a `Q_POS` or `Q_NEG`
+`VertexCoord`. The key compares Cartesian ordering axes derived from integer axial thirds, followed by the axial
+thirds and direction as deterministic tie-breakers.
+"""
+function _vertex_proper_order_key(vertex::VertexCoord)::Tuple{Int, Int, Int, Int, Int}
+    proper_vertex = to_proper(vertex)
+    q3, r3 = _vertex_axial_thirds(proper_vertex)
+    x_key = q3
+    y_key = -(q3 + 2 * r3)
+    return (x_key, y_key, q3, r3, Int(proper_vertex.dir))
+end
+
+"Cartesian length between two pipe endpoint vertices."
+function pipe_segment_length(v1::VertexCoord, v2::VertexCoord)::Float64
+    delta = to_cartesian(v2) - to_cartesian(v1)
+    return sqrt(delta.x^2 + delta.y^2)
+end
+
+"Return the number of tiles shared by two vertices."
+function common_tile_count(v1::VertexCoord, v2::VertexCoord)::Int
+    v2_tiles = get_tiles(v2)
+    return count(tile -> tile in v2_tiles, get_tiles(v1))
+end
+
+function _pipe_span_class_from_length(length::Float64)::Union{PipeSpanClass, Nothing}
+    isapprox(length, 1.0) && return SIDE_SPAN
+    isapprox(length, sqrt(3.0)) && return SHORT_DIAGONAL_SPAN
+    isapprox(length, 2.0) && return LONG_DIAGONAL_SPAN
+    return nothing
+end
+
+"Return whether two vertices form one of the valid pipe segments."
+function is_valid_pipe_segment(v1::VertexCoord, v2::VertexCoord)::Bool
+    proper_v1 = to_proper(v1)
+    proper_v2 = to_proper(v2)
+    proper_v1 == proper_v2 && return false
+
+    span_class = _pipe_span_class_from_length(pipe_segment_length(proper_v1, proper_v2))
+    isnothing(span_class) && return false
+
+    common_count = common_tile_count(proper_v1, proper_v2)
+    if span_class === SIDE_SPAN
+        return common_count == 2
+    end
+    return common_count == 1
+end
+
+"Return whether a pipe coordinate is geometrically valid."
+is_valid_pipe_segment(pipe::PipeCoord)::Bool = is_valid_pipe_segment(pipe.v1, pipe.v2)
+
+"Cartesian length of a pipe segment."
+pipe_segment_length(pipe::PipeCoord)::Float64 = pipe_segment_length(pipe.v1, pipe.v2)
+
+"Return the geometry class of a valid pipe segment."
+function pipe_span_class(pipe::PipeCoord)::PipeSpanClass
+    span_class = _pipe_span_class_from_length(pipe_segment_length(pipe))
+    isnothing(span_class) && error("invalid PipeCoord length")
+    return span_class
+end
+
+is_side_span(pipe::PipeCoord)::Bool = pipe_span_class(pipe) === SIDE_SPAN
+is_short_diagonal_span(pipe::PipeCoord)::Bool = pipe_span_class(pipe) === SHORT_DIAGONAL_SPAN
+is_long_diagonal_span(pipe::PipeCoord)::Bool = pipe_span_class(pipe) === LONG_DIAGONAL_SPAN
+
+"""
+Return a deterministic render/selection stacking rank for a pipe segment.
+
+Higher ranks stack above lower ranks.
+Long diagonals use ranks 1-3, short diagonal parallel pairs use ranks 4-6.
+All side spans share rank 7.
+"""
+function get_stacking_rank(pipe::PipeCoord)::Int
+    pipe_span_class(pipe) === SIDE_SPAN && return 7
+
+    v1_q3, v1_r3 = _vertex_axial_thirds(pipe.v1)
+    v2_q3, v2_r3 = _vertex_axial_thirds(pipe.v2)
+    dq3 = abs(v2_q3 - v1_q3)
+    dr3 = abs(v2_r3 - v1_r3)
+
+    if dq3 == 4 && dr3 == 2
+        return 1
+    elseif dq3 == 2 && dr3 == 4
+        return 2
+    elseif dq3 == 2 && dr3 == 2
+        return 3
+    elseif dq3 == 3 && dr3 == 0
+        return 4
+    elseif dq3 == 3 && dr3 == 3
+        return 5
+    elseif dq3 == 0 && dr3 == 3
+        return 6
+    end
+
+    error("unknown pipe stacking orientation")
+end
+
+"Return whether `a` should stack above `b`."
+has_higher_stacking_rank(a::PipeCoord, b::PipeCoord)::Bool = get_stacking_rank(a) > get_stacking_rank(b)
+
+"Return the number of tiles shared by both endpoints of a pipe segment."
+common_tile_count(pipe::PipeCoord)::Int = common_tile_count(pipe.v1, pipe.v2)
+
+"Return the tile that contains a non-side pipe segment."
+function get_tile_containing_pipe(pipe::PipeCoord)::Union{TileCoord, Nothing}
+    common_tile_count(pipe) == 1 || return nothing
+
+    v2_tiles = get_tiles(pipe.v2)
+    for tile in get_tiles(pipe.v1)
+        tile in v2_tiles && return tile
+    end
+    error("common_tile_count reported a shared tile, but no tile was found")
 end
 
 # ===============================================================
@@ -315,8 +471,8 @@ function get_tiles(vertex::VertexCoord)::NTuple{3, TileCoord}
     return neighbors
 end
 
-"Returns vertices able to be connected by edges to the input vertex."
-function get_vertexes(vertex::VertexCoord)::NTuple{3, VertexCoord}
+"Return the three vertices connected to the input vertex by side spans."
+function _side_adjacent_vertices(vertex::VertexCoord)::NTuple{3, VertexCoord}
     proper_vertex = to_proper(vertex)
 
     if proper_vertex.dir == Q_POS
@@ -332,51 +488,165 @@ function get_vertexes(vertex::VertexCoord)::NTuple{3, VertexCoord}
             VertexCoord(proper_vertex.tile - TileCoord(1, 0), Q_POS),
         )
     else
-        error("to_proper returned an improper vertex in get_vertexes")
+        error("to_proper returned an improper vertex in _side_adjacent_vertices")
     end
 
     return neighbors
 end
 
-"Returns adjacent edges for a tile in proper form."
-function get_edges(tile::TileCoord)::NTuple{6, EdgeCoord}
+"Return the six side-span pipe segments bordering a tile in clockwise order."
+function get_side_pipes(tile::TileCoord)::NTuple{6, PipeCoord}
     return ntuple(i -> begin
         V1 = to_proper(VertexCoord(tile, HexAxis(i - 1)))
         V2 = to_proper(VertexCoord(tile, HexAxis(i % length(instances(HexAxis)))))
-        to_proper(EdgeCoord(V1, V2))
+        PipeCoord(V1, V2)
     end, 6)
 end
 
-"Returns connected edges for a vertex in proper form."
-function get_edges(vertex::VertexCoord)::NTuple{3, EdgeCoord}
+"Return the three side-span pipe segments incident to a vertex in angular order."
+function get_side_pipes(vertex::VertexCoord)::NTuple{3, PipeCoord}
     proper_vertex = to_proper(vertex)
-    other_vertexes = get_vertexes(proper_vertex)
-    return ntuple(i -> to_proper(EdgeCoord(proper_vertex, other_vertexes[i])), 3)
+    other_vertexes = _side_adjacent_vertices(proper_vertex)
+    return ntuple(i -> PipeCoord(proper_vertex, other_vertexes[i]), 3)
+end
+
+"Returns valid pipe segments incident to a vertex in continuous angular order."
+function get_pipe_segments(vertex::VertexCoord)::NTuple{12, PipeCoord}
+    source = to_proper(vertex)
+    t = source.tile
+
+    if source.dir === Q_POS
+        return (
+            PipeCoord(source, VertexCoord(t + TileCoord( 2, -1), Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord( 1, -1), Q_POS)),
+            PipeCoord(source, VertexCoord(t + TileCoord( 2, -2), Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord( 0, -1), Q_POS)),
+
+            PipeCoord(source, VertexCoord(t + TileCoord( 1, -1), Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord(-1,  0), Q_POS)),
+            PipeCoord(source, VertexCoord(t,                     Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord(-1,  1), Q_POS)),
+
+            PipeCoord(source, VertexCoord(t + TileCoord( 1,  0), Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord( 0,  1), Q_POS)),
+            PipeCoord(source, VertexCoord(t + TileCoord( 2,  0), Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord( 1,  0), Q_POS)),
+        )
+    elseif source.dir === Q_NEG
+        return (
+            PipeCoord(source, VertexCoord(t,                     Q_POS)),
+            PipeCoord(source, VertexCoord(t + TileCoord( 1, -1), Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord(-1,  0), Q_POS)),
+            PipeCoord(source, VertexCoord(t + TileCoord( 0, -1), Q_NEG)),
+
+            PipeCoord(source, VertexCoord(t + TileCoord(-2,  0), Q_POS)),
+            PipeCoord(source, VertexCoord(t + TileCoord(-1,  0), Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord(-2,  1), Q_POS)),
+            PipeCoord(source, VertexCoord(t + TileCoord(-1,  1), Q_NEG)),
+
+            PipeCoord(source, VertexCoord(t + TileCoord(-2,  2), Q_POS)),
+            PipeCoord(source, VertexCoord(t + TileCoord( 0,  1), Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord(-1,  1), Q_POS)),
+            PipeCoord(source, VertexCoord(t + TileCoord( 1,  0), Q_NEG)),
+        )
+    else
+        error("to_proper returned an improper vertex in get_pipe_segments")
+    end
+end
+
+"Returns all valid pipe segments touching or crossing a tile."
+function get_pipe_segments(tile::TileCoord)::NTuple{15, PipeCoord}
+    qpos = VertexCoord(tile, Q_POS)
+    rneg = VertexCoord(tile, R_NEG)
+    spos = VertexCoord(tile, S_POS)
+    qneg = VertexCoord(tile, Q_NEG)
+    rpos = VertexCoord(tile, R_POS)
+    sneg = VertexCoord(tile, S_NEG)
+
+    return (
+        PipeCoord(qpos, rneg),
+        PipeCoord(rneg, spos),
+        PipeCoord(spos, qneg),
+        PipeCoord(qneg, rpos),
+        PipeCoord(rpos, sneg),
+        PipeCoord(sneg, qpos),
+
+        PipeCoord(qpos, spos),
+        PipeCoord(rneg, qneg),
+        PipeCoord(spos, rpos),
+        PipeCoord(qneg, sneg),
+        PipeCoord(rpos, qpos),
+        PipeCoord(sneg, rneg),
+
+        PipeCoord(qpos, qneg),
+        PipeCoord(rneg, rpos),
+        PipeCoord(spos, sneg),
+    )
 end
 
 """
-Gets the closest edge to a basic coordinate.
+Gets the closest side-span pipe to a basic coordinate.
 Uses the dot product to find the most parallel vectors.
 """
-function round_to_edge(coord::AbstractBasicCoordSystem)::EdgeCoord
+function round_to_side_pipe(coord::AbstractBasicCoordSystem)::PipeCoord
     closest_tile::TileCoord = round_to_tile(coord)
     cartesian_coord = to_cartesian(coord)
     vec_from_tile_center = cartesian_coord - to_cartesian(closest_tile)
 
-    edges = get_edges(closest_tile)
-    edges_coords = to_cartesian.(edges)
-    edges_from_tile_center = map(x -> x - to_cartesian(closest_tile), edges_coords)
+    side_pipes = get_side_pipes(closest_tile)
+    side_pipe_coords = to_cartesian.(side_pipes)
+    side_pipes_from_tile_center = map(x -> x - to_cartesian(closest_tile), side_pipe_coords)
 
     # find the largest dot product of the vectors, which will correspond to the most parallel one
-    dot_products = map(x -> dot(vec_from_tile_center, x), edges_from_tile_center)
-    return edges[argmax(dot_products)]
+    dot_products = map(x -> dot(vec_from_tile_center, x), side_pipes_from_tile_center)
+    return side_pipes[argmax(dot_products)]
 end
 
-"gets the correct rotation matrix for an edge"
-function get_rotmat(edge::EdgeCoord)
-    cart_vec = to_cartesian(AxialCoord(to_axial(edge.v2) - to_axial(edge.v1)))
+"Return the closest canonical vertex to a basic coordinate."
+function closest_vertex(coord::AbstractBasicCoordSystem)::VertexCoord
+    closest_tile = round_to_tile(coord)
+    cartesian_coord = to_cartesian(coord)
+    vertices = ntuple(i -> to_proper(VertexCoord(closest_tile, HexAxis(i - 1))), 6)
+    distances = map(vertices) do vertex
+        vertex_cart = to_cartesian(vertex)
+        delta = cartesian_coord - vertex_cart
+        return delta.x^2 + delta.y^2
+    end
+    return to_proper(vertices[argmin(distances)])
+end
+
+"Return the incident pipe segment whose direction from `source` best matches `coord`."
+function nearest_pipe_segment_from_vertex(source::VertexCoord, coord::AbstractBasicCoordSystem)::PipeCoord
+    source_vertex = to_proper(source)
+    source_cart = to_cartesian(source_vertex)
+    cursor_vec = to_cartesian(coord) - source_cart
+    cursor_len = sqrt(cursor_vec.x^2 + cursor_vec.y^2)
+
+    candidates = get_pipe_segments(source_vertex)
+    cursor_len == 0.0 && return first(candidates)
+
+    best_candidate = first(candidates)
+    best_score = -Inf
+    for candidate in candidates
+        far_vertex = candidate.v1 == source_vertex ? candidate.v2 : candidate.v1
+        segment_vec = to_cartesian(far_vertex) - source_cart
+        segment_len = sqrt(segment_vec.x^2 + segment_vec.y^2)
+        score = (cursor_vec.x * segment_vec.x + cursor_vec.y * segment_vec.y) / (cursor_len * segment_len)
+        if score > best_score
+            best_score = score
+            best_candidate = candidate
+        end
+    end
+
+    return best_candidate
+end
+
+"Gets the correct rotation matrix for a pipe segment."
+function get_rotmat(pipe::PipeCoord)
+    cart_vec = to_cartesian(AxialCoord(to_axial(pipe.v2) - to_axial(pipe.v1)))
     angle = atand(cart_vec.y, cart_vec.x)
-    return rotmat_2D(angle)
+    authored_axis_angle = pipe_span_class(pipe) === SHORT_DIAGONAL_SPAN ? 90.0f0 : 0.0f0
+    return rotmat_2D(angle - authored_axis_angle)
 end
 
 """

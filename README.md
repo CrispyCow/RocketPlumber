@@ -174,7 +174,7 @@ A floating point number can be used to represent an arbitrary point in this coor
 
 A number of other map elements have coordinate systems defined for them. The corners of the hexagonal tiles (used as the pressure nodes) are stored as a `VertexCoord` which combines a `TileCoord` and a direction. This is not a unique representation so the concept of a 'proper' vertex was introduced, where the only allowable directions are `Q_POS` and `Q_NEG` (left and right). There is only one 'proper' representation for a given vertex.
 
-The edges between hexagonal tiles (used for the pipes) are stored as an `EdgeCoord` which consists of the 2 `VertexCoord`s it spans. This is a similarly non-unique representation, so a 'proper' edge is defined as consisting of proper vertexes, and ordered so the vertexes span from left to right. There is only one 'proper' representation for a given edge.
+Pipes are stored as a `PipeCoord`, which consists of the 2 `VertexCoord`s it spans. `PipeCoord` is canonical: both endpoints are converted to proper vertexes, the pair must form a valid side, short diagonal, or long diagonal span, and the endpoints are ordered deterministically. There is only one `PipeCoord` representation for a given pipe segment.
 
 These coordinate system types are all defined in `local_packages/HexFrame`. This was one of the earliest parts of the code I wrote, so there is a lot in here that is suboptimal.
 

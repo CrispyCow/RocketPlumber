@@ -1,6 +1,6 @@
 # Component System
 
-Components use a **fragment composition** pattern. Complex behaviours are built from small reusable `*BehavFrag` structs. Concrete types (`*CompBehav` for tiles, `*PipeBehav` for edges) compose fragments and delegate interface methods.
+Components use a **fragment composition** pattern. Complex behaviours are built from small reusable `*BehavFrag` structs. Concrete types (`*CompBehav` for tiles, `*PipeBehav` for pipe segments) compose fragments and delegate interface methods.
 
 See `component_module_guide.md` for the full authoring guide.
 
@@ -13,8 +13,7 @@ See `component_module_guide.md` for the full authoring guide.
 - `HexFlowNozzleComponents` — nozzles, switched nozzles, decomp chambers with thrust calculation and particle exhaust
 - `HexFlowPumpComponents` — turbopumps (gas-driven) and electric pumps (battery-powered) with energy management
 - `HexFlowSwitchComponents` — bool switches, stepped adjustable valves, and on/off valves in two sizes (`LargeValve`, `TinyValve`)
-- `HexFlowPipeComponents` — tile-based multi-pipe component fragments and container (`MultiPipeTileCompBehav`, `ScrapTilePipeBehavFrag`, `BigTilePipeBehavFrag`)
-- `HexFlowBasicPipes` — edge-based pipe behaviours (`ScrapPipeBehav`, `BigPipeBehav`)
+- `HexFlowBasicPipes` — pipe-segment behaviours (`ScrapPipeBehav`, `BigPipeBehav`)
 
 ---
 
@@ -30,11 +29,11 @@ See `component_module_guide.md` for the full authoring guide.
 
 ---
 
-## PipeBehavior Interface (edge-placed)
+## PipeBehavior Interface (pipe-segment placed)
 
-**Mandatory:** `get_conductance`, `get_pipe_tunables`, `set_pipe_tunables`, `render_pipe_base!`
+**Mandatory:** `get_conductance`, `get_pipe_tunables`, `set_pipe_tunables`, `render_pipe_base!`, `get_pipe_click_radius`
 
-**Optional:** `render_pipe_map!`, `produce_rel_fluid_declarations`, `can_pipe_be_moved`, `produce_abs_elements`, `get_tile_pipe_equivalent`
+**Optional:** `render_pipe_map!`, `produce_rel_fluid_declarations`, `can_pipe_be_moved`, `produce_abs_elements`
 
 ---
 
@@ -44,7 +43,7 @@ See `component_module_guide.md` for the full authoring guide.
 - **Nozzles**: `TinyNozzle`, `SmallNozzle`, `MediumNozzle`, `SwitchedTinyNozzle`, `BasicDecompChamber`
 - **Pumps**: `TurboPump`, `ElecTurboPump`, `ElecTransferPump`
 - **Valves**: `LargeAdjValve`, `TinyAdjValve` (stepped), `LargeOnOffValve`, `TinyOnOffValve` — all `StandardValveCompBehav{S,V}`
-- **Pipes (edge)**: `ScrapPipe` (2.0 S), `BigPipe` (10.0 S)
+- **Pipes**: `ScrapPipe` (2.0 S), `BigPipe` (10.0 S)
 
 ---
 

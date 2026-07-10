@@ -26,19 +26,19 @@
 ### Game Map (Multi-Ship)
 
 - **`GameMap`** (in `FlowMap`): top-level container with:
-	- `ships::Dict{Symbol, ShipState}` — always has `:primary`. Each `ShipState` carries `ship_tiles`, `docking_status`, and render offset state. It is a lightweight container — it does **not** own components or pipes.
-	- `components::Dict{TileCoord, ComponentOnTile}` — global components dict for the whole gamemap. Ownership is encoded on the value: `ComponentOnTile.ship::Symbol`.
-	- `pipe_behaviors::Dict{EdgeCoord, PipeOnEdge}` — global pipes dict. Ownership is encoded on the value: `PipeOnEdge.ship::Symbol`.
+	- `ships::Dict{Symbol, ShipState}` — always has `:primary`. Each `ShipState` carries docking and render-offset state. It is a lightweight container — it does **not** own components, pipes, or surface tiles.
+	- `components::Dict{TileCoord, PlacedComponent}` — global components dict for the whole gamemap. Ownership is encoded on the value: `PlacedComponent.ship::Symbol`.
+	- `pipe_behaviors::Dict{PipeCoord, PlacedPipe}` — global pipes dict. Ownership is encoded on the value: `PlacedPipe.ship::Symbol`.
 	- `space_map::AbstractSpaceMap`, `learning_system::AbstractLearningSystem`.
 - **`ShipBlueprint`**: detached construction payload used to build encounter ships, demo maps, and tile-by-tile generation. Carries its own `components` / `pipe_behaviors` dicts plus `ship_tiles`. Merged into a `GameMap` via `merge_ship!`.
 
 Ship management: `add_ship!`, `remove_ship!`, `get_all_ship_names`, `has_ship`, `get_ship_state`, `merge_ship!`, `swap_primary!`, `get_ship_blueprint`, `offset_ship!`.
 
-Cross-ship queries: `find_ship_for_surface`, `find_ship_containing_edge`, `find_ship_for_placement`, `get_shiptag`, `find_tile_pipe_host_ship`, `find_ship_surface_containing_node`, `find_ship_pipes_containing_node`, `find_ship_for_node`, `is_on_surface_tile_any_ship`.
+Cross-ship queries: `find_ships_adjacent_to_coord`, `find_ship_for_placement`, `find_ship_containing`, `get_surface_shiptag`, `get_component_shiptag`, `get_pipe_shiptag`, `find_ship_surface_containing_node`, `find_ship_pipes_containing_node`, `find_ship_for_node`, `is_on_surface_tile_any_ship`.
 
 Component / pipe access (all routed off the global dicts; ownership is encoded on the value's `.ship` field):
 
-- Single-coord: `get_component`, `has_component`, `set_component!`, `delete_component!`, and pipe equivalents. None take a `ship_name` kwarg — to filter by ship, read `.ship` on the returned `ComponentOnTile` / `PipeOnEdge`. To set with a specific ship, construct the wrapper with that ship: `ComponentOnTile(behav, rot, ship)` / `PipeOnEdge(behav, ship)`.
+- Single-coord: `get_component`, `has_component`, `set_component!`, `delete_component!`, and pipe equivalents. None take a `ship_name` kwarg — to filter by ship, read `.ship` on the returned `PlacedComponent` / `PlacedPipe`. To set with a specific ship, construct the wrapper with that ship: `PlacedComponent(behav, rot, ship)` / `PlacedPipe(behav, ship)`.
 - Bulk: `get_components(gamemap)` and `get_pipes(gamemap)` return the underlying shared dicts. `count_components(gamemap; ship_name=...)` and `count_pipes(gamemap; ship_name=...)` provide zero-allocation counts and still accept `ship_name` as a filter.
 - Lazy iteration: `each_component_of_ship(gamemap, ship_name)` / `each_pipe_of_ship(gamemap, ship_name)` for per-ship values, `each_component_of_type(gamemap, SomeBehav)` / `each_pipe_of_type(gamemap, SomePipeBehav)` for per-type values. If you need coords as well, filter `get_components(gamemap)` or `get_pipes(gamemap)` pairs rather than reaching into the backing fields directly.
 
@@ -49,7 +49,7 @@ Six coordinate types for flat-top hexagonal grids:
 - `TileCoord` — integer axial, identifies a hex tile
 - `AxialCoord` — continuous axial for sub-tile precision
 - `VertexCoord` — hex vertex, canonicalised via `to_proper`
-- `EdgeCoord` — hex edge between two vertices
+- `PipeCoord` — canonical pipe segment between two vertices
 - `NodeCoord` — circuit node (6 axis directions + `NODE_INTERNAL` + `GROUND`)
 
 `HexAxis` enum: `Q_POS=0, R_NEG=1, S_POS=2, Q_NEG=3, R_POS=4, S_NEG=5` — forms Z/6Z rotation group; each increment = 60°.
@@ -115,8 +115,7 @@ Three `DockingStatus` subtypes: `ConnectedDockStat`, `ApproachingDockStat`, `Dep
 |----------|-------|---------|
 | `RENDER_HEIGHT_TRACTOR_BEAM` | -1100 | Docking beam visuals |
 | `RENDER_HEIGHT_BACKGROUND` | -1000 | Ship surface tiles |
-| `RENDER_HEIGHT_PIPE_BASE` | -10 | Base pipe sprite |
-| `RENDER_HEIGHT_PIPE` | 0 | Pipe fluid mask |
+| `RENDER_HEIGHT_PIPE_RANK_MULTIPLIER` | 10 | Pipe stacking-rank band spacing |
 | `RENDER_HEIGHT_COMPONENT_BEHIND` | 1000 | Behind-component art (fluid masks, energy bars) |
 | `RENDER_HEIGHT_COMPONENT_STATIC` | 2000 | Static component sprites |
 | `RENDER_HEIGHT_COMPONENT_ANIM` | 3000 | Animated overlays (flames, smoke) |
