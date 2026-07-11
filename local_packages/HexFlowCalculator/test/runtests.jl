@@ -1603,6 +1603,19 @@ end
         @test collect_surface_tiles!(Set{TileCoord}(), gm; ship_name = :asteroid) == original_tiles
     end
 
+    @testset "rejects placement when pipe clearance overlaps another ship" begin
+        gm = make_gamemap()
+        add_ship!(gm, :asteroid, ShipState(docking_status = FlowMap.ConnectedDockStat()))
+        set_surface_tile!(gm, TileCoord(10, 0); ship_name = :asteroid)
+        set_pipe!(gm, side_pipe(TileCoord(15, 0)), MockPipeBehav(); ship_name = :asteroid)
+
+        cmd = create_redock_ship_command(cq, :asteroid, TileCoord(-15, 0))
+        original_tiles = collect_surface_tiles!(Set{TileCoord}(), gm; ship_name = :asteroid)
+        process_and_log!(cmd, gm)
+
+        @test collect_surface_tiles!(Set{TileCoord}(), gm; ship_name = :asteroid) == original_tiles
+    end
+
     @testset "rejects redock of nonexistent ship" begin
         gm = GameMap()
         delta = TileCoord(1, 0)

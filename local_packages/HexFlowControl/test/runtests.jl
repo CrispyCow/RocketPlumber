@@ -38,9 +38,8 @@ function make_test_redock_state()
         ship_name = :test_ship,
         ship_tiles = Set{TileCoord}(),
         exclusion_ring = Set{TileCoord}(),
-        ship_nodes = Set{NodeCoord}(),
-        other_ship_tiles = Set{TileCoord}(),
-        other_ship_nodes = Set{NodeCoord}(),
+        ship_footprint = Set{TileCoord}(),
+        other_exclusion = Set{TileCoord}(),
         original_centre = TileCoord(0, 0),
     )
 end

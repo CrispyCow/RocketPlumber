@@ -125,10 +125,9 @@ entry so per-frame validity checking is cheap.
 @kwdef mutable struct PlacementRedockState <: AbstractPlacementState
     ship_name::Symbol                           # ship being redocked
     ship_tiles::Set{TileCoord}                  # original surface tiles (green/red ghost)
-    exclusion_ring::Set{TileCoord}              # combined 2-ring expansion minus core (grey ghost)
-    ship_nodes::Set{NodeCoord}                  # circuit nodes of this ship (pipe bridge check)
-    other_ship_tiles::Set{TileCoord}            # combined surfaces of all other ships
-    other_ship_nodes::Set{NodeCoord}            # combined nodes of all other ships
+    exclusion_ring::Set{TileCoord}              # surface and pipe clearance rendered around the ghost
+    ship_footprint::Set{TileCoord}              # untranslated surface and pipe clearance for validation
+    other_exclusion::Set{TileCoord}             # fixed docking exclusion of all other ships
     original_centre::TileCoord                  # centre tile for computing mouse delta
 end
 

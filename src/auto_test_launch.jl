@@ -440,10 +440,10 @@ test_commands::TestCommandSchedule = [
     make_test_step(5300, make_test_redock_ship(:primary, TileCoord(1, 0));
         expected_status = INVALID,
         description = "Attempt redock of :primary"),
-    # After the blocked return above, this shorter follow-up offset is still valid.
+    # This shorter offset clears the hull buffer but conflicts with pipe clearance.
     make_test_step(5380, make_test_redock_ship(SHIP_AV551, TileCoord(0, 2));
-        expected_status = APPLIED,
-        description = "Redock AV-551 by (0,2) from offset position"),
+        expected_status = INVALID,
+        description = "Reject redock AV-551 by (0,2) due to pipe clearance"),
 
     # ----- Phase H: Encounter ship spawning --------------------------
     # Reuse an existing ship's blueprint via `get_ship_blueprint` so the

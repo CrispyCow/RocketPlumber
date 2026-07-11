@@ -87,6 +87,8 @@ using HexFrame
 
     @testset "round_axial_to_tile for AxialCoord" begin
         @test round_to_tile(AxialCoord(0.1, 0.1)) ≈ TileCoord(0, 0)
+        @test round_to_tile(AxialCoord(40000.2, -40000.1)) == TileCoord(40000, -40000)
+        @test TileCoord(0, 0).q isa Int32
 
     end
 

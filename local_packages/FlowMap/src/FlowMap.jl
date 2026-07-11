@@ -37,6 +37,8 @@ export get_axial_bounds, get_cartesian_bounds, get_surface_centroid
 export get_surface_shiptag, get_component_shiptag, get_pipe_shiptag
 export find_ships_adjacent_to_coord, find_ship_for_placement, find_ship_containing
 export find_ship_surface_containing_node, find_ship_pipes_containing_node, find_ship_for_node
+export DOCKING_SURFACE_CLEARANCE, docking_footprint, docking_footprint_including, docking_footprint_excluding
+export ship_footprints_overlap
 
 #= ---------- Learning System Exports ----------- =#
 export get_learning_system, set_learning_system!, has_learning_system, is_sandbox_learning
@@ -940,6 +942,89 @@ function expand_tileset(tiles::Set{TileCoord}, n::Integer)::Set{TileCoord}
     expanded = Set{TileCoord}()
     sizehint!(expanded, max(length(tiles) * 4, length(tiles)))
     return expand_tileset!(expanded, tiles, n)
+end
+
+#= ---------- Ship Docking Footprints ----------- =#
+
+"Minimum surface-to-surface clearance maintained while ships are docked."
+const DOCKING_SURFACE_CLEARANCE::Int = 2
+
+"Add every tile touching an endpoint node of `pipe_coords` to `dest`."
+function _add_docking_pipe_clearance_tiles!(dest::Set{TileCoord}, pipe_coords)
+    for pipe_coord in pipe_coords
+        for vertex in (pipe_coord.v1, pipe_coord.v2)
+            for (tile, _) in HexFrame.get_adjacent_tiles_for_node(to_nodecoord(vertex))
+                push!(dest, tile)
+            end
+        end
+    end
+    return dest
+end
+
+"Build a docking footprint from surface tiles and pipe endpoint clearance."
+function docking_footprint(surface_tiles, pipe_coords; surface_clearance::Integer = 0)::Set{TileCoord}
+    surface_clearance < 0 && throw(ArgumentError("surface_clearance must be non-negative"))
+    footprint = surface_clearance == 0 ? Set{TileCoord}(surface_tiles) : expand_tileset(Set{TileCoord}(surface_tiles), surface_clearance)
+    _add_docking_pipe_clearance_tiles!(footprint, pipe_coords)
+    return footprint
+end
+
+"Build the surface and pipe-clearance footprint for a detached ship blueprint."
+function docking_footprint(blueprint::ShipBlueprint; surface_clearance::Integer = 0)::Set{TileCoord}
+    return docking_footprint(blueprint.ship_tiles, keys(blueprint.pipe_behaviors); surface_clearance)
+end
+
+"Build the surface and pipe-clearance footprint for every ship in `gamemap`."
+function docking_footprint(gamemap::GameMap; surface_clearance::Integer = 0)::Set{TileCoord}
+    return docking_footprint_excluding(gamemap; surface_clearance)
+end
+
+"Build a docking footprint containing only `included_ships`."
+function docking_footprint_including(
+        gamemap::GameMap, included_ships::Vararg{Symbol}; surface_clearance::Integer = 0
+    )::Set{TileCoord}
+    surface_tiles = Set{TileCoord}()
+    pipe_coords = PipeCoord[]
+
+    for (tile, ship_name) in each_surface_owner(gamemap)
+        ship_name in included_ships || continue
+        push!(surface_tiles, tile)
+    end
+    for (coord, pipe) in get_pipes(gamemap)
+        pipe.ship in included_ships || continue
+        push!(pipe_coords, coord)
+    end
+
+    return docking_footprint(surface_tiles, pipe_coords; surface_clearance)
+end
+
+"Build a docking footprint containing every ship except `excluded_ships`."
+function docking_footprint_excluding(
+        gamemap::GameMap, excluded_ships::Vararg{Symbol}; surface_clearance::Integer = 0
+    )::Set{TileCoord}
+    surface_tiles = Set{TileCoord}()
+    pipe_coords = PipeCoord[]
+
+    for (tile, ship_name) in each_surface_owner(gamemap)
+        ship_name in excluded_ships && continue
+        push!(surface_tiles, tile)
+    end
+    for (coord, pipe) in get_pipes(gamemap)
+        pipe.ship in excluded_ships && continue
+        push!(pipe_coords, coord)
+    end
+
+    return docking_footprint(surface_tiles, pipe_coords; surface_clearance)
+end
+
+"Return whether `incoming_footprint` overlaps `existing_footprint` after `offset` translation."
+function ship_footprints_overlap(
+        existing_footprint::Set{TileCoord}, incoming_footprint::Set{TileCoord}, offset::TileCoord = TileCoord(0, 0)
+    )::Bool
+    for tile in incoming_footprint
+        tile + offset in existing_footprint && return true
+    end
+    return false
 end
 
 # ===============================================================

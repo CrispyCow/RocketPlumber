@@ -59,8 +59,8 @@ A composite datatype representing coordinates in the axial coordinate frame.
 Limited to integers, to represent the coordinate of an actual tile.
 """
 struct TileCoord <: AbstractAxialCoordSystem
-    q::Int16
-    r::Int16
+    q::Int32
+    r::Int32
 end
 @struct_hash_equal TileCoord
 
@@ -221,16 +221,16 @@ Equivalent to `round_to_tile(CartesianCoord(x, y))`.
     r_axial = (-1.0 / 3.0) * x + (-sqrt(3.0) / 3.0) * y
 
     # round_to_tile logic (inlined)
-    q_grid = round(Int16, q_axial)
-    r_grid = round(Int16, r_axial)
+    q_grid = round(Int32, q_axial)
+    r_grid = round(Int32, r_axial)
     q_rem = q_axial - Float64(q_grid)
     r_rem = r_axial - Float64(r_grid)
 
     if abs(q_rem) >= abs(r_rem)
-        q_offset = round(Int16, q_rem + 0.5 * r_rem)
+        q_offset = round(Int32, q_rem + 0.5 * r_rem)
         return TileCoord(q_grid + q_offset, r_grid)
     else
-        r_offset = round(Int16, r_rem + 0.5 * q_rem)
+        r_offset = round(Int32, r_rem + 0.5 * q_rem)
         return TileCoord(q_grid, r_grid + r_offset)
     end
 end
@@ -927,7 +927,7 @@ Base.convert(::Type{CartesianCoord}, coord::CartesianCoord) = coord
 Base.convert(::Type{AxialCoord}, coord::TileCoord) = AxialCoord(Float64(coord.q), Float64(coord.r))
 
 "Convert AxialCoord to TileCoord by rounding floats to integers."
-Base.convert(::Type{TileCoord}, coord::AxialCoord) = TileCoord(Int16(round(coord.q)), Int16(round(coord.r)))
+Base.convert(::Type{TileCoord}, coord::AxialCoord) = TileCoord(Int32(round(coord.q)), Int32(round(coord.r)))
 
 "Convert axial coordinate system to CartesianCoord using transformation matrix."
 Base.convert(::Type{CartesianCoord}, coord::AbstractAxialCoordSystem) = to_cartesian(coord)

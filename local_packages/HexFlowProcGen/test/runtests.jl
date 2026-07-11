@@ -121,6 +121,27 @@ function make_bare_blueprint(seed::UInt32)
     return bp
 end
 
+"Create a side-span pipe on `tile` for docking-clearance tests."
+function make_test_pipe_coord(tile::TileCoord = TileCoord(0, 0))
+    return PipeCoord(VertexCoord(tile, HexFrame.Q_POS), VertexCoord(tile, HexFrame.R_NEG))
+end
+
+"Collect endpoint nodes from an iterable of pipe coordinates."
+function collect_pipe_nodes(pipe_coords)
+    nodes = Set{NodeCoord}()
+    for pipe_coord in pipe_coords
+        push!(nodes, to_nodecoord(pipe_coord.v1), to_nodecoord(pipe_coord.v2))
+    end
+    return nodes
+end
+
+"Return the hex-grid distance between two tile coordinates."
+function tile_distance(a::TileCoord, b::TileCoord)::Int
+    dq = Int(a.q) - Int(b.q)
+    dr = Int(a.r) - Int(b.r)
+    return max(abs(dq), abs(dr), abs(dq + dr))
+end
+
 "Add a mock mass-reporting component to `gm` for delta-V estimator tests."
 function add_mock_mass_component!(
         gm::GameMap,
@@ -789,20 +810,6 @@ const mock_pipe_opts = [PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES,
         @test !isempty(blueprint.components)
     end
 
-    @testset "_is_ship_too_close" begin
-        tiles = make_small_surface()
-        gm = make_test_gamemap(tiles)
-        expanded = FlowMap.expand_tileset(collect_surface_tiles!(Set{TileCoord}(), gm), HexFlowProcGen.MIN_SPACING)
-
-        # Ship at origin is within MIN_SPACING of primary
-        close_ship = ShipBlueprint(ship_tiles = Set([TileCoord(0, 0)]))
-        @test HexFlowProcGen._is_ship_too_close(close_ship, expanded) == true
-
-        # Ship far away is not
-        remote_ship = ShipBlueprint(ship_tiles = Set([TileCoord(100, 100)]))
-        @test HexFlowProcGen._is_ship_too_close(remote_ship, expanded) == false
-    end
-
     @testset "_rects_overlap" begin
         a = (X_POS = 5.0, X_NEG = 0.0, Y_POS = 5.0, Y_NEG = 0.0)
         b = (X_POS = 3.0, X_NEG = 1.0, Y_POS = 3.0, Y_NEG = 1.0)
@@ -847,6 +854,38 @@ end
             encounter_ship!(gm, bp, "axis_$(axis)", UInt32(0xAAAA), axis)
             @test length(gm.ships) == 2  # :primary + new ship
         end
+    end
+
+    @testset "avoids existing off-ship pipes" begin
+        gm = make_origin_gamemap()
+        old_surface_only_offset = TileCoord(3, -3)
+        set_pipe!(gm, offset_by_tile(make_test_pipe_coord(), old_surface_only_offset), MockPipeBehav())
+
+        encounter_ship!(
+            gm, ShipBlueprint(ship_tiles = Set([TileCoord(0, 0)])), "pipe_obstruction",
+            UInt32(0x5151), HexFrame.Q_POS
+        )
+        new_ship = only(setdiff(keys(gm.ships), [:primary]))
+        @test round_to_tile(get_surface_centroid(gm, new_ship)) != old_surface_only_offset
+    end
+
+    @testset "keeps protruding incoming pipes disconnected" begin
+        gm = make_origin_gamemap()
+        old_surface_only_offset = TileCoord(3, -3)
+        protruding_pipe = offset_by_tile(make_test_pipe_coord(), TileCoord(2, -2))
+        existing_pipe = offset_by_tile(protruding_pipe, old_surface_only_offset)
+        set_pipe!(gm, existing_pipe, MockPipeBehav())
+
+        blueprint = ShipBlueprint(
+            pipe_behaviors = Dict(protruding_pipe => MockPipeBehav()),
+            ship_tiles = Set([TileCoord(0, 0)]),
+        )
+        encounter_ship!(gm, blueprint, "pipe_nodes", UInt32(0x5252), HexFrame.Q_POS)
+        new_ship = only(setdiff(keys(gm.ships), [:primary]))
+
+        existing_nodes = collect_pipe_nodes((existing_pipe,))
+        incoming_coords = (coord for (coord, pipe) in get_pipes(gm) if pipe.ship === new_ship)
+        @test isdisjoint(existing_nodes, collect_pipe_nodes(incoming_coords))
     end
 
     @testset "encounter -> connect -> depart end-to-end" begin
@@ -1361,53 +1400,95 @@ end
 end
 
 # ===============================================================
-# _offset_ship_until_clear! tests
+# Encounter docking geometry tests
 # ===============================================================
 
-@testset "_offset_ship_until_clear!" begin
+@testset "Encounter docking geometry" begin
 
-    @testset "steps outward until no overlap" begin
+    @testset "builds surface and pipe footprints in the intended order" begin
         gm = make_origin_gamemap()
-        # Ship placed at primary's location (origin) — overlaps
-        trial = ShipBlueprint(ship_tiles = Set([TileCoord(0, 0)]))
+        pipe_coord = offset_by_tile(make_test_pipe_coord(), TileCoord(20, 20))
+        set_pipe!(gm, pipe_coord, MockPipeBehav())
 
-        steps = HexFlowProcGen._offset_ship_until_clear!(gm, trial, HexFrame.Q_POS)
-        @test steps >= 3  # at least distance 3 to clear the 2-ring exclusion zone
+        surface_only = expand_tileset(Set([TileCoord(0, 0)]), DOCKING_SURFACE_CLEARANCE)
+        pipe_tiles = docking_footprint(ShipBlueprint(pipe_behaviors = Dict(pipe_coord => MockPipeBehav())))
+        exclusion = docking_footprint(gm; surface_clearance = DOCKING_SURFACE_CLEARANCE)
 
-        # Ship should no longer be within the exclusion zone
-        expanded = FlowMap.expand_tileset(collect_surface_tiles!(Set{TileCoord}(), gm), HexFlowProcGen.MIN_SPACING)
-        @test HexFlowProcGen._is_ship_too_close(trial, expanded) == false
+        @test surface_only ⊆ exclusion
+        @test pipe_tiles ⊆ exclusion
+
+        outside_pipe_margin = first(
+            tile for pipe_tile in pipe_tiles for tile in get_adjacent_tiles_for_tile(pipe_tile)
+            if tile ∉ pipe_tiles && tile ∉ surface_only
+        )
+        @test outside_pipe_margin ∉ exclusion
+
+        component_coord = TileCoord(30, 30)
+        blueprint = ShipBlueprint(
+            components = Dict(component_coord => PlacedComponent(MockCompBehav(1.0), HexFrame.Q_POS, :incoming)),
+            pipe_behaviors = Dict(make_test_pipe_coord() => MockPipeBehav()),
+            ship_tiles = Set([TileCoord(0, 0)]),
+        )
+        incoming = docking_footprint(blueprint)
+        incoming_pipe_tiles = docking_footprint(ShipBlueprint(pipe_behaviors = blueprint.pipe_behaviors))
+
+        @test TileCoord(0, 0) in incoming
+        @test incoming_pipe_tiles ⊆ incoming
+        @test component_coord ∉ incoming
+        @test docking_footprint(ShipBlueprint(pipe_behaviors = Dict(pipe_coord => MockPipeBehav()))) == pipe_tiles
     end
 
-    @testset "no overlap from start — zero steps" begin
-        gm = make_origin_gamemap()
-        trial = ShipBlueprint(ship_tiles = Set([TileCoord(50, 50)]))
+    @testset "checks translated footprints without mutation" begin
+        existing = Set([TileCoord(0, 0), TileCoord(2, -2)])
+        incoming = Set([TileCoord(0, 0), TileCoord(1, 0)])
+        existing_before = copy(existing)
+        incoming_before = copy(incoming)
 
-        steps = HexFlowProcGen._offset_ship_until_clear!(gm, trial, HexFrame.Q_POS)
-        @test steps == 0  # already outside the exclusion zone
-    end
-
-    @testset "works with all 6 directions" begin
-        gm = make_origin_gamemap()
+        @test ship_footprints_overlap(existing, incoming)
+        @test ship_footprints_overlap(existing, incoming, TileCoord(1, -2))
+        @test !ship_footprints_overlap(existing, incoming, TileCoord(10, 10))
         for dir in instances(HexFrame.HexAxis)
-            trial = ShipBlueprint(ship_tiles = Set([TileCoord(0, 0)]))
-
-            steps = HexFlowProcGen._offset_ship_until_clear!(gm, trial, dir)
-            @test steps >= 3
-            expanded = FlowMap.expand_tileset(collect_surface_tiles!(Set{TileCoord}(), gm), HexFlowProcGen.MIN_SPACING)
-            @test HexFlowProcGen._is_ship_too_close(trial, expanded) == false
+            translated = Set(tile + HexFrame.hex_neighbour_tiles[dir] for tile in incoming)
+            expected = !isdisjoint(existing, translated)
+            @test ship_footprints_overlap(
+                existing, incoming, HexFrame.hex_neighbour_tiles[dir]
+            ) == expected
         end
+
+        @test existing == existing_before
+        @test incoming == incoming_before
+        offset = HexFlowProcGen._find_docking_offset(
+            Set([TileCoord(typemax(Int16), 0)]), Set([TileCoord(0, 0)]),
+            TileCoord(typemax(Int16), 0), HexFrame.Q_POS
+        )
+        @test offset == TileCoord(typemax(Int16) + 1, -1)
     end
 
-    @testset "returns consistent result for same setup" begin
-        gm = make_origin_gamemap()
-        trial1 = ShipBlueprint(ship_tiles = Set([TileCoord(0, 0)]))
-        steps1 = HexFlowProcGen._offset_ship_until_clear!(gm, trial1, HexFrame.R_NEG)
+    @testset "searches beyond the former 500-step cap" begin
+        existing = Set(TileCoord(distance, -distance) for distance in 0:1200)
+        incoming = Set([TileCoord(0, 0)])
+        offset = HexFlowProcGen._find_docking_offset(
+            existing, incoming, TileCoord(0, 0), HexFrame.Q_POS
+        )
 
-        trial2 = ShipBlueprint(ship_tiles = Set([TileCoord(0, 0)]))
-        steps2 = HexFlowProcGen._offset_ship_until_clear!(gm, trial2, HexFrame.R_NEG)
+        @test tile_distance(offset, TileCoord(0, 0)) > 500
+        @test !ship_footprints_overlap(existing, incoming, offset)
+    end
 
-        @test steps1 == steps2
+    @testset "handles empty geometry from the origin" begin
+        dir, offset = HexFlowProcGen._find_optimal_docking_offset(
+            Set{TileCoord}(), Set([TileCoord(0, 0)]), TileCoord(0, 0), UInt32(0x1234)
+        )
+        @test dir in instances(HexFrame.HexAxis)
+        @test offset == TileCoord(0, 0)
+
+        gm = GameMap()
+        delete_all_surface_tiles!(gm)
+        encounter_ship_optimal_dir!(
+            gm, ShipBlueprint(ship_tiles = Set([TileCoord(0, 0)])), "empty_primary", UInt32(0x1234)
+        )
+        new_ship = only(setdiff(keys(gm.ships), [:primary]))
+        @test get_surface_centroid(gm, new_ship) == HexFrame.AxialCoord(0.0, 0.0)
     end
 end
 
@@ -1441,19 +1522,26 @@ end
 
         newship = ShipBlueprint(ship_tiles = Set([TileCoord(0, 0)]))
 
-        # Measure distances for each direction
         centroid_tile = HexFrame.round_to_tile(get_surface_centroid(gm, :primary))
+        existing_exclusion = docking_footprint(gm; surface_clearance = DOCKING_SURFACE_CLEARANCE)
+        incoming_footprint = docking_footprint(newship)
         dists = Dict{HexFrame.HexAxis, Int}()
         for dir in instances(HexFrame.HexAxis)
-            trial = deepcopy(newship)
-            offset_ship!(trial, centroid_tile)
-            dists[dir] = HexFlowProcGen._offset_ship_until_clear!(gm, trial, dir)
+            offset = HexFlowProcGen._find_docking_offset(
+                existing_exclusion, incoming_footprint, centroid_tile, dir
+            )
+            dists[dir] = tile_distance(offset, centroid_tile)
         end
 
         # Perpendicular directions should be much shorter than along-the-line directions
         @test dists[HexFrame.R_NEG] < dists[HexFrame.S_NEG]
         @test dists[HexFrame.R_POS] < dists[HexFrame.S_POS]
         @test dists[HexFrame.Q_POS] < dists[HexFrame.S_NEG]
+
+        encounter_ship_optimal_dir!(gm, newship, "minimum_distance", UInt32(0xA11CE))
+        new_name = only(setdiff(keys(gm.ships), [:primary]))
+        final_tile = round_to_tile(get_surface_centroid(gm, new_name))
+        @test tile_distance(final_tile, centroid_tile) == minimum(values(dists))
     end
 
     @testset "deterministic for same seed" begin
@@ -1470,6 +1558,42 @@ end
         s1 = FlowMap.get_docking_status(gm1, key1)
         s2 = FlowMap.get_docking_status(gm2, key2)
         @test s1.motion.current_offset == s2.motion.current_offset
+    end
+
+    @testset "seeded ties include every clear direction" begin
+        gm = make_origin_gamemap()
+        blueprint = ShipBlueprint(ship_tiles = Set([TileCoord(0, 0)]))
+        exclusion = docking_footprint(gm; surface_clearance = DOCKING_SURFACE_CLEARANCE)
+        footprint = docking_footprint(blueprint)
+        anchor = TileCoord(0, 0)
+
+        chosen_dirs = Set{HexFrame.HexAxis}()
+        for seed in UInt32(1):UInt32(64)
+            dir, offset = HexFlowProcGen._find_optimal_docking_offset(exclusion, footprint, anchor, seed)
+            push!(chosen_dirs, dir)
+            @test tile_distance(offset, anchor) == 3
+        end
+        @test chosen_dirs == Set(instances(HexFrame.HexAxis))
+    end
+
+    @testset "does not mutate the input blueprint" begin
+        gm = make_origin_gamemap()
+        pipe_coord = make_test_pipe_coord()
+        component_coord = TileCoord(0, 0)
+        blueprint = ShipBlueprint(
+            components = Dict(component_coord => PlacedComponent(MockCompBehav(1.0), HexFrame.Q_POS, :incoming)),
+            pipe_behaviors = Dict(pipe_coord => MockPipeBehav()),
+            ship_tiles = Set([TileCoord(0, 0)]),
+        )
+        component_keys = Set(keys(blueprint.components))
+        pipe_keys = Set(keys(blueprint.pipe_behaviors))
+        ship_tiles = copy(blueprint.ship_tiles)
+
+        encounter_ship_optimal_dir!(gm, blueprint, "unchanged", UInt32(0xC0DE))
+
+        @test Set(keys(blueprint.components)) == component_keys
+        @test Set(keys(blueprint.pipe_behaviors)) == pipe_keys
+        @test blueprint.ship_tiles == ship_tiles
     end
 
     @testset "spreads ships around when multiple docked" begin

@@ -895,10 +895,8 @@ function apply_mapedit_command!(
 end
 
 """
-Relocate a non-primary ship by a tile offset. Validates that the new position
-does not overlap any other ship's surface (including a 2-tile exclusion gap
-enforced by the render-side check) and does not bridge circuit nodes. Sets up
-an `ApproachingDockStat` so the ship animates to its new position.
+Relocate a non-primary ship by a tile offset. Validates the shared docking
+footprints before setting up an `ApproachingDockStat` to animate the move.
 """
 function apply_mapedit_command!(
         gamemap::GameMap,
@@ -917,16 +915,12 @@ function apply_mapedit_command!(
         return false
     end
 
-    # Pre-compute offset tiles without modifying the ship
-    core_tiles = collect_surface_tiles!(Set{TileCoord}(), gamemap; ship_name = command.ship_name)
-    trial_tiles = Set(tile + command.offset for tile in core_tiles)
-
-    # Enforce a 2-tile gap between the relocated ship and all other ships
-    other_tiles = collect_surface_tiles!(Set{TileCoord}(), gamemap; exclude_ship = command.ship_name)
-    exclusion_zone = expand_tileset(other_tiles, 2)
-
-    if !isempty(intersect(trial_tiles, exclusion_zone))
-        threadsafe_console_push("Redock position too close to another ship")
+    other_exclusion = docking_footprint_excluding(
+        gamemap, command.ship_name; surface_clearance = DOCKING_SURFACE_CLEARANCE
+    )
+    ship_footprint = docking_footprint_including(gamemap, command.ship_name)
+    if ship_footprints_overlap(other_exclusion, ship_footprint, command.offset)
+        threadsafe_console_push("Redock position conflicts with another ship's docking clearance")
         return false
     end
 

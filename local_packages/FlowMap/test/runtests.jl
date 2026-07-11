@@ -1497,5 +1497,40 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
         end
     end
 
+    @testset "ship docking footprints" begin
+        pipe_coord = side_pipe(TileCoord(10, 0))
+        pipe_tiles = Set(
+            tile for vertex in (pipe_coord.v1, pipe_coord.v2)
+            for (tile, _) in get_adjacent_tiles_for_node(to_nodecoord(vertex))
+        )
+        blueprint = ShipBlueprint(
+            ship_tiles = Set([TileCoord(20, 0)]),
+            pipe_behaviors = Dict(pipe_coord => MockPipeBehav()),
+        )
+
+        footprint = docking_footprint(blueprint)
+        @test TileCoord(20, 0) in footprint
+        @test pipe_tiles ⊆ footprint
+        @test docking_footprint(Set([TileCoord(20, 0)]), (pipe_coord,)) == footprint
+        @test ship_footprints_overlap(Set([TileCoord(0, 0)]), Set([TileCoord(0, 0)]))
+        @test !ship_footprints_overlap(Set([TileCoord(0, 0)]), Set([TileCoord(0, 0)]), TileCoord(3, 0))
+
+        gm = GameMap()
+        set_pipe!(gm, pipe_coord, MockPipeBehav())
+        add_ship!(gm, :visitor, ShipState())
+        set_surface_tile!(gm, TileCoord(30, 0); ship_name = :visitor)
+        set_pipe!(gm, side_pipe(TileCoord(30, 0)), MockPipeBehav(); ship_name = :visitor)
+
+        exclusion = docking_footprint_excluding(gm, :visitor; surface_clearance = DOCKING_SURFACE_CLEARANCE)
+        @test expand_tileset(Set([TileCoord(0, 0)]), DOCKING_SURFACE_CLEARANCE) ⊆ exclusion
+        @test pipe_tiles ⊆ exclusion
+        @test docking_footprint(gm) == docking_footprint_excluding(gm)
+        @test docking_footprint(gm) == docking_footprint_including(gm, :primary, :visitor)
+        @test docking_footprint_including(gm, :visitor) == docking_footprint_excluding(gm, :primary)
+        @test isempty(docking_footprint_excluding(gm, :primary, :visitor))
+        @test !ship_footprints_overlap(exclusion, docking_footprint_including(gm, :visitor), TileCoord(30, 0))
+        @test ship_footprints_overlap(exclusion, Set([first(pipe_tiles)]))
+    end
+
 end # @testset "FlowMap"
 

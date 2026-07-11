@@ -1698,7 +1698,7 @@ function _render_redock_ghost!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
         ))
     end
 
-    # Exclusion ring (2-tile buffer zone)
+    # Exclusion ring (surface buffer and pipe clearance)
     for tile in rs.exclusion_ring
         push!(queue, render_basic_tile(
             glmap, :ShipSurface_basic, HexFrame.Q_POS, tile + delta;
@@ -1709,22 +1709,17 @@ function _render_redock_ghost!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
     return nothing
 end
 
-"Enter the interactive redock placement mode, caching tile/node sets for fast per-frame validation."
+"Enter the interactive redock placement mode, caching docking footprints for fast per-frame validation."
 function _enter_redock_mode!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, ship_name::Symbol)
     gamemap = flowcalc_ipc.get_snapshot().gamemap
     core_tiles = collect_surface_tiles!(Set{TileCoord}(), gamemap; ship_name = ship_name)
-    ring1 = expand_tileset!(Set{TileCoord}(), core_tiles)
-    ring2 = expand_tileset!(Set{TileCoord}(), ring1)
-
-    ship_elems = FlowEngine.list_elements(gamemap; ship_name = ship_name)
-    ship_nodes = Set(keys(FlowEngine.list_nodes(ship_elems)))
-
-    other_tiles = collect_surface_tiles!(Set{TileCoord}(), gamemap; exclude_ship = ship_name)
-    other_nodes = Set{NodeCoord}()
-    for name in get_all_ship_names(gamemap)
-        name === ship_name && continue
-        union!(other_nodes, keys(FlowEngine.list_nodes(FlowEngine.list_elements(gamemap; ship_name = name))))
-    end
+    ship_footprint = docking_footprint_including(gamemap, ship_name)
+    display_footprint = docking_footprint_including(
+        gamemap, ship_name; surface_clearance = DOCKING_SURFACE_CLEARANCE
+    )
+    other_exclusion = docking_footprint_excluding(
+        gamemap, ship_name; surface_clearance = DOCKING_SURFACE_CLEARANCE
+    )
 
     centroid = get_surface_centroid(gamemap, ship_name)
     original_centre = isnothing(centroid) ? TileCoord(0, 0) : round_to_tile(centroid)
@@ -1732,10 +1727,9 @@ function _enter_redock_mode!(inputstate::InputState, flowcalc_ipc::FlowCalculato
     enter_redock_placement_state!(inputstate, PlacementRedockState(
         ship_name = ship_name,
         ship_tiles = core_tiles,
-        exclusion_ring = setdiff(ring2, core_tiles),
-        ship_nodes = ship_nodes,
-        other_ship_tiles = other_tiles,
-        other_ship_nodes = other_nodes,
+        exclusion_ring = setdiff(display_footprint, core_tiles),
+        ship_footprint = ship_footprint,
+        other_exclusion = other_exclusion,
         original_centre = original_centre,
     ))
     flowcalc_ipc.console_push("Redock mode: click to place $(ship_name), ESC to cancel")
@@ -1744,18 +1738,7 @@ end
 
 "Check whether the given tile offset produces a valid placement for the redocking ship."
 function _check_redock_valid(rs::RedockModeState, delta::TileCoord)::Bool
-    # Surface exclusion: ship core + 2-ring buffer must not overlap other ships
-    for tile in rs.ship_tiles
-        (tile + delta) in rs.other_ship_tiles && return false
-    end
-    for tile in rs.exclusion_ring
-        (tile + delta) in rs.other_ship_tiles && return false
-    end
-    # Node bridge: no circuit node of this ship may coincide with another ship's nodes
-    for node in rs.ship_nodes
-        NodeCoord(node.tile + delta, node.dir) in rs.other_ship_nodes && return false
-    end
-    return true
+    return !ship_footprints_overlap(rs.other_exclusion, rs.ship_footprint, delta)
 end
 
 "Enqueue a `RedockShipCommand` to relocate the ship after the player confirms placement."

@@ -34,9 +34,6 @@ export SpaceMapState, get_encounter_config
 export estimate_min_delta_v
 
 
-"Minimum gap (in tile-steps) added between ships after clearing overlap."
-const MIN_SPACING::Int = 2
-
 # ===============================================================
 # Utilities
 # ===============================================================
@@ -514,7 +511,7 @@ struct WeightedComponentSet
 end
 
 # ===============================================================
-# Encounter Config Data Structures
+# Encounter Logic
 # ===============================================================
 
 "Hull generation parameters: linear scaling for both walk steps and stacks."
@@ -681,9 +678,110 @@ function generate_encounter(
     return blueprint
 end
 
-"Check whether `ship`'s tiles are too close to any existing surfaces in `gamemap` (within MIN_SPACING)."
-function _is_ship_too_close(ship::ShipBlueprint, expanded_other_tiles::Set{TileCoord})::Bool
-    return any(t -> t in expanded_other_tiles, ship.ship_tiles)
+"Return `(q_min, q_max, r_min, r_max)` for `tiles` translated by `offset`."
+function _tile_extrema(tiles::Set{TileCoord}, offset::TileCoord)::NTuple{4, Int}
+    q_min = r_min = typemax(Int)
+    q_max = r_max = typemin(Int)
+    for tile in tiles
+        q = Int(tile.q) + Int(offset.q)
+        r = Int(tile.r) + Int(offset.r)
+        q_min = min(q_min, q)
+        q_max = max(q_max, q)
+        r_min = min(r_min, r)
+        r_max = max(r_max, r)
+    end
+    return (q_min, q_max, r_min, r_max)
+end
+
+"Return a distance at which `incoming_extrema` is guaranteed clear along `step`."
+function _docking_search_limit(
+        existing_extrema::NTuple{4, Int}, incoming_extrema::NTuple{4, Int}, step::TileCoord
+    )::Int
+    existing_q_min, existing_q_max, existing_r_min, existing_r_max = existing_extrema
+    incoming_q_min, incoming_q_max, incoming_r_min, incoming_r_max = incoming_extrema
+
+    if !iszero(step.q)
+        return step.q > 0 ? max(0, existing_q_max - incoming_q_min + 1) :
+            max(0, incoming_q_max - existing_q_min + 1)
+    end
+    return step.r > 0 ? max(0, existing_r_max - incoming_r_min + 1) :
+        max(0, incoming_r_max - existing_r_min + 1)
+end
+
+"Find the first clear offset from `anchor` along one hex-axis direction."
+function _find_docking_offset(
+        existing_exclusion::Set{TileCoord}, incoming_footprint::Set{TileCoord}, anchor::TileCoord,
+        dir::HexFrame.HexAxis
+    )::TileCoord
+    (isempty(existing_exclusion) || isempty(incoming_footprint)) && return anchor
+
+    step = HexFrame.hex_neighbour_tiles[dir]
+    existing_extrema = _tile_extrema(existing_exclusion, TileCoord(0, 0))
+    incoming_extrema = _tile_extrema(incoming_footprint, anchor)
+    search_limit = _docking_search_limit(existing_extrema, incoming_extrema, step)
+    offset = anchor
+
+    for distance in 0:search_limit
+        !ship_footprints_overlap(existing_exclusion, incoming_footprint, offset) && return offset
+        distance < search_limit && (offset += step)
+    end
+    error("Encounter docking search failed to find a clear position within its guaranteed bound")
+end
+
+"Find the minimum-distance clear direction and offset, breaking ties with `seed`."
+function _find_optimal_docking_offset(
+        existing_exclusion::Set{TileCoord}, incoming_footprint::Set{TileCoord}, anchor::TileCoord, seed::UInt32
+    )::Tuple{HexFrame.HexAxis, TileCoord}
+    directions = instances(HexFrame.HexAxis)
+    if isempty(existing_exclusion) || isempty(incoming_footprint)
+        chosen_dir = pick_element_from_noise(directions, 42, seed)
+        return (chosen_dir, anchor)
+    end
+
+    existing_extrema = _tile_extrema(existing_exclusion, TileCoord(0, 0))
+    incoming_extrema = _tile_extrema(incoming_footprint, anchor)
+    search_limit = typemax(Int)
+    for dir in directions
+        step = HexFrame.hex_neighbour_tiles[dir]
+        search_limit = min(search_limit, _docking_search_limit(existing_extrema, incoming_extrema, step))
+    end
+
+    candidate_offsets = fill(anchor, length(directions))
+    clear_directions = fill(true, length(directions))
+    for distance in 0:search_limit
+        fill!(clear_directions, true)
+        remaining_clear = length(directions)
+
+        for tile in incoming_footprint
+            for (index, _) in enumerate(directions)
+                clear_directions[index] || continue
+                if tile + candidate_offsets[index] in existing_exclusion
+                    clear_directions[index] = false
+                    remaining_clear -= 1
+                end
+            end
+            iszero(remaining_clear) && break
+        end
+
+        if !iszero(remaining_clear)
+            best_dirs = HexFrame.HexAxis[]
+            sizehint!(best_dirs, remaining_clear)
+            for (index, dir) in enumerate(directions)
+                clear_directions[index] && push!(best_dirs, dir)
+            end
+            chosen_dir = length(best_dirs) == 1 ? only(best_dirs) : pick_from_options(best_dirs, 42, seed)
+            chosen_index = findfirst(==(chosen_dir), directions)
+            !isnothing(chosen_index) && return (chosen_dir, candidate_offsets[chosen_index])
+            error("Selected encounter docking direction was not among the candidates")
+        end
+
+        if distance < search_limit
+            for (index, dir) in enumerate(directions)
+                candidate_offsets[index] += HexFrame.hex_neighbour_tiles[dir]
+            end
+        end
+    end
+    error("Encounter docking search failed to find a clear direction within its guaranteed bound")
 end
 
 "Check whether two axis-aligned bounding rectangles overlap."
@@ -724,23 +822,28 @@ function _compute_docking_offsets(direction_vec, distance::Float64; duration_sec
     return (far_offset, zero_offset, step)
 end
 
-"""
-Offset `ship` along `dir` until it clears all existing surfaces by at least `MIN_SPACING`
-tiles in every direction. Uses tile-set expansion to enforce a true isotropic gap.
-Mutates `ship` in place. Returns the total number of tile-steps moved.
-"""
-function _offset_ship_until_clear!(gamemap::GameMap, ship::ShipBlueprint, dir::HexFrame.HexAxis)::Int
-    step = HexFrame.hex_neighbour_tiles[dir]
-    steps = 0
-    max_steps = 500
-    all_other_tiles = collect_surface_tiles!(Set{TileCoord}(), gamemap)  # gamemap does not yet include ship
-    expanded_others = expand_tileset(all_other_tiles, MIN_SPACING)
-    while _is_ship_too_close(ship, expanded_others) && steps < max_steps
-        offset_ship!(ship, step)  # mutates the ShipBlueprint in-place
-        steps += 1
+"Copy, translate, animate, and merge an encountered ship at its selected position."
+function _place_encounter_ship!(
+        gamemap::GameMap, blueprint::ShipBlueprint, ship_name_base::String, dir::HexFrame.HexAxis,
+        final_offset::TileCoord;
+        max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing
+    )
+    newship_name = gensym(ship_name_base)
+    offset_blueprint = deepcopy(blueprint)
+    offset_ship!(offset_blueprint, final_offset)
+
+    approach_distance_tiles = 20.0
+    direction_vec = HexFrame.hex_vert_vecs[dir]
+    if !isnothing(max_view_bounds)
+        approach_distance_tiles = _ensure_offscreen_distance(
+            get_cartesian_bounds(offset_blueprint), direction_vec, approach_distance_tiles, max_view_bounds
+        )
     end
-    steps >= max_steps && @warn "Hit safety limit in _offset_ship_until_clear!" dir steps
-    return steps
+    start_offset, target_offset, offset_step = _compute_docking_offsets(direction_vec, approach_distance_tiles)
+
+    merge_ship!(gamemap, newship_name, offset_blueprint;
+        docking_status = ApproachingDockStat(start_offset, target_offset, offset_step))
+    return nothing
 end
 
 """
@@ -752,67 +855,31 @@ function encounter_ship!(
         gamemap::GameMap, blueprint::ShipBlueprint, ship_name_base::String, seed::UInt32, dir::HexFrame.HexAxis;
         max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing
     )
-    newship_name = gensym(ship_name_base)
-
-    # Deep-copy input blueprint to preserve caller's original
-    offset_blueprint = deepcopy(blueprint)
-
     ship_centroid = get_surface_centroid(gamemap, :primary)
-    offset_ship!(offset_blueprint, round_to_tile(ship_centroid))
-    _offset_ship_until_clear!(gamemap, offset_blueprint, dir)
-
-    APPROACH_DISTANCE_TILES = 20.0
-    direction_vec = HexFrame.hex_vert_vecs[dir]
-    if !isnothing(max_view_bounds)
-        APPROACH_DISTANCE_TILES = _ensure_offscreen_distance(
-            get_cartesian_bounds(offset_blueprint), direction_vec, APPROACH_DISTANCE_TILES, max_view_bounds
-        )
-    end
-    start_offset, target_offset, offset_step = _compute_docking_offsets(direction_vec, APPROACH_DISTANCE_TILES)
-
-    merge_ship!(gamemap, newship_name, offset_blueprint;
-        docking_status = ApproachingDockStat(start_offset, target_offset, offset_step))
-
-    return nothing
+    anchor = isnothing(ship_centroid) ? TileCoord(0, 0) : round_to_tile(ship_centroid)
+    existing_exclusion = docking_footprint(gamemap; surface_clearance = DOCKING_SURFACE_CLEARANCE)
+    incoming_footprint = docking_footprint(blueprint)
+    final_offset = _find_docking_offset(existing_exclusion, incoming_footprint, anchor, dir)
+    return _place_encounter_ship!(gamemap, blueprint, ship_name_base, dir, final_offset; max_view_bounds)
 end
 
 """
 Dock a pre-generated ship into the game map, automatically choosing the approach
 direction that requires the fewest tile-steps to avoid overlap with existing ships.
 
-Tries all six hex axis directions, measures the offset distance each would require,
-and picks the direction with the shortest distance. Ties are broken deterministically
-using the encounter seed. Delegates to `encounter_ship!` for the actual placement.
+Tests all six hex axis directions together at each distance and selects the first
+distance with a clear placement. Ties are broken deterministically using the encounter seed.
 """
 function encounter_ship_optimal_dir!(
         gamemap::GameMap, blueprint::ShipBlueprint, ship_name_base::String, seed::UInt32;
         max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing
     )
     ship_centroid = get_surface_centroid(gamemap, :primary)
-    if isnothing(ship_centroid)
-        dir = pick_element_from_noise(collect(instances(HexFrame.HexAxis)), 42, seed)
-        encounter_ship!(gamemap, blueprint, ship_name_base, seed, dir; max_view_bounds)
-        return nothing
-    end
-    centroid_tile = round_to_tile(ship_centroid)
-
-    best_dist = typemax(Int)
-    best_dirs = HexFrame.HexAxis[]
-    for dir in instances(HexFrame.HexAxis)
-        trial = deepcopy(blueprint)           # trial copy — discarded if not best
-        offset_ship!(trial, centroid_tile)
-        dist = _offset_ship_until_clear!(gamemap, trial, dir)
-        if dist < best_dist
-            best_dist = dist
-            best_dirs = HexFrame.HexAxis[dir]
-        elseif dist == best_dist
-            push!(best_dirs, dir)
-        end
-    end
-
-    chosen_dir = length(best_dirs) == 1 ? best_dirs[1] : pick_from_options(best_dirs, 42, seed)
-    encounter_ship!(gamemap, blueprint, ship_name_base, seed, chosen_dir; max_view_bounds)
-    return nothing
+    anchor = isnothing(ship_centroid) ? TileCoord(0, 0) : round_to_tile(ship_centroid)
+    existing_exclusion = docking_footprint(gamemap; surface_clearance = DOCKING_SURFACE_CLEARANCE)
+    incoming_footprint = docking_footprint(blueprint)
+    chosen_dir, final_offset = _find_optimal_docking_offset(existing_exclusion, incoming_footprint, anchor, seed)
+    return _place_encounter_ship!(gamemap, blueprint, ship_name_base, chosen_dir, final_offset; max_view_bounds)
 end
 
 """
