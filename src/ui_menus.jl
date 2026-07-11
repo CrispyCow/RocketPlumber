@@ -722,8 +722,8 @@ end
 
 "Execute an action, dispatching on popup target type. Closes the popup afterwards."
 function _execute_action!(inputstate, popup::ActionPopupState, action::ActionInfo, flowcalc_ipc, viewstate)
-    _execute_target_action!(inputstate, popup.target, action, flowcalc_ipc, viewstate)
-    _close_popup!(inputstate)
+    result = _execute_target_action!(inputstate, popup.target, action, flowcalc_ipc, viewstate)
+    (!(result isa Tuple) || first(result)) && _close_popup!(inputstate)
     return nothing
 end
 
@@ -737,6 +737,19 @@ function _execute_target_action!(inputstate, target::ComponentPopupTarget, actio
     return try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
 end
 
+"Execute a shared component action as one calculator transaction."
+function _execute_target_action!(inputstate, target::ComponentGroupPopupTarget, action::ActionInfo, flowcalc_ipc, viewstate)
+    commands = if action.id === :delete_component
+        MapEditCommand[create_delete_command(flowcalc_ipc.command_queue, coord) for coord in target.coords]
+    else
+        MapEditCommand[
+            create_do_action_command(flowcalc_ipc.command_queue, coord, action.id) for coord in target.coords
+        ]
+    end
+    batch = create_batch_command(flowcalc_ipc.command_queue, commands)
+    return try_enqueue_command!(flowcalc_ipc.command_queue, batch, flowcalc_ipc.console_push)
+end
+
 "Execute a ship action via the ship action dispatch system."
 function _execute_target_action!(inputstate, target::ShipPopupTarget, action::ActionInfo, flowcalc_ipc, viewstate)
     return execute_ship_action!(ship_name = target.ship_name, action_id = action.id,
@@ -746,6 +759,17 @@ end
 "Close the action popup and clear all right-click selection state."
 function _close_popup!(inputstate)
     inputstate.action_popup = nothing
-    inputstate.rightclick_selectedcoord = nothing
+    clear_selection!(inputstate)
     return inputstate.rightclick_selectedship = nothing
+end
+
+"Group component popups expose one atomic deletion action."
+function _render_target_extras!(popup, target::ComponentGroupPopupTarget, inputstate, flowcalc_ipc, viewstate)
+    isempty(popup.actions) || CImGui.Separator()
+    count = length(target.coords)
+    delete_action = ActionInfo(:delete_component, "Delete $count Components", true,
+        "Remove these components from their ships.", "Delete all $count selected components permanently?")
+    return if button_with_disable(delete_action.label, ImVec2(-1, 0), false; tooltip = delete_action.tooltip)
+        popup.pending_confirmation = delete_action
+    end
 end

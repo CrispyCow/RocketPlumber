@@ -281,6 +281,18 @@ function placement_valid(comp::ActionCompBehav, coord::TileCoord, gamemap::GameM
     return (true, "")
 end
 
+mutable struct ValidationMutationCompBehav <: ComponentBehavior
+    updates::Int
+end
+HexComponentsAPI.produce_rel_elements(::ValidationMutationCompBehav) = ()
+HexComponentsAPI.get_tunables(::ValidationMutationCompBehav) = ()
+HexComponentsAPI.set_tunables(comp::ValidationMutationCompBehav, ::NTuple{0, Real}) = comp
+HexComponentsAPI.render_base_elem!(queue, ::ValidationMutationCompBehav; kwargs...) = nothing
+function HexComponentsAPI.update_flowbehav!(comp::ValidationMutationCompBehav; kwargs...)
+    comp.updates += 1
+    return nothing
+end
+
 struct RotationSensitiveCompBehav{N} <: ComponentBehavior
     valid_rotations::NTuple{N, HexAxis}
 end
@@ -799,10 +811,10 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         # reset for command test
         action_count[] = 0
 
-        # perform action (sanbox validation + real apply will call the action twice)
+        # The action is applied once to the working map and is not replayed after validation.
         cmd = create_do_action_command(cq, coord, :flip)
         logs = process_and_log!(cmd, gamemap)
-        @test action_count[] == 2
+        @test action_count[] == 1
         @test !isempty(logs)  # at least some message logged
 
         # action on nonexistent component should log error and do nothing
@@ -982,6 +994,104 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 
         @test c2.id == c1.id + 1
         @test c3.id == c2.id + 1
+    end
+end
+
+# ===============================================================
+# Tests — transactional batch commands
+# ===============================================================
+
+@testset "BatchCommand transactions" begin
+    @testset "commits heterogeneous children in order" begin
+        gm = make_gamemap()
+        cq = create_command_queue(4)
+        new_surface = TileCoord(1, 0)
+        batch = create_batch_command(cq, MapEditCommand[
+            create_add_ship_surface_command(cq, new_surface),
+            create_set_tile_command(cq, new_surface, MockCompBehav(), Q_POS),
+        ])
+
+        process_and_log!(batch, gm)
+        @test is_on_surface_tile(new_surface, gm)
+        @test has_component(gm, new_surface)
+    end
+
+    @testset "rolls back first, middle, and last child failures" begin
+        for failure_index in 1:3
+            gm = make_gamemap()
+            cq = create_command_queue(4)
+            set_surface_tile!(gm, TileCoord(1, 0))
+            set_surface_tile!(gm, TileCoord(2, 0))
+            original_hash = hash(gm)
+            commands = MapEditCommand[
+                create_set_tile_command(cq, TileCoord(1, 0), MockCompBehav(), Q_POS),
+                create_set_tile_command(cq, TileCoord(2, 0), MockCompBehav(), Q_POS),
+            ]
+            insert!(commands, failure_index, create_delete_command(cq, TileCoord(20, 20)))
+            logs = process_and_log!(create_batch_command(cq, commands), gm)
+
+            @test hash(gm) == original_hash
+            @test count_components(gm) == 0
+            @test any(contains(log, "child $failure_index") for log in logs)
+        end
+    end
+
+    @testset "validation failure and validation mutations do not commit" begin
+        gm = make_gamemap()
+        cq = create_command_queue(4)
+        original_hash = hash(gm)
+        invalid_batch = create_batch_command(cq, MapEditCommand[
+            create_set_tile_command(cq, TileCoord(0, 0), InvalidFluidBridgeCompBehav(), Q_POS),
+        ])
+        HexFlowCalculator.process_command!(invalid_batch, gm, silent_console, throw_errors = false)
+        @test hash(gm) == original_hash
+
+        process_and_log!(create_set_tile_command(cq, TileCoord(0, 0), ValidationMutationCompBehav(0), Q_POS), gm)
+        comp = get_component(gm, TileCoord(0, 0)).component
+        @test comp isa ValidationMutationCompBehav
+        @test comp.updates == 0
+    end
+
+    @testset "reports once and discards rolled-back success messages" begin
+        gm = make_gamemap()
+        set_surface_tile!(gm, TileCoord(1, 0))
+        cq = create_command_queue(4)
+        response = Channel{CommandStatus}(1)
+        batch = create_batch_command(cq, MapEditCommand[
+            create_set_tile_command(cq, TileCoord(1, 0), MockCompBehav(), Q_POS),
+            create_delete_command(cq, TileCoord(20, 20)),
+        ]; response_channel = response)
+        logs = process_and_log!(batch, gm)
+
+        @test take!(response) == INVALID
+        @test !isready(response)
+        @test !has_component(gm, TileCoord(1, 0))
+        @test !any(contains(log, "Component placed") for log in logs)
+    end
+
+    @testset "constructor rejects unsafe batches" begin
+        cq = create_command_queue(4)
+        delete = create_delete_command(cq, TileCoord(0, 0))
+        @test_throws ArgumentError create_batch_command(cq, MapEditCommand[])
+        @test_throws ArgumentError create_batch_command(cq, MapEditCommand[
+            create_click_tile_command(cq, TileCoord(0, 0), CartesianCoord(0.0, 0.0)),
+        ])
+        response = Channel{CommandStatus}(1)
+        @test_throws ArgumentError create_batch_command(cq, MapEditCommand[
+            create_delete_command(cq, TileCoord(0, 0); response_channel = response),
+        ])
+        nested = create_batch_command(cq, MapEditCommand[delete])
+        @test_throws ArgumentError create_batch_command(cq, MapEditCommand[nested])
+    end
+
+    @testset "occupies one queue slot regardless of child count" begin
+        cq = create_command_queue(1)
+        batch = create_batch_command(cq, MapEditCommand[
+            create_delete_command(cq, TileCoord(index, 0)) for index in 1:8
+        ])
+        @test try_enqueue_command!(cq, batch, silent_console) == (true, APPLIED)
+        @test take!(cq.command_channel) === batch
+        @test !isready(cq.command_channel)
     end
 end
 

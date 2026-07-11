@@ -713,10 +713,11 @@ function ui_propertybox_render!(
 
     # Ready state: display info about right-click selected or hovered element
     if state isa PlacementReadyState
-        selected = inputstate.rightclick_selectedcoord
+        selected = primary_selected_component(inputstate)
 
         if !isnothing(selected)
-            CImGui.Text("Inspecting selected part...")
+            count = selected_component_count(inputstate)
+            CImGui.Text(count == 1 ? "Inspecting selected part..." : "Inspecting primary of $count selected parts...")
             CImGui.Separator()
             CImGui.NewLine()
 
@@ -745,11 +746,18 @@ function ui_propertybox_render!(
                 CImGui.Unindent()
             else
                 CImGui.Text("Selected component no longer exists.")
-                inputstate.rightclick_selectedcoord = nothing
+                clear_selection!(inputstate)
             end
         else
             # No right-click selection: show hovered part info
             clicked = get_clicked(inputstate)
+            if !(clicked isa VertexCoord)
+                cursor_cart = get_cursor_cart(inputstate)
+                if !isnothing(cursor_cart)
+                    clicked_pipe = get_clicked_pipe(cursor_cart, gamemap)
+                    !isnothing(clicked_pipe) && (clicked = clicked_pipe)
+                end
+            end
             inspect_ui!(clicked, gamemap, derivedmapstate, mna_state)
         end
     end

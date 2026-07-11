@@ -6,7 +6,9 @@ using StaticArrays, GLFW, Dates
 # Type exports
 export SimSpeed, SIM_1X, SIM_2X, SIM_4X, SIM_MAX
 export ExitReason, EXIT_QUIT, EXIT_MENU, EXIT_SANDBOX_COMPLETED, EXIT_SANDBOX_STARTED
-export AbstractPopupTarget, ComponentPopupTarget, ShipPopupTarget
+export AbstractPopupTarget, ComponentPopupTarget, ComponentGroupPopupTarget, ShipPopupTarget
+export AbstractSelectionTarget, ComponentSelectionTarget
+export AbstractSelectionState, SelectionEmptyState, ComponentSelectionState
 export AbstractPlacementMoveTarget, TileComponentMoveTarget, PipeMoveTarget
 export AbstractPlacementState, AbstractEditorPlacementState
 export PlacementReadyState, PlacementPressedState, PlacementMoveState, PlacementPipeChainState
@@ -17,6 +19,10 @@ export ActionPopupState, HintData, RedockModeState, InputState, ViewState, GameS
 export create_consolebuffer, get_viewtransform
 export get_lastinstate!, update_lastinstate!, get_instate, get_inrising!, get_infalling!
 export placement_state, set_placement_state!, clear_placement_pressed_state!, clear_placement_state!
+export selection_state, selected_component_coords, primary_selected_component
+export select_single_component!, toggle_selected_component!, prune_selected_components!
+export clear_selection!, has_selected_component, selected_component_count
+export shared_component_actions
 export is_standard_family_state, is_active_standard_interaction_state
 export clear_world_selection!, enter_ready_placement_state!, enter_editor_placement_state!, toggle_editor_placement_state!
 export enter_redock_placement_state!, editor_capabilities_enabled
@@ -101,6 +107,18 @@ abstract type AbstractPopupTarget end
 "Popup target for a tile component."
 struct ComponentPopupTarget <: AbstractPopupTarget
     coord::TileCoord
+end
+
+"Popup target for an ordered group of tile components, anchored at the component that opened it."
+struct ComponentGroupPopupTarget <: AbstractPopupTarget
+    coords::Vector{TileCoord}
+    anchor::TileCoord
+
+    function ComponentGroupPopupTarget(coords::Vector{TileCoord}, anchor::TileCoord)
+        length(coords) > 1 || throw(ArgumentError("component group popup requires at least two coordinates"))
+        anchor in coords || throw(ArgumentError("component group popup anchor must be selected"))
+        return new(copy(coords), anchor)
+    end
 end
 
 "Popup target for a ship."
@@ -205,6 +223,38 @@ const PlacementState = Union{
     PlacementRedockState,
 }
 
+# ===============================================================
+# Selection State
+# ===============================================================
+
+"Abstract type for targets held by the selection state machine."
+abstract type AbstractSelectionTarget end
+
+"Selection target for a tile component."
+struct ComponentSelectionTarget <: AbstractSelectionTarget
+    coord::TileCoord
+end
+
+"Abstract type for the world-selection state machine."
+abstract type AbstractSelectionState end
+
+"World-selection state with no selected targets."
+struct SelectionEmptyState <: AbstractSelectionState end
+
+"World-selection state containing component targets and a deterministic primary target."
+struct ComponentSelectionState <: AbstractSelectionState
+    targets::Set{ComponentSelectionTarget}
+    primary::ComponentSelectionTarget
+
+    function ComponentSelectionState(targets::Set{ComponentSelectionTarget}, primary::ComponentSelectionTarget)
+        isempty(targets) && throw(ArgumentError("component selection cannot be empty"))
+        primary in targets || throw(ArgumentError("primary component must be selected"))
+        return new(targets, primary)
+    end
+end
+
+const SelectionState = Union{SelectionEmptyState, ComponentSelectionState}
+
 "Input state for placement, selection, and control"
 @kwdef mutable struct InputState
     # placement
@@ -215,7 +265,7 @@ const PlacementState = Union{
     pendingpipebehavior::PipeBehavior
     tile_tool_state::Union{Nothing, PlacementTileState} = nothing
     placement_state::PlacementState = PlacementReadyState()
-    rightclick_selectedcoord::Union{Nothing, TileCoord} = nothing
+    selection_state::SelectionState = SelectionEmptyState()
     rightclick_selectedship::Union{Nothing, Symbol} = nothing
     last_command_time::Float64 = 0.0
     gui_inputs::Dict{Symbol, Any} = Dict{Symbol, Any}()  # for storing ImGui input field states
@@ -272,6 +322,104 @@ that is published to render snapshots on a coarse cadence.
 end
 
 # ===============================================================
+# Selection State Helpers
+# ===============================================================
+
+"Return the current world-selection state."
+selection_state(inputstate::InputState) = inputstate.selection_state
+
+"Return the coordinates of all selected components."
+function selected_component_coords(inputstate::InputState)::Set{TileCoord}
+    state = selection_state(inputstate)
+    state isa ComponentSelectionState || return Set{TileCoord}()
+    return Set(target.coord for target in state.targets)
+end
+
+"Return the primary selected component coordinate, or `nothing` when selection is empty."
+function primary_selected_component(inputstate::InputState)::Union{Nothing, TileCoord}
+    state = selection_state(inputstate)
+    state isa ComponentSelectionState || return nothing
+    return state.primary.coord
+end
+
+"Replace the current selection with one component."
+function select_single_component!(inputstate::InputState, coord::TileCoord)
+    target = ComponentSelectionTarget(coord)
+    inputstate.selection_state = ComponentSelectionState(Set{ComponentSelectionTarget}((target,)), target)
+    return nothing
+end
+
+"Toggle one component in the selection, making newly added components primary."
+function toggle_selected_component!(inputstate::InputState, coord::TileCoord)
+    state = selection_state(inputstate)
+    target = ComponentSelectionTarget(coord)
+    if !(state isa ComponentSelectionState)
+        return select_single_component!(inputstate, coord)
+    end
+
+    targets = copy(state.targets)
+    if target in targets
+        delete!(targets, target)
+        if isempty(targets)
+            return clear_selection!(inputstate)
+        end
+        primary = target == state.primary ? first(sort!(collect(targets); by = item -> (item.coord.q, item.coord.r))) : state.primary
+    else
+        push!(targets, target)
+        primary = target
+    end
+    inputstate.selection_state = ComponentSelectionState(targets, primary)
+    return nothing
+end
+
+"Remove selected components that no longer satisfy `is_valid`."
+function prune_selected_components!(is_valid::Function, inputstate::InputState)
+    state = selection_state(inputstate)
+    state isa ComponentSelectionState || return nothing
+    targets = Set(target for target in state.targets if is_valid(target.coord))
+    isempty(targets) && return clear_selection!(inputstate)
+    primary = state.primary in targets ? state.primary : first(sort!(collect(targets); by = item -> (item.coord.q, item.coord.r)))
+    inputstate.selection_state = ComponentSelectionState(targets, primary)
+    return nothing
+end
+
+selected_component_count(inputstate::InputState) = (state = selection_state(inputstate); state isa ComponentSelectionState ? length(state.targets) : 0)
+
+"Intersect component actions while preserving the first component's display order."
+function shared_component_actions(action_sets)::Tuple
+    isempty(action_sets) && return ()
+    shared = ActionInfo[]
+    for primary_action in first(action_sets)
+        matches = [findfirst(action -> action.id === primary_action.id, actions) for actions in action_sets]
+        any(isnothing, matches) && continue
+        actions = [action_sets[index][match] for (index, match) in enumerate(matches)]
+        if any(action -> action.label != primary_action.label ||
+                action.confirmation_message != primary_action.confirmation_message, actions)
+            @warn "Inconsistent metadata for shared component action" action_id = primary_action.id
+        end
+        disabled_count = count(!action.enabled for action in actions)
+        tooltip = disabled_count == 0 ? primary_action.tooltip :
+            "Unavailable for $disabled_count of $(length(actions)) selected components."
+        push!(shared, ActionInfo(primary_action.id, primary_action.label, disabled_count == 0, tooltip,
+            primary_action.confirmation_message))
+    end
+    return Tuple(shared)
+end
+
+"Clear all selected world targets."
+function clear_selection!(inputstate::InputState)
+    inputstate.selection_state = SelectionEmptyState()
+    return nothing
+end
+
+"Return whether a component coordinate is selected."
+function has_selected_component(inputstate::InputState, coord::TileCoord)::Bool
+    state = selection_state(inputstate)
+    state isa ComponentSelectionState || return false
+    return ComponentSelectionTarget(coord) in state.targets
+end
+
+# ===============================================================
 # Placement State Helpers
 # ===============================================================
 
@@ -302,7 +450,7 @@ editor_capabilities_enabled(inputstate::InputState)::Bool = inputstate.editor_mo
 
 "Clear popup and selection state without mutating the active placement state."
 function clear_world_selection!(inputstate::InputState)
-    inputstate.rightclick_selectedcoord = nothing
+    clear_selection!(inputstate)
     inputstate.rightclick_selectedship = nothing
     inputstate.action_popup = nothing
     return nothing

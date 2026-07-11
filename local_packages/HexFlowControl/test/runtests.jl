@@ -63,6 +63,10 @@ end
     @testset "InputState defaults" begin
         is = make_test_inputstate()
         @test placement_state(is) isa PlacementReadyState
+        @test selection_state(is) isa SelectionEmptyState
+        @test isempty(selected_component_coords(is))
+        @test isnothing(primary_selected_component(is))
+        @test !hasproperty(is, :rightclick_selectedcoord)
         @test !editor_capabilities_enabled(is)
         @test is.tile_tool_state isa PlacementTileState
         @test is.tile_tool_state.pendingcomponent isa MockCompBehav
@@ -101,13 +105,50 @@ end
         @test editor_capabilities_enabled(is)
     end
 
+    @testset "component-selection helpers" begin
+        is = make_test_inputstate()
+        first_coord = TileCoord(1, 1)
+        second_coord = TileCoord(2, 3)
+
+        select_single_component!(is, first_coord)
+        @test selection_state(is) isa ComponentSelectionState
+        @test selected_component_coords(is) == Set((first_coord,))
+        @test primary_selected_component(is) == first_coord
+        @test has_selected_component(is, first_coord)
+        @test !has_selected_component(is, second_coord)
+
+        select_single_component!(is, second_coord)
+        @test selected_component_coords(is) == Set((second_coord,))
+        @test primary_selected_component(is) == second_coord
+        @test !has_selected_component(is, first_coord)
+
+        toggle_selected_component!(is, first_coord)
+        @test selected_component_coords(is) == Set((first_coord, second_coord))
+        @test primary_selected_component(is) == first_coord
+        @test selected_component_count(is) == 2
+
+        toggle_selected_component!(is, first_coord)
+        @test selected_component_coords(is) == Set((second_coord,))
+        @test primary_selected_component(is) == second_coord
+
+        toggle_selected_component!(is, first_coord)
+        prune_selected_components!(coord -> coord == first_coord, is)
+        @test selected_component_coords(is) == Set((first_coord,))
+        @test primary_selected_component(is) == first_coord
+
+        clear_selection!(is)
+        @test selection_state(is) isa SelectionEmptyState
+        @test isempty(selected_component_coords(is))
+        @test isnothing(primary_selected_component(is))
+    end
+
     @testset "world-selection helpers" begin
         is = make_test_inputstate()
-        is.rightclick_selectedcoord = TileCoord(1, 1)
+        select_single_component!(is, TileCoord(1, 1))
         is.rightclick_selectedship = :test_ship
 
         clear_world_selection!(is)
-        @test isnothing(is.rightclick_selectedcoord)
+        @test selection_state(is) isa SelectionEmptyState
         @test isnothing(is.rightclick_selectedship)
         @test isnothing(is.action_popup)
 
@@ -116,12 +157,32 @@ end
         @test placement_state(is) isa PlacementReadyState
     end
 
+    @testset "shared component actions" begin
+        first_actions = (
+            ActionInfo(:first, "First", true, "Ready"),
+            ActionInfo(:shared, "Shared", true, "Ready", "Confirm?"),
+        )
+        second_actions = (
+            ActionInfo(:shared, "Shared", false, "Blocked", "Confirm?"),
+            ActionInfo(:other, "Other", true, "Ready"),
+        )
+
+        actions = shared_component_actions((first_actions, second_actions))
+        @test length(actions) == 1
+        @test actions[1].id === :shared
+        @test !actions[1].enabled
+        @test actions[1].tooltip == "Unavailable for 1 of 2 selected components."
+        @test actions[1].confirmation_message == "Confirm?"
+    end
+
     @testset "editor transition helpers" begin
         is = make_test_inputstate()
         tile_state = make_tile_state()
 
+        select_single_component!(is, TileCoord(1, 1))
         enter_editor_placement_state!(is, tile_state)
         @test placement_state(is) === tile_state
+        @test selection_state(is) isa SelectionEmptyState
 
         toggle_editor_placement_state!(is, make_tile_state())
         @test placement_state(is) isa PlacementReadyState
@@ -140,9 +201,11 @@ end
         is = make_test_inputstate()
         redock_state = make_test_redock_state()
 
+        select_single_component!(is, TileCoord(1, 1))
         enter_redock_placement_state!(is, redock_state)
         @test placement_state(is) === redock_state
         @test placement_state(is) isa PlacementRedockState
+        @test selection_state(is) isa SelectionEmptyState
 
         enter_ready_placement_state!(is)
         @test placement_state(is) isa PlacementReadyState

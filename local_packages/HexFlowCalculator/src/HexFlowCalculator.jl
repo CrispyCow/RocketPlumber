@@ -16,6 +16,7 @@ export CommandStatus, APPLIED, REJECTED, QUEUED_FAILED, INVALID
 export MapEditCommand, SetTileCommand, SetPipeBehaviorCommand, MoveCommand
 export DeleteAtCommand, ClickTileCommand, DoActionCommand, AddShipSurfaceCommand, RemoveShipSurfaceCommand
 export MapOverrideCommand, AddEncounterShipCommand, RedockShipCommand
+export BatchCommand
 export CommandQueue
 
 # Function exports - Setup
@@ -28,6 +29,7 @@ export create_set_tile_command, create_set_pipe_behavior_command, create_move_co
 export create_delete_command, create_click_tile_command, create_do_action_command
 export create_add_ship_surface_command, create_remove_ship_surface_command
 export create_map_override_command, create_add_encounter_ship_command, create_redock_ship_command
+export create_batch_command, is_batchable
 export try_enqueue_command!
 
 # Function exports - Main loop
@@ -261,6 +263,14 @@ end
     response_channel::Union{Nothing, Channel{CommandStatus}}
 end
 @struct_hash_equal RedockShipCommand
+
+"Apply an ordered collection of map-local commands as one transaction."
+@kwdef struct BatchCommand <: MapEditCommand
+    id::UInt64
+    commands::Vector{MapEditCommand}
+    response_channel::Union{Nothing, Channel{CommandStatus}}
+end
+@struct_hash_equal BatchCommand
 
 # ===============================================================
 # Snapshot Refill Methods
@@ -951,52 +961,114 @@ function _try_put_status!(command::MapEditCommand, status::CommandStatus)
     return nothing
 end
 
-"""
-Validate and apply a map edit command using sandbox-first execution.
-Applies the command to a deep copy first; only mutates the real `gamemap` if the
-sandbox survives a full `update_map!` / `update_mna!` cycle.
-"""
+"Whether a command is safe to execute inside an isolated map transaction."
+is_batchable(::MapEditCommand) = false
+is_batchable(::SetTileCommand) = true
+is_batchable(::SetPipeBehaviorCommand) = true
+is_batchable(::MoveCommand) = true
+is_batchable(::DeleteAtCommand) = true
+is_batchable(::DoActionCommand) = true
+is_batchable(::AddShipSurfaceCommand) = true
+is_batchable(::RemoveShipSurfaceCommand) = true
+
+struct CommandTransactionResult
+    status::CommandStatus
+    failed_child_index::Union{Nothing, Int}
+    reason::String
+    exception::Any
+end
+
+"Run graph and MNA validation on a disposable candidate map."
+function validate_gamemap_candidate!(gamemap::GameMap)
+    derivedmapstate = DerivedMapState()
+    mna_state = MNA_State()
+    scratchpad = CalculatorScratchpad()
+
+    update_components!(gamemap, mna_state, derivedmapstate)
+    collect_primary_map_inputs!(gamemap, derivedmapstate)
+    update_map_from_inputs!(derivedmapstate, mna_state, scratchpad, Int64(0))
+    update_mna!(derivedmapstate, mna_state, Int64(0))
+    compute_region_temperatures!(derivedmapstate, scratchpad, mna_state)
+    return nothing
+end
+
+"Apply commands to one working map, validate a second copy, and commit atomically."
+function process_transaction!(
+        commands::AbstractVector{<:MapEditCommand}, gamemap::GameMap, threadsafe_console_push::Function
+    )::CommandTransactionResult
+    working_map = deepcopy(gamemap)
+    buffered_messages = String[]
+
+    for (index, command) in enumerate(commands)
+        child_messages = String[]
+        try
+            if !apply_mapedit_command!(working_map, command, msg -> push!(child_messages, msg))
+                reason = isempty(child_messages) ? "command was not applied" : last(child_messages)
+                if length(commands) == 1
+                    foreach(threadsafe_console_push, child_messages)
+                else
+                    threadsafe_console_push("Batch command failed at child $index: $reason")
+                end
+                return CommandTransactionResult(INVALID, index, reason, nothing)
+            end
+        catch error
+            reason = sprint(showerror, error)
+            prefix = length(commands) == 1 ? "Invalid map edit" : "Batch command failed at child $index"
+            threadsafe_console_push("$prefix: $reason")
+            return CommandTransactionResult(REJECTED, index, reason, error)
+        end
+        append!(buffered_messages, child_messages)
+    end
+
+    try
+        validate_gamemap_candidate!(deepcopy(working_map))
+    catch error
+        reason = sprint(showerror, error)
+        threadsafe_console_push("Invalid map edit: $reason")
+        return CommandTransactionResult(REJECTED, nothing, reason, error)
+    end
+
+    replace_by_mutation!(gamemap, working_map)
+    foreach(threadsafe_console_push, buffered_messages)
+    return CommandTransactionResult(APPLIED, nothing, "", nothing)
+end
+
+"Apply a map edit command through the shared atomic transaction path."
 function process_command!(
         command::MapEditCommand,
         gamemap::GameMap,
         threadsafe_console_push::Function;
         throw_errors::Bool = true
     )
-    # Create sandbox copy for validation
-    sandbox = deepcopy(gamemap)
-    original_hash = hash(sandbox)
+    commands = command isa BatchCommand ? command.commands : MapEditCommand[command]
 
-    try
-        # Dry-run on the sandbox with a silent console. The return value is
-        # discarded here — the real-map call below decides the final status.
-        apply_mapedit_command!(sandbox, command, (msg) -> nothing)
-        new_hash = hash(sandbox)
-
-        # If map changed, validate it won't cause errors
-        if new_hash != original_hash
-            test_derivedmapstate = DerivedMapState()
-            test_mna_state = MNA_State()
-            test_scratchpad = CalculatorScratchpad()
-
-            # Validate using the non-speculative path (no reactivation probes during sandbox)
-            update_components!(sandbox, test_mna_state, test_derivedmapstate)
-            collect_primary_map_inputs!(sandbox, test_derivedmapstate)
-            update_map_from_inputs!(test_derivedmapstate, test_mna_state, test_scratchpad, Int64(0))
-            update_mna!(test_derivedmapstate, test_mna_state, Int64(0))
-            compute_region_temperatures!(test_derivedmapstate, test_scratchpad, test_mna_state)
+    if command isa BatchCommand
+        if isempty(commands)
+            threadsafe_console_push("Invalid batch command: batch is empty")
+            _try_put_status!(command, INVALID)
+            return nothing
         end
 
-        applied = apply_mapedit_command!(gamemap, command, threadsafe_console_push)
-        _try_put_status!(command, applied ? APPLIED : INVALID)
-
-    catch sandbox_error
-        threadsafe_console_push("Invalid map edit: $(sandbox_error)")
-        _try_put_status!(command, REJECTED)
-
-        if throw_errors
-            @warn "Rethrowing sandbox error" exception = sandbox_error
-            rethrow(sandbox_error)
+        invalid_index = findfirst(
+            child -> child isa BatchCommand || !is_batchable(child) || child.response_channel !== nothing,
+            commands,
+        )
+        if invalid_index !== nothing
+            child = commands[invalid_index]
+            reason = child isa BatchCommand ? "nested batches are not supported" :
+                !is_batchable(child) ? "$(typeof(child)) is not batchable" : "child commands cannot have response channels"
+            threadsafe_console_push("Invalid batch command at child $invalid_index: $reason")
+            _try_put_status!(command, INVALID)
+            return nothing
         end
+    end
+
+    result = process_transaction!(commands, gamemap, threadsafe_console_push)
+    _try_put_status!(command, result.status)
+
+    if throw_errors && result.exception !== nothing
+        @warn "Rethrowing transaction error" exception = result.exception
+        throw(result.exception)
     end
     return nothing
 end
@@ -1172,6 +1244,28 @@ function create_redock_ship_command(
         ship_name = ship_name,
         offset = offset,
         response_channel = response_channel
+    )
+end
+
+"Create a defensive, validated batch of map-local commands."
+function create_batch_command(
+        cq::CommandQueue,
+        commands::AbstractVector{<:MapEditCommand};
+        response_channel::Union{Nothing, Channel} = nothing
+    )::BatchCommand
+    isempty(commands) && throw(ArgumentError("a batch command must contain at least one child"))
+
+    owned_commands = MapEditCommand[commands...]
+    for (index, command) in enumerate(owned_commands)
+        command isa BatchCommand && throw(ArgumentError("nested batch at child $index is not supported"))
+        is_batchable(command) || throw(ArgumentError("child $index ($(typeof(command))) is not batchable"))
+        command.response_channel === nothing || throw(ArgumentError("child $index has a response channel"))
+    end
+
+    return BatchCommand(
+        id = cq.next_command_id(),
+        commands = owned_commands,
+        response_channel = response_channel,
     )
 end
 

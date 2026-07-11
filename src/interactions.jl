@@ -460,8 +460,8 @@ end
 
 """
 Determine what coordinate element (TileCoord, PipeCoord, or VertexCoord) the cursor is pointing at.
-Returns the most specific element: VertexCoord if near a node, PipeCoord if near a pipe segment,
-or TileCoord as a fallback.
+Returns the most specific element: VertexCoord if near a node, PipeCoord if near a tile-side gap,
+or TileCoord as a fallback. Use `get_clicked_pipe` when detecting real placed pipes of any span class.
 """
 function get_clicked(inputstate::InputState)
     # Escape if no cursor location or invalid coordinates
@@ -484,10 +484,10 @@ function get_clicked(inputstate::InputState)
         return close_vertex
     end
 
-    pipe = nearest_pipe_segment_from_vertex(close_vertex, cursor_cart)
-    dist_to_pipe = point_to_segment_distance(cursor_cart, to_cartesian(pipe.v1), to_cartesian(pipe.v2))
+    side = round_to_side_pipe(cursor_cart)
+    dist_to_pipe = point_to_segment_distance(cursor_cart, to_cartesian(side.v1), to_cartesian(side.v2))
     if dist_to_pipe <= edgerange
-        return pipe
+        return side
     end
 
     # Fallback: always return the tile containing the cursor
@@ -716,7 +716,7 @@ end
 "Clear the active world action popup and its selection highlights."
 function clear_action_popup_selection!(inputstate::InputState)
     inputstate.action_popup = nothing
-    inputstate.rightclick_selectedcoord = nothing
+    clear_selection!(inputstate)
     inputstate.rightclick_selectedship = nothing
     return nothing
 end
@@ -944,6 +944,9 @@ const GHOST_COLOUR_INVALID = SVector{4, Float32}(1.0, 0.4, 0.4, 1.0)
 const GHOST_PIPE_COLOUR_INVALID = ColourType(0.6, 0.15, 0.15, 1.0)
 const GHOST_MOVE_SELECTION_COLOUR = SVector{4, Float32}(1.0, 0.9, 0.2, 0.85)
 const GHOST_MOVE_SELECTION_HEIGHT_OFFSET = Int32(100100)
+const COMPONENT_SELECTION_COLOUR = SVector{4, Float32}(0.3, 1.0, 0.3, 0.4)
+const COMPONENT_SELECTION_HEIGHT = Int32(100100)
+const COMPONENT_SELECTION_SCALE = 2.5
 
 """
 Render cursor ghosts for tile/pipe placement and move operations.
@@ -962,15 +965,13 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
         return # suppress all other placement ghosts during redock
     end
 
-    # Render selection circle for right-click selected tile
-    if !isnothing(inputstate.rightclick_selectedcoord)
-        selected = inputstate.rightclick_selectedcoord
-        selection_colour = SVector{4, Float32}(0.3, 1.0, 0.3, 0.4)  # Green, ~60% transparent
-
+    # Render selection circles for every selected component.
+    for selected in selected_component_coords(inputstate)
         push!(
             queue, render_basic_sprite(
                 glmap, :MoveArrow_arrow_start, rotmat_2D(0.0), selected;
-                colour = selection_colour, draw_height = Int32(100100), scale = 2.5
+                colour = COMPONENT_SELECTION_COLOUR, draw_height = COMPONENT_SELECTION_HEIGHT,
+                scale = COMPONENT_SELECTION_SCALE,
             )
         )
     end
@@ -1322,6 +1323,17 @@ function flowcalc_standard_interaction!(
     left_falling = get_infalling!(inputstate, GLFW.MOUSE_BUTTON_LEFT, window)
     left_held = get_instate(GLFW.MOUSE_BUTTON_LEFT, window)
 
+    shift_held = get_instate(GLFW.KEY_LEFT_SHIFT, window) || get_instate(GLFW.KEY_RIGHT_SHIFT, window)
+    if state isa PlacementReadyState && left_rising && shift_held && !mouse_captured
+        element = get_clicked(inputstate)
+        if element isa TileCoord && has_component(gamemap, element) && !is_on_offset_ship(element, gamemap)
+            inputstate.action_popup = nothing
+            inputstate.rightclick_selectedship = nothing
+            toggle_selected_component!(inputstate, element)
+        end
+        return nothing
+    end
+
     if state isa PlacementPipeChainState
         if !isnothing(state.pending_response_channel)
             return nothing
@@ -1549,33 +1561,43 @@ function flowcalc_rightclick_action!(inputstate::InputState, gamemap::GameMap, w
 
     cursor_cart = CartesianCoord(inputstate.cursor_x, inputstate.cursor_y)
     element = get_clicked(inputstate)
+    tile = round_to_tile(cursor_cart)
 
-    # Clear any previous selection state
-    inputstate.rightclick_selectedcoord = nothing
     inputstate.rightclick_selectedship = nothing
 
     #= ---------- Component target ----------- =#
+    # Node and edge hit regions represent the visible gaps between components,
+    # allowing access to ship actions even when every surface tile is occupied.
     if element isa TileCoord
-        is_on_offset_ship(element, gamemap) && return nothing
         tilecomp = get_component(gamemap, element)
         if !isnothing(tilecomp)
-            actions = get_actions(tilecomp)
-            inputstate.rightclick_selectedcoord = element
-            inputstate.action_popup = ActionPopupState(
-                target = ComponentPopupTarget(element),
-                world_position = to_cartesian(element),
-                actions = actions,
-                window_title = "Actions",
-            )
+            is_on_offset_ship(element, gamemap) && return nothing
+            if has_selected_component(inputstate, element) && selected_component_count(inputstate) > 1
+                coords = sort!(collect(selected_component_coords(inputstate)); by = coord -> (coord.q, coord.r))
+                action_sets = [get_actions(get_component(gamemap, coord)) for coord in coords]
+                actions = shared_component_actions(action_sets)
+                inputstate.action_popup = ActionPopupState(
+                    target = ComponentGroupPopupTarget(coords, element), world_position = to_cartesian(element),
+                    actions = actions, window_title = "Actions ($(length(coords)) components)",
+                )
+            else
+                actions = get_actions(tilecomp)
+                select_single_component!(inputstate, element)
+                inputstate.action_popup = ActionPopupState(
+                    target = ComponentPopupTarget(element), world_position = to_cartesian(element),
+                    actions = actions, window_title = "Actions",
+                )
+            end
             return nothing
         end
     end
 
     #= ---------- Ship target (non-component surface) ----------- =#
-    tile = round_to_tile(cursor_cart)
     ship_name = get_surface_shiptag(gamemap, tile)
     isnothing(ship_name) && return nothing
     is_on_offset_ship(tile, gamemap) && return nothing
+
+    clear_selection!(inputstate)
 
     actions = get_ship_actions(gamemap, ship_name)
     display_name = safe_ship_display_name(ship_name)

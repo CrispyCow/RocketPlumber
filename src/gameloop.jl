@@ -139,6 +139,20 @@ function user_handler!(
     inputstate.gui_inputs[:current_spacemap_time] = something(current_time_years, 0.0)
     inputstate.gui_inputs[:consume_right_click] = false
 
+    # Prune any selected components that no longer exist in the gamemap (e.g., deleted or moved)
+    prune_selected_components!(inputstate) do coord
+        has_component(snapshot.gamemap, coord) && !is_on_offset_ship(coord, snapshot.gamemap)
+    end
+    # Cancel action popups if their targets are no longer valid (e.g. deleted or deselected)
+    popup = inputstate.action_popup
+    if popup !== nothing
+        target = popup.target
+        stale_component_popup = target isa ComponentPopupTarget && !has_selected_component(inputstate, target.coord)
+        stale_group_popup = target isa ComponentGroupPopupTarget &&
+            (selected_component_count(inputstate) < 2 || any(!has_selected_component(inputstate, coord) for coord in target.coords))
+        (stale_component_popup || stale_group_popup) && (inputstate.action_popup = nothing)
+    end
+
     GLFW.PollEvents()
     cimgui_io = CImGui.GetIO()
     handle_inputs!(inputstate, viewstate, flowcalc_ipc.shared_state, window, cimgui_io) # input handling (window sizes, cursor, keys, scroll)
