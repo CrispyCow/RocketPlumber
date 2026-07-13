@@ -333,6 +333,39 @@ function placement_valid(::MirroringRequiredCompBehav, coord::TileCoord, gamemap
     return (true, "")
 end
 
+struct ImmovableCompBehav <: ComponentBehavior end
+HexComponentsAPI.produce_rel_elements(::ImmovableCompBehav) = ()
+HexComponentsAPI.get_tunables(::ImmovableCompBehav) = ()
+HexComponentsAPI.set_tunables(::ImmovableCompBehav, ::NTuple{0, Real}) = ImmovableCompBehav()
+HexComponentsAPI.render_base_elem!(queue, ::ImmovableCompBehav; kwargs...) = nothing
+HexComponentsAPI.can_be_moved(::ImmovableCompBehav; kwargs...) = (false, "Test component is fixed")
+
+struct DestinationInvalidCompBehav <: ComponentBehavior
+    invalid_coord::TileCoord
+end
+
+
+struct PlacementRestrictedCompBehav <: ComponentBehavior
+    invalid_coord::TileCoord
+end
+HexComponentsAPI.produce_rel_elements(::PlacementRestrictedCompBehav) = ()
+HexComponentsAPI.get_tunables(::PlacementRestrictedCompBehav) = ()
+HexComponentsAPI.set_tunables(comp::PlacementRestrictedCompBehav, ::NTuple{0, Real}) = comp
+HexComponentsAPI.render_base_elem!(queue, ::PlacementRestrictedCompBehav; kwargs...) = nothing
+function placement_valid(comp::PlacementRestrictedCompBehav, coord::TileCoord, gamemap::GameMap;
+        ship_name::Symbol = :primary, kwargs...)
+    coord == comp.invalid_coord && return (false, "Restricted destination")
+    return is_on_surface_tile(coord, gamemap; ship_name) ? (true, "") : (false, "Not on ship surface")
+end
+HexComponentsAPI.produce_rel_elements(::DestinationInvalidCompBehav) = ()
+HexComponentsAPI.get_tunables(::DestinationInvalidCompBehav) = ()
+HexComponentsAPI.set_tunables(comp::DestinationInvalidCompBehav, ::NTuple{0, Real}) = comp
+HexComponentsAPI.render_base_elem!(queue, ::DestinationInvalidCompBehav; kwargs...) = nothing
+function HexComponentsAPI.update_flowbehav!(comp::DestinationInvalidCompBehav; tile::TileCoord, kwargs...)
+    tile == comp.invalid_coord && error("Invalid destination reached")
+    return nothing
+end
+
 #= ---------- Test Helpers ----------- =#
 
 "No-op console sink — captures nothing"
@@ -700,6 +733,219 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         @test any(contains(l, "occupied on asteroid") for l in logs)
     end
 
+    #= ---------- TranslateElementsCommand ----------- =#
+    @testset "TranslateElementsCommand" begin
+        @testset "constructor owns and validates its source set" begin
+            sources = Set([TileCoord(0, 0)])
+            command = create_translate_elements_command(cq, sources, TileCoord(1, 0))
+            empty!(sources)
+
+            @test command.component_coords == Set([TileCoord(0, 0)])
+            @test isempty(command.pipe_coords)
+            @test_throws ArgumentError create_translate_elements_command(cq, Set{TileCoord}(), TileCoord(1, 0))
+            @test_throws ArgumentError create_translate_elements_command(cq, Set([TileCoord(0, 0)]), TileCoord(0, 0))
+        end
+
+        @testset "translates one or several components" begin
+            for sources in (Set([TileCoord(0, 0)]), Set([TileCoord(0, 0), TileCoord(1, 0)]))
+                gamemap = make_gamemap()
+                destinations = Set(source + TileCoord(0, 1) for source in sources)
+                set_surface_tile!(gamemap, union(sources, destinations))
+                for source in sources
+                    set_component!(gamemap, source, PlacedComponent(MockCompBehav(), Q_POS, :primary))
+                end
+
+                process_and_log!(create_translate_elements_command(cq, sources, TileCoord(0, 1)), gamemap)
+
+                @test all(destination -> has_component(gamemap, destination), destinations)
+                @test all(source -> !has_component(gamemap, source), setdiff(sources, destinations))
+                @test count_components(gamemap) == length(sources)
+            end
+        end
+
+        @testset "translates pipes and mixed element sets" begin
+            gamemap = make_gamemap()
+            translation = TileCoord(0, 1)
+            component_source = TileCoord(0, 0)
+            pipe_source = side_pipe(TileCoord(1, 0))
+            pipe_destination = offset_by_tile(pipe_source, translation)
+            set_surface_tile!(gamemap, Set([
+                component_source,
+                component_source + translation,
+                TileCoord(1, 0),
+                TileCoord(1, 1),
+            ]))
+            set_component!(gamemap, component_source, PlacedComponent(MockCompBehav(), Q_POS, :primary))
+            pipe_behaviour = MockPipeBehav()
+            set_pipe!(gamemap, pipe_source, PlacedPipe(pipe_behaviour, :primary))
+
+            command = create_translate_elements_command(
+                cq, Set([component_source]), Set([pipe_source]), translation,
+            )
+            process_and_log!(command, gamemap)
+
+            @test has_component(gamemap, component_source + translation)
+            @test !has_component(gamemap, component_source)
+            @test has_pipe(gamemap, pipe_destination)
+            @test !has_pipe(gamemap, pipe_source)
+            @test get_pipe(gamemap, pipe_destination).pipe === pipe_behaviour
+        end
+
+        @testset "requires a non-empty source type" begin
+            @test_throws ArgumentError create_translate_elements_command(
+                cq, Set{TileCoord}(), Set{PipeCoord}(), TileCoord(1, 0),
+            )
+        end
+
+        @testset "uses simultaneous occupancy semantics" begin
+            gamemap = make_gamemap()
+            sources = Set([TileCoord(0, 0), TileCoord(0, 1)])
+            set_surface_tile!(gamemap, Set([TileCoord(0, 0), TileCoord(0, 1), TileCoord(0, 2)]))
+            for source in sources
+                set_component!(gamemap, source, PlacedComponent(MockCompBehav(), Q_POS, :primary))
+            end
+
+            process_and_log!(create_translate_elements_command(cq, sources, TileCoord(0, 1)), gamemap)
+
+            @test !has_component(gamemap, TileCoord(0, 0))
+            @test has_component(gamemap, TileCoord(0, 1))
+            @test has_component(gamemap, TileCoord(0, 2))
+        end
+
+        @testset "rolls back source and occupancy failures" begin
+            gamemap = make_gamemap()
+            source = TileCoord(0, 0)
+            missing = TileCoord(1, 0)
+            destination = TileCoord(0, 1)
+            set_surface_tile!(gamemap, Set([source, missing, destination, TileCoord(1, 1)]))
+            set_component!(gamemap, source, PlacedComponent(MockCompBehav(), Q_POS, :primary))
+            original_hash = hash(gamemap)
+
+            process_and_log!(
+                create_translate_elements_command(cq, Set([source, missing]), TileCoord(0, 1)),
+                gamemap,
+            )
+            @test hash(gamemap) == original_hash
+
+            set_component!(gamemap, missing, PlacedComponent(ImmovableCompBehav(), Q_POS, :primary))
+            original_hash = hash(gamemap)
+            process_and_log!(
+                create_translate_elements_command(cq, Set([source, missing]), TileCoord(0, 1)),
+                gamemap,
+            )
+            @test hash(gamemap) == original_hash
+
+            external_destination = TileCoord(0, 1)
+            set_component!(gamemap, external_destination, PlacedComponent(MockCompBehav(), Q_POS, :primary))
+            original_hash = hash(gamemap)
+            process_and_log!(create_translate_elements_command(cq, Set([source]), TileCoord(0, 1)), gamemap)
+            @test hash(gamemap) == original_hash
+        end
+
+        @testset "enforces pipe and component placement rules" begin
+            source = TileCoord(0, 0)
+            destination = TileCoord(0, 1)
+
+            gamemap = make_gamemap()
+            set_surface_tile!(gamemap, destination)
+            set_component!(gamemap, source, PlacedComponent(MockCompBehav(), Q_POS, :primary))
+            crossing_pipe = get_pipe_segments(destination)[7]
+            set_pipe!(gamemap, crossing_pipe, PlacedPipe(MockPipeBehav(), :primary))
+            original_hash = hash(gamemap)
+            process_and_log!(create_translate_elements_command(cq, Set([source]), TileCoord(0, 1)), gamemap)
+            @test hash(gamemap) == original_hash
+
+            delete_pipe!(gamemap, crossing_pipe)
+            set_pipe!(gamemap, side_pipe(destination), PlacedPipe(MockPipeBehav(), :primary))
+            process_and_log!(create_translate_elements_command(cq, Set([source]), TileCoord(0, 1)), gamemap)
+            @test has_component(gamemap, destination)
+
+            restricted_map = make_gamemap()
+            set_surface_tile!(restricted_map, destination)
+            set_component!(restricted_map, source,
+                PlacedComponent(PlacementRestrictedCompBehav(destination), Q_POS, :primary))
+            original_hash = hash(restricted_map)
+            process_and_log!(
+                create_translate_elements_command(cq, Set([source]), TileCoord(0, 1)),
+                restricted_map,
+            )
+            @test hash(restricted_map) == original_hash
+        end
+
+        @testset "preserves orientation and resolves each destination ship" begin
+            gamemap = GameMap()
+            add_ship!(gamemap, :middle, ShipState())
+            add_ship!(gamemap, :destination, ShipState())
+            source_a = TileCoord(0, 0)
+            source_b = TileCoord(10, 0)
+            destination_b = TileCoord(20, 0)
+            set_surface_tile!(gamemap, source_a; ship_name = :primary)
+            set_surface_tile!(gamemap, source_b; ship_name = :middle)
+            set_surface_tile!(gamemap, destination_b; ship_name = :destination)
+            set_component!(gamemap, source_a, PlacedComponent(MirrorableCompBehav(), HexFrame.R_NEG, true, :primary))
+            set_component!(gamemap, source_b, PlacedComponent(MockCompBehav(), HexFrame.S_POS, false, :middle))
+
+            process_and_log!(
+                create_translate_elements_command(cq, Set([source_a, source_b]), TileCoord(10, 0)),
+                gamemap,
+            )
+
+            moved_a = get_component(gamemap, source_b)
+            moved_b = get_component(gamemap, destination_b)
+            @test moved_a.ship === :middle
+            @test moved_a.rotation === HexFrame.R_NEG
+            @test moved_a.mirrored
+            @test moved_b.ship === :destination
+            @test moved_b.rotation === HexFrame.S_POS
+            @test !moved_b.mirrored
+        end
+
+        @testset "final candidate validation rolls back the complete move" begin
+            gamemap = make_gamemap()
+            source = TileCoord(0, 0)
+            destination = TileCoord(0, 1)
+            set_surface_tile!(gamemap, destination)
+            set_component!(gamemap, source,
+                PlacedComponent(DestinationInvalidCompBehav(destination), Q_POS, :primary))
+            original_hash = hash(gamemap)
+            response = Channel{CommandStatus}(1)
+            command = create_translate_elements_command(
+                cq,
+                Set([source]),
+                TileCoord(0, 1);
+                response_channel = response,
+            )
+
+            HexFlowCalculator.process_command!(command, gamemap, silent_console; throw_errors = false)
+
+            @test take!(response) == REJECTED
+            @test !isready(response)
+            @test hash(gamemap) == original_hash
+        end
+
+        @testset "reports one status for applied and invalid commands" begin
+            for (source_exists, expected_status) in ((true, APPLIED), (false, INVALID))
+                gamemap = make_gamemap()
+                destination = TileCoord(0, 1)
+                set_surface_tile!(gamemap, destination)
+                source_exists && set_component!(gamemap, TileCoord(0, 0),
+                    PlacedComponent(MockCompBehav(), Q_POS, :primary))
+                response = Channel{CommandStatus}(1)
+                command = create_translate_elements_command(
+                    cq,
+                    Set([TileCoord(0, 0)]),
+                    TileCoord(0, 1);
+                    response_channel = response,
+                )
+
+                HexFlowCalculator.process_command!(command, gamemap, silent_console; throw_errors = false)
+
+                @test take!(response) == expected_status
+                @test !isready(response)
+            end
+        end
+    end
+
     #= ---------- MoveCommand{PipeCoord} ----------- =#
     @testset "MoveCommand{PipeCoord}" begin
         gamemap = make_gamemap()
@@ -772,8 +1018,8 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         end
     end
 
-    #= ---------- DeleteAtCommand{TileCoord} ----------- =#
-    @testset "DeleteAtCommand{TileCoord}" begin
+    #= ---------- Singleton component deletion ----------- =#
+    @testset "DeleteElementsCommand singleton component" begin
         gamemap = make_gamemap()
         coord = TileCoord(0, 0)
 
@@ -784,8 +1030,10 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         )
         @test !isnothing(get_component(gamemap, coord))
 
-        cmd = create_delete_command(cq, coord)
-        @test cmd isa DeleteAtCommand{TileCoord}
+        cmd = create_delete_elements_command(cq, coord)
+        @test cmd isa DeleteElementsCommand
+        @test cmd.component_coords == Set([coord])
+        @test isempty(cmd.pipe_coords)
 
         logs = process_and_log!(cmd, gamemap)
         @test isnothing(get_component(gamemap, coord))
@@ -823,18 +1071,18 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         @test any(contains(l, "No component") for l in logs2)
     end
 
-    @testset "DeleteAtCommand{TileCoord} — missing component" begin
+    @testset "DeleteElementsCommand singleton missing component" begin
         gamemap = GameMap()
         logs = process_and_log!(
-            create_delete_command(cq, TileCoord(0, 0)),
+            create_delete_elements_command(cq, TileCoord(0, 0)),
             gamemap
         )
 
         @test any(contains(l, "No component") for l in logs)
     end
 
-    #= ---------- DeleteAtCommand{PipeCoord} ----------- =#
-    @testset "DeleteAtCommand{PipeCoord}" begin
+    #= ---------- Singleton pipe deletion ----------- =#
+    @testset "DeleteElementsCommand singleton pipe" begin
         gamemap = make_two_ship_map()
         pipe = side_pipe(TileCoord(20, 0), 1)
 
@@ -845,8 +1093,10 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         )
         @test !isnothing(get_pipe(gamemap, pipe))
 
-        cmd = create_delete_command(cq, pipe)
-        @test cmd isa DeleteAtCommand{PipeCoord}
+        cmd = create_delete_elements_command(cq, pipe)
+        @test cmd isa DeleteElementsCommand
+        @test isempty(cmd.component_coords)
+        @test cmd.pipe_coords == Set([pipe])
 
         logs = process_and_log!(cmd, gamemap)
         @test isnothing(get_pipe(gamemap, pipe))
@@ -854,25 +1104,25 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         @test any(contains(l, "from asteroid") for l in logs)
     end
 
-    @testset "DeleteAtCommand{PipeCoord} — missing pipe" begin
+    @testset "DeleteElementsCommand singleton missing pipe" begin
         gamemap = GameMap()
         pipe = side_pipe(TileCoord(0, 0), 1)
 
         logs = process_and_log!(
-            create_delete_command(cq, pipe),
+            create_delete_elements_command(cq, pipe),
             gamemap
         )
 
         @test any(contains(l, "No pipe") for l in logs)
     end
 
-    #= ---------- DeleteAtCommand — type parameter correctness ----------- =#
-    @testset "DeleteAtCommand type parameter" begin
-        cmd_tile = create_delete_command(cq, TileCoord(0, 0))
-        cmd_pipe = create_delete_command(cq, side_pipe(TileCoord(0, 0), 1))
+    #= ---------- Singleton deletion factory correctness ----------- =#
+    @testset "DeleteElementsCommand singleton factories" begin
+        cmd_tile = create_delete_elements_command(cq, TileCoord(0, 0))
+        cmd_pipe = create_delete_elements_command(cq, side_pipe(TileCoord(0, 0), 1))
 
-        @test cmd_tile isa DeleteAtCommand{TileCoord}
-        @test cmd_pipe isa DeleteAtCommand{PipeCoord}
+        @test cmd_tile isa DeleteElementsCommand
+        @test cmd_pipe isa DeleteElementsCommand
 
         # Both are subtypes of MapEditCommand
         @test cmd_tile isa MapEditCommand
@@ -979,7 +1229,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 
         # Delete from :asteroid
         process_and_log!(
-            create_delete_command(cq, TileCoord(2, 0)),
+            create_delete_elements_command(cq, TileCoord(2, 0)),
             gamemap
         )
 
@@ -988,8 +1238,8 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 
     #= ---------- Command ID Generation ----------- =#
     @testset "Command IDs are sequential" begin
-        c1 = create_delete_command(cq, TileCoord(0, 0))
-        c2 = create_delete_command(cq, TileCoord(0, 0))
+        c1 = create_delete_elements_command(cq, TileCoord(0, 0))
+        c2 = create_delete_elements_command(cq, TileCoord(0, 0))
         c3 = create_set_tile_command(cq, TileCoord(0, 0), MockCompBehav(), Q_POS)
 
         @test c2.id == c1.id + 1
@@ -1027,7 +1277,8 @@ end
                 create_set_tile_command(cq, TileCoord(1, 0), MockCompBehav(), Q_POS),
                 create_set_tile_command(cq, TileCoord(2, 0), MockCompBehav(), Q_POS),
             ]
-            insert!(commands, failure_index, create_delete_command(cq, TileCoord(20, 20)))
+            insert!(commands, failure_index,
+                create_set_tile_command(cq, TileCoord(20, 20), MockCompBehav(), Q_POS))
             logs = process_and_log!(create_batch_command(cq, commands), gm)
 
             @test hash(gm) == original_hash
@@ -1059,7 +1310,7 @@ end
         response = Channel{CommandStatus}(1)
         batch = create_batch_command(cq, MapEditCommand[
             create_set_tile_command(cq, TileCoord(1, 0), MockCompBehav(), Q_POS),
-            create_delete_command(cq, TileCoord(20, 20)),
+            create_set_tile_command(cq, TileCoord(20, 20), MockCompBehav(), Q_POS),
         ]; response_channel = response)
         logs = process_and_log!(batch, gm)
 
@@ -1071,23 +1322,54 @@ end
 
     @testset "constructor rejects unsafe batches" begin
         cq = create_command_queue(4)
-        delete = create_delete_command(cq, TileCoord(0, 0))
+        batchable = create_set_tile_command(cq, TileCoord(0, 0), MockCompBehav(), Q_POS)
         @test_throws ArgumentError create_batch_command(cq, MapEditCommand[])
         @test_throws ArgumentError create_batch_command(cq, MapEditCommand[
             create_click_tile_command(cq, TileCoord(0, 0), CartesianCoord(0.0, 0.0)),
         ])
         response = Channel{CommandStatus}(1)
         @test_throws ArgumentError create_batch_command(cq, MapEditCommand[
-            create_delete_command(cq, TileCoord(0, 0); response_channel = response),
+            create_delete_elements_command(cq, TileCoord(0, 0); response_channel = response),
         ])
-        nested = create_batch_command(cq, MapEditCommand[delete])
+        @test_throws ArgumentError create_batch_command(cq, MapEditCommand[
+            create_delete_elements_command(cq, TileCoord(0, 0)),
+        ])
+        nested = create_batch_command(cq, MapEditCommand[batchable])
         @test_throws ArgumentError create_batch_command(cq, MapEditCommand[nested])
+        @test_throws ArgumentError create_batch_command(cq, MapEditCommand[
+            create_move_command(cq, TileCoord(0, 0), TileCoord(1, 0), Q_POS),
+        ])
+        @test_throws ArgumentError create_batch_command(cq, MapEditCommand[
+            create_translate_elements_command(cq, Set([TileCoord(0, 0)]), TileCoord(1, 0)),
+        ])
+    end
+
+
+    #= ---------- DeleteElementsCommand ----------- =#
+    @testset "DeleteElementsCommand" begin
+        cq = create_command_queue(4)
+        @test_throws ArgumentError create_delete_elements_command(cq, Set{TileCoord}(), Set{PipeCoord}())
+
+        gamemap = make_gamemap()
+        component_coord = TileCoord(0, 0)
+        pipe_coord = side_pipe(TileCoord(0, 0))
+        set_component!(gamemap, component_coord, PlacedComponent(MockCompBehav(), Q_POS, :primary))
+        set_pipe!(gamemap, pipe_coord, PlacedPipe(MockPipeBehav(), :primary))
+
+        process_and_log!(create_delete_elements_command(
+            cq, Set([component_coord]), Set([pipe_coord]),
+        ), gamemap)
+
+        @test !has_component(gamemap, component_coord)
+        @test !has_pipe(gamemap, pipe_coord)
+        @test !is_batchable(create_delete_elements_command(cq, component_coord))
+        @test !is_batchable(create_delete_elements_command(cq, Set([component_coord]), Set{PipeCoord}()))
     end
 
     @testset "occupies one queue slot regardless of child count" begin
         cq = create_command_queue(1)
         batch = create_batch_command(cq, MapEditCommand[
-            create_delete_command(cq, TileCoord(index, 0)) for index in 1:8
+            create_set_tile_command(cq, TileCoord(index, 0), MockCompBehav(), Q_POS) for index in 1:8
         ])
         @test try_enqueue_command!(cq, batch, silent_console) == (true, APPLIED)
         @test take!(cq.command_channel) === batch
@@ -1354,7 +1636,7 @@ end
 
 @testset "try_enqueue_command!" begin
     cq = create_command_queue(4)
-    cmd = create_delete_command(cq, TileCoord(0, 0))
+    cmd = create_delete_elements_command(cq, TileCoord(0, 0))
 
     success, status = try_enqueue_command!(cq, cmd, silent_console)
     @test success == true
@@ -1363,7 +1645,7 @@ end
 
 @testset "CommandQueue — last_command tracking" begin
     cq = create_command_queue(4)
-    cmd1 = create_delete_command(cq, TileCoord(0, 0))
+    cmd1 = create_delete_elements_command(cq, TileCoord(0, 0))
     cmd2 = create_set_tile_command(cq, TileCoord(0, 0), MockCompBehav(), Q_POS)
 
     try_enqueue_command!(cq, cmd1, silent_console)

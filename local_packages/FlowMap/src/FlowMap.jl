@@ -31,7 +31,7 @@ export count_components, count_pipes, count_surface_tiles
 export delete_all_surface_tiles!
 export is_on_surface_tile, set_surface_tile!, delete_surface_tile!
 export is_on_surface_tile_any_ship
-export can_place_component_at, can_place_pipe_at, can_remove_surface_at, is_node_on_ship_surface
+export can_place_component_at, validate_component_destination, can_place_pipe_at, can_remove_surface_at, is_node_on_ship_surface
 export each_surface_owner, collect_surface_tiles!, collect_surface_edge_tiles!, expand_tileset!, expand_tileset
 export get_axial_bounds, get_cartesian_bounds, get_surface_centroid
 export get_surface_shiptag, get_component_shiptag, get_pipe_shiptag
@@ -45,6 +45,7 @@ export get_learning_system, set_learning_system!, has_learning_system, is_sandbo
 
 #= ---------- Off-Ship Pipe Exports ----------- =#
 export can_place_pipe_offship, validate_offship_pipe_deletion, reassign_pipe_ownership!
+export resolve_pipe_ownerships, normalise_pipe_ownership!
 export is_node_on_any_ship_surface, flood_search_pipes_from_node!
 export has_pipe_component_conflict
 
@@ -1052,6 +1053,42 @@ function can_place_component_at(coord::TileCoord, gamemap::GameMap; ship_name::S
     return (true, "")
 end
 
+"""
+Validate an unchanged placed component at `destination` and return its destination ship.
+
+Coordinates in `vacating_coords` relax component occupancy only. Pipe conflicts and
+component-specific placement rules are always checked.
+"""
+function validate_component_destination(
+        component::PlacedComponent,
+        destination::TileCoord,
+        gamemap::GameMap;
+        vacating_coords::Union{Nothing, AbstractSet{TileCoord}} = nothing,
+    )::Tuple{Bool, Union{Nothing, Symbol}, String}
+    occupant = get_component(gamemap, destination)
+    destination_vacated = !isnothing(vacating_coords) && destination in vacating_coords
+    if !isnothing(occupant) && !destination_vacated
+        return (false, nothing, "Destination tile is already occupied on $(occupant.ship)")
+    end
+
+    if has_pipe_component_conflict(destination, gamemap)
+        return (false, nothing, "Destination tile contains a pipe segment")
+    end
+
+    destination_ship = find_ship_for_placement(
+        component.component,
+        destination,
+        gamemap;
+        rotation = component.rotation,
+        mirrored = component.mirrored,
+    )
+    if isnothing(destination_ship)
+        return (false, nothing, "Destination is not a valid placement on any ship")
+    end
+
+    return (true, destination_ship, "")
+end
+
 "Check if a pipe can be placed at a pipe coordinate (both endpoint nodes must be on ship surface)."
 function can_place_pipe_at(coord::PipeCoord, gamemap::GameMap; ship_name::Symbol = :primary)::Tuple{Bool, String}
     if has_pipe_component_conflict(coord, gamemap)
@@ -1078,8 +1115,9 @@ end
 
 "Return true when an existing non-side pipe segment crosses `subject`."
 function has_pipe_component_conflict(subject::TileCoord, gamemap::GameMap)::Bool
-    for pipe in keys(gamemap.pipe_behaviors)
-        get_tile_containing_pipe(pipe) == subject && return true
+    for pipe in get_pipe_segments(subject)
+        get_tile_containing_pipe(pipe) == subject || continue
+        has_pipe(gamemap, pipe) && return true
     end
     return false
 end
@@ -1257,35 +1295,87 @@ function flood_search_pipes_from_node!(reachable::Set{PipeCoord}, all_pipe_coord
 end
 
 """
+Resolve ownership for a complete candidate pipe topology without mutating `gamemap`.
+
+Off-surface networks touching multiple ships are assigned to the ship whose name sorts first,
+making ownership independent of dictionary and set iteration order.
+"""
+function resolve_pipe_ownerships(gamemap::GameMap, pipe_coords)::Tuple{Bool, Dict{PipeCoord, Symbol}, String}
+    ownerships = Dict{PipeCoord, Symbol}()
+    off_surface = Set{PipeCoord}()
+
+    for coord in pipe_coords
+        ship = find_ship_containing(gamemap, coord)
+        if isnothing(ship)
+            push!(off_surface, coord)
+        else
+            ownerships[coord] = ship
+        end
+    end
+
+    unvisited = copy(off_surface)
+    while !isempty(unvisited)
+        first_coord = first(unvisited)
+        connected = Set{PipeCoord}()
+        flood_search_pipes_from_node!(connected, off_surface, to_nodecoord(first_coord.v1))
+        setdiff!(unvisited, connected)
+
+        target_ship::Union{Symbol, Nothing} = nothing
+        for coord in connected, vertex in (coord.v1, coord.v2)
+            ship = find_ship_surface_containing_node(to_nodecoord(vertex), gamemap; default = nothing)
+            isnothing(ship) && continue
+            target_ship = isnothing(target_ship) ? ship : min(target_ship, ship)
+        end
+        isnothing(target_ship) &&
+            return (false, ownerships, "Pipe network is not connected to a ship surface")
+
+        for coord in connected
+            ownerships[coord] = target_ship
+        end
+    end
+    return (true, ownerships, "")
+end
+
+"Normalise every placed pipe's owner from the map's complete final topology."
+function normalise_pipe_ownership!(gamemap::GameMap)::Tuple{Bool, String}
+    valid, ownerships, reason = resolve_pipe_ownerships(gamemap, keys(gamemap.pipe_behaviors))
+    valid || return (false, reason)
+
+    for (coord, ship) in ownerships
+        placed = gamemap.pipe_behaviors[coord]
+        placed.ship === ship || (gamemap.pipe_behaviors[coord] = PlacedPipe(placed.pipe, ship))
+    end
+    return (true, "")
+end
+
+"""
     can_place_pipe_offship(coord, gamemap) → (valid, target_ship, reason)
 
-Check if a pipe can be placed at `coord` when it doesn't fit entirely on a single ship's
-surface. Requires at least one endpoint to be connected to a ship (via surface adjacency
-or an existing pipe). Returns the target ship to store the pipe on.
+Perform the minimum local check needed to preview placing an off-surface pipe at `coord`.
+Requires an endpoint to touch a ship surface or an existing, authoritatively normalised pipe
+network. Committed map edits must subsequently resolve the complete pipe topology.
 """
 function can_place_pipe_offship(coord::PipeCoord, gamemap::GameMap)::Tuple{Bool, Union{Symbol, Nothing}, String}
     if has_pipe_component_conflict(coord, gamemap)
         return (false, nothing, "Pipe segment crosses an occupied tile")
     end
 
-    v1_node = to_nodecoord(coord.v1)
-    v2_node = to_nodecoord(coord.v2)
-
-    v1_ship = find_ship_for_node(v1_node, gamemap; default = nothing)
-    v2_ship = find_ship_for_node(v2_node, gamemap; default = nothing)
+    v1_ship = find_ship_for_node(to_nodecoord(coord.v1), gamemap; default = nothing)
+    v2_ship = find_ship_for_node(to_nodecoord(coord.v2), gamemap; default = nothing)
 
     if isnothing(v1_ship) && isnothing(v2_ship)
         return (false, nothing, "Neither endpoint is connected to a ship or existing pipe")
     end
 
-    target = !isnothing(v1_ship) ? v1_ship : v2_ship
-    return (true, target, "")
+    return (true, !isnothing(v1_ship) ? v1_ship : v2_ship, "")
 end
 
 """
     validate_offship_pipe_deletion(coord, gamemap) → valid
 
-Validate that deleting an off-surface pipe won't orphan any remaining off-surface pipes.
+Perform the minimum local check needed to preview deleting the off-surface pipe at `coord`.
+Only networks connected through its endpoints can be affected. Committed map edits must
+subsequently resolve the complete pipe topology.
 """
 function validate_offship_pipe_deletion(coord::PipeCoord, gamemap::GameMap)::Bool
     remaining_offship = Set{PipeCoord}()
@@ -1302,11 +1392,11 @@ function validate_offship_pipe_deletion(coord::PipeCoord, gamemap::GameMap)::Boo
         flood_search_pipes_from_node!(reachable, remaining_offship, start_node)
         isempty(reachable) && continue
         has_ship_connection = any(
-            is_node_on_any_ship_surface(to_nodecoord(v), gamemap)
-            for e in reachable
-            for v in (e.v1, e.v2)
+            is_node_on_any_ship_surface(to_nodecoord(vertex), gamemap)
+            for pipe_coord in reachable
+            for vertex in (pipe_coord.v1, pipe_coord.v2)
         )
-        !has_ship_connection && return false
+        has_ship_connection || return false
     end
     return true
 end
@@ -1314,46 +1404,10 @@ end
 """
     reassign_pipe_ownership!(deleted_coord, gamemap)
 
-After deleting an off-surface pipe, flood-fill through remaining off-surface pipes
-and rewrite each connected component's ship tag to the ship its touching endpoint belongs to.
+Compatibility wrapper that normalises ownership after deleting an off-surface pipe.
 """
-function reassign_pipe_ownership!(deleted_coord::PipeCoord, gamemap::GameMap)
-    offship_coords = Set{PipeCoord}()
-    for (pipe_coord, _) in gamemap.pipe_behaviors
-        v1_on = is_node_on_any_ship_surface(to_nodecoord(pipe_coord.v1), gamemap)
-        v2_on = is_node_on_any_ship_surface(to_nodecoord(pipe_coord.v2), gamemap)
-        !(v1_on && v2_on) && push!(offship_coords, pipe_coord)
-    end
-    isempty(offship_coords) && return nothing
-
-    visited_all = Set{PipeCoord}()
-    for start_node in (to_nodecoord(deleted_coord.v1), to_nodecoord(deleted_coord.v2))
-        reachable = Set{PipeCoord}()
-        flood_search_pipes_from_node!(reachable, offship_coords, start_node)
-        isempty(reachable) && continue
-        any(e -> e ∈ visited_all, reachable) && continue
-        union!(visited_all, reachable)
-
-        # Pipe-fallback disabled: the chain we're about to retag is itself the source
-        # of stale tags, so we must anchor only on actual surface ownership.
-        target_ship = nothing
-        for coord in reachable
-            for v in (coord.v1, coord.v2)
-                target_ship = find_ship_surface_containing_node(to_nodecoord(v), gamemap;
-                    default = nothing)
-                !isnothing(target_ship) && break
-            end
-            !isnothing(target_ship) && break
-        end
-        isnothing(target_ship) && continue
-
-        for coord in reachable
-            p = gamemap.pipe_behaviors[coord]
-            if p.ship !== target_ship
-                gamemap.pipe_behaviors[coord] = PlacedPipe(p.pipe, target_ship)
-            end
-        end
-    end
+function reassign_pipe_ownership!(::PipeCoord, gamemap::GameMap)
+    normalise_pipe_ownership!(gamemap)
     return nothing
 end
 

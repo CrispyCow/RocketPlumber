@@ -6,22 +6,21 @@ using StaticArrays, GLFW, Dates
 # Type exports
 export SimSpeed, SIM_1X, SIM_2X, SIM_4X, SIM_MAX
 export ExitReason, EXIT_QUIT, EXIT_MENU, EXIT_SANDBOX_COMPLETED, EXIT_SANDBOX_STARTED
-export AbstractPopupTarget, ComponentPopupTarget, ComponentGroupPopupTarget, ShipPopupTarget
-export AbstractSelectionTarget, ComponentSelectionTarget
-export AbstractSelectionState, SelectionEmptyState, ComponentSelectionState
-export AbstractPlacementMoveTarget, TileComponentMoveTarget, PipeMoveTarget
+export AbstractPopupTarget, ComponentPopupTarget, ElementGroupPopupTarget, ShipPopupTarget
+export AbstractSelectionState, SelectionEmptyState, WorldSelectionState, SelectionState
+export AbstractPlacementMoveTarget, TileComponentMoveTarget, PipeMoveTarget, SelectionMoveTarget
 export AbstractPlacementState, AbstractEditorPlacementState
-export PlacementReadyState, PlacementPressedState, PlacementMoveState, PlacementPipeChainState
+export PlacementReadyState, PlacementPressedState, PlacementMoveState, PlacementMovePendingState, PlacementPipeChainState
 export PlacementDeleteState, PlacementTileState, PlacementSurfaceEditState, PlacementRedockState
 export ActionPopupState, HintData, RedockModeState, InputState, ViewState, GameState
 
 # Function exports
 export create_consolebuffer, get_viewtransform
 export get_lastinstate!, update_lastinstate!, get_instate, get_inrising!, get_infalling!
-export placement_state, set_placement_state!, clear_placement_pressed_state!, clear_placement_state!
-export selection_state, selected_component_coords, primary_selected_component
-export select_single_component!, toggle_selected_component!, prune_selected_components!
-export clear_selection!, has_selected_component, selected_component_count
+export placement_state, set_placement_state!, try_enter_placement_state!, clear_placement_pressed_state!, clear_placement_state!
+export selection_state, selected_component_coords, selected_pipe_coords
+export select_single_component!, select_single_pipe!, select_elements!, toggle_selected_component!, toggle_selected_pipe!, prune_selection!
+export clear_selection!, has_selected_component, has_selected_pipe, selected_element_count, translate_selection
 export shared_component_actions
 export is_standard_family_state, is_active_standard_interaction_state
 export clear_world_selection!, enter_ready_placement_state!, enter_editor_placement_state!, toggle_editor_placement_state!
@@ -99,25 +98,50 @@ abstract type AbstractEditorPlacementState <: AbstractPlacementState end
     is_visible::Bool = true
 end
 
+#= ---------- Selection State Types ----------- =#
+
+"Abstract type for the world-selection state machine."
+abstract type AbstractSelectionState end
+
+"World-selection state with no selected targets."
+struct SelectionEmptyState <: AbstractSelectionState end
+
+"World-selection state containing components and pipes."
+struct WorldSelectionState <: AbstractSelectionState
+    component_coords::Set{TileCoord}
+    pipe_coords::Set{PipeCoord}
+
+    function WorldSelectionState(component_coords, pipe_coords)
+        isempty(component_coords) && isempty(pipe_coords) && throw(ArgumentError("world selection cannot be empty"))
+        return new(Set{TileCoord}(component_coords), Set{PipeCoord}(pipe_coords))
+    end
+end
+
+const SelectionState = Union{SelectionEmptyState, WorldSelectionState}
+
 #= ---------- Action Popup Target Types ----------- =#
 
 "Abstract type for popup-specific data. Concrete subtypes identify the popup target."
 abstract type AbstractPopupTarget end
+
+pipe_sort_key(coord::PipeCoord) = (coord.v1.tile.q, coord.v1.tile.r, Int(coord.v1.dir), coord.v2.tile.q, coord.v2.tile.r, Int(coord.v2.dir))
 
 "Popup target for a tile component."
 struct ComponentPopupTarget <: AbstractPopupTarget
     coord::TileCoord
 end
 
-"Popup target for an ordered group of tile components, anchored at the component that opened it."
-struct ComponentGroupPopupTarget <: AbstractPopupTarget
-    coords::Vector{TileCoord}
-    anchor::TileCoord
+"Popup target for an ordered group of components and pipes."
+struct ElementGroupPopupTarget <: AbstractPopupTarget
+    component_coords::Vector{TileCoord}
+    pipe_coords::Vector{PipeCoord}
 
-    function ComponentGroupPopupTarget(coords::Vector{TileCoord}, anchor::TileCoord)
-        length(coords) > 1 || throw(ArgumentError("component group popup requires at least two coordinates"))
-        anchor in coords || throw(ArgumentError("component group popup anchor must be selected"))
-        return new(copy(coords), anchor)
+    function ElementGroupPopupTarget(component_coords, pipe_coords)
+        length(component_coords) + length(pipe_coords) > 1 ||
+            throw(ArgumentError("element group popup requires at least two coordinates"))
+        components = sort!(collect(component_coords); by = coord -> (coord.q, coord.r))
+        pipes = sort!(collect(pipe_coords); by = pipe_sort_key)
+        return new(components, pipes)
     end
 end
 
@@ -168,7 +192,26 @@ struct PipeMoveTarget <: AbstractPlacementMoveTarget
     coord::PipeCoord
 end
 
-const PlacementMoveTarget = Union{TileComponentMoveTarget, PipeMoveTarget}
+const SelectionAnchor = Union{TileCoord, PipeCoord}
+
+"Move target captured from the current world selection."
+struct SelectionMoveTarget <: AbstractPlacementMoveTarget
+    component_coords::Set{TileCoord}
+    pipe_coords::Set{PipeCoord}
+    anchor::SelectionAnchor
+    press_reference_tile::TileCoord
+
+    function SelectionMoveTarget(
+            component_coords, pipe_coords, anchor::SelectionAnchor, press_reference_tile::TileCoord,
+        )
+        length(component_coords) + length(pipe_coords) > 1 || throw(ArgumentError("selection move target requires at least two elements"))
+        anchor_selected = anchor isa TileCoord ? anchor in component_coords : anchor in pipe_coords
+        anchor_selected || throw(ArgumentError("selection move anchor must be selected"))
+        return new(Set{TileCoord}(component_coords), Set{PipeCoord}(pipe_coords), anchor, press_reference_tile)
+    end
+end
+
+const PlacementMoveTarget = Union{TileComponentMoveTarget, PipeMoveTarget, SelectionMoveTarget}
 
 "Idle placement state: inspect-hover plus click classification."
 struct PlacementReadyState <: AbstractPlacementState end
@@ -189,6 +232,18 @@ end
     drag_reference_axis::Union{Nothing, HexAxis} = nothing
     toolrotation::HexAxis = HexFrame.Q_POS
     toolmirrored::Bool = false
+end
+
+"An enqueued move awaiting its calculator result and committed render snapshot."
+@kwdef struct PlacementMovePendingState <: AbstractPlacementState
+    response_channel::Channel
+    original_selection::SelectionState
+    translated_selection::SelectionState
+    expected_component_sources::Set{TileCoord}
+    expected_component_destinations::Set{TileCoord}
+    expected_pipe_sources::Set{PipeCoord}
+    expected_pipe_destinations::Set{PipeCoord}
+    calculator_applied::Bool = false
 end
 
 "Active placement pipe-chain state." 
@@ -216,6 +271,7 @@ const PlacementState = Union{
     PlacementReadyState,
     PlacementPressedState,
     PlacementMoveState,
+    PlacementMovePendingState,
     PlacementPipeChainState,
     PlacementDeleteState,
     PlacementTileState,
@@ -226,34 +282,6 @@ const PlacementState = Union{
 # ===============================================================
 # Selection State
 # ===============================================================
-
-"Abstract type for targets held by the selection state machine."
-abstract type AbstractSelectionTarget end
-
-"Selection target for a tile component."
-struct ComponentSelectionTarget <: AbstractSelectionTarget
-    coord::TileCoord
-end
-
-"Abstract type for the world-selection state machine."
-abstract type AbstractSelectionState end
-
-"World-selection state with no selected targets."
-struct SelectionEmptyState <: AbstractSelectionState end
-
-"World-selection state containing component targets and a deterministic primary target."
-struct ComponentSelectionState <: AbstractSelectionState
-    targets::Set{ComponentSelectionTarget}
-    primary::ComponentSelectionTarget
-
-    function ComponentSelectionState(targets::Set{ComponentSelectionTarget}, primary::ComponentSelectionTarget)
-        isempty(targets) && throw(ArgumentError("component selection cannot be empty"))
-        primary in targets || throw(ArgumentError("primary component must be selected"))
-        return new(targets, primary)
-    end
-end
-
-const SelectionState = Union{SelectionEmptyState, ComponentSelectionState}
 
 "Input state for placement, selection, and control"
 @kwdef mutable struct InputState
@@ -331,77 +359,100 @@ selection_state(inputstate::InputState) = inputstate.selection_state
 "Return the coordinates of all selected components."
 function selected_component_coords(inputstate::InputState)::Set{TileCoord}
     state = selection_state(inputstate)
-    state isa ComponentSelectionState || return Set{TileCoord}()
-    return Set(target.coord for target in state.targets)
+    state isa WorldSelectionState || return Set{TileCoord}()
+    return copy(state.component_coords)
 end
 
-"Return the primary selected component coordinate, or `nothing` when selection is empty."
-function primary_selected_component(inputstate::InputState)::Union{Nothing, TileCoord}
+"Return the coordinates of all selected pipes."
+function selected_pipe_coords(inputstate::InputState)::Set{PipeCoord}
     state = selection_state(inputstate)
-    state isa ComponentSelectionState || return nothing
-    return state.primary.coord
+    state isa WorldSelectionState || return Set{PipeCoord}()
+    return copy(state.pipe_coords)
 end
 
 "Replace the current selection with one component."
 function select_single_component!(inputstate::InputState, coord::TileCoord)
-    target = ComponentSelectionTarget(coord)
-    inputstate.selection_state = ComponentSelectionState(Set{ComponentSelectionTarget}((target,)), target)
+    inputstate.selection_state = WorldSelectionState(Set((coord,)), Set{PipeCoord}())
     return nothing
 end
 
-"Toggle one component in the selection, making newly added components primary."
-function toggle_selected_component!(inputstate::InputState, coord::TileCoord)
-    state = selection_state(inputstate)
-    target = ComponentSelectionTarget(coord)
-    if !(state isa ComponentSelectionState)
-        return select_single_component!(inputstate, coord)
-    end
+"Replace the current selection with one pipe."
+function select_single_pipe!(inputstate::InputState, coord::PipeCoord)
+    inputstate.selection_state = WorldSelectionState(Set{TileCoord}(), Set((coord,)))
+    return nothing
+end
 
-    targets = copy(state.targets)
-    if target in targets
-        delete!(targets, target)
-        if isempty(targets)
-            return clear_selection!(inputstate)
-        end
-        primary = target == state.primary ? first(sort!(collect(targets); by = item -> (item.coord.q, item.coord.r))) : state.primary
+"Replace the current selection from complete component and pipe coordinate collections."
+function select_elements!(inputstate::InputState, component_coords, pipe_coords)
+    isempty(component_coords) && isempty(pipe_coords) && return clear_selection!(inputstate)
+    inputstate.selection_state = WorldSelectionState(component_coords, pipe_coords)
+    return nothing
+end
+
+"Toggle one component or pipe coordinate in the current selection."
+function toggle_selected_coordinate!(inputstate::InputState, target::Union{TileCoord, PipeCoord})
+    state = selection_state(inputstate)
+    components = state isa WorldSelectionState ? copy(state.component_coords) : Set{TileCoord}()
+    pipes = state isa WorldSelectionState ? copy(state.pipe_coords) : Set{PipeCoord}()
+
+    if target isa TileCoord
+        target in components ? delete!(components, target) : push!(components, target)
     else
-        push!(targets, target)
-        primary = target
+        target in pipes ? delete!(pipes, target) : push!(pipes, target)
     end
-    inputstate.selection_state = ComponentSelectionState(targets, primary)
+
+    isempty(components) && isempty(pipes) && return clear_selection!(inputstate)
+    inputstate.selection_state = WorldSelectionState(components, pipes)
     return nothing
 end
 
-"Remove selected components that no longer satisfy `is_valid`."
-function prune_selected_components!(is_valid::Function, inputstate::InputState)
+"Toggle one component in the selection."
+toggle_selected_component!(inputstate::InputState, coord::TileCoord) = toggle_selected_coordinate!(inputstate, coord)
+
+"Toggle one pipe in the selection."
+toggle_selected_pipe!(inputstate::InputState, coord::PipeCoord) = toggle_selected_coordinate!(inputstate, coord)
+
+"Remove selected elements that no longer satisfy their validity predicates."
+function prune_selection!(component_is_valid::Function, pipe_is_valid::Function, inputstate::InputState)
     state = selection_state(inputstate)
-    state isa ComponentSelectionState || return nothing
-    targets = Set(target for target in state.targets if is_valid(target.coord))
-    isempty(targets) && return clear_selection!(inputstate)
-    primary = state.primary in targets ? state.primary : first(sort!(collect(targets); by = item -> (item.coord.q, item.coord.r)))
-    inputstate.selection_state = ComponentSelectionState(targets, primary)
+    state isa WorldSelectionState || return nothing
+    components = Set(coord for coord in state.component_coords if component_is_valid(coord))
+    pipes = Set(coord for coord in state.pipe_coords if pipe_is_valid(coord))
+    isempty(components) && isempty(pipes) && return clear_selection!(inputstate)
+    inputstate.selection_state = WorldSelectionState(components, pipes)
     return nothing
 end
 
-selected_component_count(inputstate::InputState) = (state = selection_state(inputstate); state isa ComponentSelectionState ? length(state.targets) : 0)
+function selected_element_count(inputstate::InputState)::Int
+    state = selection_state(inputstate)
+    return state isa WorldSelectionState ? length(state.component_coords) + length(state.pipe_coords) : 0
+end
+
+"Translate a complete selection by a whole-tile offset."
+function translate_selection(selection::SelectionState, translation::TileCoord)::SelectionState
+    selection isa SelectionEmptyState && return selection
+    components = Set(coord + translation for coord in selection.component_coords)
+    pipes = Set(offset_by_tile(coord, translation) for coord in selection.pipe_coords)
+    return WorldSelectionState(components, pipes)
+end
 
 "Intersect component actions while preserving the first component's display order."
 function shared_component_actions(action_sets)::Tuple
     isempty(action_sets) && return ()
     shared = ActionInfo[]
-    for primary_action in first(action_sets)
-        matches = [findfirst(action -> action.id === primary_action.id, actions) for actions in action_sets]
+    for reference_action in first(action_sets)
+        matches = [findfirst(action -> action.id === reference_action.id, actions) for actions in action_sets]
         any(isnothing, matches) && continue
         actions = [action_sets[index][match] for (index, match) in enumerate(matches)]
-        if any(action -> action.label != primary_action.label ||
-                action.confirmation_message != primary_action.confirmation_message, actions)
-            @warn "Inconsistent metadata for shared component action" action_id = primary_action.id
+        if any(action -> action.label != reference_action.label ||
+                action.confirmation_message != reference_action.confirmation_message, actions)
+            @warn "Inconsistent metadata for shared component action" action_id = reference_action.id
         end
         disabled_count = count(!action.enabled for action in actions)
-        tooltip = disabled_count == 0 ? primary_action.tooltip :
+        tooltip = disabled_count == 0 ? reference_action.tooltip :
             "Unavailable for $disabled_count of $(length(actions)) selected components."
-        push!(shared, ActionInfo(primary_action.id, primary_action.label, disabled_count == 0, tooltip,
-            primary_action.confirmation_message))
+        push!(shared, ActionInfo(reference_action.id, reference_action.label, disabled_count == 0, tooltip,
+            reference_action.confirmation_message))
     end
     return Tuple(shared)
 end
@@ -415,9 +466,12 @@ end
 "Return whether a component coordinate is selected."
 function has_selected_component(inputstate::InputState, coord::TileCoord)::Bool
     state = selection_state(inputstate)
-    state isa ComponentSelectionState || return false
-    return ComponentSelectionTarget(coord) in state.targets
+    return state isa WorldSelectionState && coord in state.component_coords
 end
+
+"Return whether a pipe coordinate is selected."
+has_selected_pipe(inputstate::InputState, coord::PipeCoord)::Bool =
+    (state = selection_state(inputstate); state isa WorldSelectionState && coord in state.pipe_coords)
 
 # ===============================================================
 # Placement State Helpers
@@ -432,11 +486,25 @@ function set_placement_state!(inputstate::InputState, state::PlacementState)
     return nothing
 end
 
+"Return whether a placement state permits component selection and world popups."
+function allows_world_selection(state::AbstractPlacementState)::Bool
+    return !(state isa AbstractEditorPlacementState || state isa PlacementRedockState)
+end
+
+"Attempt a player-requested placement transition, enforcing destination-state invariants."
+function try_enter_placement_state!(inputstate::InputState, state::PlacementState)::Bool
+    inputstate.placement_state isa PlacementMovePendingState && return false
+    !allows_world_selection(state) && clear_world_selection!(inputstate)
+    set_placement_state!(inputstate, state)
+    return true
+end
+
 "Return `true` when placement is in one of the standard gameplay state-machine states."
 function is_standard_family_state(state::AbstractPlacementState)::Bool
     return state isa PlacementReadyState ||
         state isa PlacementPressedState ||
         state isa PlacementMoveState ||
+        state isa PlacementMovePendingState ||
         state isa PlacementPipeChainState
 end
 
@@ -456,19 +524,13 @@ function clear_world_selection!(inputstate::InputState)
     return nothing
 end
 
-"Enter the idle ready placement state and clear world-selection UI state."
-function enter_ready_placement_state!(inputstate::InputState)
-    clear_world_selection!(inputstate)
-    inputstate.placement_state = PlacementReadyState()
-    return nothing
-end
+"Attempt to enter the idle ready placement state."
+enter_ready_placement_state!(inputstate::InputState)::Bool = 
+    try_enter_placement_state!(inputstate, PlacementReadyState())
 
-"Enter an editor-only placement state, clearing world-selection UI state first."
-function enter_editor_placement_state!(inputstate::InputState, state::AbstractEditorPlacementState)
-    clear_world_selection!(inputstate)
-    inputstate.placement_state = state
-    return nothing
-end
+"Attempt to enter an editor-only placement state."
+enter_editor_placement_state!(inputstate::InputState, state::AbstractEditorPlacementState)::Bool =
+    try_enter_placement_state!(inputstate, state)
 
 "Toggle an editor-only placement state, returning to ready when the same tool is selected twice."
 function toggle_editor_placement_state!(inputstate::InputState, state::AbstractEditorPlacementState)
@@ -479,12 +541,9 @@ function toggle_editor_placement_state!(inputstate::InputState, state::AbstractE
     return enter_editor_placement_state!(inputstate, state)
 end
 
-"Enter redock placement state, clearing world-selection UI state first."
-function enter_redock_placement_state!(inputstate::InputState, state::PlacementRedockState)
-    clear_world_selection!(inputstate)
-    inputstate.placement_state = state
-    return nothing
-end
+"Attempt to enter redock placement state."
+enter_redock_placement_state!(inputstate::InputState, state::PlacementRedockState)::Bool =
+    try_enter_placement_state!(inputstate, state)
 
 "Clear only the pending pressed state when placement has not yet committed to move or pipe behaviour."
 function clear_placement_pressed_state!(inputstate::InputState)
@@ -495,10 +554,7 @@ function clear_placement_pressed_state!(inputstate::InputState)
 end
 
 "Clear any nested placement state and return to ready state."
-function clear_placement_state!(inputstate::InputState)
-    inputstate.placement_state = PlacementReadyState()
-    return nothing
-end
+clear_placement_state!(inputstate::InputState)::Bool = try_enter_placement_state!(inputstate, PlacementReadyState())
 
 # ===============================================================
 # Console Buffer

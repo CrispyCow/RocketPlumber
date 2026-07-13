@@ -13,8 +13,8 @@ export FlowCalculatorSnapshot, FlowCalculatorSharedState, FlowCalculatorIPC, Tim
 
 # Type exports - Commands
 export CommandStatus, APPLIED, REJECTED, QUEUED_FAILED, INVALID
-export MapEditCommand, SetTileCommand, SetPipeBehaviorCommand, MoveCommand
-export DeleteAtCommand, ClickTileCommand, DoActionCommand, AddShipSurfaceCommand, RemoveShipSurfaceCommand
+export MapEditCommand, SetTileCommand, SetPipeBehaviorCommand, MoveCommand, TranslateElementsCommand
+export DeleteElementsCommand, ClickTileCommand, DoActionCommand, AddShipSurfaceCommand, RemoveShipSurfaceCommand
 export MapOverrideCommand, AddEncounterShipCommand, RedockShipCommand
 export BatchCommand
 export CommandQueue
@@ -25,8 +25,8 @@ export create_command_queue
 export set_max_reachable_bounds!, get_max_reachable_bounds
 
 # Function exports - Commands
-export create_set_tile_command, create_set_pipe_behavior_command, create_move_command
-export create_delete_command, create_click_tile_command, create_do_action_command
+export create_set_tile_command, create_set_pipe_behavior_command, create_move_command, create_translate_elements_command
+export create_delete_elements_command, create_click_tile_command, create_do_action_command
 export create_add_ship_surface_command, create_remove_ship_surface_command
 export create_map_override_command, create_add_encounter_ship_command, create_redock_ship_command
 export create_batch_command, is_batchable
@@ -192,13 +192,37 @@ end
 end
 @struct_hash_equal MoveCommand
 
-"Delete element at coordinate. Type parameter selects tile vs edge dispatch."
-@kwdef struct DeleteAtCommand{T <: Union{TileCoord, PipeCoord}} <: MapEditCommand
+"Translate non-empty component and/or pipe source sets without rotation or mirroring."
+@kwdef struct TranslateElementsCommand <: MapEditCommand
     id::UInt64
-    coord::T
+    component_coords::Set{TileCoord}
+    pipe_coords::Set{PipeCoord}
+    translation::TileCoord
     response_channel::Union{Nothing, Channel{CommandStatus}}
+
+    function TranslateElementsCommand(id, component_coords, pipe_coords, translation, response_channel)
+        isempty(component_coords) && isempty(pipe_coords) &&
+            throw(ArgumentError("element translation sources cannot both be empty"))
+        translation == TileCoord(0, 0) && throw(ArgumentError("element translation cannot be zero"))
+        return new(id, Set{TileCoord}(component_coords), Set{PipeCoord}(pipe_coords), translation, response_channel)
+    end
 end
-@struct_hash_equal DeleteAtCommand
+@struct_hash_equal TranslateElementsCommand
+
+"Delete non-empty component and/or pipe coordinate sets simultaneously."
+@kwdef struct DeleteElementsCommand <: MapEditCommand
+    id::UInt64
+    component_coords::Set{TileCoord}
+    pipe_coords::Set{PipeCoord}
+    response_channel::Union{Nothing, Channel{CommandStatus}}
+
+    function DeleteElementsCommand(id, component_coords, pipe_coords, response_channel)
+        isempty(component_coords) && isempty(pipe_coords) &&
+            throw(ArgumentError("element deletion targets cannot both be empty"))
+        return new(id, Set{TileCoord}(component_coords), Set{PipeCoord}(pipe_coords), response_channel)
+    end
+end
+@struct_hash_equal DeleteElementsCommand
 
 "Invoke `on_click!` semantics for a tile component."
 @kwdef struct ClickTileCommand <: MapEditCommand
@@ -549,31 +573,24 @@ function apply_mapedit_command!(
         return false
     end
 
-    # Try on-surface placement first, then off-ship fallback
-    target_ship = find_ship_containing(gamemap, command.coord)
-
-    if !isnothing(target_ship)
-        can_place, reason = can_place_pipe_at(command.coord, gamemap; ship_name = target_ship)
-        if !can_place
-            threadsafe_console_push("Cannot place pipe: $(reason)")
-            return false
-        end
-
-        set_pipe!(gamemap, command.coord, PlacedPipe(deepcopy(command.pipe_behavior), target_ship))
-        threadsafe_console_push("Pipe placed at $(command.coord) on $(target_ship)")
-        return true
+    if has_pipe_component_conflict(command.coord, gamemap)
+        threadsafe_console_push("Cannot place pipe: Pipe segment crosses an occupied tile")
+        return false
     end
 
-    # Not on any single ship — try off-ship pipe placement (extending from a ship into space)
-    can_place, offship_target, reason = can_place_pipe_offship(command.coord, gamemap)
-    if can_place
-        set_pipe!(gamemap, command.coord, PlacedPipe(deepcopy(command.pipe_behavior), offship_target))
-        threadsafe_console_push("Off-ship pipe placed at $(command.coord) on $(offship_target)")
-        return true
+    # Ownership is provisional until the complete final topology is normalised below.
+    provisional_ship = something(find_ship_containing(gamemap, command.coord), :primary)
+    set_pipe!(gamemap, command.coord, PlacedPipe(deepcopy(command.pipe_behavior), provisional_ship))
+    valid, reason = normalise_pipe_ownership!(gamemap)
+    if !valid
+        threadsafe_console_push("Cannot place pipe: $reason")
+        return false
     end
-    threadsafe_console_push("Cannot place pipe: $(reason)")
-    return false
-    
+
+    target_ship = get_pipe(gamemap, command.coord).ship
+    threadsafe_console_push("Pipe placed at $(command.coord) on $(target_ship)")
+    return true
+
 end
 
 function apply_mapedit_command!(
@@ -656,51 +673,25 @@ function apply_mapedit_command!(
         return false
     end
 
-    # Check if source pipe is off-surface — validate that removing it won't orphan connected pipes
-    src_v1_on = is_node_on_any_ship_surface(to_nodecoord(command.source_coord.v1), gamemap)
-    src_v2_on = is_node_on_any_ship_surface(to_nodecoord(command.source_coord.v2), gamemap)
-    source_is_offship = !(src_v1_on && src_v2_on)
-
-    if source_is_offship
-        if !validate_offship_pipe_deletion(command.source_coord, gamemap)
-            threadsafe_console_push("Cannot move pipe: would orphan connected off-surface pipes")
-            return false
-        end
+    can_move, reason = can_pipe_be_moved(source_pipe)
+    if !can_move
+        threadsafe_console_push("Cannot move pipe: $reason")
+        return false
     end
-
-    # Determine destination ship — try on-surface first, then off-ship fallback
-    dest_ship = find_ship_containing(gamemap, command.dest_coord)
-
-    if !isnothing(dest_ship)
-        can_place, reason = can_place_pipe_at(command.dest_coord, gamemap; ship_name = dest_ship)
-        if !can_place
-            threadsafe_console_push("Cannot move pipe: $(reason)")
-            return false
-        end
-    else
-        # Try off-ship placement
-        can_place, offship_target, reason = can_place_pipe_offship(command.dest_coord, gamemap)
-        if can_place
-            dest_ship = offship_target
-        else
-            threadsafe_console_push("Cannot move pipe: $(reason)")
-            return false
-        end
-    end
-
-    # Check destination not already occupied (across all ships)
     if has_pipe(gamemap, command.dest_coord)
         threadsafe_console_push("Cannot move pipe: destination coordinate already occupied")
         return false
     end
-
-    # Perform move
+    if has_pipe_component_conflict(command.dest_coord, gamemap)
+        threadsafe_console_push("Cannot move pipe: Pipe segment crosses an occupied tile")
+        return false
+    end
     delete_pipe!(gamemap, command.source_coord)
-    set_pipe!(gamemap, command.dest_coord, PlacedPipe(source_pipe.pipe, dest_ship))
-
-    # Reassign ownership if source was off-surface (removing it may have split a chain)
-    if source_is_offship
-        reassign_pipe_ownership!(command.source_coord, gamemap)
+    set_pipe!(gamemap, command.dest_coord, PlacedPipe(source_pipe.pipe, source_pipe.ship))
+    valid, reason = normalise_pipe_ownership!(gamemap)
+    if !valid
+        threadsafe_console_push("Cannot move pipe: $reason")
+        return false
     end
 
     threadsafe_console_push("Pipe moved from $(command.source_coord) to $(command.dest_coord)")
@@ -709,49 +700,162 @@ end
 
 function apply_mapedit_command!(
         gamemap::GameMap,
-        command::DeleteAtCommand{TileCoord},
-        threadsafe_console_push::Function
+        command::TranslateElementsCommand,
+        threadsafe_console_push::Function,
     )::Bool
-    existing_comp = get_component(gamemap, command.coord)
-    if !isnothing(existing_comp)
-        delete_component!(gamemap, command.coord)
-        threadsafe_console_push("Component deleted at $(command.coord) from $(existing_comp.ship)")
-        return true
+    if isempty(command.component_coords) && isempty(command.pipe_coords)
+        threadsafe_console_push("Cannot translate elements: Source sets are empty")
+        return false
     end
-    threadsafe_console_push("No component found at $(command.coord)")
-    return false
-    
+    if command.translation == TileCoord(0, 0)
+        threadsafe_console_push("Cannot move components: Translation is zero")
+        return false
+    end
+
+    sources = sort!(collect(command.component_coords); by = coord -> (coord.q, coord.r))
+    pipe_sources = sort!(collect(command.pipe_coords); by = string)
+    components = PlacedComponent[]
+    pipes = PlacedPipe[]
+    sizehint!(components, length(sources))
+    sizehint!(pipes, length(pipe_sources))
+
+    # Capture every source before mutating the transaction's working map.
+    for source in sources
+        component = get_component(gamemap, source)
+        if isnothing(component)
+            threadsafe_console_push("Cannot move components: No component at source $source")
+            return false
+        end
+
+        can_move, reason = can_be_moved(component)
+        if !can_move
+            threadsafe_console_push("Cannot move components: Component at $source cannot be moved: $reason")
+            return false
+        end
+        push!(components, component)
+    end
+
+    for source in pipe_sources
+        pipe = get_pipe(gamemap, source)
+        if isnothing(pipe)
+            threadsafe_console_push("Cannot translate elements: No pipe at source $source")
+            return false
+        end
+        can_move, reason = can_pipe_be_moved(pipe)
+        if !can_move
+            threadsafe_console_push("Cannot translate elements: Pipe at $source cannot be moved: $reason")
+            return false
+        end
+        push!(pipes, pipe)
+    end
+
+    # Occupants inside the source set will be removed together; all others block the move.
+    for source in sources
+        destination = source + command.translation
+        if destination ∉ command.component_coords && has_component(gamemap, destination)
+            occupant = get_component(gamemap, destination)
+            threadsafe_console_push("Cannot move components: Destination $destination is occupied on $(occupant.ship)")
+            return false
+        end
+    end
+
+    for source in pipe_sources
+        destination = offset_by_tile(source, command.translation)
+        if destination ∉ command.pipe_coords && has_pipe(gamemap, destination)
+            threadsafe_console_push("Cannot translate elements: Pipe destination $destination is occupied")
+            return false
+        end
+    end
+
+    foreach(source -> delete_component!(gamemap, source), sources)
+    foreach(source -> delete_pipe!(gamemap, source), pipe_sources)
+
+    destination_ships = Symbol[]
+    sizehint!(destination_ships, length(sources))
+    for (source, component) in zip(sources, components)
+        destination = source + command.translation
+        valid, destination_ship, reason = validate_component_destination(component, destination, gamemap)
+        if !valid
+            threadsafe_console_push("Cannot move components to $destination: $reason")
+            return false
+        end
+        push!(destination_ships, destination_ship::Symbol)
+    end
+
+    for (source, component, destination_ship) in zip(sources, components, destination_ships)
+        destination = source + command.translation
+        set_component!(gamemap, destination, PlacedComponent(
+            component.component,
+            component.rotation,
+            component.mirrored,
+            destination_ship,
+        ))
+    end
+
+    for source in pipe_sources
+        destination = offset_by_tile(source, command.translation)
+        if has_pipe_component_conflict(destination, gamemap)
+            threadsafe_console_push("Cannot translate elements: Pipe at $destination crosses an occupied tile")
+            return false
+        end
+    end
+    for (source, pipe) in zip(pipe_sources, pipes)
+        set_pipe!(gamemap, offset_by_tile(source, command.translation), PlacedPipe(pipe.pipe, pipe.ship))
+    end
+    valid, reason = normalise_pipe_ownership!(gamemap)
+    if !valid
+        threadsafe_console_push("Cannot translate elements: $reason")
+        return false
+    end
+
+    threadsafe_console_push(
+        "Translated $(length(sources)) components and $(length(pipe_sources)) pipes by $(command.translation)",
+    )
+    return true
 end
 
 function apply_mapedit_command!(
         gamemap::GameMap,
-        command::DeleteAtCommand{PipeCoord},
-        threadsafe_console_push::Function
+        command::DeleteElementsCommand,
+        threadsafe_console_push::Function,
     )::Bool
-    existing_pipe = get_pipe(gamemap, command.coord)
-    if isnothing(existing_pipe)
-        threadsafe_console_push("No pipe found at $(command.coord)")
+    component_coords = sort!(collect(command.component_coords); by = coord -> (coord.q, coord.r))
+    pipe_coords = sort!(collect(command.pipe_coords); by = string)
+    components = PlacedComponent[]
+    pipes = PlacedPipe[]
+
+    for coord in component_coords
+        component = get_component(gamemap, coord)
+        if isnothing(component)
+            threadsafe_console_push("Cannot delete elements: No component at $coord")
+            return false
+        end
+        push!(components, component)
+    end
+    for coord in pipe_coords
+        pipe = get_pipe(gamemap, coord)
+        if isnothing(pipe)
+            threadsafe_console_push("Cannot delete elements: No pipe at $coord")
+            return false
+        end
+        push!(pipes, pipe)
+    end
+
+    foreach(coord -> delete_component!(gamemap, coord), component_coords)
+    foreach(coord -> delete_pipe!(gamemap, coord), pipe_coords)
+    valid, reason = normalise_pipe_ownership!(gamemap)
+    if !valid
+        threadsafe_console_push("Cannot delete elements: $reason")
         return false
     end
 
-    # Check if pipe is off-surface — validate deletion won't orphan connected pipes
-    v1_on = is_node_on_any_ship_surface(to_nodecoord(command.coord.v1), gamemap)
-    v2_on = is_node_on_any_ship_surface(to_nodecoord(command.coord.v2), gamemap)
-    is_offship = !(v1_on && v2_on)
-
-    if is_offship && !validate_offship_pipe_deletion(command.coord, gamemap)
-        threadsafe_console_push("Cannot delete: would orphan connected off-surface pipes")
-        return false
+    if length(component_coords) == 1 && isempty(pipe_coords)
+        threadsafe_console_push("Component deleted at $(only(component_coords)) from $(only(components).ship)")
+    elseif isempty(component_coords) && length(pipe_coords) == 1
+        threadsafe_console_push("Pipe deleted at $(only(pipe_coords)) from $(only(pipes).ship)")
+    else
+        threadsafe_console_push("Deleted $(length(component_coords)) components and $(length(pipe_coords)) pipes")
     end
-
-    delete_pipe!(gamemap, command.coord)
-    threadsafe_console_push("Pipe deleted at $(command.coord) from $(existing_pipe.ship)")
-
-    # Reassign ownership if the deleted pipe was off-surface (may have split a chain)
-    if is_offship
-        reassign_pipe_ownership!(command.coord, gamemap)
-    end
-
     return true
 end
 
@@ -965,8 +1069,7 @@ end
 is_batchable(::MapEditCommand) = false
 is_batchable(::SetTileCommand) = true
 is_batchable(::SetPipeBehaviorCommand) = true
-is_batchable(::MoveCommand) = true
-is_batchable(::DeleteAtCommand) = true
+is_batchable(::MoveCommand) = false
 is_batchable(::DoActionCommand) = true
 is_batchable(::AddShipSurfaceCommand) = true
 is_batchable(::RemoveShipSurfaceCommand) = true
@@ -1130,17 +1233,66 @@ function create_move_command(
     )
 end
 
-"Create a `DeleteAtCommand` for deleting a component or pipe."
-function create_delete_command(
+"Create a `TranslateElementsCommand` for a simultaneous element translation."
+function create_translate_elements_command(
         cq::CommandQueue,
-        coord::T;
-        response_channel::Union{Nothing, Channel} = nothing
-    ) where {T <: Union{TileCoord, PipeCoord}}
-    return DeleteAtCommand{T}(
+        component_coords,
+        pipe_coords,
+        translation::TileCoord;
+        response_channel::Union{Nothing, Channel} = nothing,
+    )::TranslateElementsCommand
+    return TranslateElementsCommand(
         id = cq.next_command_id(),
-        coord = coord,
-        response_channel = response_channel
+        component_coords = component_coords,
+        pipe_coords = pipe_coords,
+        translation = translation,
+        response_channel = response_channel,
     )
+end
+
+"Create a component-only `TranslateElementsCommand`."
+function create_translate_elements_command(
+        cq::CommandQueue,
+        component_coords,
+        translation::TileCoord;
+        response_channel::Union{Nothing, Channel} = nothing,
+    )::TranslateElementsCommand
+    return create_translate_elements_command(
+        cq, component_coords, Set{PipeCoord}(), translation; response_channel,
+    )
+end
+
+"Create a `DeleteElementsCommand` for a simultaneous element deletion."
+function create_delete_elements_command(
+        cq::CommandQueue,
+        component_coords,
+        pipe_coords;
+        response_channel::Union{Nothing, Channel} = nothing,
+    )::DeleteElementsCommand
+    return DeleteElementsCommand(
+        id = cq.next_command_id(),
+        component_coords = component_coords,
+        pipe_coords = pipe_coords,
+        response_channel = response_channel,
+    )
+end
+
+"Create a component-only `DeleteElementsCommand` for one coordinate."
+function create_delete_elements_command(
+        cq::CommandQueue,
+        coord::TileCoord;
+        response_channel::Union{Nothing, Channel} = nothing,
+    )::DeleteElementsCommand
+    return create_delete_elements_command(cq, Set([coord]), Set{PipeCoord}(); response_channel)
+end
+
+"Create a pipe-only `DeleteElementsCommand` for one coordinate."
+function create_delete_elements_command(
+        cq::CommandQueue,
+        coord::PipeCoord;
+        response_channel::Union{Nothing, Channel} = nothing,
+    )::DeleteElementsCommand
+    return create_delete_elements_command(cq, Set{TileCoord}(), Set([coord]); response_channel)
 end
 
 "Create a `ClickTileCommand` for tile interaction."

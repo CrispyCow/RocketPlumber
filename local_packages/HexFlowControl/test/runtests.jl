@@ -65,7 +65,8 @@ end
         @test placement_state(is) isa PlacementReadyState
         @test selection_state(is) isa SelectionEmptyState
         @test isempty(selected_component_coords(is))
-        @test isnothing(primary_selected_component(is))
+        @test isempty(selected_pipe_coords(is))
+        @test !hasproperty(is, :pending_move_completion)
         @test !hasproperty(is, :rightclick_selectedcoord)
         @test !editor_capabilities_enabled(is)
         @test is.tile_tool_state isa PlacementTileState
@@ -84,6 +85,19 @@ end
         @test state isa PlacementPressedState
         @test is_standard_family_state(state)
         @test is_active_standard_interaction_state(state)
+
+        pending_state = PlacementMovePendingState(
+            response_channel = Channel{Any}(1),
+            original_selection = SelectionEmptyState(),
+            translated_selection = SelectionEmptyState(),
+            expected_component_sources = Set{TileCoord}(),
+            expected_component_destinations = Set{TileCoord}(),
+            expected_pipe_sources = Set{PipeCoord}(),
+            expected_pipe_destinations = Set{PipeCoord}(),
+        )
+        set_placement_state!(is, pending_state)
+        @test is_standard_family_state(placement_state(is))
+        @test !is_active_standard_interaction_state(placement_state(is))
 
         set_placement_state!(is, PlacementDeleteState())
         state = placement_state(is)
@@ -105,41 +119,57 @@ end
         @test editor_capabilities_enabled(is)
     end
 
-    @testset "component-selection helpers" begin
+    @testset "mixed selection helpers" begin
         is = make_test_inputstate()
         first_coord = TileCoord(1, 1)
         second_coord = TileCoord(2, 3)
+        pipe = PipeCoord(VertexCoord(TileCoord(0, 0), HexFrame.Q_POS), VertexCoord(TileCoord(0, 0), HexFrame.Q_NEG))
 
         select_single_component!(is, first_coord)
-        @test selection_state(is) isa ComponentSelectionState
+        @test selection_state(is) isa WorldSelectionState
         @test selected_component_coords(is) == Set((first_coord,))
-        @test primary_selected_component(is) == first_coord
         @test has_selected_component(is, first_coord)
         @test !has_selected_component(is, second_coord)
 
         select_single_component!(is, second_coord)
         @test selected_component_coords(is) == Set((second_coord,))
-        @test primary_selected_component(is) == second_coord
         @test !has_selected_component(is, first_coord)
 
         toggle_selected_component!(is, first_coord)
         @test selected_component_coords(is) == Set((first_coord, second_coord))
-        @test primary_selected_component(is) == first_coord
-        @test selected_component_count(is) == 2
+        @test selected_element_count(is) == 2
 
         toggle_selected_component!(is, first_coord)
         @test selected_component_coords(is) == Set((second_coord,))
-        @test primary_selected_component(is) == second_coord
 
         toggle_selected_component!(is, first_coord)
-        prune_selected_components!(coord -> coord == first_coord, is)
+        toggle_selected_pipe!(is, pipe)
+        @test selected_pipe_coords(is) == Set((pipe,))
+        prune_selection!(coord -> coord == first_coord, _ -> true, is)
         @test selected_component_coords(is) == Set((first_coord,))
-        @test primary_selected_component(is) == first_coord
+        @test selected_pipe_coords(is) == Set((pipe,))
+        prune_selection!(_ -> true, _ -> false, is)
+        @test selected_component_coords(is) == Set((first_coord,))
+        @test isempty(selected_pipe_coords(is))
+
+        select_elements!(is, Set((second_coord, first_coord)), Set{PipeCoord}())
+        @test selected_component_coords(is) == Set((first_coord, second_coord))
+
+        selection = WorldSelectionState(Set((first_coord,)), Set((pipe,)))
+        translated = translate_selection(selection, TileCoord(2, -1))
+        @test translated.component_coords == Set((TileCoord(3, 0),))
+        @test translated.pipe_coords == Set((offset_by_tile(pipe, TileCoord(2, -1)),))
+
+        @test_throws ArgumentError WorldSelectionState(Set{TileCoord}(), Set{PipeCoord}())
+
+        popup = ElementGroupPopupTarget(Set((first_coord,)), Set((pipe,)))
+        @test popup.component_coords == [first_coord]
+        @test popup.pipe_coords == [pipe]
+        @test_throws ArgumentError ElementGroupPopupTarget(Set((first_coord,)), Set{PipeCoord}())
 
         clear_selection!(is)
         @test selection_state(is) isa SelectionEmptyState
         @test isempty(selected_component_coords(is))
-        @test isnothing(primary_selected_component(is))
     end
 
     @testset "world-selection helpers" begin
@@ -153,8 +183,29 @@ end
         @test isnothing(is.action_popup)
 
         set_placement_state!(is, make_pressed_state())
-        clear_placement_state!(is)
+        select_single_component!(is, TileCoord(2, 2))
+        @test enter_ready_placement_state!(is)
         @test placement_state(is) isa PlacementReadyState
+        @test selected_component_coords(is) == Set((TileCoord(2, 2),))
+
+        pending_state = PlacementMovePendingState(
+            response_channel = Channel{Any}(1),
+            original_selection = WorldSelectionState(Set((TileCoord(1, 1),)), Set{PipeCoord}()),
+            translated_selection = WorldSelectionState(Set((TileCoord(2, 1),)), Set{PipeCoord}()),
+            expected_component_sources = Set((TileCoord(1, 1),)),
+            expected_component_destinations = Set((TileCoord(2, 1),)),
+            expected_pipe_sources = Set{PipeCoord}(),
+            expected_pipe_destinations = Set{PipeCoord}(),
+        )
+        select_single_component!(is, TileCoord(1, 1))
+        set_placement_state!(is, pending_state)
+        @test !enter_ready_placement_state!(is)
+        @test selected_component_coords(is) == Set((TileCoord(1, 1),))
+        @test placement_state(is) === pending_state
+
+        clear_world_selection!(is)
+        @test selection_state(is) isa SelectionEmptyState
+        @test placement_state(is) === pending_state
     end
 
     @testset "shared component actions" begin
@@ -180,7 +231,7 @@ end
         tile_state = make_tile_state()
 
         select_single_component!(is, TileCoord(1, 1))
-        enter_editor_placement_state!(is, tile_state)
+        @test enter_editor_placement_state!(is, tile_state)
         @test placement_state(is) === tile_state
         @test selection_state(is) isa SelectionEmptyState
 
@@ -202,7 +253,7 @@ end
         redock_state = make_test_redock_state()
 
         select_single_component!(is, TileCoord(1, 1))
-        enter_redock_placement_state!(is, redock_state)
+        @test enter_redock_placement_state!(is, redock_state)
         @test placement_state(is) === redock_state
         @test placement_state(is) isa PlacementRedockState
         @test selection_state(is) isa SelectionEmptyState
@@ -242,6 +293,20 @@ end
         clear_placement_state!(is)
         @test !(placement_state(is) isa PlacementMoveState)
         @test !(placement_state(is) isa PlacementPipeChainState)
+
+        sources = Set((TileCoord(0, 0), TileCoord(1, 0)))
+        target = SelectionMoveTarget(sources, Set{PipeCoord}(), TileCoord(1, 0), TileCoord(1, 0))
+        empty!(sources)
+        @test target.component_coords == Set((TileCoord(0, 0), TileCoord(1, 0)))
+        @test_throws ArgumentError SelectionMoveTarget(target.component_coords, Set{PipeCoord}(),
+            TileCoord(2, 0), TileCoord(2, 0))
+
+        pipe = PipeCoord(VertexCoord(TileCoord(0, 0), HexFrame.Q_POS), VertexCoord(TileCoord(0, 0), HexFrame.Q_NEG))
+        pipe_target = SelectionMoveTarget(Set((TileCoord(0, 0),)), Set((pipe,)), pipe, TileCoord(0, 0))
+        @test pipe_target.anchor == pipe
+        @test_throws ArgumentError SelectionMoveTarget(Set((TileCoord(0, 0),)), Set((pipe,)),
+            PipeCoord(VertexCoord(TileCoord(1, 0), HexFrame.Q_POS), VertexCoord(TileCoord(1, 0), HexFrame.Q_NEG)),
+            TileCoord(1, 0))
     end
 
     @testset "toolbar and tile tool cache survive state clearing" begin

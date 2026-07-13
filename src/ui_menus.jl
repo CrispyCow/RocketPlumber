@@ -190,6 +190,8 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             "Move Pending"
         elseif editor_state isa PlacementMoveState
             "Move"
+        elseif editor_state isa PlacementMovePendingState
+            "Applying Move"
         elseif editor_state isa PlacementPipeChainState
             "Pipe Chain"
         elseif editor_state isa PlacementTileState
@@ -730,7 +732,7 @@ end
 "Execute a component action — delete or regular DoActionCommand."
 function _execute_target_action!(inputstate, target::ComponentPopupTarget, action::ActionInfo, flowcalc_ipc, viewstate)
     if action.id === :delete_component
-        cmd = create_delete_command(flowcalc_ipc.command_queue, target.coord)
+        cmd = create_delete_elements_command(flowcalc_ipc.command_queue, target.coord)
     else
         cmd = create_do_action_command(flowcalc_ipc.command_queue, target.coord, action.id)
     end
@@ -738,14 +740,16 @@ function _execute_target_action!(inputstate, target::ComponentPopupTarget, actio
 end
 
 "Execute a shared component action as one calculator transaction."
-function _execute_target_action!(inputstate, target::ComponentGroupPopupTarget, action::ActionInfo, flowcalc_ipc, viewstate)
-    commands = if action.id === :delete_component
-        MapEditCommand[create_delete_command(flowcalc_ipc.command_queue, coord) for coord in target.coords]
-    else
-        MapEditCommand[
-            create_do_action_command(flowcalc_ipc.command_queue, coord, action.id) for coord in target.coords
-        ]
+function _execute_target_action!(inputstate, target::ElementGroupPopupTarget, action::ActionInfo, flowcalc_ipc, viewstate)
+    if action.id === :delete_component
+        command = create_delete_elements_command(
+            flowcalc_ipc.command_queue, Set(target.component_coords), Set(target.pipe_coords),
+        )
+        return try_enqueue_command!(flowcalc_ipc.command_queue, command, flowcalc_ipc.console_push)
     end
+    commands = MapEditCommand[
+        create_do_action_command(flowcalc_ipc.command_queue, coord, action.id) for coord in target.component_coords
+    ]
     batch = create_batch_command(flowcalc_ipc.command_queue, commands)
     return try_enqueue_command!(flowcalc_ipc.command_queue, batch, flowcalc_ipc.console_push)
 end
@@ -764,11 +768,11 @@ function _close_popup!(inputstate)
 end
 
 "Group component popups expose one atomic deletion action."
-function _render_target_extras!(popup, target::ComponentGroupPopupTarget, inputstate, flowcalc_ipc, viewstate)
+function _render_target_extras!(popup, target::ElementGroupPopupTarget, inputstate, flowcalc_ipc, viewstate)
     isempty(popup.actions) || CImGui.Separator()
-    count = length(target.coords)
-    delete_action = ActionInfo(:delete_component, "Delete $count Components", true,
-        "Remove these components from their ships.", "Delete all $count selected components permanently?")
+    count = length(target.component_coords) + length(target.pipe_coords)
+    delete_action = ActionInfo(:delete_component, "Delete $count Selected Items", true,
+        "Remove the selected components and pipes.", "Delete all $count selected items permanently?")
     return if button_with_disable(delete_action.label, ImVec2(-1, 0), false; tooltip = delete_action.tooltip)
         popup.pending_confirmation = delete_action
     end

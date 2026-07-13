@@ -125,8 +125,10 @@ function command_summary(cmd)::String
         return "ClickTileCommand id=$(cmd.id) coord=$(cmd.coord) click=$(cmd.unrotated_clicksite)"
     elseif cmd isa DoActionCommand
         return "DoActionCommand id=$(cmd.id) coord=$(cmd.coord) action=$(cmd.action_id)"
-    elseif cmd isa DeleteAtCommand
-        return "DeleteAtCommand id=$(cmd.id) coord=$(cmd.coord)"
+    elseif cmd isa DeleteElementsCommand
+        return "DeleteElementsCommand id=$(cmd.id) components=$(length(cmd.component_coords)) pipes=$(length(cmd.pipe_coords))"
+    elseif cmd isa TranslateElementsCommand
+        return "TranslateElementsCommand id=$(cmd.id) components=$(length(cmd.component_coords)) pipes=$(length(cmd.pipe_coords)) translation=$(cmd.translation)"
     elseif cmd isa AddShipSurfaceCommand
         return "AddShipSurfaceCommand id=$(cmd.id) coord=$(cmd.coord)"
     elseif cmd isa RemoveShipSurfaceCommand

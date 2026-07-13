@@ -17,6 +17,18 @@ HexComponentsAPI.get_tunables(::MockCompBehav) = ()
 HexComponentsAPI.set_tunables(::MockCompBehav, ::NTuple{0, Real}) = MockCompBehav()
 HexComponentsAPI.render_base_elem!(queue, ::MockCompBehav; kwargs...) = nothing
 
+"Mock component whose placement rule deliberately permits one off-surface tile."
+struct OffSurfaceCompBehav <: ComponentBehavior
+    valid_coord::TileCoord
+end
+HexComponentsAPI.produce_rel_elements(::OffSurfaceCompBehav) = ()
+HexComponentsAPI.get_tunables(::OffSurfaceCompBehav) = ()
+HexComponentsAPI.set_tunables(comp::OffSurfaceCompBehav, ::NTuple{0, Real}) = comp
+HexComponentsAPI.render_base_elem!(queue, ::OffSurfaceCompBehav; kwargs...) = nothing
+function HexComponentsAPI.placement_valid(comp::OffSurfaceCompBehav, coord::TileCoord, ::GameMap; kwargs...)
+    return coord == comp.valid_coord ? (true, "") : (false, "Wrong destination")
+end
+
 "Minimal mock pipe for testing."
 struct MockPipeBehav <: PipeBehavior end
 HexComponentsAPI.get_conductance(::MockPipeBehav) = 1.0
@@ -575,6 +587,62 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
         @test !isempty(reason)
     end
 
+    @testset "validate_component_destination" begin
+        origin = TileCoord(0, 0)
+        destination = TileCoord(1, 0)
+        gm = make_gamemap_with_surface([origin, destination])
+        component = PlacedComponent(MockCompBehav(), R_NEG, true, :primary)
+
+        valid, ship, reason = validate_component_destination(component, destination, gm)
+        @test valid
+        @test ship === :primary
+        @test isempty(reason)
+
+        set_component!(gm, destination, PlacedComponent(MockCompBehav(), Q_POS, :primary))
+        valid, ship, reason = validate_component_destination(component, destination, gm)
+        @test !valid
+        @test isnothing(ship)
+        @test contains(reason, "occupied")
+
+        valid, ship, reason = validate_component_destination(
+            component,
+            destination,
+            gm;
+            vacating_coords = Set([destination]),
+        )
+        @test valid
+        @test ship === :primary
+        @test isempty(reason)
+
+        delete_component!(gm, destination)
+        crossing_pipe = get_pipe_segments(destination)[7]
+        set_pipe!(gm, crossing_pipe, PlacedPipe(MockPipeBehav(), :primary))
+        valid, ship, reason = validate_component_destination(component, destination, gm)
+        @test !valid
+        @test isnothing(ship)
+        @test contains(reason, "pipe segment")
+
+        delete_pipe!(gm, crossing_pipe)
+        set_pipe!(gm, side_pipe(destination), PlacedPipe(MockPipeBehav(), :primary))
+        @test validate_component_destination(component, destination, gm)[1]
+
+        off_surface = TileCoord(10, 10)
+        specialised = PlacedComponent(OffSurfaceCompBehav(off_surface), Q_POS, :primary)
+        valid, ship, _ = validate_component_destination(specialised, off_surface, gm)
+        @test valid
+        @test ship === :primary
+
+        valid, ship, reason = validate_component_destination(component, TileCoord(20, 20), gm)
+        @test !valid
+        @test isnothing(ship)
+        @test contains(reason, "any ship")
+
+        second_ship_map = make_two_ship_map()
+        valid, ship, _ = validate_component_destination(component, TileCoord(20, 0), second_ship_map)
+        @test valid
+        @test ship === :second
+    end
+
     @testset "can_place_pipe_at" begin
         gm = make_gamemap_with_surface(origin_neighbourhood())
         pipe_coord_1 = side_pipe(TileCoord(0, 0), 1)
@@ -860,6 +928,29 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
         empty_reachable = Set{PipeCoord}()
         flood_search_pipes_from_node!(empty_reachable, Set{PipeCoord}(), start_node)
         @test isempty(empty_reachable)
+    end
+
+    @testset "resolve_pipe_ownerships" begin
+        gm = make_gamemap()
+        on_surface = side_pipe(TileCoord(0, 0), 1)
+        valid, ownerships, reason = resolve_pipe_ownerships(gm, Set{PipeCoord}())
+        @test valid
+        @test isempty(ownerships)
+        @test isempty(reason)
+
+        valid, ownerships, _ = resolve_pipe_ownerships(gm, Set([on_surface]))
+        @test valid
+        @test ownerships[on_surface] === :primary
+
+        detached = side_pipe(TileCoord(50, 50), 1)
+        valid, _, reason = resolve_pipe_ownerships(gm, Set([detached]))
+        @test !valid
+        @test reason == "Pipe network is not connected to a ship surface"
+
+        set_pipe!(gm, on_surface, PlacedPipe(MockPipeBehav(), :stale))
+        @test normalise_pipe_ownership!(gm) == (true, "")
+        @test get_pipe(gm, on_surface).ship === :primary
+        @test get_pipe(gm, on_surface).pipe isa MockPipeBehav
     end
 
     @testset "PipeCoord flood fill and off-ship deletion" begin

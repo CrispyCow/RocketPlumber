@@ -23,6 +23,7 @@ function placement_state_description(state::AbstractPlacementState)::Union{Nothi
     state isa PlacementReadyState && return nothing
     state isa PlacementPressedState && return "Move pending."
     state isa PlacementMoveState && return "Move active. Drag to place."
+    state isa PlacementMovePendingState && return "Applying move."
     state isa PlacementPipeChainState && return "Pipe chain active. Left-click to place or delete."
     state isa PlacementTileState && return "Tile placement active."
     state isa PlacementDeleteState && return "Delete active. Left-click deletes."
@@ -713,16 +714,27 @@ function ui_propertybox_render!(
 
     # Ready state: display info about right-click selected or hovered element
     if state isa PlacementReadyState
-        selected = primary_selected_component(inputstate)
+        selected_count = selected_element_count(inputstate)
 
-        if !isnothing(selected)
-            count = selected_component_count(inputstate)
-            CImGui.Text(count == 1 ? "Inspecting selected part..." : "Inspecting primary of $count selected parts...")
+        if selected_count > 1
+            CImGui.Text("$selected_count parts selected")
+            CImGui.Text("Select one part to inspect its details.")
+            CImGui.Separator()
+        elseif selected_count == 1
+            CImGui.Text("Inspecting selected part...")
             CImGui.Separator()
             CImGui.NewLine()
 
-            comp = get_component(gamemap, selected)
-            if !isnothing(comp)
+            component_coords = selected_component_coords(inputstate)
+            if !isempty(component_coords)
+                selected = first(component_coords)
+                comp = get_component(gamemap, selected)
+                if isnothing(comp)
+                    CImGui.Text("Selected component no longer exists.")
+                    clear_selection!(inputstate)
+                    CImGui.End()
+                    return nothing
+                end
                 tilecomp = comp
                 CImGui.Text("Hex Tile at $(coord_description(selected))")
                 CImGui.Text("Type: $(String(nameof(typeof(tilecomp.component))))")
@@ -745,8 +757,7 @@ function ui_propertybox_render!(
                 display_element_details!(collect(elements), derivedmapstate, mna_state)
                 CImGui.Unindent()
             else
-                CImGui.Text("Selected component no longer exists.")
-                clear_selection!(inputstate)
+                inspect_ui!(first(selected_pipe_coords(inputstate)), gamemap, derivedmapstate, mna_state)
             end
         else
             # No right-click selection: show hovered part info

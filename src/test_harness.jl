@@ -2,8 +2,8 @@
 # Test Harness
 # ===============================================================
 
-using HexFlowCalculator: MapEditCommand, SetTileCommand, DeleteAtCommand,
-    SetPipeBehaviorCommand, MoveCommand, ClickTileCommand, DoActionCommand,
+using HexFlowCalculator: MapEditCommand, SetTileCommand, DeleteElementsCommand,
+    SetPipeBehaviorCommand, MoveCommand, TranslateElementsCommand, ClickTileCommand, DoActionCommand,
     AddShipSurfaceCommand, RemoveShipSurfaceCommand, RedockShipCommand,
     AddEncounterShipCommand, MapOverrideCommand, CommandQueue, try_enqueue_command!,
     CommandStatus, APPLIED, REJECTED, QUEUED_FAILED, INVALID
@@ -47,9 +47,9 @@ make_test_set_tile(coord::TileCoord, component::ComponentBehavior, rotation::Hex
     SetTileCommand(id = UInt64(0), coord = coord, component = component,
         rotation = rotation, mirrored = mirrored, response_channel = nothing)
 
-"Build a `DeleteAtCommand` for harness use."
+"Build a singleton `DeleteElementsCommand` for harness use."
 make_test_delete(coord::T) where {T <: Union{TileCoord, PipeCoord}} =
-    create_delete_command(create_command_queue(1), coord; response_channel = nothing)
+    create_delete_elements_command(create_command_queue(1), coord; response_channel = nothing)
 
 "Build a `SetPipeBehaviorCommand` for harness use."
 make_test_set_pipe(coord::PipeCoord, pipe::PipeBehavior) =
@@ -58,6 +58,11 @@ make_test_set_pipe(coord::PipeCoord, pipe::PipeBehavior) =
 "Build a `MoveCommand` for harness use."
 make_test_move(src::T, dst::T, delta_rotation::HexAxis, delta_mirror::Bool = false) where {T <: Union{TileCoord, PipeCoord}} =
     create_move_command(create_command_queue(1), src, dst, delta_rotation, delta_mirror; response_channel = nothing)
+
+"Build a simultaneous `TranslateElementsCommand` for harness use."
+make_test_move_components(sources::AbstractSet{TileCoord}, translation::TileCoord) =
+    TranslateElementsCommand(id = UInt64(0), component_coords = sources, pipe_coords = Set{PipeCoord}(),
+        translation = translation, response_channel = nothing)
 
 "Build a `ClickTileCommand` for harness use."
 make_test_click(coord::TileCoord, clicksite::CartesianCoord = CartesianCoord(0.0, 0.0)) =

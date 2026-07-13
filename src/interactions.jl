@@ -229,7 +229,9 @@ function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedSt
 
     # ESC key — cancel redock or editor tool > cancel active standard interaction > dismiss action popup > cancel time warp > toggle pause menu
     if get_inrising!(inputstate, GLFW.KEY_ESCAPE, window)
-        if state isa PlacementRedockState || state isa AbstractEditorPlacementState
+        if state isa PlacementMovePendingState
+            # The calculator result must complete before placement can accept another transition.
+        elseif state isa PlacementRedockState || state isa AbstractEditorPlacementState
             enter_ready_placement_state!(inputstate)
         elseif is_active_standard_interaction_state(state)
             clear_placement_state!(inputstate)
@@ -677,7 +679,7 @@ function create_pipe_chain_command(
         response_channel::Union{Nothing, Channel} = nothing
     )
     if candidate.commit_kind === :delete
-        return create_delete_command(command_queue, candidate.pipe_coord; response_channel = response_channel)
+        return create_delete_elements_command(command_queue, candidate.pipe_coord; response_channel = response_channel)
     end
 
     return create_set_pipe_behavior_command(
@@ -721,6 +723,13 @@ function clear_action_popup_selection!(inputstate::InputState)
     return nothing
 end
 
+"Close world popups without changing component selection."
+function clear_action_popups!(inputstate::InputState)
+    inputstate.action_popup = nothing
+    inputstate.rightclick_selectedship = nothing
+    return nothing
+end
+
 "Return the snapped hex axis nearest the cursor around a tile centre."
 function nearest_tile_rotation_axis(cursor_cart::CartesianCoord, tile::TileCoord)::HexAxis
     tile_centre = to_cartesian(tile)
@@ -748,17 +757,39 @@ function get_move_hover_target(inputstate::InputState, gamemap::GameMap)
 end
 
 "Record a pending MOVE hold on the current target and clear any stale popup state."
-function set_move_hold_target!(inputstate::InputState, target)::Bool
+function set_move_hold_target!(inputstate::InputState, target, gamemap::GameMap)::Bool
     cursor_cart = get_cursor_cart(inputstate)
     cursor_cart === nothing && return false
     click_tile = round_to_tile(cursor_cart)
 
-    clear_action_popup_selection!(inputstate)
+    component_sources = selected_component_coords(inputstate)
+    pipe_sources = selected_pipe_coords(inputstate)
+    is_selected = target.kind === :tile_component ? target.coord in component_sources : target.coord in pipe_sources
+    is_group_move = selected_element_count(inputstate) >= 2 && is_selected
 
-    move_target = if target.kind === :tile_component
+    move_target = if is_group_move
+        clear_action_popups!(inputstate)
+        SelectionMoveTarget(component_sources, pipe_sources, target.coord, round_to_tile(cursor_cart))
+    elseif target.kind === :tile_component
+        clear_action_popup_selection!(inputstate)
         TileComponentMoveTarget(target.coord)
     else
+        clear_action_popup_selection!(inputstate)
         PipeMoveTarget(target.coord)
+    end
+
+    move_target_valid = if move_target isa SelectionMoveTarget
+        components_valid = all(move_target.component_coords) do coord
+            component = get_component(gamemap, coord)
+            !isnothing(component) && first(can_be_moved(component))
+        end
+        pipes_valid = all(move_target.pipe_coords) do coord
+            pipe = get_pipe(gamemap, coord)
+            !isnothing(pipe) && first(can_pipe_be_moved(pipe))
+        end
+        components_valid && pipes_valid
+    else
+        target.can_move
     end
 
     set_placement_state!(inputstate, PlacementPressedState(
@@ -766,9 +797,15 @@ function set_move_hold_target!(inputstate::InputState, target)::Bool
         press_cursor_cart = cursor_cart,
         click_tile = click_tile,
         move_target = move_target,
-        move_target_valid = target.can_move,
+        move_target_valid = move_target_valid,
     ))
     return true
+end
+
+
+"Return the group translation implied by the current cursor position."
+function selection_move_translation(move_target::SelectionMoveTarget, cursor_cart::CartesianCoord)::TileCoord
+    return round_to_tile(cursor_cart) - move_target.press_reference_tile
 end
 
 "Promote the pending MOVE hold into an active drag selection."
@@ -826,8 +863,8 @@ function create_move_short_click_command(command_queue::CommandQueue, inputstate
     return create_click_tile_command(command_queue, hold_coord, unrotated_clicksite)
 end
 
-"Return whether the active MOVE selection can commit at the current cursor destination."
-function can_commit_active_move(inputstate::InputState, gamemap::GameMap)::Bool
+"Return whether the active MOVE ghost has an obviously valid destination."
+function can_preview_active_move(inputstate::InputState, gamemap::GameMap)::Bool
     state = placement_state(inputstate)
     state isa PlacementMoveState || return false
 
@@ -864,31 +901,51 @@ function can_commit_active_move(inputstate::InputState, gamemap::GameMap)::Bool
 
         source_pipe = get_pipe(gamemap, selected)
         isnothing(source_pipe) && return false
-
-        src_v1_on = is_node_on_any_ship_surface(to_nodecoord(selected.v1), gamemap)
-        src_v2_on = is_node_on_any_ship_surface(to_nodecoord(selected.v2), gamemap)
-        source_is_offship = !(src_v1_on && src_v2_on)
-
-        source_is_offship && !validate_offship_pipe_deletion(selected, gamemap) && return false
+        first(can_pipe_be_moved(source_pipe)) || return false
         has_pipe(gamemap, destination) && return false
+        return can_place_pipe_segment(destination, gamemap)
+    elseif state.move_target isa SelectionMoveTarget
+        translation = selection_move_translation(state.move_target, cursor_cart)
+        translation == TileCoord(0, 0) && return false
 
-        target_ship = find_ship_containing(destination, gamemap)
-        if !isnothing(target_ship)
-            can_place, _ = can_place_pipe_at(destination, gamemap; ship_name = target_ship)
-            return can_place
+        destinations = Set(source + translation for source in state.move_target.component_coords)
+        pipe_destinations = Set(offset_by_tile(source, translation) for source in state.move_target.pipe_coords)
+        any(destination -> has_component(gamemap, destination) && destination ∉ state.move_target.component_coords, destinations) && return false
+        any(destination -> has_pipe(gamemap, destination) && destination ∉ state.move_target.pipe_coords, pipe_destinations) && return false
+
+        for source in state.move_target.component_coords
+            component = get_component(gamemap, source)
+            isnothing(component) && return false
+            first(can_be_moved(component)) || return false
+
+            destination = source + translation
+            for pipe in get_pipe_segments(destination)
+                get_tile_containing_pipe(pipe) == destination || continue
+                has_pipe(gamemap, pipe) && pipe ∉ state.move_target.pipe_coords && return false
+            end
+            isnothing(find_ship_for_placement(component.component, destination, gamemap;
+                rotation = component.rotation, mirrored = component.mirrored)) && return false
         end
-
-        can_place, _, _ = can_place_pipe_offship(destination, gamemap)
-        return can_place
+        for source in state.move_target.pipe_coords
+            pipe = get_pipe(gamemap, source)
+            isnothing(pipe) && return false
+            first(can_pipe_be_moved(pipe)) || return false
+        end
+        for destination in pipe_destinations
+            tile = get_tile_containing_pipe(destination)
+            !isnothing(tile) && (tile in destinations || (has_component(gamemap, tile) && tile ∉ state.move_target.component_coords)) && return false
+        end
+        return true
     end
 
     return false
 end
 
 "Build the current active MOVE command, or return `nothing` when the release should cancel."
-function create_active_move_command(command_queue::CommandQueue, inputstate::InputState, gamemap::GameMap)
-    can_commit_active_move(inputstate, gamemap) || return nothing
-
+function create_active_move_command(
+        command_queue::CommandQueue, inputstate::InputState;
+        response_channel::Union{Nothing, Channel} = nothing,
+    )
     state = placement_state(inputstate)
     state isa PlacementMoveState || return nothing
     cursor_cart = get_cursor_cart(inputstate)
@@ -899,14 +956,109 @@ function create_active_move_command(command_queue::CommandQueue, inputstate::Inp
     if state.move_target isa TileComponentMoveTarget
         selected = state.move_target.coord
         destination = round_to_tile(cursor_cart)
-        return create_move_command(command_queue, selected, destination, state.toolrotation, state.toolmirrored)
+        return create_move_command(command_queue, selected, destination, state.toolrotation, state.toolmirrored;
+            response_channel = response_channel)
     elseif state.move_target isa PipeMoveTarget
         selected = state.move_target.coord
         destination = resolve_pipe_destination_from_cursor(inputstate)
         destination === nothing && return nothing
-        return create_move_command(command_queue, selected, destination, state.toolrotation, state.toolmirrored)
+        return create_move_command(command_queue, selected, destination, state.toolrotation, state.toolmirrored;
+            response_channel = response_channel)
+    elseif state.move_target isa SelectionMoveTarget
+        translation = selection_move_translation(state.move_target, cursor_cart)
+        translation == TileCoord(0, 0) && return nothing
+        return create_translate_elements_command(
+            command_queue, state.move_target.component_coords, state.move_target.pipe_coords, translation;
+            response_channel = response_channel)
     end
 
+    return nothing
+end
+
+
+"Build the pending placement state for an active move."
+function pending_move_state(inputstate::InputState, response_channel::Channel)
+    state = placement_state(inputstate)::PlacementMoveState
+    move_target = state.move_target
+    original_selection = selection_state(inputstate)
+
+    if move_target isa SelectionMoveTarget
+        translation = selection_move_translation(move_target, get_cursor_cart(inputstate))
+        component_destinations = Set(source + translation for source in move_target.component_coords)
+        pipe_destinations = Set(offset_by_tile(source, translation) for source in move_target.pipe_coords)
+        return PlacementMovePendingState(
+            response_channel = response_channel,
+            original_selection = original_selection,
+            translated_selection = translate_selection(original_selection, translation),
+            expected_component_sources = copy(move_target.component_coords),
+            expected_component_destinations = component_destinations,
+            expected_pipe_sources = copy(move_target.pipe_coords),
+            expected_pipe_destinations = pipe_destinations,
+        )
+    elseif move_target isa TileComponentMoveTarget
+        destination = round_to_tile(get_cursor_cart(inputstate))
+        moved_selection = has_selected_component(inputstate, move_target.coord) ?
+            WorldSelectionState(Set((destination,)), Set{PipeCoord}()) : SelectionEmptyState()
+        return PlacementMovePendingState(
+            response_channel = response_channel,
+            original_selection = original_selection,
+            translated_selection = moved_selection,
+            expected_component_sources = Set((move_target.coord,)),
+            expected_component_destinations = Set((destination,)),
+            expected_pipe_sources = Set{PipeCoord}(),
+            expected_pipe_destinations = Set{PipeCoord}(),
+        )
+    elseif move_target isa PipeMoveTarget
+        destination = resolve_pipe_destination_from_cursor(inputstate)
+        moved_selection = has_selected_pipe(inputstate, move_target.coord) ?
+            WorldSelectionState(Set{TileCoord}(), Set((destination,))) : SelectionEmptyState()
+        return PlacementMovePendingState(
+            response_channel = response_channel,
+            original_selection = original_selection,
+            translated_selection = moved_selection,
+            expected_component_sources = Set{TileCoord}(),
+            expected_component_destinations = Set{TileCoord}(),
+            expected_pipe_sources = Set((move_target.coord,)),
+            expected_pipe_destinations = Set((destination,)),
+        )
+    end
+    error("Unsupported move target")
+end
+
+
+"Consume calculator move status and apply selection once the committed snapshot is visible."
+function poll_move_completion!(inputstate::InputState, gamemap::GameMap)
+    state = placement_state(inputstate)
+    state isa PlacementMovePendingState || return nothing
+
+    if !state.calculator_applied && isready(state.response_channel)
+        status = take!(state.response_channel)
+        if status != APPLIED
+            inputstate.selection_state = state.original_selection
+            set_placement_state!(inputstate, PlacementReadyState())
+            return nothing
+        end
+        state = PlacementMovePendingState(
+            response_channel = state.response_channel,
+            original_selection = state.original_selection,
+            translated_selection = state.translated_selection,
+            expected_component_sources = state.expected_component_sources,
+            expected_component_destinations = state.expected_component_destinations,
+            expected_pipe_sources = state.expected_pipe_sources,
+            expected_pipe_destinations = state.expected_pipe_destinations,
+            calculator_applied = true,
+        )
+        set_placement_state!(inputstate, state)
+    end
+
+    state.calculator_applied || return nothing
+    all(coord -> has_component(gamemap, coord), state.expected_component_destinations) || return nothing
+    all(coord -> has_pipe(gamemap, coord), state.expected_pipe_destinations) || return nothing
+    all(coord -> coord in state.expected_component_destinations || !has_component(gamemap, coord), state.expected_component_sources) || return nothing
+    all(coord -> coord in state.expected_pipe_destinations || !has_pipe(gamemap, coord), state.expected_pipe_sources) || return nothing
+
+    inputstate.selection_state = state.translated_selection
+    set_placement_state!(inputstate, PlacementReadyState())
     return nothing
 end
 
@@ -975,6 +1127,13 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
             )
         )
     end
+    for selected in selected_pipe_coords(inputstate)
+        pipe = get_pipe(gamemap, selected)
+        isnothing(pipe) && continue
+        render_pipe_base!(queue, pipe; glmap = glmap, rotation = HexFrame.Q_POS, position = selected,
+            transparency = 0.6, colour = COMPONENT_SELECTION_COLOUR,
+            render_height_offset = COMPONENT_SELECTION_HEIGHT)
+    end
 
     if state isa PlacementTileState
         coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
@@ -1012,11 +1171,12 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
 
     if state isa PlacementPressedState && !isnothing(state.move_target) && state.hold_threshold_crossed
         #= ---------- Move activation indicator ----------- =#
-        if state.move_target isa TileComponentMoveTarget
+        if state.move_target isa Union{TileComponentMoveTarget, SelectionMoveTarget}
+            coord = state.move_target isa SelectionMoveTarget ? state.move_target.anchor : state.move_target.coord
             move_colour = state.move_target_valid ? GHOST_MOVE_SELECTION_COLOUR : GHOST_COLOUR_INVALID
             push!(
                 queue, render_basic_sprite(
-                    glmap, :MoveArrow_arrow_start, rotmat_2D(0.0), state.move_target.coord;
+                    glmap, :MoveArrow_arrow_start, rotmat_2D(0.0), coord;
                     colour = move_colour, draw_height = GHOST_MOVE_SELECTION_HEIGHT_OFFSET, scale = 1.5
                 )
             )
@@ -1040,7 +1200,7 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
                 rotation = map_rotation(tilecomp, rotate(tilecomp.rotation, state.toolrotation))
                 requested_mirror = xor(tilecomp.mirrored, state.toolmirrored)
                 mirrored = map_mirroring(tilecomp, requested_mirror)
-                ghost_colour = can_commit_active_move(inputstate, gamemap) ? GHOST_COLOUR_VALID : GHOST_COLOUR_INVALID
+                ghost_colour = can_preview_active_move(inputstate, gamemap) ? GHOST_COLOUR_VALID : GHOST_COLOUR_INVALID
 
                 render_base_elem!(queue, tilecomp; glmap = glmap, rotation = rotation, mirrored = mirrored, position = coord, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000))
 
@@ -1054,13 +1214,53 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
                     start_marker_scale = 1.0
                 )
             end
+        elseif move_target isa SelectionMoveTarget
+            cursor_cart = get_cursor_cart(inputstate)
+            cursor_cart === nothing && return nothing
+            translation = selection_move_translation(move_target, cursor_cart)
+            ghost_colour = can_preview_active_move(inputstate, gamemap) ? GHOST_COLOUR_VALID : GHOST_COLOUR_INVALID
+
+            for source in move_target.component_coords
+                component = get_component(gamemap, source)
+                isnothing(component) && continue
+                render_base_elem!(
+                    queue, component;
+                    glmap = glmap,
+                    rotation = component.rotation,
+                    mirrored = component.mirrored,
+                    position = source + translation,
+                    transparency = 0.5,
+                    colour = ghost_colour,
+                    render_height_offset = Int32(100000),
+                )
+            end
+
+            for source in move_target.pipe_coords
+                pipe = get_pipe(gamemap, source)
+                isnothing(pipe) && continue
+                render_pipe_base!(queue, pipe; glmap = glmap, rotation = HexFrame.Q_POS,
+                    position = offset_by_tile(source, translation), transparency = 0.5,
+                    colour = ghost_colour, render_height_offset = Int32(100000))
+            end
+
+            anchor_source = move_target.anchor
+            anchor_destination = anchor_source isa TileCoord ?
+                anchor_source + translation : offset_by_tile(anchor_source, translation)
+            render_move_arrow_overlay!(
+                queue, glmap, gamestate.ticks, anchor_source, anchor_destination;
+                draw_start_marker = true,
+                draw_dashes = true,
+                colour = SVector{4, Float32}(0.8, 0.8, 0.2, 1.0),
+                draw_height = Int32(100200),
+                start_marker_scale = 1.0,
+            )
         elseif move_target isa PipeMoveTarget
             actual_pipe = get_pipe(gamemap, move_target.coord)
             if !isnothing(actual_pipe)
                 #= ---------- Pipe move ghost ----------- =#
                 ghost_pipe = resolve_pipe_destination_from_cursor(inputstate)
                 ghost_pipe === nothing && return nothing
-                ghost_colour = can_commit_active_move(inputstate, gamemap) ? GHOST_COLOUR_VALID : GHOST_PIPE_COLOUR_INVALID
+                ghost_colour = can_preview_active_move(inputstate, gamemap) ? GHOST_COLOUR_VALID : GHOST_PIPE_COLOUR_INVALID
                 render_pipe_base!(
                     queue, actual_pipe; glmap = glmap,
                     rotation = HexFrame.Q_POS, position = ghost_pipe, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000)
@@ -1313,6 +1513,9 @@ function flowcalc_standard_interaction!(
 
     poll_pipe_chain_response!(inputstate)
 
+    # A delayed move result must not overwrite a newer selection or gesture.
+    state isa PlacementMovePendingState && return nothing
+
     if is_active_standard_interaction_state(state) && get_inrising!(inputstate, GLFW.MOUSE_BUTTON_RIGHT, window)
         inputstate.gui_inputs[:consume_right_click] = true
         clear_placement_state!(inputstate)
@@ -1325,6 +1528,14 @@ function flowcalc_standard_interaction!(
 
     shift_held = get_instate(GLFW.KEY_LEFT_SHIFT, window) || get_instate(GLFW.KEY_RIGHT_SHIFT, window)
     if state isa PlacementReadyState && left_rising && shift_held && !mouse_captured
+        cursor_cart = get_cursor_cart(inputstate)
+        clicked_pipe = isnothing(cursor_cart) ? nothing : get_clicked_pipe(cursor_cart, gamemap)
+        if !isnothing(clicked_pipe) && !is_on_offset_ship(clicked_pipe, gamemap)
+            inputstate.action_popup = nothing
+            inputstate.rightclick_selectedship = nothing
+            toggle_selected_pipe!(inputstate, clicked_pipe)
+            return nothing
+        end
         element = get_clicked(inputstate)
         if element isa TileCoord && has_component(gamemap, element) && !is_on_offset_ship(element, gamemap)
             inputstate.action_popup = nothing
@@ -1379,11 +1590,14 @@ function flowcalc_standard_interaction!(
         update_active_move_rotation!(inputstate)
 
         if left_falling
-            command = create_active_move_command(command_queue, inputstate, gamemap)
+            response_channel = Channel{CommandStatus}(1)
+            command = create_active_move_command(command_queue, inputstate; response_channel = response_channel)
             if !isnothing(command)
-                try_enqueue_command!(command_queue, command, threadsafe_console_push)
+                pending_state = pending_move_state(inputstate, response_channel)
+                success, _ = try_enqueue_command!(command_queue, command, threadsafe_console_push)
+                success && set_placement_state!(inputstate, pending_state)
             end
-            clear_placement_state!(inputstate)
+            placement_state(inputstate) isa PlacementMoveState && clear_placement_state!(inputstate)
         end
 
         return nothing
@@ -1456,7 +1670,7 @@ function flowcalc_standard_interaction!(
         return nothing
     end
 
-    set_move_hold_target!(inputstate, target)
+    set_move_hold_target!(inputstate, target, gamemap)
     return nothing
 end
 
@@ -1492,7 +1706,7 @@ function flowcalc_deleteplacer!(
         return nothing
     end
 
-    command = create_delete_command(command_queue, target)
+    command = create_delete_elements_command(command_queue, target)
     try_enqueue_command!(command_queue, command, threadsafe_console_push)
 
     return nothing
@@ -1565,6 +1779,18 @@ function flowcalc_rightclick_action!(inputstate::InputState, gamemap::GameMap, w
 
     inputstate.rightclick_selectedship = nothing
 
+    clicked_pipe = get_clicked_pipe(cursor_cart, gamemap)
+    if selected_element_count(inputstate) >= 2 && !isnothing(clicked_pipe) && has_selected_pipe(inputstate, clicked_pipe)
+        components = selected_component_coords(inputstate)
+        pipes = selected_pipe_coords(inputstate)
+        inputstate.action_popup = ActionPopupState(
+            target = ElementGroupPopupTarget(components, pipes),
+            world_position = to_cartesian(clicked_pipe), actions = (),
+            window_title = "Actions ($(length(components) + length(pipes)) selected items)",
+        )
+        return nothing
+    end
+
     #= ---------- Component target ----------- =#
     # Node and edge hit regions represent the visible gaps between components,
     # allowing access to ship actions even when every surface tile is occupied.
@@ -1572,13 +1798,15 @@ function flowcalc_rightclick_action!(inputstate::InputState, gamemap::GameMap, w
         tilecomp = get_component(gamemap, element)
         if !isnothing(tilecomp)
             is_on_offset_ship(element, gamemap) && return nothing
-            if has_selected_component(inputstate, element) && selected_component_count(inputstate) > 1
-                coords = sort!(collect(selected_component_coords(inputstate)); by = coord -> (coord.q, coord.r))
-                action_sets = [get_actions(get_component(gamemap, coord)) for coord in coords]
-                actions = shared_component_actions(action_sets)
+            if has_selected_component(inputstate, element) && selected_element_count(inputstate) > 1
+                components = selected_component_coords(inputstate)
+                pipes = selected_pipe_coords(inputstate)
+                actions = isempty(pipes) ? shared_component_actions([get_actions(get_component(gamemap, coord))
+                    for coord in sort!(collect(components); by = coord -> (coord.q, coord.r))]) : ()
                 inputstate.action_popup = ActionPopupState(
-                    target = ComponentGroupPopupTarget(coords, element), world_position = to_cartesian(element),
-                    actions = actions, window_title = "Actions ($(length(coords)) components)",
+                    target = ElementGroupPopupTarget(components, pipes),
+                    world_position = to_cartesian(element), actions = actions,
+                    window_title = "Actions ($(length(components) + length(pipes)) selected items)",
                 )
             else
                 actions = get_actions(tilecomp)
