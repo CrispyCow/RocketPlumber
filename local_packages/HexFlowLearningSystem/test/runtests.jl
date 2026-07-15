@@ -28,10 +28,7 @@ HexComponentsAPI.get_pipe_click_radius(::MockPipeBehav) = 0.1
 # ===============================================================
 
 function make_test_inputstate()
-    return InputState(
-        pendingpipebehavior = MockPipeBehav(),
-        tile_tool_state = PlacementTileState(pendingcomponent = MockCompBehav()),
-    )
+    return InputState()
 end
 
 function make_test_inputs(;

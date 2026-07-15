@@ -24,14 +24,19 @@ HexComponentsAPI.get_pipe_click_radius(::MockPipeBehav) = 0.1
 # Test Helpers
 # ===============================================================
 
-make_tile_state(; mirrored = false) = PlacementTileState(pendingcomponent = MockCompBehav(), toolmirrored = mirrored)
+make_tile_state(; component_index = 1, mirrored = false) = PlacementTileState(
+    component_index = component_index, pendingcomponent = MockCompBehav(), toolmirrored = mirrored,
+)
 
-function make_test_inputstate()
-    return InputState(
-        pendingpipebehavior = MockPipeBehav(),
-        tile_tool_state = make_tile_state(),
-    )
-end
+make_pipe_state() = PlacementPipeChainState(
+    source_node = VertexCoord(TileCoord(0, 0), HexFrame.Q_POS), pipe_behavior = MockPipeBehav(),
+)
+
+make_popup(target) = ActionPopupState(
+    target = target, world_position = CartesianCoord(0.0, 0.0), actions = (), window_title = "Actions",
+)
+
+make_test_inputstate() = InputState()
 
 function make_test_redock_state()
     return PlacementRedockState(
@@ -68,9 +73,28 @@ end
         @test isempty(selected_pipe_coords(is))
         @test !hasproperty(is, :pending_move_completion)
         @test !hasproperty(is, :rightclick_selectedcoord)
+        @test isnothing(is.action_popup)
+        for field in (:toolbar, :last_toolbar, :tile_tool_state, :pendingpipebehavior, :rightclick_selectedship, :last_command_time)
+            @test !hasproperty(is, field)
+        end
         @test !editor_capabilities_enabled(is)
-        @test is.tile_tool_state isa PlacementTileState
-        @test is.tile_tool_state.pendingcomponent isa MockCompBehav
+    end
+
+    @testset "active placement tool state owns its configuration" begin
+        tile_state = make_tile_state(component_index = 3, mirrored = true)
+        @test tile_state.component_index == 3
+        @test tile_state.pendingcomponent isa MockCompBehav
+        tile_state.toolrotation = HexFrame.R_POS
+        tile_state.toolmirrored = false
+        @test tile_state.toolrotation == HexFrame.R_POS
+        @test !tile_state.toolmirrored
+
+        pipe_state = make_pipe_state()
+        @test pipe_state.pipe_behavior isa MockPipeBehav
+        next_state = PlacementPipeChainState(
+            source_node = pipe_state.source_node, pipe_behavior = pipe_state.pipe_behavior,
+        )
+        @test next_state.pipe_behavior === pipe_state.pipe_behavior
     end
 
     @testset "state classification helpers" begin
@@ -174,13 +198,31 @@ end
 
     @testset "world-selection helpers" begin
         is = make_test_inputstate()
-        select_single_component!(is, TileCoord(1, 1))
-        is.rightclick_selectedship = :test_ship
+        first_coord = TileCoord(1, 1)
+        select_single_component!(is, first_coord)
+        is.action_popup = make_popup(ComponentPopupTarget(first_coord))
+
+        dismiss_action_popup!(is)
+        @test selected_component_coords(is) == Set((first_coord,))
+        @test isnothing(is.action_popup)
+
+        is.action_popup = make_popup(ShipPopupTarget(:test_ship))
+        @test highlighted_ship(is) === :test_ship
+        dismiss_action_popup!(is)
+        @test isnothing(highlighted_ship(is))
+
+        is.action_popup = make_popup(ComponentPopupTarget(first_coord))
 
         clear_world_selection!(is)
         @test selection_state(is) isa SelectionEmptyState
-        @test isnothing(is.rightclick_selectedship)
         @test isnothing(is.action_popup)
+
+        pipe = PipeCoord(VertexCoord(TileCoord(0, 0), HexFrame.Q_POS), VertexCoord(TileCoord(0, 0), HexFrame.Q_NEG))
+        select_elements!(is, Set((first_coord,)), Set((pipe,)))
+        is.action_popup = make_popup(ElementGroupPopupTarget(Set((first_coord,)), Set((pipe,))))
+        dismiss_action_popup!(is)
+        @test isnothing(highlighted_ship(is))
+        @test selected_element_count(is) == 2
 
         set_placement_state!(is, make_pressed_state())
         select_single_component!(is, TileCoord(2, 2))
@@ -206,6 +248,56 @@ end
         clear_world_selection!(is)
         @test selection_state(is) isa SelectionEmptyState
         @test placement_state(is) === pending_state
+    end
+
+    @testset "Escape world-interaction precedence" begin
+        is = make_test_inputstate()
+        coord = TileCoord(1, 1)
+        select_single_component!(is, coord)
+        is.action_popup = make_popup(ComponentPopupTarget(coord))
+
+        @test handle_world_escape!(is)
+        @test isnothing(is.action_popup)
+        @test selected_component_coords(is) == Set((coord,))
+
+        @test handle_world_escape!(is)
+        @test selection_state(is) isa SelectionEmptyState
+        @test !handle_world_escape!(is)
+
+        select_single_component!(is, coord)
+        move_state = PlacementMoveState(move_target = TileComponentMoveTarget(coord))
+        set_placement_state!(is, move_state)
+
+        @test handle_world_escape!(is)
+        @test placement_state(is) isa PlacementReadyState
+        @test selected_component_coords(is) == Set((coord,))
+
+        @test handle_world_escape!(is)
+        @test selection_state(is) isa SelectionEmptyState
+
+        set_placement_state!(is, make_tile_state())
+        @test handle_world_escape!(is)
+        @test placement_state(is) isa PlacementReadyState
+
+        set_placement_state!(is, make_test_redock_state())
+        @test handle_world_escape!(is)
+        @test placement_state(is) isa PlacementReadyState
+
+        pending_state = PlacementMovePendingState(
+            response_channel = Channel{Any}(1),
+            original_selection = WorldSelectionState(Set((coord,)), Set{PipeCoord}()),
+            translated_selection = WorldSelectionState(Set((TileCoord(2, 1),)), Set{PipeCoord}()),
+            expected_component_sources = Set((coord,)),
+            expected_component_destinations = Set((TileCoord(2, 1),)),
+            expected_pipe_sources = Set{PipeCoord}(),
+            expected_pipe_destinations = Set{PipeCoord}(),
+        )
+        select_single_component!(is, coord)
+        set_placement_state!(is, pending_state)
+
+        @test handle_world_escape!(is)
+        @test placement_state(is) === pending_state
+        @test selected_component_coords(is) == Set((coord,))
     end
 
     @testset "shared component actions" begin
@@ -285,7 +377,7 @@ end
         state = placement_state(is)
         @test state isa PlacementMoveState
 
-        set_placement_state!(is, PlacementPipeChainState(source_node = VertexCoord(TileCoord(0, 0), HexFrame.Q_POS)))
+        set_placement_state!(is, make_pipe_state())
         state = placement_state(is)
         @test state isa PlacementPipeChainState
         @test is_active_standard_interaction_state(state)
@@ -307,19 +399,6 @@ end
         @test_throws ArgumentError SelectionMoveTarget(Set((TileCoord(0, 0),)), Set((pipe,)),
             PipeCoord(VertexCoord(TileCoord(1, 0), HexFrame.Q_POS), VertexCoord(TileCoord(1, 0), HexFrame.Q_NEG)),
             TileCoord(1, 0))
-    end
-
-    @testset "toolbar and tile tool cache survive state clearing" begin
-        is = make_test_inputstate()
-        is.toolbar = 7
-        cached_tile_state = is.tile_tool_state
-
-        enter_editor_placement_state!(is, cached_tile_state)
-        clear_placement_state!(is)
-
-        @test is.toolbar == 7
-        @test is.tile_tool_state === cached_tile_state
-        @test placement_state(is) isa PlacementReadyState
     end
 
 end

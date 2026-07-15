@@ -203,6 +203,29 @@ function calc_max_reachable_bounds(viewstate::ViewState)
     return (X_POS = Float64(max_right), X_NEG = Float64(min_left), Y_POS = Float64(max_top), Y_NEG = Float64(min_bottom))
 end
 
+"Create a fresh tile-placement session at `component_index`."
+function new_tile_placement_state(component_index::Int = 1)::PlacementTileState
+    checkbounds(component_list, component_index)
+    return PlacementTileState(
+        component_index = component_index,
+        pendingcomponent = deepcopy(component_list[component_index]),
+    )
+end
+
+"Enter a fresh tile-placement session, or leave the currently active one."
+function toggle_tile_placement_state!(inputstate::InputState)::Bool
+    placement_state(inputstate) isa PlacementTileState && return enter_ready_placement_state!(inputstate)
+    return enter_editor_placement_state!(inputstate, new_tile_placement_state())
+end
+
+"Cycle the active tile-placement component while preserving rotation and mirroring."
+function cycle_tile_component!(state::PlacementTileState, step::Int)
+    index = mod1(state.component_index + step, length(component_list))
+    state.component_index = index
+    state.pendingcomponent = deepcopy(component_list[index])
+    return nothing
+end
+
 "Poll key rising edges and mutate InputState and FlowCalculatorSharedState (tile tool rotation/mirroring, placement state, pause, time warp, exit)"
 function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedState, window::GLFW.Window)
     state = placement_state(inputstate)
@@ -227,16 +250,10 @@ function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedSt
         end
     end
 
-    # ESC key — cancel redock or editor tool > cancel active standard interaction > dismiss action popup > cancel time warp > toggle pause menu
+    # ESC key — cancel world interaction > dismiss popup > clear selection > cancel time warp > toggle pause menu
     if get_inrising!(inputstate, GLFW.KEY_ESCAPE, window)
-        if state isa PlacementMovePendingState
-            # The calculator result must complete before placement can accept another transition.
-        elseif state isa PlacementRedockState || state isa AbstractEditorPlacementState
-            enter_ready_placement_state!(inputstate)
-        elseif is_active_standard_interaction_state(state)
-            clear_placement_state!(inputstate)
-        elseif !isnothing(inputstate.action_popup)
-            clear_action_popup_selection!(inputstate)
+        if handle_world_escape!(inputstate)
+            # World interactions consume Escape before space-map and pause-menu handling.
         elseif inputstate.spacemap_active
             time_prog = get(inputstate.gui_inputs, :time_progressing, false)::Bool
             if time_prog
@@ -269,7 +286,7 @@ function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedSt
     # Number keys 4-6 for editor-only placement states when editor capability is enabled
     if editor_capabilities_enabled(inputstate)
         get_inrising!(inputstate, GLFW.KEY_4, window) && toggle_editor_placement_state!(inputstate, PlacementDeleteState())
-        get_inrising!(inputstate, GLFW.KEY_5, window) && toggle_editor_placement_state!(inputstate, inputstate.tile_tool_state)
+        get_inrising!(inputstate, GLFW.KEY_5, window) && toggle_tile_placement_state!(inputstate)
         get_inrising!(inputstate, GLFW.KEY_6, window) && toggle_editor_placement_state!(inputstate, PlacementSurfaceEditState())
     end
 
@@ -299,12 +316,10 @@ function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedSt
         end
     end
 
-    # Toolbar cycling (Z = previous, C = next) — wraps around
-    if get_inrising!(inputstate, GLFW.KEY_Z, window)
-        inputstate.toolbar = mod1(inputstate.toolbar - 1, length(component_list))
-    end
-    if get_inrising!(inputstate, GLFW.KEY_C, window)
-        inputstate.toolbar = mod1(inputstate.toolbar + 1, length(component_list))
+    # Tile component cycling (Z = previous, C = next) — wraps around while the tool is active.
+    if state isa PlacementTileState
+        get_inrising!(inputstate, GLFW.KEY_Z, window) && cycle_tile_component!(state, -1)
+        get_inrising!(inputstate, GLFW.KEY_C, window) && cycle_tile_component!(state, 1)
     end
 
     return nothing
@@ -313,6 +328,12 @@ end
 "Poll cursor position and transform it to map space, updating inputstate cursor_x/y"
 function poll_cursorpos!(inputstate::InputState, viewstate::ViewState, window::GLFW.Window)
     x, y = GLFW.GetCursorPos(window)
+
+    if !isfinite(x) || !isfinite(y) || viewstate.window_width <= 0 || viewstate.window_height <= 0
+        inputstate.cursor_x = nothing
+        inputstate.cursor_y = nothing
+        return nothing
+    end
 
     # Convert cursor coordinates from window space to framebuffer space (handles Retina/HiDPI displays)
     fb_scale_x = viewstate.fb_width / viewstate.window_width
@@ -325,6 +346,13 @@ function poll_cursorpos!(inputstate::InputState, viewstate::ViewState, window::G
     xy = @SVector [(x_fb - viewstate.fb_width / 2), (y_origin - viewstate.fb_height / 2)]
     view_offset = @SVector [viewstate.view_x, viewstate.view_y]
     xy_cartesian = ((xy ./ hex_size_pixels) ./ viewstate.view_zoom) - view_offset
+
+    if !all(isfinite, xy_cartesian)
+        inputstate.cursor_x = nothing
+        inputstate.cursor_y = nothing
+        return nothing
+    end
+
     inputstate.cursor_x = xy_cartesian[1]
     inputstate.cursor_y = xy_cartesian[2]
 
@@ -417,6 +445,10 @@ function poll_middleclick_pan!(viewstate::ViewState, inputstate::InputState, win
     #= Recompute view offset so the anchor stays under the cursor (runs on drag-start frame too).
     Uses raw GLFW cursor position to avoid circular dependency with poll_cursorpos!. =#
     x, y = GLFW.GetCursorPos(window)
+    if !isfinite(x) || !isfinite(y) || viewstate.window_width <= 0 || viewstate.window_height <= 0
+        return nothing
+    end
+
     fb_scale_x = viewstate.fb_width / viewstate.window_width
     fb_scale_y = viewstate.fb_height / viewstate.window_height
     x_fb = x * fb_scale_x
@@ -604,10 +636,10 @@ function resolve_pipe_destination_from_cursor(inputstate::InputState)::Union{Not
     return nearest_pipe_segment_from_vertex(closest_vertex(cursor_cart), cursor_cart)
 end
 
-"Collect the twelve concrete PIPE candidates incident to a selected source node." 
-function collect_pipe_chain_candidates(source_vertex::VertexCoord, inputstate::InputState, gamemap::GameMap)
+"Collect the twelve concrete PIPE candidates incident to the active source node."
+function collect_pipe_chain_candidates(state::PlacementPipeChainState, gamemap::GameMap)
     candidates = NamedTuple[]
-    source = to_proper(source_vertex)
+    source = to_proper(state.source_node)
 
     for pipe in get_pipe_segments(source)
         far_node = pipe.v1 == source ? pipe.v2 : pipe.v1
@@ -627,7 +659,7 @@ function collect_pipe_chain_candidates(source_vertex::VertexCoord, inputstate::I
         push!(candidates, (
             pipe_coord = pipe,
             far_node = far_node,
-            ghost_payload = inputstate.pendingpipebehavior,
+            ghost_payload = state.pipe_behavior,
             can_commit = can_place_pipe_segment(pipe, gamemap),
             commit_kind = :place,
         ))
@@ -636,14 +668,14 @@ function collect_pipe_chain_candidates(source_vertex::VertexCoord, inputstate::I
     return candidates
 end
 
-"Resolve the currently active PIPE candidate from the cursor direction around the selected source node." 
-function get_active_pipe_chain_candidate(source_vertex::VertexCoord, inputstate::InputState, gamemap::GameMap)
+"Resolve the currently active PIPE candidate from the cursor direction around the selected source node."
+function get_active_pipe_chain_candidate(state::PlacementPipeChainState, inputstate::InputState, gamemap::GameMap)
     cursor_pos = get_cursor_cart(inputstate)
     cursor_pos === nothing && return nothing
 
-    target_pipe = nearest_pipe_segment_from_vertex(source_vertex, cursor_pos)
+    target_pipe = nearest_pipe_segment_from_vertex(state.source_node, cursor_pos)
 
-    for candidate in collect_pipe_chain_candidates(source_vertex, inputstate, gamemap)
+    for candidate in collect_pipe_chain_candidates(state, gamemap)
         if candidate.pipe_coord == target_pipe
             return candidate
         end
@@ -664,9 +696,15 @@ function poll_pipe_chain_response!(inputstate::InputState)
     status = take!(channel)
     if status == APPLIED
         next_source = something(state.pending_next_source_node, state.source_node)
-        set_placement_state!(inputstate, PlacementPipeChainState(source_node = next_source))
+        set_placement_state!(inputstate, PlacementPipeChainState(
+            source_node = next_source,
+            pipe_behavior = state.pipe_behavior,
+        ))
     else
-        set_placement_state!(inputstate, PlacementPipeChainState(source_node = state.source_node))
+        set_placement_state!(inputstate, PlacementPipeChainState(
+            source_node = state.source_node,
+            pipe_behavior = state.pipe_behavior,
+        ))
     end
     return nothing
 end
@@ -674,7 +712,7 @@ end
 "Build the map-edit command for the currently active PIPE candidate." 
 function create_pipe_chain_command(
         command_queue::CommandQueue,
-        inputstate::InputState,
+        state::PlacementPipeChainState,
         candidate;
         response_channel::Union{Nothing, Channel} = nothing
     )
@@ -685,7 +723,7 @@ function create_pipe_chain_command(
     return create_set_pipe_behavior_command(
         command_queue,
         candidate.pipe_coord,
-        inputstate.pendingpipebehavior;
+        state.pipe_behavior;
         response_channel = response_channel,
     )
 end
@@ -697,6 +735,9 @@ end
 "Return the current cursor position as a CartesianCoord, or `nothing` when unavailable."
 function get_cursor_cart(inputstate::InputState)::Union{Nothing, CartesianCoord}
     if isnothing(inputstate.cursor_x) || isnothing(inputstate.cursor_y)
+        return nothing
+    end
+    if !isfinite(inputstate.cursor_x) || !isfinite(inputstate.cursor_y)
         return nothing
     end
     return CartesianCoord(inputstate.cursor_x, inputstate.cursor_y)
@@ -713,21 +754,6 @@ function resolve_edit_target_from_cursor(inputstate::InputState, gamemap::GameMa
     tile = round_to_tile(cursor_cart)
     has_component(gamemap, tile) || return nothing
     return tile
-end
-
-"Clear the active world action popup and its selection highlights."
-function clear_action_popup_selection!(inputstate::InputState)
-    inputstate.action_popup = nothing
-    clear_selection!(inputstate)
-    inputstate.rightclick_selectedship = nothing
-    return nothing
-end
-
-"Close world popups without changing component selection."
-function clear_action_popups!(inputstate::InputState)
-    inputstate.action_popup = nothing
-    inputstate.rightclick_selectedship = nothing
-    return nothing
 end
 
 "Return the snapped hex axis nearest the cursor around a tile centre."
@@ -768,13 +794,13 @@ function set_move_hold_target!(inputstate::InputState, target, gamemap::GameMap)
     is_group_move = selected_element_count(inputstate) >= 2 && is_selected
 
     move_target = if is_group_move
-        clear_action_popups!(inputstate)
+        dismiss_action_popup!(inputstate)
         SelectionMoveTarget(component_sources, pipe_sources, target.coord, round_to_tile(cursor_cart))
     elseif target.kind === :tile_component
-        clear_action_popup_selection!(inputstate)
+        is_selected ? dismiss_action_popup!(inputstate) : clear_world_selection!(inputstate)
         TileComponentMoveTarget(target.coord)
     else
-        clear_action_popup_selection!(inputstate)
+        is_selected ? dismiss_action_popup!(inputstate) : clear_world_selection!(inputstate)
         PipeMoveTarget(target.coord)
     end
 
@@ -1063,31 +1089,6 @@ function poll_move_completion!(inputstate::InputState, gamemap::GameMap)
 end
 
 # ===============================================================
-# Pending Component Updates
-# ===============================================================
-
-"Update pending component type to match current toolbar selection"
-function pendingcomponent_typeupdate!(inputstate::InputState)
-    toolbar_has_changed = inputstate.last_toolbar != inputstate.toolbar
-    inputstate.last_toolbar = inputstate.toolbar
-
-    tile_tool_state = inputstate.tile_tool_state
-    if isnothing(tile_tool_state)
-        tile_tool_state = PlacementTileState(pendingcomponent = deepcopy(component_list[inputstate.toolbar]))
-        inputstate.tile_tool_state = tile_tool_state
-    end
-
-    if toolbar_has_changed
-        tile_tool_state.pendingcomponent = deepcopy(component_list[inputstate.toolbar])
-    end
-
-    if !editor_capabilities_enabled(inputstate)
-        inputstate.pendingpipebehavior = ScrapPipeBehav()
-    end
-    return nothing
-end
-
-# ===============================================================
 # Cursor Ghost Rendering
 # ===============================================================
 
@@ -1156,7 +1157,7 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
             )
         )
 
-        candidate = get_active_pipe_chain_candidate(source_vertex, inputstate, gamemap)
+        candidate = get_active_pipe_chain_candidate(state, inputstate, gamemap)
         if !isnothing(candidate)
             ghost_colour = (candidate.commit_kind === :delete || !candidate.can_commit) ? GHOST_COLOUR_INVALID : GHOST_COLOUR_VALID
             if !isnothing(candidate.ghost_payload)
@@ -1424,39 +1425,6 @@ function is_on_offset_ship(coord, gamemap::GameMap)::Bool
     return false
 end
 
-"Checks if two commands are trying to do the same thing, by checking for equivalence excluding IDs"
-function is_same_command(cmd1::Union{MapEditCommand, Nothing}, cmd2::Union{MapEditCommand, Nothing})::Bool
-    if isnothing(cmd1) || isnothing(cmd2)
-        return false
-    end
-    # check equality from all but the ID field by setting IDs equal
-    cmd2_with_id_from_cmd1 = @set cmd2.id = cmd1.id
-    return cmd1 == cmd2_with_id_from_cmd1
-end
-
-"""
-Enqueue command if it is not a duplicate of the last command sent, and within a minimum time interval to prevent spamming
-Used for commands that may be triggered repeatedly while holding mouse button down (e.g. pipe placement)
-"""
-function enqueue_if_not_duplicates!(
-        command_queue::CommandQueue,
-        command::MapEditCommand,
-        threadsafe_console_push::Function,
-        inputstate::InputState
-    )
-
-    threshhold_time = 0.5 # time in seconds to ignore duplicate commands
-    time_since_last = time() - inputstate.last_command_time
-    enough_time_passed = time_since_last >= threshhold_time
-
-    if !is_same_command(command, command_queue.last_command) || enough_time_passed
-        try_enqueue_command!(command_queue, command, threadsafe_console_push)
-        inputstate.last_command_time = time()
-    end
-
-    return nothing
-end
-
 "Enqueue tile placement command when in TILE mode and mouse clicked"
 function flowcalc_tileplacer!(
         command_queue::CommandQueue,
@@ -1507,10 +1475,6 @@ function flowcalc_standard_interaction!(
         return nothing
     end
 
-    if !editor_capabilities_enabled(inputstate)
-        inputstate.pendingpipebehavior = ScrapPipeBehav()
-    end
-
     poll_pipe_chain_response!(inputstate)
 
     # A delayed move result must not overwrite a newer selection or gesture.
@@ -1528,18 +1492,15 @@ function flowcalc_standard_interaction!(
 
     shift_held = get_instate(GLFW.KEY_LEFT_SHIFT, window) || get_instate(GLFW.KEY_RIGHT_SHIFT, window)
     if state isa PlacementReadyState && left_rising && shift_held && !mouse_captured
+        dismiss_action_popup!(inputstate)
         cursor_cart = get_cursor_cart(inputstate)
         clicked_pipe = isnothing(cursor_cart) ? nothing : get_clicked_pipe(cursor_cart, gamemap)
         if !isnothing(clicked_pipe) && !is_on_offset_ship(clicked_pipe, gamemap)
-            inputstate.action_popup = nothing
-            inputstate.rightclick_selectedship = nothing
             toggle_selected_pipe!(inputstate, clicked_pipe)
             return nothing
         end
         element = get_clicked(inputstate)
         if element isa TileCoord && has_component(gamemap, element) && !is_on_offset_ship(element, gamemap)
-            inputstate.action_popup = nothing
-            inputstate.rightclick_selectedship = nothing
             toggle_selected_component!(inputstate, element)
         end
         return nothing
@@ -1559,19 +1520,20 @@ function flowcalc_standard_interaction!(
             return nothing
         end
 
-        candidate = get_active_pipe_chain_candidate(source_node, inputstate, gamemap)
+        candidate = get_active_pipe_chain_candidate(state, inputstate, gamemap)
         if isnothing(candidate) || !candidate.can_commit
             return nothing
         end
 
         response_channel = Channel{CommandStatus}(1)
-        command = create_pipe_chain_command(command_queue, inputstate, candidate; response_channel = response_channel)
+        command = create_pipe_chain_command(command_queue, state, candidate; response_channel = response_channel)
         isnothing(command) && return nothing
 
         success, _ = try_enqueue_command!(command_queue, command, threadsafe_console_push)
         if success
             set_placement_state!(inputstate, PlacementPipeChainState(
                 source_node = source_node,
+                pipe_behavior = state.pipe_behavior,
                 pending_next_source_node = candidate.far_node,
                 pending_response_channel = response_channel,
             ))
@@ -1645,15 +1607,18 @@ function flowcalc_standard_interaction!(
     source_node = resolve_pipe_source_node(inputstate)
     if !isnothing(source_node)
         if !is_pipe_source_on_offset_ship(source_node, gamemap)
-            clear_action_popup_selection!(inputstate)
-            set_placement_state!(inputstate, PlacementPipeChainState(source_node = source_node))
+            clear_world_selection!(inputstate)
+            set_placement_state!(inputstate, PlacementPipeChainState(
+                source_node = source_node,
+                pipe_behavior = ScrapPipeBehav(),
+            ))
         end
         return nothing
     end
 
     target = get_move_hover_target(inputstate, gamemap)
     if isnothing(target)
-        clear_action_popup_selection!(inputstate)
+        clear_world_selection!(inputstate)
         pressed_element = get_clicked(inputstate)
         if pressed_element isa TileCoord || pressed_element isa PipeCoord
             cursor_cart = get_cursor_cart(inputstate)
@@ -1769,6 +1734,8 @@ function flowcalc_rightclick_action!(inputstate::InputState, gamemap::GameMap, w
         return nothing
     end
 
+    dismiss_action_popup!(inputstate)
+
     # Need valid cursor position
     isnothing(inputstate.cursor_x) && return nothing
     isnothing(inputstate.cursor_y) && return nothing
@@ -1776,8 +1743,6 @@ function flowcalc_rightclick_action!(inputstate::InputState, gamemap::GameMap, w
     cursor_cart = CartesianCoord(inputstate.cursor_x, inputstate.cursor_y)
     element = get_clicked(inputstate)
     tile = round_to_tile(cursor_cart)
-
-    inputstate.rightclick_selectedship = nothing
 
     clicked_pipe = get_clicked_pipe(cursor_cart, gamemap)
     if selected_element_count(inputstate) >= 2 && !isnothing(clicked_pipe) && has_selected_pipe(inputstate, clicked_pipe)
@@ -1825,12 +1790,11 @@ function flowcalc_rightclick_action!(inputstate::InputState, gamemap::GameMap, w
     isnothing(ship_name) && return nothing
     is_on_offset_ship(tile, gamemap) && return nothing
 
-    clear_selection!(inputstate)
+    clear_world_selection!(inputstate)
 
     actions = get_ship_actions(gamemap, ship_name)
     display_name = safe_ship_display_name(ship_name)
 
-    inputstate.rightclick_selectedship = ship_name
     inputstate.action_popup = ActionPopupState(
         target = ShipPopupTarget(ship_name),
         world_position = cursor_cart,

@@ -695,7 +695,7 @@ function ui_propertybox_render!(
             CImGui.Text("Select Pipe Type:")
             for (label, pipe_type) in PIPE_TYPES
                 if CImGui.Button(label)
-                    inputstate.pendingpipebehavior = pipe_type()
+                    state.pipe_behavior = pipe_type()
                 end
                 CImGui.SameLine()
             end
@@ -707,8 +707,8 @@ function ui_propertybox_render!(
         CImGui.Separator()
 
         CImGui.Indent()
-        new_tunables = edit_tunables!(get_pipe_tunables(inputstate.pendingpipebehavior))
-        inputstate.pendingpipebehavior = set_pipe_tunables(inputstate.pendingpipebehavior, new_tunables)
+        new_tunables = edit_tunables!(get_pipe_tunables(state.pipe_behavior))
+        state.pipe_behavior = set_pipe_tunables(state.pipe_behavior, new_tunables)
         CImGui.Unindent()
     end
 

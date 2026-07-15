@@ -211,20 +211,22 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
         @cref CImGui.Checkbox("Editor Mode", &editor_enabled)
         if editor_enabled != inputstate.editor_mode
             inputstate.editor_mode = editor_enabled
-            if !editor_enabled && placement_state(inputstate) isa AbstractEditorPlacementState
-                enter_ready_placement_state!(inputstate)
+            if !editor_enabled
+                state = placement_state(inputstate)
+                if state isa AbstractEditorPlacementState
+                    enter_ready_placement_state!(inputstate)
+                elseif state isa PlacementPipeChainState
+                    state.pipe_behavior = ScrapPipeBehav()
+                end
             end
         end
 
         !inputstate.editor_mode && CImGui.BeginDisabled()
-        tile_tool_state = inputstate.tile_tool_state
-        isnothing(tile_tool_state) && error("Tile tool state must be initialised before opening Developer Utilities")
-
         if CImGui.RadioButton("[4] Delete", placement_state(inputstate) isa PlacementDeleteState)
             toggle_editor_placement_state!(inputstate, PlacementDeleteState())
         end
         if CImGui.RadioButton("[5] Tile Placement", placement_state(inputstate) isa PlacementTileState)
-            toggle_editor_placement_state!(inputstate, tile_tool_state)
+            toggle_tile_placement_state!(inputstate)
         end
         if CImGui.RadioButton("[6] Surface Edit", placement_state(inputstate) isa PlacementSurfaceEditState)
             toggle_editor_placement_state!(inputstate, PlacementSurfaceEditState())
@@ -674,7 +676,7 @@ function ui_action_popup_render!(inputstate::InputState, viewstate::ViewState, f
     CImGui.End()
 
     if !p_open[]
-        _close_popup!(inputstate)
+        dismiss_action_popup!(inputstate)
     end
     return nothing
 end
@@ -722,10 +724,10 @@ end
 
 #= ---------- Action Execution Dispatch ----------- =#
 
-"Execute an action, dispatching on popup target type. Closes the popup afterwards."
+"Execute an action, dispatching on popup target type. Closes the popup after success."
 function _execute_action!(inputstate, popup::ActionPopupState, action::ActionInfo, flowcalc_ipc, viewstate)
     result = _execute_target_action!(inputstate, popup.target, action, flowcalc_ipc, viewstate)
-    (!(result isa Tuple) || first(result)) && _close_popup!(inputstate)
+    (!(result isa Tuple) || first(result)) && dismiss_action_popup!(inputstate)
     return nothing
 end
 
@@ -758,13 +760,6 @@ end
 function _execute_target_action!(inputstate, target::ShipPopupTarget, action::ActionInfo, flowcalc_ipc, viewstate)
     return execute_ship_action!(ship_name = target.ship_name, action_id = action.id,
         flowcalc_ipc = flowcalc_ipc, viewstate = viewstate, inputstate = inputstate)
-end
-
-"Close the action popup and clear all right-click selection state."
-function _close_popup!(inputstate)
-    inputstate.action_popup = nothing
-    clear_selection!(inputstate)
-    return inputstate.rightclick_selectedship = nothing
 end
 
 "Group component popups expose one atomic deletion action."

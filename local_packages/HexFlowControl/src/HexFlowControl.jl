@@ -23,6 +23,7 @@ export select_single_component!, select_single_pipe!, select_elements!, toggle_s
 export clear_selection!, has_selected_component, has_selected_pipe, selected_element_count, translate_selection
 export shared_component_actions
 export is_standard_family_state, is_active_standard_interaction_state
+export dismiss_action_popup!, highlighted_ship, handle_world_escape!
 export clear_world_selection!, enter_ready_placement_state!, enter_editor_placement_state!, toggle_editor_placement_state!
 export enter_redock_placement_state!, editor_capabilities_enabled
 export sim_speed_to_ups, increase_sim_speed, decrease_sim_speed, sim_speed_label
@@ -246,9 +247,10 @@ end
     calculator_applied::Bool = false
 end
 
-"Active placement pipe-chain state." 
-@kwdef struct PlacementPipeChainState <: AbstractPlacementState
+"Active pipe-chain configuration and pending calculator transaction."
+@kwdef mutable struct PlacementPipeChainState <: AbstractPlacementState
     source_node::VertexCoord
+    pipe_behavior::PipeBehavior
     pending_next_source_node::Union{Nothing, VertexCoord} = nothing
     #= Stores a calculator response channel without depending on HexFlowCalculator.CommandStatus at the package boundary. =#
     pending_response_channel::Union{Nothing, Channel} = nothing
@@ -257,8 +259,9 @@ end
 "Editor-only delete placement state."
 struct PlacementDeleteState <: AbstractEditorPlacementState end
 
-"Editor-only tile placement state."
+"Active editor tile-placement configuration. Discarded when tile placement ends."
 @kwdef mutable struct PlacementTileState <: AbstractEditorPlacementState
+    component_index::Int = 1
     pendingcomponent::ComponentBehavior
     toolrotation::HexAxis = HexFrame.Q_POS
     toolmirrored::Bool = false
@@ -288,14 +291,8 @@ const PlacementState = Union{
     # placement
     cursor_x::Union{Nothing, Float64} = nothing
     cursor_y::Union{Nothing, Float64} = nothing
-    toolbar::Int64 = 1
-    last_toolbar::Int64 = 1
-    pendingpipebehavior::PipeBehavior
-    tile_tool_state::Union{Nothing, PlacementTileState} = nothing
     placement_state::PlacementState = PlacementReadyState()
     selection_state::SelectionState = SelectionEmptyState()
-    rightclick_selectedship::Union{Nothing, Symbol} = nothing
-    last_command_time::Float64 = 0.0
     gui_inputs::Dict{Symbol, Any} = Dict{Symbol, Any}()  # for storing ImGui input field states
     # last key states
     last_keystates::Dict{GLFW.Key, Bool} = Dict{GLFW.Key, Bool}()
@@ -516,11 +513,24 @@ end
 "Return whether editor-only capabilities are enabled for the current input state."
 editor_capabilities_enabled(inputstate::InputState)::Bool = inputstate.editor_mode
 
+"Dismiss the world action popup without changing element selection."
+function dismiss_action_popup!(inputstate::InputState)
+    inputstate.action_popup = nothing
+    return nothing
+end
+
+"Return the ship highlighted by the open ship popup, or `nothing`."
+function highlighted_ship(inputstate::InputState)::Union{Nothing, Symbol}
+    popup = inputstate.action_popup
+    popup === nothing && return nothing
+    target = popup.target
+    return target isa ShipPopupTarget ? target.ship_name : nothing
+end
+
 "Clear popup and selection state without mutating the active placement state."
 function clear_world_selection!(inputstate::InputState)
     clear_selection!(inputstate)
-    inputstate.rightclick_selectedship = nothing
-    inputstate.action_popup = nothing
+    dismiss_action_popup!(inputstate)
     return nothing
 end
 
@@ -555,6 +565,28 @@ end
 
 "Clear any nested placement state and return to ready state."
 clear_placement_state!(inputstate::InputState)::Bool = try_enter_placement_state!(inputstate, PlacementReadyState())
+
+"Handle Escape for world interactions, returning whether the key press was consumed."
+function handle_world_escape!(inputstate::InputState)::Bool
+    state = placement_state(inputstate)
+
+    # A pending calculator move cannot be cancelled or allow its selection to change.
+    state isa PlacementMovePendingState && return true
+
+    if state isa Union{PlacementRedockState, AbstractEditorPlacementState} || is_active_standard_interaction_state(state)
+        clear_placement_state!(inputstate)
+        return true
+    end
+
+    if !isnothing(inputstate.action_popup)
+        dismiss_action_popup!(inputstate)
+        return true
+    end
+
+    selected_element_count(inputstate) == 0 && return false
+    clear_selection!(inputstate)
+    return true
+end
 
 # ===============================================================
 # Console Buffer

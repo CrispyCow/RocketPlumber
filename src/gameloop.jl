@@ -57,7 +57,7 @@ function custom_rendering!(
     # Render queued elements (tiles, pipes, nodes)
     @timeit render_loop_timer "Sprite Rendering" begin
         @timeit render_loop_timer "Populate Render Queue" begin
-            @timeit render_loop_timer "Ship Surface" ship_surface_queued_render!(renderqueue, glmap, snapshot.gamemap; selected_ship = inputstate.rightclick_selectedship)
+            @timeit render_loop_timer "Ship Surface" ship_surface_queued_render!(renderqueue, glmap, snapshot.gamemap; selected_ship = highlighted_ship(inputstate))
             @timeit render_loop_timer "Docking Beams" render_docking_beams!(renderqueue, glmap, snapshot.gamemap, snapshot.gamestate.ticks)
             @timeit render_loop_timer "Tiles" tile_queued_render!(renderqueue, glmap, snapshot.gamemap, snapshot.derived, snapshot.mna, snapshot.gamestate)
             @timeit render_loop_timer "Ghosts" render_cursor_ghosts!(renderqueue, glmap, inputstate, snapshot.gamemap, snapshot.gamestate)
@@ -104,11 +104,7 @@ end
 
 "Creates input and view state structs, populating window and framebuffer sizes"
 function init_input_viewstates(window::GLFW.Window)::Tuple{InputState, ViewState}
-    initial_component = deepcopy(component_list[1])
-    inputstate = InputState(
-        pendingpipebehavior = ScrapPipeBehav(),
-        tile_tool_state = PlacementTileState(pendingcomponent = initial_component),
-    )
+    inputstate = InputState()
     viewstate = ViewState()
 
     winsize = GLFW.GetWindowSize(window)
@@ -150,12 +146,19 @@ function user_handler!(
     popup = inputstate.action_popup
     if popup !== nothing
         target = popup.target
-        stale_component_popup = target isa ComponentPopupTarget && !has_selected_component(inputstate, target.coord)
+        stale_component_popup = target isa ComponentPopupTarget &&
+            (selected_element_count(inputstate) != 1 ||
+             !has_selected_component(inputstate, target.coord) ||
+             !has_component(snapshot.gamemap, target.coord) ||
+             is_on_offset_ship(target.coord, snapshot.gamemap))
         stale_group_popup = target isa ElementGroupPopupTarget &&
             (selected_element_count(inputstate) < 2 ||
              Set(target.component_coords) != selected_component_coords(inputstate) ||
              Set(target.pipe_coords) != selected_pipe_coords(inputstate))
-        (stale_component_popup || stale_group_popup) && (inputstate.action_popup = nothing)
+        stale_ship_popup = target isa ShipPopupTarget &&
+            (!has_ship(snapshot.gamemap, target.ship_name) ||
+             get_ship_render_offset(snapshot.gamemap, target.ship_name) != AxialCoord(0.0, 0.0))
+        (stale_component_popup || stale_group_popup || stale_ship_popup) && dismiss_action_popup!(inputstate)
     end
 
     GLFW.PollEvents()
@@ -189,8 +192,6 @@ function ui_rendering!(
         viewstate::ViewState, window::GLFW.Window;
         learning_state::Union{Nothing, LearningSystemState} = nothing
     )
-    pendingcomponent_typeupdate!(inputstate)
-
     # Calculate bounds for interactions
     max_view_bounds = calc_max_reachable_bounds(viewstate)
     set_max_reachable_bounds!(flowcalc_ipc.shared_state, max_view_bounds)
