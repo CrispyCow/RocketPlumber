@@ -804,7 +804,7 @@ function render_spacemap_active_manoeuvre_panel!(
     )
     manoeuvre = get_active_manoeuvre(gamemap)
     time_progressing = is_time_progressing(gamemap)
-    timewarp_blocked = is_timewarp_blocked(gamemap, gamestate, flowcalc_ipc)
+    timewarp_status = can_timewarp(gamemap, gamestate, flowcalc_ipc)
 
     phase = manoeuvre.phase
 
@@ -817,7 +817,7 @@ function render_spacemap_active_manoeuvre_panel!(
     CImGui.Spacing()
 
     if phase == PHASE_COAST && !time_progressing
-        if button_with_disable("Wait for Capture Burn", ImVec2(-1, 30), timewarp_blocked)
+        if button_with_disable("Wait for Capture Burn", ImVec2(-1, 30), timewarp_status)
             @atomic :monotonic flowcalc_ipc.shared_state.target_spacemap_time = manoeuvre.intercept_time
         end
     end
@@ -827,7 +827,6 @@ function render_spacemap_active_manoeuvre_panel!(
         modified_map = deepcopy(gamemap)
         clear_active_manoeuvre!(modified_map)
         enqueue_map_override!(flowcalc_ipc, modified_map)
-        @info "Manoeuvre cancelled"
     end
 
     return nothing
@@ -923,7 +922,6 @@ function render_spacemap_manoeuvre_planning_panel!(
             set_active_manoeuvre!(modified_map, preview_manoeuvre)
             enqueue_map_override!(flowcalc_ipc, modified_map)
             @atomic :monotonic flowcalc_ipc.shared_state.target_spacemap_time = current_time
-            @info "Manoeuvre planned" target = ep.display_name dv = total_dv
         end
     end
 
@@ -969,15 +967,15 @@ function render_spacemap_left_panel!(
     CImGui.PopFont()
     CImGui.Spacing()
 
-    timewarp_blocked = is_timewarp_blocked(gamemap, gamestate, flowcalc_ipc)
+    timewarp_status = can_timewarp(gamemap, gamestate, flowcalc_ipc)
 
     # Advance time buttons — always shown, disabled while warping, blocked, or paused
-    advance_disabled = time_progressing ? (true, "Time warp in progress") : timewarp_blocked
+    advance_status = time_progressing ? InvalidRequest("Time warp in progress") : timewarp_status
     CImGui.Text("Advance Time:")
     if CImGui.BeginTable("##advance_time", 3, CImGui.ImGuiTableFlags_SizingStretchSame)
         for (label, dt) in (("0.1 yr", 0.1), ("1 yr", 1.0), ("10 yr", 10.0))
             CImGui.TableNextColumn()
-            if button_with_disable(label, ImVec2(-1, 0), advance_disabled)
+            if button_with_disable(label, ImVec2(-1, 0), advance_status)
                 @atomic :monotonic flowcalc_ipc.shared_state.target_spacemap_time = current_time + dt
             end
         end

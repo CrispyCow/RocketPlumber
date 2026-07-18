@@ -179,7 +179,7 @@ function do_action!(nozzle::NozzleBehavFrag, action_id::Symbol; kwargs...)
     if action_id === :repair_component
         return do_action!(nozzle.overheat, action_id; kwargs...)
     end
-    return (false, "Action :$(action_id) not recognised by NozzleBehavFrag")
+    throw(ArgumentError("Action :$(action_id) not recognised by NozzleBehavFrag"))
 end
 
 "Return a one-element probe for the speculative reactivation scheduler, or `nothing` if already active or damaged."
@@ -255,16 +255,16 @@ end
 function placement_valid(nozzle::NozzleBehavFrag, coord::TileCoord, gamemap::GameMap; rotation::HexAxis, ship_name::Symbol = :primary, kwargs...)
     # Nozzles must hang off ship edges - their input node must be on surface, but the nozzle tile itself must not be
     if is_on_surface_tile(coord, gamemap; ship_name = ship_name)
-        return (false, "Nozzle must be placed off the ship surface (hanging off an edge)")
+        return InvalidRequest("Nozzles must be placed on a ship edge with their input connected to the surface")
     end
 
     # Check that the input node IS connected to the ship surface
     input_node_abs = map_element(nozzle.connected_node, coord, rotation)
     if !is_node_on_ship_surface(input_node_abs, gamemap; ship_name = ship_name)
-        return (false, "Nozzle input node is not connected to ship surface")
+        return InvalidRequest("Nozzles must be placed on a ship edge with their input connected to the surface")
     end
 
-    return (true, "")
+    return ValidRequest()
 end
 
 function collect_effect_particles!(
@@ -550,17 +550,17 @@ function placement_valid(comp::SwitchedNozzleCompBehav, coord::TileCoord, gamema
     # For switched nozzles, check the switch's external connection node (v1).
     # The switch connects external node (v1) to internal node (v2), and nozzle connects internal to ground.
     if is_on_surface_tile(coord, gamemap; ship_name = ship_name)
-        return (false, "Nozzle must be placed off the ship surface (hanging off an edge)")
+        return InvalidRequest("Nozzles must be placed on a ship edge with their input connected to the surface")
     end
 
     # Check that the input node IS connected to the ship surface
     input_node_pos = comp.switch.switch.connection.v1  # External node from switch
     input_node_abs = map_element(input_node_pos, coord, rotation)
     if !is_node_on_ship_surface(input_node_abs, gamemap; ship_name = ship_name)
-        return (false, "Nozzle input node is not connected to ship surface")
+        return InvalidRequest("Nozzles must be placed on a ship edge with their input connected to the surface")
     end
 
-    return (true, "")
+    return ValidRequest()
 end
 
 # Render valve sprite just under the main background sprite

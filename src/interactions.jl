@@ -610,16 +610,16 @@ function can_delete_pipe_segment(pipe::PipeCoord, gamemap::GameMap)::Bool
     return !is_offship || validate_offship_pipe_deletion(pipe, gamemap)
 end
 
-"Return whether a new pipe segment can be placed under the current on-surface or off-ship rules."
-function can_place_pipe_segment(pipe::PipeCoord, gamemap::GameMap)::Bool
+"Return a request status indicating whether a new pipe segment can be placed under the current on-surface or off-ship rules."
+function can_place_pipe_segment(pipe::PipeCoord, gamemap::GameMap)::RequestStatus
     target_ship = find_ship_containing(pipe, gamemap)
     if !isnothing(target_ship)
-        can_place, _ = can_place_pipe_at(pipe, gamemap; ship_name = target_ship)
-        return can_place
+        return can_place_pipe_at(pipe, gamemap; ship_name = target_ship)
     end
 
-    can_place, _, _ = can_place_pipe_offship(pipe, gamemap)
-    return can_place
+    offship_result = can_place_pipe_offship(pipe, gamemap)
+    isvalidrequest(offship_result) && return ValidRequest()
+    return offship_result
 end
 
 "Resolve the existing pipe segment currently targeted by the cursor."
@@ -660,7 +660,7 @@ function collect_pipe_chain_candidates(state::PlacementPipeChainState, gamemap::
             pipe_coord = pipe,
             far_node = far_node,
             ghost_payload = state.pipe_behavior,
-            can_commit = can_place_pipe_segment(pipe, gamemap),
+            can_commit = isvalidrequest(can_place_pipe_segment(pipe, gamemap)),
             commit_kind = :place,
         ))
     end
@@ -772,14 +772,35 @@ function get_move_hover_target(inputstate::InputState, gamemap::GameMap)
     if target isa TileCoord
         tilecomp = get_component(gamemap, target)
         isnothing(tilecomp) && return nothing
-        can_move, reason = can_be_moved(tilecomp)
-        return (; coord = target, kind = :tile_component, can_move, reason)
+        status = can_be_moved(tilecomp)
+        return (; coord = target, kind = :tile_component, status)
     end
 
     pipe_behav = get_pipe(gamemap, target)
     isnothing(pipe_behav) && return nothing
-    can_move, reason = can_pipe_be_moved(pipe_behav)
-    return (; coord = target, kind = :pipe, can_move, reason)
+    status = can_pipe_be_moved(pipe_behav)
+    return (; coord = target, kind = :pipe, status)
+end
+
+"Return the captured movement status for a selection in calculator source order."
+function get_selection_move_status(move_target::SelectionMoveTarget, gamemap::GameMap)::RequestStatus
+    component_sources = sort!(collect(move_target.component_coords); by = coord -> (coord.q, coord.r))
+    for coord in component_sources
+        component = get_component(gamemap, coord)
+        isnothing(component) && return InvalidRequest("one or more selected elements are no longer available")
+        status = can_be_moved(component)
+        isvalidrequest(status) || return status
+    end
+
+    pipe_sources = sort!(collect(move_target.pipe_coords); by = string)
+    for coord in pipe_sources
+        pipe = get_pipe(gamemap, coord)
+        isnothing(pipe) && return InvalidRequest("one or more selected elements are no longer available")
+        status = can_pipe_be_moved(pipe)
+        isvalidrequest(status) || return status
+    end
+
+    return ValidRequest()
 end
 
 "Record a pending MOVE hold on the current target and clear any stale popup state."
@@ -804,18 +825,10 @@ function set_move_hold_target!(inputstate::InputState, target, gamemap::GameMap)
         PipeMoveTarget(target.coord)
     end
 
-    move_target_valid = if move_target isa SelectionMoveTarget
-        components_valid = all(move_target.component_coords) do coord
-            component = get_component(gamemap, coord)
-            !isnothing(component) && first(can_be_moved(component))
-        end
-        pipes_valid = all(move_target.pipe_coords) do coord
-            pipe = get_pipe(gamemap, coord)
-            !isnothing(pipe) && first(can_pipe_be_moved(pipe))
-        end
-        components_valid && pipes_valid
+    move_target_status = if move_target isa SelectionMoveTarget
+        get_selection_move_status(move_target, gamemap)
     else
-        target.can_move
+        target.status
     end
 
     set_placement_state!(inputstate, PlacementPressedState(
@@ -823,9 +836,26 @@ function set_move_hold_target!(inputstate::InputState, target, gamemap::GameMap)
         press_cursor_cart = cursor_cart,
         click_tile = click_tile,
         move_target = move_target,
-        move_target_valid = move_target_valid,
+        move_target_status = move_target_status,
     ))
     return true
+end
+
+"Return whether the captured move status permits drag activation."
+move_target_is_valid(state::PlacementPressedState)::Bool = !isnothing(state.move_target_status) && isvalidrequest(state.move_target_status)
+
+"Format a movement rejection using the same prefix as calculator-side validation."
+function move_rejection_message(move_target::AbstractPlacementMoveTarget, status::InvalidRequest)::String
+    prefix = if move_target isa TileComponentMoveTarget
+        "Cannot move component"
+    elseif move_target isa PipeMoveTarget
+        "Cannot move pipe"
+    elseif move_target isa SelectionMoveTarget
+        "Cannot move selection"
+    else
+        throw(ArgumentError("unsupported move target type: $(typeof(move_target))"))
+    end
+    return "$prefix: $(reason(status))"
 end
 
 
@@ -878,11 +908,12 @@ function update_active_move_rotation!(inputstate::InputState)
 end
 
 "Create an INSPECT-style click command from the stored MOVE short-click press site."
-function create_move_short_click_command(command_queue::CommandQueue, inputstate::InputState)
+function create_move_short_click_command(command_queue::CommandQueue, inputstate::InputState, gamemap::GameMap)
     state = placement_state(inputstate)
     state isa PlacementPressedState || return nothing
     hold_coord = state.click_tile
     hold_coord isa TileCoord || return nothing
+    has_component(gamemap, hold_coord) || return nothing
 
     tile_center_cart = to_cartesian(hold_coord)
     unrotated_clicksite = state.press_cursor_cart - tile_center_cart
@@ -909,16 +940,16 @@ function can_preview_active_move(inputstate::InputState, gamemap::GameMap)::Bool
 
         if destination == selected
             rotated_comptile = PlacedComponent(tilecomp.component, new_rotation, new_mirrored, tilecomp.ship)
-            is_valid, _ = placement_valid(rotated_comptile, selected, gamemap; ship_name = tilecomp.ship)
-            return is_valid
+            return isvalidrequest(placement_valid(rotated_comptile, selected, gamemap; ship_name = tilecomp.ship))
         end
 
-        !isnothing(get_component(gamemap, destination)) && return false
-        dest_ship = find_ship_for_placement(
+        has_component(gamemap, destination) && return false
+        has_pipe_component_conflict(destination, gamemap) && return false
+        placement = find_ship_for_placement(
             tilecomp.component, destination, gamemap;
             rotation = new_rotation, mirrored = new_mirrored
         )
-        return !isnothing(dest_ship)
+        return isvalidrequest(placement)
     elseif state.move_target isa PipeMoveTarget
         selected = state.move_target.coord
         destination = resolve_pipe_destination_from_cursor(inputstate)
@@ -927,9 +958,9 @@ function can_preview_active_move(inputstate::InputState, gamemap::GameMap)::Bool
 
         source_pipe = get_pipe(gamemap, selected)
         isnothing(source_pipe) && return false
-        first(can_pipe_be_moved(source_pipe)) || return false
+        isvalidrequest(can_pipe_be_moved(source_pipe)) || return false
         has_pipe(gamemap, destination) && return false
-        return can_place_pipe_segment(destination, gamemap)
+        return isvalidrequest(can_place_pipe_segment(destination, gamemap))
     elseif state.move_target isa SelectionMoveTarget
         translation = selection_move_translation(state.move_target, cursor_cart)
         translation == TileCoord(0, 0) && return false
@@ -942,20 +973,21 @@ function can_preview_active_move(inputstate::InputState, gamemap::GameMap)::Bool
         for source in state.move_target.component_coords
             component = get_component(gamemap, source)
             isnothing(component) && return false
-            first(can_be_moved(component)) || return false
+            isvalidrequest(can_be_moved(component)) || return false
 
             destination = source + translation
             for pipe in get_pipe_segments(destination)
                 get_tile_containing_pipe(pipe) == destination || continue
                 has_pipe(gamemap, pipe) && pipe ∉ state.move_target.pipe_coords && return false
             end
-            isnothing(find_ship_for_placement(component.component, destination, gamemap;
-                rotation = component.rotation, mirrored = component.mirrored)) && return false
+            placement = find_ship_for_placement(component.component, destination, gamemap;
+                rotation = component.rotation, mirrored = component.mirrored)
+            isvalidrequest(placement) || return false
         end
         for source in state.move_target.pipe_coords
             pipe = get_pipe(gamemap, source)
             isnothing(pipe) && return false
-            first(can_pipe_be_moved(pipe)) || return false
+            isvalidrequest(can_pipe_be_moved(pipe)) || return false
         end
         for destination in pipe_destinations
             tile = get_tile_containing_pipe(destination)
@@ -1141,8 +1173,10 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
         component = state.pendingcomponent
         rotation = map_rotation(component, state.toolrotation)
         mirrored = map_mirroring(component, state.toolmirrored)
-        target_ship = find_ship_for_placement(component, coord, gamemap; rotation = rotation, mirrored = mirrored)
-        ghost_colour = isnothing(target_ship) ? GHOST_COLOUR_INVALID : GHOST_COLOUR_VALID
+        can_place = !has_component(gamemap, coord) &&
+            !has_pipe_component_conflict(coord, gamemap) &&
+            isvalidrequest(find_ship_for_placement(component, coord, gamemap; rotation, mirrored))
+        ghost_colour = can_place ? GHOST_COLOUR_VALID : GHOST_COLOUR_INVALID
         render_base_elem!(queue, component; glmap = glmap, rotation = rotation, mirrored = mirrored, position = coord, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000))
     end
 
@@ -1174,7 +1208,7 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
         #= ---------- Move activation indicator ----------- =#
         if state.move_target isa Union{TileComponentMoveTarget, SelectionMoveTarget}
             coord = state.move_target isa SelectionMoveTarget ? state.move_target.anchor : state.move_target.coord
-            move_colour = state.move_target_valid ? GHOST_MOVE_SELECTION_COLOUR : GHOST_COLOUR_INVALID
+            move_colour = move_target_is_valid(state) ? GHOST_MOVE_SELECTION_COLOUR : GHOST_COLOUR_INVALID
             push!(
                 queue, render_basic_sprite(
                     glmap, :MoveArrow_arrow_start, rotmat_2D(0.0), coord;
@@ -1182,7 +1216,7 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
                 )
             )
         elseif state.move_target isa PipeMoveTarget
-            move_colour = state.move_target_valid ? GHOST_MOVE_SELECTION_COLOUR : GHOST_PIPE_COLOUR_INVALID
+            move_colour = move_target_is_valid(state) ? GHOST_MOVE_SELECTION_COLOUR : GHOST_PIPE_COLOUR_INVALID
             actual_pipe = get_pipe(gamemap, state.move_target.coord)
             !isnothing(actual_pipe) && render_pipe_base!(
                 queue, actual_pipe; glmap = glmap,
@@ -1430,7 +1464,6 @@ function flowcalc_tileplacer!(
         command_queue::CommandQueue,
         inputstate::InputState,
         gamemap::GameMap,
-        threadsafe_console_push::Function,
         window::GLFW.Window;
         mouse_captured::Bool = false
     )
@@ -1457,7 +1490,7 @@ function flowcalc_tileplacer!(
     end
 
     command = create_set_tile_command(command_queue, coord, state.pendingcomponent, state.toolrotation, state.toolmirrored)
-    try_enqueue_command!(command_queue, command, threadsafe_console_push)
+    try_enqueue_command!(command_queue, command)
     return nothing
 end
 
@@ -1466,8 +1499,8 @@ function flowcalc_standard_interaction!(
         command_queue::CommandQueue,
         inputstate::InputState,
         gamemap::GameMap,
-        threadsafe_console_push::Function,
         window::GLFW.Window;
+        console_push::Function,
         mouse_captured::Bool = false
     )
     state = placement_state(inputstate)
@@ -1529,7 +1562,7 @@ function flowcalc_standard_interaction!(
         command = create_pipe_chain_command(command_queue, state, candidate; response_channel = response_channel)
         isnothing(command) && return nothing
 
-        success, _ = try_enqueue_command!(command_queue, command, threadsafe_console_push)
+        success = try_enqueue_command!(command_queue, command)
         if success
             set_placement_state!(inputstate, PlacementPipeChainState(
                 source_node = source_node,
@@ -1556,7 +1589,7 @@ function flowcalc_standard_interaction!(
             command = create_active_move_command(command_queue, inputstate; response_channel = response_channel)
             if !isnothing(command)
                 pending_state = pending_move_state(inputstate, response_channel)
-                success, _ = try_enqueue_command!(command_queue, command, threadsafe_console_push)
+                success = try_enqueue_command!(command_queue, command)
                 success && set_placement_state!(inputstate, pending_state)
             end
             placement_state(inputstate) isa PlacementMoveState && clear_placement_state!(inputstate)
@@ -1567,26 +1600,32 @@ function flowcalc_standard_interaction!(
 
     if state isa PlacementPressedState
         if !isnothing(state.move_target) && !state.hold_threshold_crossed && time() - state.press_started_at >= 0.5
-            if state.move_target_valid
+            if move_target_is_valid(state)
                 activate_move_drag!(inputstate)
                 return nothing
             end
 
+            move_target = state.move_target
+            move_target_status = state.move_target_status
             set_placement_state!(inputstate, PlacementPressedState(
                 press_started_at = state.press_started_at,
                 press_cursor_cart = state.press_cursor_cart,
                 click_tile = state.click_tile,
-                move_target = state.move_target,
-                move_target_valid = state.move_target_valid,
+                move_target = move_target,
+                move_target_status = move_target_status,
                 hold_threshold_crossed = true,
             ))
-            state = placement_state(inputstate)::PlacementPressedState
+            if move_target_status isa InvalidRequest
+                console_push(move_rejection_message(move_target, move_target_status))
+            elseif isnothing(move_target_status)
+                @warn "Move target is missing its captured movement status" target_type = nameof(typeof(move_target))
+            end
         end
 
         if left_falling
-            command = create_move_short_click_command(command_queue, inputstate)
+            command = create_move_short_click_command(command_queue, inputstate, gamemap)
             if !isnothing(command)
-                try_enqueue_command!(command_queue, command, threadsafe_console_push)
+                try_enqueue_command!(command_queue, command)
             end
             clear_placement_state!(inputstate)
             return nothing
@@ -1628,7 +1667,6 @@ function flowcalc_standard_interaction!(
                     press_cursor_cart = cursor_cart,
                     click_tile = round_to_tile(cursor_cart),
                     move_target = nothing,
-                    move_target_valid = false,
                 ))
             end
         end
@@ -1644,7 +1682,6 @@ function flowcalc_deleteplacer!(
         command_queue::CommandQueue,
         inputstate::InputState,
         gamemap::GameMap,
-        threadsafe_console_push::Function,
         window::GLFW.Window;
         mouse_captured::Bool = false
     )
@@ -1672,7 +1709,7 @@ function flowcalc_deleteplacer!(
     end
 
     command = create_delete_elements_command(command_queue, target)
-    try_enqueue_command!(command_queue, command, threadsafe_console_push)
+    try_enqueue_command!(command_queue, command)
 
     return nothing
 end
@@ -1682,7 +1719,6 @@ function flowcalc_surfaceeditor!(
         command_queue::CommandQueue,
         inputstate::InputState,
         gamemap::GameMap,
-        threadsafe_console_push::Function,
         window::GLFW.Window;
         mouse_captured::Bool = false
     )
@@ -1716,7 +1752,7 @@ function flowcalc_surfaceeditor!(
         command = create_add_ship_surface_command(command_queue, coord)
     end
 
-    try_enqueue_command!(command_queue, command, threadsafe_console_push)
+    try_enqueue_command!(command_queue, command)
     return nothing
 end
 
@@ -1823,17 +1859,18 @@ function get_ship_actions(gamemap::GameMap, ship_name::Symbol)::Tuple
         is_primary ? "Cannot redock the primary ship" : "Choose a new docking position",
     )
 
-    can_depart, depart_reason = if !is_primary && is_connected
+    departure_status = if !is_primary && is_connected
         check_departure_pipe_connections(gamemap, ship_name)
     else
-        (false, "")
+        nothing
     end
+    can_depart = !isnothing(departure_status) && isvalidrequest(departure_status)
     undock_tooltip = if is_primary
         "Cannot undock the primary ship"
     elseif !is_connected
         "Ship is not docked"
-    elseif !can_depart
-        depart_reason
+    elseif departure_status isa InvalidRequest
+        reason(departure_status)
     else
         "Undock and depart this ship"
     end
@@ -1862,12 +1899,16 @@ function execute_ship_action!(;
         success, reason = swap_primary!(current_map, ship_name)
         if success
             cmd = create_map_override_command(flowcalc_ipc.command_queue, current_map)
-            try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+            return try_enqueue_command!(flowcalc_ipc.command_queue, cmd)
+        else
+            snapshot_status = typeof(get_docking_status(current_map, ship_name))
+            @warn "Enabled ship action failed" ship_name = ship_name action_id = action_id snapshot_status = snapshot_status reason = reason
+            return false
         end
-        flowcalc_ipc.console_push(reason)
 
     elseif action_id === :redock
         _enter_redock_mode!(inputstate, flowcalc_ipc, ship_name)
+        return true
 
     elseif action_id === :undock
         current_map = deepcopy(flowcalc_ipc.get_snapshot().gamemap)
@@ -1875,14 +1916,17 @@ function execute_ship_action!(;
         success, reason = depart_ship!(current_map, ship_name; max_view_bounds = max_bounds)
         if success
             cmd = create_map_override_command(flowcalc_ipc.command_queue, current_map)
-            try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+            return try_enqueue_command!(flowcalc_ipc.command_queue, cmd)
+        else
+            snapshot_status = typeof(get_docking_status(current_map, ship_name))
+            @warn "Enabled ship action failed" ship_name = ship_name action_id = action_id snapshot_status = snapshot_status reason = reason
+            return false
         end
-        flowcalc_ipc.console_push(reason)
 
     else
-        flowcalc_ipc.console_push("Unknown ship action: $(action_id)")
+        @warn "Unknown ship action" ship_name = ship_name action_id = action_id
+        return false
     end
-    return nothing
 end
 
 #= ---------- Redock Placement Mode ----------- =#
@@ -1946,7 +1990,6 @@ function _enter_redock_mode!(inputstate::InputState, flowcalc_ipc::FlowCalculato
         other_exclusion = other_exclusion,
         original_centre = original_centre,
     ))
-    flowcalc_ipc.console_push("Redock mode: click to place $(ship_name), ESC to cancel")
     return nothing
 end
 
@@ -1958,7 +2001,7 @@ end
 "Enqueue a `RedockShipCommand` to relocate the ship after the player confirms placement."
 function _execute_redock!(rs::RedockModeState, delta::TileCoord, flowcalc_ipc::FlowCalculatorIPC)
     cmd = create_redock_ship_command(flowcalc_ipc.command_queue, rs.ship_name, delta)
-    try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+    try_enqueue_command!(flowcalc_ipc.command_queue, cmd)
     return nothing
 end
 
@@ -1972,7 +2015,6 @@ function _handle_redock_click!(inputstate::InputState, flowcalc_ipc::FlowCalcula
     if get_inrising!(inputstate, GLFW.MOUSE_BUTTON_RIGHT, window)
         inputstate.gui_inputs[:consume_right_click] = true
         enter_ready_placement_state!(inputstate)
-        flowcalc_ipc.console_push("Redock cancelled")
         return nothing
     end
 
@@ -1985,7 +2027,9 @@ function _handle_redock_click!(inputstate::InputState, flowcalc_ipc::FlowCalcula
     delta = cursor_tile - rs.original_centre
 
     if !_check_redock_valid(rs, delta)
-        flowcalc_ipc.console_push("Invalid redock position, too close to another ship or nodes overlap!")
+        flowcalc_ipc.console_push(
+            "Cannot redock here: move the ship until its highlighted footprint no longer overlaps another ship's clearance area",
+        )
         return nothing
     end
 

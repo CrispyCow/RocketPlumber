@@ -15,9 +15,14 @@ using HexFluids: THERMAL_AMBIENT_TEMPERATURE_K
     damage!(damage)
     @test is_damaged(damage)
 
-    success, _ = do_action!(damage, :repair_component)
-    @test success
+    result = do_action!(damage, :repair_component)
+    @test isvalidrequest(result)
     @test !is_damaged(damage)
+
+    stale_result = do_action!(damage, :repair_component)
+    @test !isvalidrequest(stale_result)
+    @test reason(stale_result) == "Component is not currently damaged"
+    @test_throws ArgumentError do_action!(damage, :unknown_action)
 end
 
 @testset "Component temperature fragment" begin
@@ -78,7 +83,7 @@ end
     @test get_component_temperature(damaging) < start_temperature
     @test is_damaged(damaging)
 
-    repaired, _ = do_action!(damaging, :repair_component)
-    @test repaired
+    result = do_action!(damaging, :repair_component)
+    @test isvalidrequest(result)
     @test !is_damaged(damaging)
 end

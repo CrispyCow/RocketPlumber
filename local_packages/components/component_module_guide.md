@@ -233,19 +233,23 @@ get_component_mass(behav; kwargs...)::Float64
 # Right-click popup actions. Return a tuple of ActionInfo values.
 get_actions(behav; kwargs...)
 
-# Execute a right-click action. Return (success, message).
-do_action!(behav, action_id::Symbol; kwargs...)::Tuple{Bool, String}
+# Execute a right-click action.
+do_action!(behav, action_id::Symbol; kwargs...)::RequestResult{String}
+
+# Successful action: ValidRequestResult("message")
+# Action no longer applies because component state changed: InvalidRequest("reason")
+# Unsupported action IDs must throw ArgumentError.
 
 # Rotation mapping (default: identity)
 map_rotation(behav, rotation::HexAxis)::HexAxis
 
-# Move restrictions (default: (true, ""))
-can_be_moved(behav; kwargs...)::(Bool, String)
+# Move restrictions (default: `ValidRequest()`)
+can_be_moved(behav; kwargs...)::RequestStatus
 
 # Placement restrictions beyond the default "must be on ship surface" rule.
 placement_valid(behav, coord::TileCoord, gamemap::GameMap;
                 rotation::HexAxis, ship_name::Symbol = :primary,
-                kwargs...)::(Bool, String)
+                kwargs...)::RequestStatus
 
 # Particle effects (default: no-op)
 collect_effect_particles!(manager, behav; kwargs...)
@@ -254,7 +258,7 @@ collect_effect_particles!(manager, behav; kwargs...)
 Notes:
 - `FlowMap` provides the default `placement_valid(..., gamemap::GameMap, ...)` implementation for normal surface placement. Override it only when the component has additional constraints, such as nozzles needing to hang off an edge.
 - Mass queries in ship physics use `get_component_dry_mass` and `get_component_wet_mass`, so components that store fluid should normally implement the wet-mass hook rather than overriding `get_component_mass` directly.
-- The action popup UI and calculator action command path use `get_actions` and `do_action!`, so interactive components should expose actions through those hooks rather than bespoke UI logic.
+- The action popup UI and calculator action command path use `get_actions` and `do_action!`, so interactive components should expose actions through those hooks rather than bespoke UI logic. The calculator logs exceptions for unsupported action IDs as programming failures; they are not player-facing action rejections.
 
 ## PipeBehavior Interface
 
@@ -294,8 +298,8 @@ render_pipe_map!(queue::AbstractVector, behav::MyPipe;
 # Fluid constraints (default: FluidTags())
 get_pipe_fluidtags(behav)::FluidTags
 
-# Move restrictions (default: (true, ""))
-can_pipe_be_moved(behav; kwargs...)::(Bool, String)
+# Move restrictions (default: `ValidRequest()`)
+can_pipe_be_moved(behav; kwargs...)::RequestStatus
 
 # Custom element generation (default: creates resistor from conductance)
 produce_abs_elements(behav, pipe::PipeCoord)

@@ -124,7 +124,11 @@ function command_summary(cmd)::String
     if cmd isa ClickTileCommand
         return "ClickTileCommand id=$(cmd.id) coord=$(cmd.coord) click=$(cmd.unrotated_clicksite)"
     elseif cmd isa DoActionCommand
-        return "DoActionCommand id=$(cmd.id) coord=$(cmd.coord) action=$(cmd.action_id)"
+        target_count = length(cmd.component_coords)
+        coord = target_count == 1 ? " coord=$(only(cmd.component_coords))" : ""
+        return "DoActionCommand id=$(cmd.id) action=$(cmd.action_id) targets=$target_count$coord"
+    elseif cmd isa MoveCommand
+        return "MoveCommand id=$(cmd.id) source=$(cmd.source_coord) destination=$(cmd.dest_coord) rotation=$(cmd.delta_rotation) mirror=$(cmd.delta_mirror)"
     elseif cmd isa DeleteElementsCommand
         return "DeleteElementsCommand id=$(cmd.id) components=$(length(cmd.component_coords)) pipes=$(length(cmd.pipe_coords))"
     elseif cmd isa TranslateElementsCommand
@@ -139,10 +143,15 @@ function command_summary(cmd)::String
         pipe_name = replace(string(typeof(cmd.pipe_behavior)), r"^.*\." => "")
         return "SetPipeBehaviorCommand id=$(cmd.id) coord=$(cmd.coord) pipe=$pipe_name"
     elseif cmd isa MapOverrideCommand
-        return "MapOverrideCommand id=$(cmd.id)"
+        map_state = HexFlowCalculator.map_diagnostic(cmd.new_map)
+        return "MapOverrideCommand id=$(cmd.id) ships=$(map_state.ships) surfaces=$(map_state.surfaces) components=$(map_state.components) pipes=$(map_state.pipes)"
+    elseif cmd isa AddEncounterShipCommand
+        return "AddEncounterShipCommand id=$(cmd.id) name=$(cmd.ship_name_base) seed=$(cmd.seed) dir=$(cmd.dir) target=$(cmd.target_encounter_index)"
+    elseif cmd isa RedockShipCommand
+        return "RedockShipCommand id=$(cmd.id) ship=$(cmd.ship_name) offset=$(cmd.offset)"
     end
 
-    return string(typeof(cmd), " ", repr(cmd))
+    return "$(nameof(typeof(cmd))) id=$(cmd.id)"
 end
 
 function print_dump_metadata(opts::InspectOptions)

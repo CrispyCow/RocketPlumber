@@ -55,6 +55,20 @@ function produce_rel_fluid_declarations(::DummyFluidComp)
     return (FlowEngine.RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, HexFluids.FluidSource(HexFluids.COLD_GAS, 300.0)),)
 end
 
+function expect_fluid_compatibility_error(action::Function, expected_message::AbstractString)
+    error = try
+        action()
+        nothing
+    catch exception
+        exception
+    end
+
+    @test error isa FluidCompatibilityError
+    @test error isa ExpectedMapValidationError
+    @test sprint(showerror, error) == expected_message
+    return nothing
+end
+
 
 # ===============================================================
 # Helper: construct absolute elements directly from node coords
@@ -214,9 +228,67 @@ end
         exc
     end
 
-    @test err isa ErrorException
-    @test occursin("MONOPROP_GAS", sprint(showerror, err))
+    @test err isa FluidCompatibilityError
+    @test err isa ExpectedMapValidationError
+    @test sprint(showerror, err) == "Fluid MONOPROP_GAS incompatible with constraint IS_LIQUID"
     @test !haskey(derived.nodeactualfluids, constrained_node)
+end
+
+@testset "fluid compatibility errors preserve their messages" begin
+    expect_fluid_compatibility_error(
+        () -> FlowEngine.prioritise_declarations(
+            HexFluids.FluidConstraintRule(HexFluids.IS_GAS),
+            HexFluids.FluidConstraintRule(HexFluids.IS_LIQUID),
+        ),
+        "Conflicting fluid constraints: IS_GAS vs IS_LIQUID",
+    )
+    expect_fluid_compatibility_error(
+        () -> FlowEngine.prioritise_declarations(
+            HexFluids.FluidSource(HexFluids.MONOPROP_GAS, 800.0),
+            HexFluids.FluidSource(HexFluids.COLD_GAS, 300.0),
+        ),
+        "Conflicting fluid sources: MONOPROP_GAS vs COLD_GAS",
+    )
+    expect_fluid_compatibility_error(
+        () -> FlowEngine.prioritise_declarations(
+            HexFluids.FluidTypeRule(HexFluids.COLD_GAS),
+            HexFluids.FluidSource(HexFluids.MONOPROP_GAS, 800.0),
+        ),
+        "FluidTypeRule COLD_GAS incompatible with MONOPROP_GAS",
+    )
+    expect_fluid_compatibility_error(
+        () -> FlowEngine.prioritise_declarations(
+            HexFluids.FluidConstraintRule(HexFluids.IS_LIQUID),
+            HexFluids.FluidSource(HexFluids.MONOPROP_GAS, 800.0),
+        ),
+        "Fluid MONOPROP_GAS does not satisfy constraint IS_LIQUID",
+    )
+    expect_fluid_compatibility_error(
+        () -> FlowEngine._check_declaration_compatible(
+            HexFluids.FluidConstraintRule(HexFluids.IS_LIQUID), HexFluids.MONOPROP_GAS,
+        ),
+        "Fluid MONOPROP_GAS incompatible with constraint IS_LIQUID",
+    )
+    expect_fluid_compatibility_error(
+        () -> FlowEngine._check_declaration_compatible(
+            HexFluids.FluidTypeRule(HexFluids.COLD_GAS), HexFluids.MONOPROP_GAS,
+        ),
+        "FluidTypeRule COLD_GAS conflicts with region fluid MONOPROP_GAS",
+    )
+    expect_fluid_compatibility_error(
+        () -> FlowEngine._check_declaration_compatible(
+            HexFluids.FluidSource(HexFluids.COLD_GAS, 300.0), HexFluids.MONOPROP_GAS,
+        ),
+        "FluidSource COLD_GAS conflicts with region fluid MONOPROP_GAS",
+    )
+
+    @test FlowEngine.prioritise_declarations(
+        HexFluids.FluidConstraintRule(HexFluids.IS_GAS),
+        HexFluids.FluidConstraintRule(HexFluids.IS_GAS),
+    ) == HexFluids.FluidConstraintRule(HexFluids.IS_GAS)
+    @test FlowEngine._check_declaration_compatible(
+        HexFluids.FluidConstraintRule(HexFluids.IS_GAS), HexFluids.COLD_GAS,
+    ) === nothing
 end
 
 @testset "prioritise_declarations rejects conflicting constraint rules" begin
@@ -237,8 +309,9 @@ end
         exc
     end
 
-    @test err isa ErrorException
-    @test occursin("Conflicting fluid constraints", sprint(showerror, err))
+    @test err isa FluidCompatibilityError
+    @test err isa ExpectedMapValidationError
+    @test sprint(showerror, err) == "Conflicting fluid constraints: IS_GAS vs IS_LIQUID"
 end
 
 @testset "propagate_fluid_types! visits whole region with stack traversal" begin

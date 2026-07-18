@@ -328,13 +328,13 @@ test_commands::TestCommandSchedule = [
         description = "Attempt repair on undamaged turbopump at (-3,0)"),
 
     # ----- Phase C-11: Negative action tests -------------------------
-    # `:flip` is not recognised by tanks; the command logs the failure but still
-    # resolves as INVALID because the action refuses to apply without throwing.
+    # Unsupported action IDs are programming failures and resolve as REJECTED
+    # through the calculator's central exception path.
     make_test_step(3110, make_test_action(TileCoord(5, -8), :flip);
-        expected_status = INVALID,
+        expected_status = REJECTED,
         description = "Attempt unsupported :flip action on liquid tank (5,-8)"),
     make_test_step(3140, make_test_action(TileCoord(5, -8), :repair_component);
-        expected_status = INVALID,
+        expected_status = REJECTED,
         description = "Attempt repair on liquid tank at (5,-8)"),
     # Action on a tile that has no component.
     make_test_step(3170, make_test_action(TileCoord(99, 99), :open_valve);
@@ -356,8 +356,8 @@ test_commands::TestCommandSchedule = [
         expected_status = APPLIED,
         description = "Click tile (0,-11)"),
     make_test_step(3540, make_test_click(TileCoord(99, 99));
-        expected_status = INVALID,
-        description = "Attempt click on empty tile (99,99)"),
+        expected_status = APPLIED,
+        description = "Click empty tile (99,99) as a silent no-op"),
 
     # ----- Phase E: Pipe lifecycle -----------------------------------
     # Delete + re-place an existing teaser pipe on primary, then build a
@@ -412,8 +412,8 @@ test_commands::TestCommandSchedule = [
         description = "Add primary-adjacent surface tile at (0,-7)"),
     # Already a surface tile.
     make_test_step(4660, make_test_add_ship_surface(TileCoord(5, -7));
-        expected_status = INVALID,
-        description = "Attempt adding existing surface tile (5,-7)"),
+        expected_status = APPLIED,
+        description = "Add existing surface tile (5,-7) as a silent no-op"),
     # Far from any ship - no adjacency.
     make_test_step(4720, make_test_add_ship_surface(TileCoord(99, 99));
         expected_status = INVALID,
@@ -436,9 +436,9 @@ test_commands::TestCommandSchedule = [
     make_test_step(5200, make_test_redock_ship(SHIP_AV551, TileCoord(0, 3));
         expected_status = INVALID,
         description = "Attempt redock AV-551 back toward primary by (0,3)"),
-    # Primary redock is forbidden by command validation.
+    # Primary redock is rejected through the central programming-failure path.
     make_test_step(5300, make_test_redock_ship(:primary, TileCoord(1, 0));
-        expected_status = INVALID,
+        expected_status = REJECTED,
         description = "Attempt redock of :primary"),
     # This shorter offset clears the hull buffer but conflicts with pipe clearance.
     make_test_step(5380, make_test_redock_ship(SHIP_AV551, TileCoord(0, 2));

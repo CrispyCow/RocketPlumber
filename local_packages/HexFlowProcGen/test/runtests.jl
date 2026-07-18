@@ -983,26 +983,26 @@ end
     @testset "can_place_pipe_offship — connected to ship surface" begin
         gm = make_two_ship_gamemap()
         # E1 has V1 on primary's surface → should be valid, placed on :primary
-        valid, target, _ = can_place_pipe_offship(ISP_E1, gm)
-        @test valid == true
-        @test target == :primary
+        valid = can_place_pipe_offship(ISP_E1, gm)
+        @test isvalidrequest(valid)
+        @test unwrap(valid) === :primary
     end
 
     @testset "can_place_pipe_offship — connected via existing pipe" begin
         gm = make_two_ship_gamemap()
         # Place E1 on primary, then E2 should connect through E1
         set_pipe!(gm, ISP_E1, PlacedPipe(MockPipeBehav(), :primary))
-        valid, target, _ = can_place_pipe_offship(ISP_E2, gm)
-        @test valid == true
-        @test target == :primary
+        valid = can_place_pipe_offship(ISP_E2, gm)
+        @test isvalidrequest(valid)
+        @test unwrap(valid) === :primary
     end
 
     @testset "can_place_pipe_offship — neither endpoint connected" begin
         gm = make_two_ship_gamemap()
         # E2 floats in the gap with no connections
-        valid, _, reason = can_place_pipe_offship(ISP_E2, gm)
-        @test valid == false
-        @test occursin("Neither endpoint", reason)
+        invalid = can_place_pipe_offship(ISP_E2, gm)
+        @test !isvalidrequest(invalid)
+        @test occursin("Neither endpoint", reason(invalid))
     end
 
     @testset "validate_offship_pipe_deletion — middle of chain" begin
@@ -1053,8 +1053,8 @@ end
 
     @testset "check_departure_pipe_connections — no off-surface pipes" begin
         gm = make_two_ship_gamemap()
-        can_depart, _ = check_departure_pipe_connections(gm, :secondary)
-        @test can_depart == true
+        status = check_departure_pipe_connections(gm, :secondary)
+        @test isvalidrequest(status)
     end
 
     @testset "check_departure_pipe_connections — pipe bridge blocks departure" begin
@@ -1064,9 +1064,9 @@ end
         set_pipe!(gm, ISP_E2, PlacedPipe(MockPipeBehav(), :primary))
         set_pipe!(gm, ISP_E3, PlacedPipe(MockPipeBehav(), :secondary))
 
-        can_depart, reason = check_departure_pipe_connections(gm, :secondary)
-        @test can_depart == false
-        @test occursin("pipes still connect", reason)
+        status = check_departure_pipe_connections(gm, :secondary)
+        @test !isvalidrequest(status)
+        @test occursin("pipes still connect", reason(status))
     end
 
     @testset "check_departure_pipe_connections — pipe only on departing ship" begin
@@ -1074,8 +1074,8 @@ end
         # E3 only touches secondary, stored on secondary
         set_pipe!(gm, ISP_E3, PlacedPipe(MockPipeBehav(), :secondary))
 
-        can_depart, _ = check_departure_pipe_connections(gm, :secondary)
-        @test can_depart == true
+        status = check_departure_pipe_connections(gm, :secondary)
+        @test isvalidrequest(status)
     end
 
     @testset "depart_ship! blocked by pipe bridge" begin

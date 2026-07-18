@@ -383,13 +383,16 @@ end
     @test get_component_wet_mass(make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 0.0)) == 0.0
 
     # Movement: only when both charges are zero
-    @test !can_be_moved(make_pressurefed_tank(liquid_charge = 10.0, gas_charge = 0.0))[1]
-    @test !can_be_moved(make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 1.0))[1]
-    @test can_be_moved(make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 0.0))[1]
+    liquid_charged = can_be_moved(make_pressurefed_tank(liquid_charge = 10.0, gas_charge = 0.0))
+    gas_charged = can_be_moved(make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 1.0))
+    @test !isvalidrequest(liquid_charged)
+    @test !isvalidrequest(gas_charged)
+    @test reason(liquid_charged) == "empty or vent the tank first"
+    @test isvalidrequest(can_be_moved(make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 0.0)))
     # Manually sealed still not movable if charge present
     sealed_movable = make_pressurefed_tank(liquid_charge = 39.0, gas_charge = 0.0)
     seal!(sealed_movable.tank.liquid_sealstate)
-    @test !can_be_moved(sealed_movable)[1]
+    @test !isvalidrequest(can_be_moved(sealed_movable))
 end
 
 @testset "Pressure-fed tank: actions" begin
@@ -405,35 +408,35 @@ end
     @test :unseal_liquid in ids
 
     # Vent and Seal Gas: zeroes gas charge and seals gas side only
-    success, msg = do_action!(tank, :vent_and_seal_gas)
-    @test success
+    result = do_action!(tank, :vent_and_seal_gas)
+    @test isvalidrequest(result)
     @test tank.gas_state.charge == 0.0
     @test gas_is_sealed(tank)
     @test !liquid_is_sealed(tank)  # liquid side unaffected
-    @test msg == "Gas vented and sealed"
+    @test unwrap(result) == "Gas vented and sealed"
 
     # Unseal Gas: clears gas seal
-    success2, _ = do_action!(tank, :unseal_gas)
-    @test success2
+    result = do_action!(tank, :unseal_gas)
+    @test isvalidrequest(result)
     @test !gas_is_sealed(tank)
 
     # Vent and Seal Liquid: zeroes liquid charge and seals liquid side only
-    success3, msg3 = do_action!(tank, :vent_and_seal_liquid)
-    @test success3
+    result = do_action!(tank, :vent_and_seal_liquid)
+    @test isvalidrequest(result)
     @test tank.liquid_state.charge == 0.0
     @test liquid_is_sealed(tank)
     @test !gas_is_sealed(tank)  # gas side unaffected
-    @test msg3 == "Liquid vented and sealed"
+    @test unwrap(result) == "Liquid vented and sealed"
 
     # Unseal Liquid: clears liquid seal
-    success4, _ = do_action!(tank, :unseal_liquid)
-    @test success4
+    result = do_action!(tank, :unseal_liquid)
+    @test isvalidrequest(result)
     @test !liquid_is_sealed(tank)
 
     # Seal Both: seals both without changing charge
     tank2 = make_pressurefed_tank(liquid_charge = 12.0, gas_charge = 3.0).tank
-    success5, _ = do_action!(tank2, :seal_both)
-    @test success5
+    result = do_action!(tank2, :seal_both)
+    @test isvalidrequest(result)
     @test liquid_is_sealed(tank2)
     @test gas_is_sealed(tank2)
     @test tank2.liquid_state.charge == 12.0  # charge preserved
@@ -447,8 +450,7 @@ end
     @test !gas_is_sealed(tank2)
 
     # Unrecognised action
-    result, _ = do_action!(tank, :nonexistent)
-    @test !result
+    @test_throws ArgumentError do_action!(tank, :nonexistent)
 end
 
 @testset "Pressure-fed tank: reactivation probe get" begin
@@ -747,11 +749,11 @@ end
     gas_near_empty_mna.vsource_currents[ElementID(TEST_TILE, 1)] = -6.0
     update_flowbehav!(gas_near_empty; tile = TEST_TILE, mna_state = gas_near_empty_mna)
     @test gas_near_empty.tank.tank.state.charge == 0.0
-    @test can_be_moved(gas_near_empty)[1]  # movable when empty
+    @test isvalidrequest(can_be_moved(gas_near_empty))  # movable when empty
 
     # Vent and Seal action empties and seals
-    success, _ = do_action!(gas_comp, :vent_and_seal)
-    @test success
+    result = do_action!(gas_comp, :vent_and_seal)
+    @test isvalidrequest(result)
     @test gas_comp.tank.tank.state.charge == 0.0
     @test is_sealed(gas_comp.tank.tank.sealstate)
 
@@ -930,37 +932,39 @@ end
     @test :unseal_tank in ids
 
     # Vent and Seal: empties tank and seals it
-    success, msg = do_action!(gas, :vent_and_seal)
-    @test success
+    result = do_action!(gas, :vent_and_seal)
+    @test isvalidrequest(result)
     @test gas.tank.tank.state.charge == 0.0
     @test is_sealed(gas.tank.tank.sealstate)
-    @test msg == "Tank vented and sealed"
+    @test unwrap(result) == "Tank vented and sealed"
 
     # Unseal: clears seal
-    success2, _ = do_action!(gas, :unseal_tank)
-    @test success2
+    result = do_action!(gas, :unseal_tank)
+    @test isvalidrequest(result)
     @test !is_sealed(gas.tank.tank.sealstate)
 
     # Seal Tank: seals without venting
     gas2 = make_gas_tank(initial_charge = 25.0)
-    success3, _ = do_action!(gas2, :seal_tank)
-    @test success3
+    result = do_action!(gas2, :seal_tank)
+    @test isvalidrequest(result)
     @test is_sealed(gas2.tank.tank.sealstate)
     @test gas2.tank.tank.state.charge == 25.0  # charge unchanged
 
     # Unseal via action
-    success4, _ = do_action!(gas2, :unseal_tank)
-    @test success4
+    result = do_action!(gas2, :unseal_tank)
+    @test isvalidrequest(result)
     @test !is_sealed(gas2.tank.tank.sealstate)
 
     # can_be_moved: based on charge only
-    @test !can_be_moved(gas2)[1]  # has charge
+    gas2_status = can_be_moved(gas2)
+    @test !isvalidrequest(gas2_status)  # has charge
+    @test reason(gas2_status) == "empty or vent the tank first"
     gas3 = make_gas_tank(initial_charge = 0.0)
-    @test can_be_moved(gas3)[1]
+    @test isvalidrequest(can_be_moved(gas3))
 
     # Sealed tank with charge: still not movable
     seal!(gas2.tank.tank.sealstate)
-    @test !can_be_moved(gas2)[1]
+    @test !isvalidrequest(can_be_moved(gas2))
 end
 
 @testset "ThevininTankCompBehav: reactivation probe (get)" begin

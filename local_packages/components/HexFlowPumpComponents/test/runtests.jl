@@ -299,14 +299,14 @@ end
     @test length(repair_actions) == 1
     @test repair_actions[1].id === :repair_component
     @test repair_actions[1].enabled
-    repaired, _ = do_action!(repaired_active, :repair_component)
-    @test repaired
+    result = do_action!(repaired_active, :repair_component)
+    @test isvalidrequest(result)
     @test !is_damaged(repaired_active.overheat)
     @test all(elem.active for elem in produce_rel_elements(repaired_active))
     @test isnothing(get_reactivation_probe(repaired_active; tile = TEST_TILE, rotation = TEST_ROTATION))
 
-    repaired_damaged_probe, _ = do_action!(damaged_probe, :repair_component)
-    @test repaired_damaged_probe
+    result = do_action!(damaged_probe, :repair_component)
+    @test isvalidrequest(result)
     @test !is_damaged(damaged_probe.overheat)
     @test get_reactivation_probe(damaged_probe; tile = TEST_TILE, rotation = TEST_ROTATION) isa ReactivationProbe
 

@@ -26,7 +26,7 @@ HexComponentsAPI.get_tunables(::OffSurfaceCompBehav) = ()
 HexComponentsAPI.set_tunables(comp::OffSurfaceCompBehav, ::NTuple{0, Real}) = comp
 HexComponentsAPI.render_base_elem!(queue, ::OffSurfaceCompBehav; kwargs...) = nothing
 function HexComponentsAPI.placement_valid(comp::OffSurfaceCompBehav, coord::TileCoord, ::GameMap; kwargs...)
-    return coord == comp.valid_coord ? (true, "") : (false, "Wrong destination")
+    return coord == comp.valid_coord ? ValidRequest() : InvalidRequest("Wrong destination")
 end
 
 "Minimal mock pipe for testing."
@@ -495,15 +495,22 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
 
         # On primary surface
         result = find_ship_for_placement(comp, TileCoord(0, 0), gm; rotation = Q_POS)
-        @test result == :primary
+        @test isvalidrequest(result)
+        @test unwrap(result) === :primary
 
         # On second surface
         result2 = find_ship_for_placement(comp, TileCoord(20, 0), gm; rotation = Q_POS)
-        @test result2 == :second
+        @test isvalidrequest(result2)
+        @test unwrap(result2) === :second
 
         # Off all surfaces
         result3 = find_ship_for_placement(comp, TileCoord(99, 99), gm; rotation = Q_POS)
-        @test isnothing(result3)
+        @test !isvalidrequest(result3)
+        @test reason(result3) == "Place components on a ship surface"
+
+        specialised = find_ship_for_placement(OffSurfaceCompBehav(TileCoord(10, 10)), TileCoord(99, 99), gm; rotation = Q_POS)
+        @test !isvalidrequest(specialised)
+        @test reason(specialised) == "Wrong destination"
     end
 
     @testset "get_component_shiptag" begin
@@ -544,14 +551,13 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
         comp = PlacedComponent(MockCompBehav(), Q_POS, :primary)
 
         # On surface — valid
-        valid, reason = placement_valid(comp, TileCoord(0, 0), gm)
-        @test valid == true
-        @test reason == ""
+        valid = placement_valid(comp, TileCoord(0, 0), gm)
+        @test isvalidrequest(valid)
 
         # Off surface — invalid
-        invalid, reason2 = placement_valid(comp, TileCoord(99, 99), gm)
-        @test !invalid
-        @test !isempty(reason2)
+        invalid = placement_valid(comp, TileCoord(99, 99), gm)
+        @test !isvalidrequest(invalid)
+        @test !isempty(reason(invalid))
     end
 
     @testset "is_node_on_ship_surface" begin
@@ -579,12 +585,12 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
     @testset "can_place_component_at" begin
         gm = make_gamemap()
 
-        valid, _ = can_place_component_at(TileCoord(0, 0), gm; ship_name = :primary)
-        @test valid
+        valid = can_place_component_at(TileCoord(0, 0), gm; ship_name = :primary)
+        @test isvalidrequest(valid)
 
-        invalid, reason = can_place_component_at(TileCoord(99, 99), gm; ship_name = :primary)
-        @test !invalid
-        @test !isempty(reason)
+        invalid = can_place_component_at(TileCoord(99, 99), gm; ship_name = :primary)
+        @test !isvalidrequest(invalid)
+        @test !isempty(reason(invalid))
     end
 
     @testset "validate_component_destination" begin
@@ -593,68 +599,65 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
         gm = make_gamemap_with_surface([origin, destination])
         component = PlacedComponent(MockCompBehav(), R_NEG, true, :primary)
 
-        valid, ship, reason = validate_component_destination(component, destination, gm)
-        @test valid
-        @test ship === :primary
-        @test isempty(reason)
+        valid = validate_component_destination(component, destination, gm)
+        @test isvalidrequest(valid)
+        @test unwrap(valid) === :primary
 
         set_component!(gm, destination, PlacedComponent(MockCompBehav(), Q_POS, :primary))
-        valid, ship, reason = validate_component_destination(component, destination, gm)
-        @test !valid
-        @test isnothing(ship)
-        @test contains(reason, "occupied")
+        existing_component = get_component(gm, destination)
+        invalid = validate_component_destination(component, destination, gm)
+        @test !isvalidrequest(invalid)
+        @test reason(invalid) == "a component already occupies the destination tile"
+        @test get_component(gm, destination) === existing_component
 
-        valid, ship, reason = validate_component_destination(
+        valid = validate_component_destination(
             component,
             destination,
             gm;
             vacating_coords = Set([destination]),
         )
-        @test valid
-        @test ship === :primary
-        @test isempty(reason)
+        @test isvalidrequest(valid)
+        @test unwrap(valid) === :primary
 
         delete_component!(gm, destination)
         crossing_pipe = get_pipe_segments(destination)[7]
         set_pipe!(gm, crossing_pipe, PlacedPipe(MockPipeBehav(), :primary))
-        valid, ship, reason = validate_component_destination(component, destination, gm)
-        @test !valid
-        @test isnothing(ship)
-        @test contains(reason, "pipe segment")
+        invalid = validate_component_destination(component, destination, gm; vacating_coords = Set([destination]))
+        @test !isvalidrequest(invalid)
+        @test reason(invalid) == "a pipe segment crosses the destination tile"
 
         delete_pipe!(gm, crossing_pipe)
         set_pipe!(gm, side_pipe(destination), PlacedPipe(MockPipeBehav(), :primary))
-        @test validate_component_destination(component, destination, gm)[1]
+        @test isvalidrequest(validate_component_destination(component, destination, gm))
 
         off_surface = TileCoord(10, 10)
         specialised = PlacedComponent(OffSurfaceCompBehav(off_surface), Q_POS, :primary)
-        valid, ship, _ = validate_component_destination(specialised, off_surface, gm)
-        @test valid
-        @test ship === :primary
+        valid = validate_component_destination(specialised, off_surface, gm)
+        @test isvalidrequest(valid)
+        @test unwrap(valid) === :primary
 
-        valid, ship, reason = validate_component_destination(component, TileCoord(20, 20), gm)
-        @test !valid
-        @test isnothing(ship)
-        @test contains(reason, "any ship")
+        invalid = validate_component_destination(component, TileCoord(20, 20), gm)
+        @test !isvalidrequest(invalid)
+        @test reason(invalid) == "Place components on a ship surface"
 
         second_ship_map = make_two_ship_map()
-        valid, ship, _ = validate_component_destination(component, TileCoord(20, 0), second_ship_map)
-        @test valid
-        @test ship === :second
+        valid = validate_component_destination(component, TileCoord(20, 0), second_ship_map)
+        @test isvalidrequest(valid)
+        @test unwrap(valid) === :second
     end
 
     @testset "can_place_pipe_at" begin
         gm = make_gamemap_with_surface(origin_neighbourhood())
         pipe_coord_1 = side_pipe(TileCoord(0, 0), 1)
 
-        valid, _ = can_place_pipe_at(pipe_coord_1, gm; ship_name = :primary)
-        @test valid
+        valid = can_place_pipe_at(pipe_coord_1, gm; ship_name = :primary)
+        @test isvalidrequest(valid)
 
         # Pipe far off surface
         far_pipe = side_pipe(TileCoord(99, 99), 1)
-        invalid, reason = can_place_pipe_at(far_pipe, gm; ship_name = :primary)
-        @test !invalid
-        @test !isempty(reason)
+        invalid = can_place_pipe_at(far_pipe, gm; ship_name = :primary)
+        @test !isvalidrequest(invalid)
+        @test !isempty(reason(invalid))
     end
 
     @testset "PipeCoord placement and component conflicts" begin
@@ -664,28 +667,28 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
         short_diag = get_pipe_segments(tile)[7]
         long_diag = get_pipe_segments(tile)[13]
 
-        @test can_place_pipe_at(side, gm; ship_name = :primary)[1]
-        @test can_place_pipe_at(short_diag, gm; ship_name = :primary)[1]
-        @test can_place_pipe_at(long_diag, gm; ship_name = :primary)[1]
+        @test isvalidrequest(can_place_pipe_at(side, gm; ship_name = :primary))
+        @test isvalidrequest(can_place_pipe_at(short_diag, gm; ship_name = :primary))
+        @test isvalidrequest(can_place_pipe_at(long_diag, gm; ship_name = :primary))
 
         set_component!(gm, tile, PlacedComponent(MockCompBehav(), Q_POS, :primary))
-        @test can_place_pipe_at(side, gm; ship_name = :primary)[1]
-        valid_short, reason_short = can_place_pipe_at(short_diag, gm; ship_name = :primary)
-        valid_long, reason_long = can_place_pipe_at(long_diag, gm; ship_name = :primary)
-        @test !valid_short
-        @test reason_short == "Pipe segment crosses an occupied tile"
-        @test !valid_long
-        @test reason_long == "Pipe segment crosses an occupied tile"
+        @test isvalidrequest(can_place_pipe_at(side, gm; ship_name = :primary))
+        invalid_short = can_place_pipe_at(short_diag, gm; ship_name = :primary)
+        invalid_long = can_place_pipe_at(long_diag, gm; ship_name = :primary)
+        @test !isvalidrequest(invalid_short)
+        @test reason(invalid_short) == "Pipe segment crosses an occupied tile"
+        @test !isvalidrequest(invalid_long)
+        @test reason(invalid_long) == "Pipe segment crosses an occupied tile"
 
         gm2 = make_gamemap_with_surface(origin_neighbourhood())
         set_pipe!(gm2, short_diag, PlacedPipe(MockPipeBehav(), :primary))
-        valid_component, component_reason = can_place_component_at(tile, gm2; ship_name = :primary)
-        @test !valid_component
-        @test component_reason == "Tile contains a pipe segment"
+        invalid_component = can_place_component_at(tile, gm2; ship_name = :primary)
+        @test !isvalidrequest(invalid_component)
+        @test reason(invalid_component) == "Tile contains a pipe segment"
 
         gm3 = make_gamemap_with_surface(origin_neighbourhood())
         set_pipe!(gm3, side, PlacedPipe(MockPipeBehav(), :primary))
-        @test can_place_component_at(tile, gm3; ship_name = :primary)[1]
+        @test isvalidrequest(can_place_component_at(tile, gm3; ship_name = :primary))
     end
 
     @testset "Pipe click hit-testing" begin
@@ -745,14 +748,14 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
 
         # Can remove empty surface tile
         set_surface_tile!(gm, TileCoord(1, 0))
-        valid, _ = can_remove_surface_at(TileCoord(1, 0), gm; ship_name = :primary)
-        @test valid
+        valid = can_remove_surface_at(TileCoord(1, 0), gm; ship_name = :primary)
+        @test isvalidrequest(valid)
 
         # Cannot remove surface under a component
         set_component!(gm, TileCoord(0, 0), PlacedComponent(MockCompBehav(), Q_POS, :primary))
-        invalid, reason = can_remove_surface_at(TileCoord(0, 0), gm; ship_name = :primary)
-        @test !invalid
-        @test contains(lowercase(reason), "component")
+        invalid = can_remove_surface_at(TileCoord(0, 0), gm; ship_name = :primary)
+        @test !isvalidrequest(invalid)
+        @test contains(lowercase(reason(invalid)), "component")
     end
 
     # ===============================================================
@@ -900,9 +903,14 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
         gm = make_gamemap()
         # Completely disconnected pipe — neither endpoint connected
         far_pipe = side_pipe(TileCoord(50, 50), 1)
-        valid, _, reason = can_place_pipe_offship(far_pipe, gm)
-        @test !valid
-        @test !isempty(reason)
+        invalid = can_place_pipe_offship(far_pipe, gm)
+        @test !isvalidrequest(invalid)
+        @test !isempty(reason(invalid))
+
+        gm = make_gamemap_with_surface(origin_neighbourhood())
+        valid = can_place_pipe_offship(side_pipe(TileCoord(0, 0), 1), gm)
+        @test isvalidrequest(valid)
+        @test unwrap(valid) === :primary
     end
 
     @testset "flood_search_pipes_from_node!" begin
@@ -933,22 +941,21 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
     @testset "resolve_pipe_ownerships" begin
         gm = make_gamemap()
         on_surface = side_pipe(TileCoord(0, 0), 1)
-        valid, ownerships, reason = resolve_pipe_ownerships(gm, Set{PipeCoord}())
-        @test valid
-        @test isempty(ownerships)
-        @test isempty(reason)
+        valid = resolve_pipe_ownerships(gm, Set{PipeCoord}())
+        @test isvalidrequest(valid)
+        @test isempty(unwrap(valid))
 
-        valid, ownerships, _ = resolve_pipe_ownerships(gm, Set([on_surface]))
-        @test valid
-        @test ownerships[on_surface] === :primary
+        valid = resolve_pipe_ownerships(gm, Set([on_surface]))
+        @test isvalidrequest(valid)
+        @test unwrap(valid)[on_surface] === :primary
 
         detached = side_pipe(TileCoord(50, 50), 1)
-        valid, _, reason = resolve_pipe_ownerships(gm, Set([detached]))
-        @test !valid
-        @test reason == "Pipe network is not connected to a ship surface"
+        invalid = resolve_pipe_ownerships(gm, Set([detached]))
+        @test !isvalidrequest(invalid)
+        @test reason(invalid) == "Pipe network is not connected to a ship surface"
 
         set_pipe!(gm, on_surface, PlacedPipe(MockPipeBehav(), :stale))
-        @test normalise_pipe_ownership!(gm) == (true, "")
+        @test isvalidrequest(normalise_pipe_ownership!(gm))
         @test get_pipe(gm, on_surface).ship === :primary
         @test get_pipe(gm, on_surface).pipe isa MockPipeBehav
     end

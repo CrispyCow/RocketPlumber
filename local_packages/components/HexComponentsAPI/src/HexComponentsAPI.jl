@@ -8,6 +8,8 @@ export BASE_UPS
 
 # General Exports
 export Sprite, Component, PlacedComponent, PlacedPipe, TunableProps, EnumTunableProps, AnyTunableProps, ActionInfo
+export ValidRequest, ValidRequestResult, InvalidRequest, RequestStatus, RequestResult, ExpectedMapValidationError
+export isvalidrequest, unwrap, reason
 
 # Tile Component Behavior Exports
 export ComponentBehavior
@@ -33,6 +35,54 @@ export get_pipe_click_radius, can_pipe_be_moved
 
 "Number of simulation ticks per simulation-second. All per-tick physics use this as their time base."
 const BASE_UPS::Float64 = 60.0
+
+# ===============================================================
+# Request Results
+# ===============================================================
+
+"""
+Base type for expected domain validation failures caused by supported player map edits.
+
+Concrete subtypes must provide player-suitable `showerror` output. When one escapes candidate map validation, the edit
+is rejected and rolled back without warning-level diagnostics.
+"""
+abstract type ExpectedMapValidationError <: Exception end
+
+"A successful request that does not produce a result value."
+struct ValidRequest end
+
+"A successful request carrying a result value of type `T`."
+struct ValidRequestResult{T}
+    result::T
+end
+
+"A rejected request with a player-facing explanation."
+struct InvalidRequest
+    reason::String
+end
+
+"Construct an invalid request from any string-like value."
+InvalidRequest(reason::AbstractString) = InvalidRequest(String(reason))
+
+"Union of request outcomes that do not carry a result value."
+const RequestStatus = Union{ValidRequest, InvalidRequest}
+
+"Union of a successful result carrying `T` and an invalid request."
+const RequestResult{T} = Union{ValidRequestResult{T}, InvalidRequest}
+
+"Return whether a request completed successfully."
+isvalidrequest(::ValidRequest) = true
+isvalidrequest(::ValidRequestResult) = true
+isvalidrequest(::InvalidRequest) = false
+
+"Return the value carried by a successful request result."
+unwrap(request::ValidRequestResult) = request.result
+unwrap(request::InvalidRequest) = throw(ArgumentError("cannot unwrap an invalid request: $(request.reason)"))
+
+"Return the failure reason from an invalid request."
+reason(request::InvalidRequest) = request.reason
+reason(::ValidRequest) = throw(ArgumentError("a valid request has no failure reason"))
+reason(::ValidRequestResult) = throw(ArgumentError("a valid request has no failure reason"))
 
 # ===============================================================
 # Component Behaviors
@@ -73,8 +123,9 @@ OPTIONAL METHODS:
     get_component_mass(behav::T; kwargs...)::Float64
     collect_effect_particles!(manager, behav::T; kwargs...)::Nothing
     map_rotation(behav::T, rotation::HexAxis)::HexAxis
-    can_be_moved(behav::T; kwargs...)::(Bool, String)
-    placement_valid(behav::T, coord::TileCoord, surface; rotation::HexAxis, kwargs...)::(Bool, String)
+    can_be_moved(behav::T; kwargs...)::RequestStatus
+    placement_valid(behav::T, coord::TileCoord, surface; rotation::HexAxis, kwargs...)::RequestStatus
+    do_action!(behav::T, action_id::Symbol; kwargs...)::RequestResult{String}
     
 """
 abstract type ComponentBehavior end
@@ -179,9 +230,9 @@ get_component_mass(behav::T; kwargs...) where {T <: ComponentBehavior} = get_com
 "Default get_actions returns an empty tuple, component has no actions."
 get_actions(behav::T; kwargs...) where {T <: ComponentBehavior} = ()
 
-"Default do_action! returns failure, action not implemented for this component type."
+"Default do_action! rejects unsupported action IDs as programming errors."
 function do_action!(behav::T, action_id::Symbol; kwargs...) where {T <: ComponentBehavior}
-    return (false, "Action :$(action_id) not implemented for $(nameof(T))")
+    throw(ArgumentError("Action :$(action_id) not implemented for $(nameof(T))"))
 end
 
 "Default collect_effect_particles! does nothing (component produces no particles)"
@@ -193,8 +244,8 @@ map_rotation(behav::T, rotation::HexAxis) where {T <: ComponentBehavior} = rotat
 "Default map_mirroring opts components out of functional mirroring."
 map_mirroring(behav::T, mirrored::Bool) where {T <: ComponentBehavior} = false
 
-"Default can_be_moved returns true with empty reason, indicating component can be moved"
-can_be_moved(behav::T; kwargs...) where {T <: ComponentBehavior} = (true, "")
+"Default can_be_moved returns a valid request, indicating the component can be moved."
+can_be_moved(behav::T; kwargs...) where {T <: ComponentBehavior} = ValidRequest()
 
 """
 Default implementation of placement_valid just errors.
@@ -349,7 +400,7 @@ There are suitable defaults, but concrete PipeBehavior types T can also implemen
 OPTIONAL METHODS:
 
     render_pipe_map!(queue::AbstractVector, behav::T; glmap, rotation, position::PipeCoord, kwargs...)::Nothing
-    can_pipe_be_moved(behav::T; kwargs...)::(Bool, String)
+    can_pipe_be_moved(behav::T; kwargs...)::RequestStatus
     produce_abs_elements(behav::T, coord::PipeCoord)::NTuple{N, AbsoluteElement}
 
 """
@@ -415,8 +466,8 @@ function render_pipe_map!(queue::AbstractVector, behav::T; glmap, rotation, posi
     return render_pipe_base!(queue, behav; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, render_height_offset = render_height_offset)
 end
 
-"Default can_pipe_be_moved returns true with empty reason, indicating pipe can be moved"
-can_pipe_be_moved(behav::T; kwargs...) where {T <: PipeBehavior} = (true, "")
+"Default can_pipe_be_moved returns a valid request, indicating the pipe can be moved."
+can_pipe_be_moved(behav::T; kwargs...) where {T <: PipeBehavior} = ValidRequest()
 
 "Default produce_abs_elements creates a resistor element from conductance"
 function produce_abs_elements(behav::T, coord::PipeCoord) where {T <: PipeBehavior}

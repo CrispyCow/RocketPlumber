@@ -58,39 +58,39 @@ function button_with_disable(label::AbstractString, size::ImVec2, disabled::Bool
     return clicked
 end
 
-# Overload that accepts a (blocked::Bool, reason::String) tuple and delegates
-function button_with_disable(label::AbstractString, size::ImVec2, blocked::Tuple{Bool, String})::Bool
-    is_blocked, reason = blocked
-    return button_with_disable(label, size, is_blocked; tooltip = is_blocked ? reason : nothing)
+"Create a button whose enabled state and disabled tooltip come from a request status."
+function button_with_disable(label::AbstractString, size::ImVec2, status::RequestStatus)::Bool
+    tooltip = status isa InvalidRequest ? reason(status) : nothing
+    return button_with_disable(label, size, !isvalidrequest(status); tooltip = tooltip)
 end
 
 """
-Return (blocked::Bool, reason::String) for whether time-warping should be blocked.
+Return whether time-warping is currently allowed.
 - Blocks if the ship is producing thrust above the manoeuvre threshold.
 - Blocks if an active manoeuvre is currently in a burn phase (approach or capture).
 - Blocks if the game is currently paused.
 """
-function is_timewarp_blocked(gamemap::GameMap, gamestate::GameState, flowcalc_ipc::FlowCalculatorIPC)::Tuple{Bool, String}
+function can_timewarp(gamemap::GameMap, gamestate::GameState, flowcalc_ipc::FlowCalculatorIPC)::RequestStatus
     # Thrust-based blocker
     if norm(gamestate.thrust) > MANOEUVRE_THRUST_THRESHOLD
-        return (true, "Cannot time-warp while engines are firing.")
+        return InvalidRequest("Cannot time-warp while engines are firing.")
     end
 
     # Active manoeuvre burn-phase blocker
     if has_active_manoeuvre(gamemap)
         man = get_active_manoeuvre(gamemap)
         if man.phase == PHASE_APPROACH_BURN || man.phase == PHASE_CAPTURE_BURN
-            return (true, "Cannot time-warp during a manoeuvre burn; complete the burn or cancel the manoeuvre first.")
+            return InvalidRequest("Cannot time-warp during a manoeuvre burn; complete the burn or cancel the manoeuvre first.")
         end
     end
 
     # Paused blocker
     is_paused = @atomic flowcalc_ipc.shared_state.is_paused
     if is_paused
-        return (true, "Cannot time-warp while the game is paused.")
+        return InvalidRequest("Cannot time-warp while the game is paused.")
     end
 
-    return (false, "")
+    return ValidRequest()
 end
 
 #= ---------- Dict-based GUI input helpers ---------- =#

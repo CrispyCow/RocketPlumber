@@ -49,13 +49,17 @@ function make_test_redock_state()
     )
 end
 
-function make_pressed_state(; move_target = nothing, click_tile = TileCoord(1, 2))
+function make_pressed_state(
+        ; move_target = nothing, move_target_status = nothing, click_tile = TileCoord(1, 2), hold_threshold_crossed = false
+    )
+    move_target_status = isnothing(move_target) ? nothing : something(move_target_status, ValidRequest())
     return PlacementPressedState(
         press_started_at = 3.5,
         press_cursor_cart = CartesianCoord(1.5, 2.5),
         click_tile = click_tile,
         move_target = move_target,
-        move_target_valid = !isnothing(move_target),
+        move_target_status = move_target_status,
+        hold_threshold_crossed = hold_threshold_crossed,
     )
 end
 
@@ -134,6 +138,31 @@ end
         @test state isa PlacementRedockState
         @test !(state isa AbstractEditorPlacementState)
         @test !is_standard_family_state(state)
+    end
+
+    @testset "pressed state captures movement status" begin
+        no_target = make_pressed_state()
+        @test no_target.move_target_status === nothing
+
+        move_target = TileComponentMoveTarget(TileCoord(2, 3))
+        valid_target = make_pressed_state(move_target = move_target, move_target_status = ValidRequest())
+        @test valid_target.move_target_status isa ValidRequest
+
+        rejection_reason = "empty or vent the tank first"
+        invalid_target = make_pressed_state(
+            move_target = move_target,
+            move_target_status = InvalidRequest(rejection_reason),
+        )
+        @test invalid_target.move_target_status isa InvalidRequest
+        @test reason(invalid_target.move_target_status) == rejection_reason
+
+        crossed_target = make_pressed_state(
+            move_target = move_target,
+            move_target_status = invalid_target.move_target_status,
+            hold_threshold_crossed = true,
+        )
+        @test crossed_target.hold_threshold_crossed
+        @test crossed_target.move_target_status === invalid_target.move_target_status
     end
 
     @testset "editor capability gate" begin

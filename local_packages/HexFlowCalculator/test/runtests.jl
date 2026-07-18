@@ -273,13 +273,73 @@ end
 function do_action!(comp::ActionCompBehav, action_id::Symbol; kwargs...)
     if action_id === :flip
         action_count[] += 1
-        return (true, "Flipped")
+        return ValidRequestResult("Flipped")
     end
-    return (false, "Unknown action")
+    throw(ArgumentError("Unknown action"))
 end
+
+mutable struct StatefulActionCompBehav <: ComponentBehavior
+    activations::Int
+end
+HexComponentsAPI.produce_rel_elements(::StatefulActionCompBehav) = ()
+HexComponentsAPI.get_tunables(::StatefulActionCompBehav) = ()
+HexComponentsAPI.set_tunables(comp::StatefulActionCompBehav, ::NTuple{0, Real}) = comp
+HexComponentsAPI.render_base_elem!(queue, ::StatefulActionCompBehav; kwargs...) = nothing
+HexComponentsAPI.get_actions(::StatefulActionCompBehav; kwargs...) = (ActionInfo(:activate, "Activate", true, "Activate action"),)
+function HexComponentsAPI.do_action!(comp::StatefulActionCompBehav, ::Symbol; kwargs...)
+    comp.activations += 1
+    return ValidRequestResult("Activated")
+end
+
+mutable struct ActionValidationFailCompBehav <: ComponentBehavior
+    activations::Int
+end
+HexComponentsAPI.produce_rel_elements(::ActionValidationFailCompBehav) = ()
+HexComponentsAPI.get_tunables(::ActionValidationFailCompBehav) = ()
+HexComponentsAPI.set_tunables(comp::ActionValidationFailCompBehav, ::NTuple{0, Real}) = comp
+HexComponentsAPI.render_base_elem!(queue, ::ActionValidationFailCompBehav; kwargs...) = nothing
+HexComponentsAPI.get_actions(::ActionValidationFailCompBehav; kwargs...) = (ActionInfo(:activate, "Activate", true, "Activate action"),)
+function HexComponentsAPI.do_action!(comp::ActionValidationFailCompBehav, ::Symbol; kwargs...)
+    comp.activations += 1
+    return ValidRequestResult("Activated")
+end
+HexComponentsAPI.update_flowbehav!(::ActionValidationFailCompBehav; kwargs...) = error("candidate validation failed")
+
+"Test-only expected candidate validation failure for exercising the warning policy."
+struct ExpectedCandidateValidationError <: ExpectedMapValidationError end
+
+"Render the test-only expected candidate validation explanation."
+Base.showerror(io::IO, ::ExpectedCandidateValidationError) = print(io, "expected candidate validation failure")
+
+struct ExpectedValidationFailCompBehav <: ComponentBehavior end
+HexComponentsAPI.produce_rel_elements(::ExpectedValidationFailCompBehav) = ()
+HexComponentsAPI.get_tunables(::ExpectedValidationFailCompBehav) = ()
+HexComponentsAPI.set_tunables(
+    ::ExpectedValidationFailCompBehav, ::NTuple{0, Real},
+) = ExpectedValidationFailCompBehav()
+HexComponentsAPI.render_base_elem!(queue, ::ExpectedValidationFailCompBehav; kwargs...) = nothing
+HexComponentsAPI.update_flowbehav!(::ExpectedValidationFailCompBehav; kwargs...) = throw(ExpectedCandidateValidationError())
+
+struct ThrowingActionCompBehav <: ComponentBehavior end
+HexComponentsAPI.produce_rel_elements(::ThrowingActionCompBehav) = ()
+HexComponentsAPI.get_tunables(::ThrowingActionCompBehav) = ()
+HexComponentsAPI.set_tunables(::ThrowingActionCompBehav, ::NTuple{0, Real}) = ThrowingActionCompBehav()
+HexComponentsAPI.render_base_elem!(queue, ::ThrowingActionCompBehav; kwargs...) = nothing
+HexComponentsAPI.get_actions(::ThrowingActionCompBehav; kwargs...) = (ActionInfo(:activate, "Activate", true, "Activate action"),)
+HexComponentsAPI.do_action!(::ThrowingActionCompBehav, ::Symbol; kwargs...) = error("action execution failed")
 function placement_valid(comp::ActionCompBehav, coord::TileCoord, gamemap::GameMap; kwargs...)
-    return (true, "")
+    return ValidRequest()
 end
+
+struct ResultActionCompBehav{T} <: ComponentBehavior
+    result::T
+end
+HexComponentsAPI.produce_rel_elements(::ResultActionCompBehav) = ()
+HexComponentsAPI.get_tunables(::ResultActionCompBehav) = ()
+HexComponentsAPI.set_tunables(comp::ResultActionCompBehav, ::NTuple{0, Real}) = comp
+HexComponentsAPI.render_base_elem!(queue, ::ResultActionCompBehav; kwargs...) = nothing
+HexComponentsAPI.get_actions(::ResultActionCompBehav; kwargs...) = (ActionInfo(:run, "Run", true, "Run action"),)
+HexComponentsAPI.do_action!(comp::ResultActionCompBehav, ::Symbol; kwargs...) = comp.result
 
 mutable struct ValidationMutationCompBehav <: ComponentBehavior
     updates::Int
@@ -302,12 +362,12 @@ HexComponentsAPI.set_tunables(comp::RotationSensitiveCompBehav, ::NTuple{0, Real
 HexComponentsAPI.render_base_elem!(queue, ::RotationSensitiveCompBehav; kwargs...) = nothing
 function placement_valid(comp::RotationSensitiveCompBehav, coord::TileCoord, gamemap::GameMap; rotation::HexAxis, ship_name::Symbol = :primary, kwargs...)
     if !is_on_surface_tile(coord, gamemap; ship_name = ship_name)
-        return (false, "Not on ship surface")
+        return InvalidRequest("Not on ship surface")
     end
     if rotation ∉ comp.valid_rotations
-        return (false, "Rotation invalid")
+        return InvalidRequest("Rotation invalid")
     end
-    return (true, "")
+    return ValidRequest()
 end
 
 struct MirrorableCompBehav <: ComponentBehavior end
@@ -317,7 +377,7 @@ HexComponentsAPI.set_tunables(::MirrorableCompBehav, ::NTuple{0, Real}) = Mirror
 HexComponentsAPI.render_base_elem!(queue, ::MirrorableCompBehav; kwargs...) = nothing
 HexComponentsAPI.map_mirroring(::MirrorableCompBehav, mirrored::Bool) = mirrored
 function placement_valid(::MirrorableCompBehav, coord::TileCoord, gamemap::GameMap; ship_name::Symbol = :primary, kwargs...)
-    return is_on_surface_tile(coord, gamemap; ship_name = ship_name) ? (true, "") : (false, "Not on ship surface")
+    return is_on_surface_tile(coord, gamemap; ship_name = ship_name) ? ValidRequest() : InvalidRequest("Not on ship surface")
 end
 
 struct MirroringRequiredCompBehav <: ComponentBehavior end
@@ -328,9 +388,9 @@ HexComponentsAPI.render_base_elem!(queue, ::MirroringRequiredCompBehav; kwargs..
 HexComponentsAPI.map_mirroring(::MirroringRequiredCompBehav, mirrored::Bool) = mirrored
 function placement_valid(::MirroringRequiredCompBehav, coord::TileCoord, gamemap::GameMap;
         mirrored::Bool = false, ship_name::Symbol = :primary, kwargs...)
-    is_on_surface_tile(coord, gamemap; ship_name = ship_name) || return (false, "Not on ship surface")
-    mirrored || return (false, "Mirroring required")
-    return (true, "")
+    is_on_surface_tile(coord, gamemap; ship_name = ship_name) || return InvalidRequest("Not on ship surface")
+    mirrored || return InvalidRequest("Mirroring required")
+    return ValidRequest()
 end
 
 struct ImmovableCompBehav <: ComponentBehavior end
@@ -338,7 +398,7 @@ HexComponentsAPI.produce_rel_elements(::ImmovableCompBehav) = ()
 HexComponentsAPI.get_tunables(::ImmovableCompBehav) = ()
 HexComponentsAPI.set_tunables(::ImmovableCompBehav, ::NTuple{0, Real}) = ImmovableCompBehav()
 HexComponentsAPI.render_base_elem!(queue, ::ImmovableCompBehav; kwargs...) = nothing
-HexComponentsAPI.can_be_moved(::ImmovableCompBehav; kwargs...) = (false, "Test component is fixed")
+HexComponentsAPI.can_be_moved(::ImmovableCompBehav; kwargs...) = InvalidRequest("Test component is fixed")
 
 struct DestinationInvalidCompBehav <: ComponentBehavior
     invalid_coord::TileCoord
@@ -354,8 +414,8 @@ HexComponentsAPI.set_tunables(comp::PlacementRestrictedCompBehav, ::NTuple{0, Re
 HexComponentsAPI.render_base_elem!(queue, ::PlacementRestrictedCompBehav; kwargs...) = nothing
 function placement_valid(comp::PlacementRestrictedCompBehav, coord::TileCoord, gamemap::GameMap;
         ship_name::Symbol = :primary, kwargs...)
-    coord == comp.invalid_coord && return (false, "Restricted destination")
-    return is_on_surface_tile(coord, gamemap; ship_name) ? (true, "") : (false, "Not on ship surface")
+    coord == comp.invalid_coord && return InvalidRequest("Restricted destination")
+    return is_on_surface_tile(coord, gamemap; ship_name) ? ValidRequest() : InvalidRequest("Not on ship surface")
 end
 HexComponentsAPI.produce_rel_elements(::DestinationInvalidCompBehav) = ()
 HexComponentsAPI.get_tunables(::DestinationInvalidCompBehav) = ()
@@ -494,6 +554,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         logs = process_and_log!(cmd, gamemap)
 
         @test !isnothing(get_component(gamemap, coord))
+        @test isempty(logs)
     end
 
     @testset "SetTileCommand — supports derived-state-aware updates" begin
@@ -519,6 +580,55 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         )
 
         @test isnothing(get_component(gamemap, off_surface))
+        @test logs == ["Cannot place component: Place components on a ship surface"]
+    end
+
+    @testset "SetTileCommand — explains occupied destinations" begin
+        gamemap = make_gamemap()
+        coord = TileCoord(0, 0)
+        process_and_log!(create_set_tile_command(cq, coord, MockCompBehav(), Q_POS), gamemap)
+
+        logs = process_and_log!(create_set_tile_command(cq, coord, MockCompBehav(), Q_POS), gamemap)
+
+        @test logs == ["Cannot place component: a component already occupies the destination tile"]
+        @test get_component(gamemap, coord).component isa MockCompBehav
+    end
+
+    @testset "SetTileCommand — rejects component-crossing destinations before candidate validation" begin
+        gamemap = make_gamemap()
+        destination = TileCoord(0, 1)
+        set_surface_tile!(gamemap, destination)
+        crossing_pipe = get_pipe_segments(destination)[7]
+        set_pipe!(gamemap, crossing_pipe, PlacedPipe(MockPipeBehav(), :primary))
+        original_hash = hash(gamemap)
+        response = Channel{CommandStatus}(1)
+        logs, console = make_log_console()
+        command = create_set_tile_command(cq, destination, MockCompBehav(), Q_POS; response_channel = response)
+
+        HexFlowCalculator.process_command!(command, gamemap, console; throw_errors = false)
+
+        @test take!(response) == INVALID
+        @test !isready(response)
+        @test logs == ["Cannot place component: a pipe segment crosses the destination tile"]
+        @test hash(gamemap) == original_hash
+        @test isnothing(get_component(gamemap, destination))
+    end
+
+    @testset "SetTileCommand — allows compatible side pipes" begin
+        gamemap = make_gamemap()
+        destination = TileCoord(0, 1)
+        set_surface_tile!(gamemap, destination)
+        set_pipe!(gamemap, side_pipe(destination), PlacedPipe(MockPipeBehav(), :primary))
+        response = Channel{CommandStatus}(1)
+        logs, console = make_log_console()
+        command = create_set_tile_command(cq, destination, MockCompBehav(), Q_POS; response_channel = response)
+
+        HexFlowCalculator.process_command!(command, gamemap, console; throw_errors = false)
+
+        @test take!(response) == APPLIED
+        @test !isready(response)
+        @test isempty(logs)
+        @test has_component(gamemap, destination)
     end
 
     @testset "SetTileCommand — routes to correct ship" begin
@@ -586,7 +696,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
             logs = process_and_log!(create_set_pipe_behavior_command(cq, pipe, MockPipeBehav()), gamemap)
 
             @test isnothing(get_pipe(gamemap, pipe))
-            @test any(contains(l, "crosses an occupied tile") for l in logs)
+            @test logs == ["Cannot place pipe: the segment crosses a component tile"]
         end
     end
 
@@ -662,7 +772,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         placed = get_component(gamemap, coord)
         @test !isnothing(placed)
         @test placed.rotation == HexFrame.R_POS
-        @test any(contains(l, "rotated in place") for l in logs)
+        @test isempty(logs)
     end
 
     @testset "MoveCommand{TileCoord} — applies mirror delta with xor semantics" begin
@@ -713,7 +823,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         @test any(contains(l, "Cannot rotate in place") || contains(l, "Mirroring required") for l in logs)
     end
 
-    @testset "MoveCommand{TileCoord} — reports occupier ship in collision log" begin
+    @testset "MoveCommand{TileCoord} — reports occupied destination" begin
         gamemap = make_two_ship_map()
         src = TileCoord(0, 0)
         dst = TileCoord(0, 1)
@@ -730,7 +840,36 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
             gamemap
         )
 
-        @test any(contains(l, "occupied on asteroid") for l in logs)
+        @test logs == ["Cannot move component: a component already occupies the destination tile"]
+        @test get_component(gamemap, src).ship === :primary
+        @test get_component(gamemap, dst).ship === :asteroid
+    end
+
+    @testset "MoveCommand{TileCoord} — rejects component-crossing destination" begin
+        gamemap = make_gamemap()
+        src = TileCoord(0, 0)
+        dst = TileCoord(0, 1)
+        set_surface_tile!(gamemap, dst; ship_name = :primary)
+        process_and_log!(create_set_tile_command(cq, src, MockCompBehav(), Q_POS), gamemap)
+        crossing_pipe = get_pipe_segments(dst)[7]
+        set_pipe!(gamemap, crossing_pipe, PlacedPipe(MockPipeBehav(), :primary))
+
+        logs = process_and_log!(create_move_command(cq, src, dst, Q_POS), gamemap)
+
+        @test logs == ["Cannot move component: a pipe segment crosses the destination tile"]
+        @test has_component(gamemap, src)
+        @test !has_component(gamemap, dst)
+    end
+
+    @testset "MoveCommand{TileCoord} — retains ownership for in-place rotation" begin
+        gamemap = make_two_ship_map()
+        coord = TileCoord(20, 0)
+        set_component!(gamemap, coord, PlacedComponent(ActionCompBehav(), Q_POS, :asteroid))
+
+        logs = process_and_log!(create_move_command(cq, coord, coord, HexFrame.R_POS), gamemap)
+
+        @test isempty(logs)
+        @test get_component(gamemap, coord).ship === :asteroid
     end
 
     #= ---------- TranslateElementsCommand ----------- =#
@@ -838,7 +977,23 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
             external_destination = TileCoord(0, 1)
             set_component!(gamemap, external_destination, PlacedComponent(MockCompBehav(), Q_POS, :primary))
             original_hash = hash(gamemap)
-            process_and_log!(create_translate_elements_command(cq, Set([source]), TileCoord(0, 1)), gamemap)
+            logs = process_and_log!(create_translate_elements_command(cq, Set([source]), TileCoord(0, 1)), gamemap)
+            @test logs == ["Cannot move selection: a component already occupies the destination tile"]
+            @test hash(gamemap) == original_hash
+        end
+
+        @testset "rejects an occupied external pipe destination" begin
+            gamemap = make_gamemap()
+            translation = TileCoord(0, 1)
+            source = side_pipe(TileCoord(0, 0))
+            destination = offset_by_tile(source, translation)
+            set_pipe!(gamemap, source, PlacedPipe(MockPipeBehav(), :primary))
+            set_pipe!(gamemap, destination, PlacedPipe(MockPipeBehav(), :primary))
+            original_hash = hash(gamemap)
+
+            logs = process_and_log!(create_translate_elements_command(cq, Set{TileCoord}(), Set([source]), translation), gamemap)
+
+            @test logs == ["Cannot move selection: clear the occupied destination edge first"]
             @test hash(gamemap) == original_hash
         end
 
@@ -994,7 +1149,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         @test isnothing(get_pipe(gamemap, src_pipe))
         @test !isnothing(moved_pipe)
         @test moved_pipe.ship === :asteroid
-        @test any(contains(l, "Pipe moved") for l in logs)
+        @test isempty(logs)
     end
 
     @testset "MoveCommand{PipeCoord} rejects component-crossing destinations" begin
@@ -1014,7 +1169,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 
             @test !isnothing(get_pipe(gamemap, src_pipe))
             @test isnothing(get_pipe(gamemap, dst_pipe))
-            @test any(contains(l, "crosses an occupied tile") for l in logs)
+            @test logs == ["Cannot move pipe: the destination segment crosses a component tile"]
         end
     end
 
@@ -1037,8 +1192,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 
         logs = process_and_log!(cmd, gamemap)
         @test isnothing(get_component(gamemap, coord))
-        @test any(contains(l, "deleted") || contains(l, "Deleted") for l in logs)
-        @test any(contains(l, "from primary") for l in logs)
+        @test isempty(logs)
     end
 
     #= ---------- DoActionCommand tests ----------- =#
@@ -1063,12 +1217,92 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         cmd = create_do_action_command(cq, coord, :flip)
         logs = process_and_log!(cmd, gamemap)
         @test action_count[] == 1
-        @test !isempty(logs)  # at least some message logged
+        @test logs == ["Flipped"]
 
-        # action on nonexistent component should log error and do nothing
+        # A stale action target is an expected silent rejection.
         gamemap2 = GameMap()
         logs2 = process_and_log!(create_do_action_command(cq, TileCoord(5, 5), :flip), gamemap2)
-        @test any(contains(l, "No component") for l in logs2)
+        @test isempty(logs2)
+
+        # A changed action state remains an actionable player rejection.
+        gamemap3 = make_gamemap()
+        set_component!(gamemap3, coord, PlacedComponent(
+            ResultActionCompBehav(InvalidRequest("Action is no longer available")), Q_POS, :primary,
+        ))
+        @test process_and_log!(create_do_action_command(cq, coord, :run), gamemap3) == ["Action is no longer available"]
+
+        # A component returning a valid request without a String result is a programming failure.
+        gamemap4 = make_gamemap()
+        set_component!(gamemap4, coord, PlacedComponent(ResultActionCompBehav(ValidRequest()), Q_POS, :primary))
+        logs4, console4 = make_log_console()
+        action_command = create_do_action_command(cq, coord, :run)
+        logger4 = Test.TestLogger(min_level = Base.CoreLogging.Warn)
+        Base.CoreLogging.with_logger(logger4) do
+            HexFlowCalculator.process_command!(
+                action_command, gamemap4, console4; throw_errors = false,
+            )
+        end
+        @test isempty(logs4)
+        command_log = only(filter(log -> log.message == "Map edit command threw an exception", logger4.logs))
+        command_context = command_log.kwargs[:command_context]
+        @test command_context.type == :DoActionCommand
+        @test command_context.id == action_command.id
+        @test command_context.coord == coord
+        @test command_context.action_id == :run
+        @test !isempty(command_log.kwargs[:exception][2])
+    end
+
+    @testset "stale map edits resolve once without console output or warnings" begin
+        cq_stale = create_command_queue(16)
+        stale_factories = [
+            response -> create_move_command(cq_stale, TileCoord(0, 0), TileCoord(1, 0), Q_POS; response_channel = response),
+            response -> create_move_command(cq_stale, side_pipe(TileCoord(0, 0)), side_pipe(TileCoord(1, 0)), Q_POS; response_channel = response),
+            response -> create_translate_elements_command(cq_stale, Set([TileCoord(0, 0)]), TileCoord(1, 0); response_channel = response),
+            response -> create_delete_elements_command(cq_stale, TileCoord(0, 0); response_channel = response),
+            response -> create_do_action_command(cq_stale, TileCoord(0, 0), :run; response_channel = response),
+            response -> create_redock_ship_command(cq_stale, :missing_ship, TileCoord(1, 0); response_channel = response),
+        ]
+        logger = Test.TestLogger(min_level = Base.CoreLogging.Warn)
+        for factory in stale_factories
+            response = Channel{CommandStatus}(1)
+            logs, console = make_log_console()
+            Base.CoreLogging.with_logger(logger) do
+                HexFlowCalculator.process_command!(factory(response), GameMap(), console; throw_errors = false)
+            end
+            @test take!(response) == INVALID
+            @test !isready(response)
+            @test isempty(logs)
+        end
+        @test isempty(logger.logs)
+    end
+
+    @testset "diagnostics retain compact command context" begin
+        cq_diag = create_command_queue(16)
+        translation = create_translate_elements_command(
+            cq_diag, Set([TileCoord(0, 0), TileCoord(1, 0)]), Set([side_pipe(TileCoord(0, 0))]), TileCoord(2, 0),
+        )
+        translation_context = HexFlowCalculator.command_diagnostic(translation)
+        @test translation_context.component_count == 2
+        @test translation_context.pipe_count == 1
+        @test !hasproperty(translation_context, :component_coords)
+        @test !hasproperty(translation_context, :pipe_coords)
+        @test !hasproperty(translation_context, :response_channel)
+
+        deletion = create_delete_elements_command(
+            cq_diag, Set([TileCoord(0, 0), TileCoord(1, 0)]), Set([side_pipe(TileCoord(0, 0))]),
+        )
+        deletion_context = HexFlowCalculator.command_diagnostic(deletion)
+        @test deletion_context.component_count == 2
+        @test deletion_context.pipe_count == 1
+        @test !hasproperty(deletion_context, :component_coords)
+        @test !hasproperty(deletion_context, :pipe_coords)
+        @test !hasproperty(deletion_context, :response_channel)
+
+        replacement = create_map_override_command(cq_diag, GameMap())
+        replacement_context = HexFlowCalculator.command_diagnostic(replacement)
+        @test replacement_context.replacement_map == HexFlowCalculator.map_diagnostic(replacement.new_map)
+        @test !hasproperty(replacement_context, :new_map)
+        @test !hasproperty(replacement_context, :response_channel)
     end
 
     @testset "DeleteElementsCommand singleton missing component" begin
@@ -1078,7 +1312,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
             gamemap
         )
 
-        @test any(contains(l, "No component") for l in logs)
+        @test isempty(logs)
     end
 
     #= ---------- Singleton pipe deletion ----------- =#
@@ -1100,8 +1334,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 
         logs = process_and_log!(cmd, gamemap)
         @test isnothing(get_pipe(gamemap, pipe))
-        @test any(contains(l, "deleted") || contains(l, "Deleted") for l in logs)
-        @test any(contains(l, "from asteroid") for l in logs)
+        @test isempty(logs)
     end
 
     @testset "DeleteElementsCommand singleton missing pipe" begin
@@ -1113,7 +1346,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
             gamemap
         )
 
-        @test any(contains(l, "No pipe") for l in logs)
+        @test isempty(logs)
     end
 
     #= ---------- Singleton deletion factory correctness ----------- =#
@@ -1144,8 +1377,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         logs = process_and_log!(cmd, gamemap)
 
         # MockCompBehav.on_click! does nothing, so no error expected
-        @test !any(contains(l, "error") || contains(l, "Error") for l in logs)
-        @test any(contains(l, "on asteroid") for l in logs)
+        @test isempty(logs)
     end
 
     @testset "ClickTileCommand — missing component" begin
@@ -1156,7 +1388,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
             gamemap
         )
 
-        @test any(contains(l, "No component") || contains(l, "no") for l in logs)
+        @test isempty(logs)
     end
 
     #= ---------- AddShipSurfaceCommand ----------- =#
@@ -1168,6 +1400,16 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         logs = process_and_log!(cmd, gamemap)
 
         @test is_on_surface_tile(coord, gamemap; ship_name = :primary)
+        @test isempty(logs)
+    end
+
+    @testset "AddShipSurfaceCommand — existing surface is a silent no-op" begin
+        gamemap = make_gamemap()
+
+        logs = process_and_log!(create_add_ship_surface_command(cq, TileCoord(0, 0)), gamemap)
+
+        @test count_surface_tiles(gamemap; ship_name = :primary) == 1
+        @test isempty(logs)
     end
 
     #= ---------- RemoveShipSurfaceCommand ----------- =#
@@ -1185,6 +1427,7 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         )
 
         @test !is_on_surface_tile(coord, gamemap; ship_name = :primary)
+        @test isempty(logs)
     end
 
     #= ---------- MapOverrideCommand ----------- =#
@@ -1193,11 +1436,12 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         new_map = make_two_ship_map()
 
         cmd = create_map_override_command(cq, new_map)
-        process_and_log!(cmd, gamemap)
+        logs = process_and_log!(cmd, gamemap)
 
         # After override, gamemap should have the :asteroid ship
         @test haskey(gamemap.ships, :asteroid)
         @test count_surface_tiles(gamemap) == count_surface_tiles(new_map)
+        @test isempty(logs)
     end
 
     #= ---------- Multi-Ship Routing ----------- =#
@@ -1248,133 +1492,181 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 end
 
 # ===============================================================
-# Tests — transactional batch commands
+# Tests — multi-target component actions
 # ===============================================================
 
-@testset "BatchCommand transactions" begin
-    @testset "commits heterogeneous children in order" begin
-        gm = make_gamemap()
-        cq = create_command_queue(4)
-        new_surface = TileCoord(1, 0)
-        batch = create_batch_command(cq, MapEditCommand[
-            create_add_ship_surface_command(cq, new_surface),
-            create_set_tile_command(cq, new_surface, MockCompBehav(), Q_POS),
-        ])
+@testset "DoActionCommand transactions" begin
+    @testset "factories own canonical targets and allocate one ID" begin
+        cq = create_command_queue(8)
+        coord = TileCoord(2, -1)
+        scalar = create_do_action_command(cq, coord, :activate)
+        source_coords = [TileCoord(2, 0), TileCoord(0, 0), TileCoord(2, 0), TileCoord(1, 0)]
+        command = create_do_action_command(cq, source_coords, :activate)
+        source_coords[1] = TileCoord(99, 99)
 
-        process_and_log!(batch, gm)
-        @test is_on_surface_tile(new_surface, gm)
-        @test has_component(gm, new_surface)
+        @test scalar.component_coords == [coord]
+        @test command.component_coords == [TileCoord(0, 0), TileCoord(1, 0), TileCoord(2, 0)]
+        @test command.id == scalar.id + 1
+        @test_throws ArgumentError create_do_action_command(cq, TileCoord[], :activate)
     end
 
-    @testset "rolls back first, middle, and last child failures" begin
-        for failure_index in 1:3
-            gm = make_gamemap()
-            cq = create_command_queue(4)
-            set_surface_tile!(gm, TileCoord(1, 0))
-            set_surface_tile!(gm, TileCoord(2, 0))
-            original_hash = hash(gm)
-            commands = MapEditCommand[
-                create_set_tile_command(cq, TileCoord(1, 0), MockCompBehav(), Q_POS),
-                create_set_tile_command(cq, TileCoord(2, 0), MockCompBehav(), Q_POS),
-            ]
-            insert!(commands, failure_index,
-                create_set_tile_command(cq, TileCoord(20, 20), MockCompBehav(), Q_POS))
-            logs = process_and_log!(create_batch_command(cq, commands), gm)
-
-            @test hash(gm) == original_hash
-            @test count_components(gm) == 0
-            @test any(contains(log, "child $failure_index") for log in logs)
+    @testset "duplicates execute once in deterministic order" begin
+        gm = make_gamemap()
+        cq = create_command_queue(8)
+        coords = [TileCoord(2, 0), TileCoord(0, 0), TileCoord(1, 0)]
+        for coord in coords
+            set_surface_tile!(gm, coord)
+            set_component!(gm, coord, PlacedComponent(ActionCompBehav(), Q_POS, :primary))
         end
+
+        action_count[] = 0
+        logs = process_and_log!(create_do_action_command(cq, [coords[1], coords[2], coords[1], coords[3]], :flip), gm)
+
+        @test action_count[] == 3
+        @test logs == ["Flipped for 3 selected components"]
     end
 
-    @testset "validation failure and validation mutations do not commit" begin
+    @testset "first message and target order are deterministic" begin
         gm = make_gamemap()
-        cq = create_command_queue(4)
-        original_hash = hash(gm)
-        invalid_batch = create_batch_command(cq, MapEditCommand[
-            create_set_tile_command(cq, TileCoord(0, 0), InvalidFluidBridgeCompBehav(), Q_POS),
-        ])
-        HexFlowCalculator.process_command!(invalid_batch, gm, silent_console, throw_errors = false)
-        @test hash(gm) == original_hash
+        cq = create_command_queue(8)
+        coords = [TileCoord(2, 0), TileCoord(0, 0)]
+        for coord in coords
+            set_surface_tile!(gm, coord)
+        end
+        set_component!(gm, coords[1], PlacedComponent(ResultActionCompBehav(ValidRequestResult("Second result")), Q_POS, :primary))
+        set_component!(gm, coords[2], PlacedComponent(ResultActionCompBehav(ValidRequestResult("First result")), Q_POS, :primary))
 
-        process_and_log!(create_set_tile_command(cq, TileCoord(0, 0), ValidationMutationCompBehav(0), Q_POS), gm)
-        comp = get_component(gm, TileCoord(0, 0)).component
-        @test comp isa ValidationMutationCompBehav
-        @test comp.updates == 0
+        logs = process_and_log!(create_do_action_command(cq, coords, :run), gm)
+
+        @test logs == ["First result for 2 selected components"]
     end
 
-    @testset "reports once and discards rolled-back success messages" begin
+    @testset "successful actions commit once and report once" begin
         gm = make_gamemap()
+        cq = create_command_queue(8)
         set_surface_tile!(gm, TileCoord(1, 0))
-        cq = create_command_queue(4)
-        response = Channel{CommandStatus}(1)
-        batch = create_batch_command(cq, MapEditCommand[
-            create_set_tile_command(cq, TileCoord(1, 0), MockCompBehav(), Q_POS),
-            create_set_tile_command(cq, TileCoord(20, 20), MockCompBehav(), Q_POS),
-        ]; response_channel = response)
-        logs = process_and_log!(batch, gm)
+        set_component!(gm, TileCoord(0, 0), PlacedComponent(StatefulActionCompBehav(0), Q_POS, :primary))
+        set_component!(gm, TileCoord(1, 0), PlacedComponent(StatefulActionCompBehav(0), Q_POS, :primary))
 
-        @test take!(response) == INVALID
+        logs = process_and_log!(create_do_action_command(cq, [TileCoord(0, 0), TileCoord(1, 0)], :activate), gm)
+
+        @test get_component(gm, TileCoord(0, 0)).component.activations == 1
+        @test get_component(gm, TileCoord(1, 0)).component.activations == 1
+        @test logs == ["Activated for 2 selected components"]
+    end
+
+    @testset "later invalid and stale targets roll back earlier actions" begin
+        gm = make_gamemap()
+        cq = create_command_queue(8)
+        set_component!(gm, TileCoord(0, 0), PlacedComponent(StatefulActionCompBehav(0), Q_POS, :primary))
+        set_surface_tile!(gm, TileCoord(1, 0))
+        set_component!(gm, TileCoord(1, 0), PlacedComponent(ResultActionCompBehav(InvalidRequest("Action is no longer available")), Q_POS, :primary))
+
+        logs = process_and_log!(create_do_action_command(cq, [TileCoord(0, 0), TileCoord(1, 0)], :activate), gm)
+
+        @test get_component(gm, TileCoord(0, 0)).component.activations == 0
+        @test logs == ["Action is no longer available"]
+
+        logs = process_and_log!(create_do_action_command(cq, [TileCoord(0, 0), TileCoord(5, 5)], :activate), gm)
+        @test get_component(gm, TileCoord(0, 0)).component.activations == 0
+        @test isempty(logs)
+    end
+
+    @testset "programming failures retain the failing target and original backtrace" begin
+        gm = make_gamemap()
+        cq = create_command_queue(8)
+        failing_coord = TileCoord(1, 0)
+        set_surface_tile!(gm, failing_coord)
+        set_component!(gm, TileCoord(0, 0), PlacedComponent(StatefulActionCompBehav(0), Q_POS, :primary))
+        set_component!(gm, failing_coord, PlacedComponent(ThrowingActionCompBehav(), Q_POS, :primary))
+        logger = Test.TestLogger(min_level = Base.CoreLogging.Warn)
+        logs, console = make_log_console()
+        command = create_do_action_command(cq, [failing_coord, TileCoord(0, 0)], :activate)
+
+        Base.CoreLogging.with_logger(logger) do
+            HexFlowCalculator.process_command!(command, gm, console; throw_errors = false)
+        end
+
+        command_log = only(filter(log -> log.message == "Map edit command threw an exception", logger.logs))
+        @test command_log.kwargs[:failed_coord] == failing_coord
+        @test command_log.kwargs[:action_id] == :activate
+        @test !isempty(command_log.kwargs[:exception][2])
+        @test get_component(gm, TileCoord(0, 0)).component.activations == 0
+        @test isempty(logs)
+    end
+
+    @testset "candidate validation rolls back action and feedback" begin
+        gm = make_gamemap()
+        cq = create_command_queue(8)
+        set_component!(gm, TileCoord(0, 0), PlacedComponent(ActionValidationFailCompBehav(0), Q_POS, :primary))
+        command = create_do_action_command(cq, TileCoord(0, 0), :activate)
+        logger = Test.TestLogger(min_level = Base.CoreLogging.Warn)
+        logs, console = make_log_console()
+
+        Base.CoreLogging.with_logger(logger) do
+            HexFlowCalculator.process_command!(command, gm, console; throw_errors = false)
+        end
+
+        validation_log = only(filter(log -> log.message == "Map edit candidate validation failed", logger.logs))
+        @test validation_log.kwargs[:command_context].id == command.id
+        @test validation_log.kwargs[:candidate_map_state].components == 1
+        @test !isempty(validation_log.kwargs[:exception][2])
+        @test get_component(gm, TileCoord(0, 0)).component.activations == 0
+        @test logs == ["Invalid map edit: candidate validation failed"]
+        @test length(filter(log -> log.message == "Map edit candidate validation failed", logger.logs)) == 1
+    end
+
+    @testset "expected candidate validation subtype is warning-free" begin
+        gm = make_gamemap()
+        cq = create_command_queue(8)
+        response = Channel{CommandStatus}(1)
+        command = create_set_tile_command(
+            cq, TileCoord(0, 0), ExpectedValidationFailCompBehav(), Q_POS; response_channel = response,
+        )
+        logger = Test.TestLogger(min_level = Base.CoreLogging.Warn)
+        logs, console = make_log_console()
+
+        Base.CoreLogging.with_logger(logger) do
+            HexFlowCalculator.process_command!(command, gm, console; throw_errors = false)
+        end
+
+        @test take!(response) == REJECTED
         @test !isready(response)
-        @test !has_component(gm, TileCoord(1, 0))
-        @test !any(contains(log, "Component placed") for log in logs)
+        @test !has_component(gm, TileCoord(0, 0))
+        @test logs == ["Invalid map edit: expected candidate validation failure"]
+        @test isempty(logger.logs)
     end
 
-    @testset "constructor rejects unsafe batches" begin
-        cq = create_command_queue(4)
-        batchable = create_set_tile_command(cq, TileCoord(0, 0), MockCompBehav(), Q_POS)
-        @test_throws ArgumentError create_batch_command(cq, MapEditCommand[])
-        @test_throws ArgumentError create_batch_command(cq, MapEditCommand[
-            create_click_tile_command(cq, TileCoord(0, 0), CartesianCoord(0.0, 0.0)),
-        ])
-        response = Channel{CommandStatus}(1)
-        @test_throws ArgumentError create_batch_command(cq, MapEditCommand[
-            create_delete_elements_command(cq, TileCoord(0, 0); response_channel = response),
-        ])
-        @test_throws ArgumentError create_batch_command(cq, MapEditCommand[
-            create_delete_elements_command(cq, TileCoord(0, 0)),
-        ])
-        nested = create_batch_command(cq, MapEditCommand[batchable])
-        @test_throws ArgumentError create_batch_command(cq, MapEditCommand[nested])
-        @test_throws ArgumentError create_batch_command(cq, MapEditCommand[
-            create_move_command(cq, TileCoord(0, 0), TileCoord(1, 0), Q_POS),
-        ])
-        @test_throws ArgumentError create_batch_command(cq, MapEditCommand[
-            create_translate_elements_command(cq, Set([TileCoord(0, 0)]), TileCoord(1, 0)),
-        ])
-    end
-
-
-    #= ---------- DeleteElementsCommand ----------- =#
-    @testset "DeleteElementsCommand" begin
-        cq = create_command_queue(4)
-        @test_throws ArgumentError create_delete_elements_command(cq, Set{TileCoord}(), Set{PipeCoord}())
-
-        gamemap = make_gamemap()
-        component_coord = TileCoord(0, 0)
-        pipe_coord = side_pipe(TileCoord(0, 0))
-        set_component!(gamemap, component_coord, PlacedComponent(MockCompBehav(), Q_POS, :primary))
-        set_pipe!(gamemap, pipe_coord, PlacedPipe(MockPipeBehav(), :primary))
-
-        process_and_log!(create_delete_elements_command(
-            cq, Set([component_coord]), Set([pipe_coord]),
-        ), gamemap)
-
-        @test !has_component(gamemap, component_coord)
-        @test !has_pipe(gamemap, pipe_coord)
-        @test !is_batchable(create_delete_elements_command(cq, component_coord))
-        @test !is_batchable(create_delete_elements_command(cq, Set([component_coord]), Set{PipeCoord}()))
-    end
-
-    @testset "occupies one queue slot regardless of child count" begin
+    @testset "one command ID, queue slot, and response status" begin
         cq = create_command_queue(1)
-        batch = create_batch_command(cq, MapEditCommand[
-            create_set_tile_command(cq, TileCoord(index, 0), MockCompBehav(), Q_POS) for index in 1:8
-        ])
-        @test try_enqueue_command!(cq, batch, silent_console) == (true, APPLIED)
-        @test take!(cq.command_channel) === batch
+        coords = [TileCoord(0, 0), TileCoord(1, 0)]
+        command = create_do_action_command(cq, coords, :activate; response_channel = Channel{CommandStatus}(1))
+        @test try_enqueue_command!(cq, command)
+        @test take!(cq.command_channel) === command
         @test !isready(cq.command_channel)
+        @test length(command.component_coords) == 2
+        @test command.id == cq.last_command.id
     end
+end
+
+# ===============================================================
+# Tests — dedicated collective commands
+# ===============================================================
+
+@testset "DeleteElementsCommand collective behaviour" begin
+    cq = create_command_queue(4)
+    @test_throws ArgumentError create_delete_elements_command(cq, Set{TileCoord}(), Set{PipeCoord}())
+
+    gamemap = make_gamemap()
+    component_coord = TileCoord(0, 0)
+    pipe_coord = side_pipe(TileCoord(0, 0))
+    set_component!(gamemap, component_coord, PlacedComponent(MockCompBehav(), Q_POS, :primary))
+    set_pipe!(gamemap, pipe_coord, PlacedPipe(MockPipeBehav(), :primary))
+
+    process_and_log!(create_delete_elements_command(cq, Set([component_coord]), Set([pipe_coord])), gamemap)
+
+    @test !has_component(gamemap, component_coord)
+    @test !has_pipe(gamemap, pipe_coord)
 end
 
 # ===============================================================
@@ -1593,6 +1885,27 @@ end
     @test t.accumulator == 0.0
     @test t.should_update == false
     @test t.last_update_time > 0.0
+    @test !t.saturation_reported
+end
+
+@testset "update_ups_metrics! — reports once per saturation episode" begin
+    shared_state = FlowCalculatorSharedState()
+    timing = TimingState()
+    logs, console = make_log_console()
+    max_accumulator = (1.0 / BASE_UPS) * 10.0
+
+    timing.accumulator = max_accumulator
+    HexFlowCalculator.update_ups_metrics!(shared_state, timing, 0, BASE_UPS, console)
+    HexFlowCalculator.update_ups_metrics!(shared_state, timing, 0, BASE_UPS, console)
+    @test logs == ["Simulation is running behind its target update rate"]
+
+    timing.accumulator = max_accumulator * 0.4
+    HexFlowCalculator.update_ups_metrics!(shared_state, timing, 0, BASE_UPS, console)
+    @test !timing.saturation_reported
+
+    timing.accumulator = max_accumulator
+    HexFlowCalculator.update_ups_metrics!(shared_state, timing, 0, BASE_UPS, console)
+    @test logs == fill("Simulation is running behind its target update rate", 2)
 end
 
 @testset "accumulate_time! — basic" begin
@@ -1638,9 +1951,7 @@ end
     cq = create_command_queue(4)
     cmd = create_delete_elements_command(cq, TileCoord(0, 0))
 
-    success, status = try_enqueue_command!(cq, cmd, silent_console)
-    @test success == true
-    @test status == APPLIED
+    @test try_enqueue_command!(cq, cmd) == true
 end
 
 @testset "CommandQueue — last_command tracking" begin
@@ -1648,11 +1959,32 @@ end
     cmd1 = create_delete_elements_command(cq, TileCoord(0, 0))
     cmd2 = create_set_tile_command(cq, TileCoord(0, 0), MockCompBehav(), Q_POS)
 
-    try_enqueue_command!(cq, cmd1, silent_console)
+    try_enqueue_command!(cq, cmd1)
     @test cq.last_command === cmd1
 
-    try_enqueue_command!(cq, cmd2, silent_console)
+    try_enqueue_command!(cq, cmd2)
     @test cq.last_command === cmd2
+end
+
+@testset "CommandQueue — failed enqueue" begin
+    cq = create_command_queue(1)
+    first_command = create_delete_elements_command(cq, TileCoord(0, 0))
+    @test try_enqueue_command!(cq, first_command)
+    close(cq.command_channel)
+
+    failed_command = create_delete_elements_command(cq, TileCoord(1, 0))
+    logs, console = make_log_console()
+    logger = Test.TestLogger(min_level = Base.CoreLogging.Warn)
+    Base.CoreLogging.with_logger(logger) do
+        @test !try_enqueue_command!(cq, failed_command)
+    end
+
+    @test cq.last_command === first_command
+    @test isempty(logs)
+    enqueue_log = only(filter(log -> log.message == "Failed to enqueue map edit command", logger.logs))
+    @test enqueue_log.kwargs[:command_context].type == :DeleteElementsCommand
+    @test enqueue_log.kwargs[:command_context].id == failed_command.id
+    @test !isempty(enqueue_log.kwargs[:exception][2])
 end
 
 # ===============================================================
@@ -1978,6 +2310,7 @@ end
         # Should be in approaching state (animating)
         status = FlowMap.get_docking_status(gm, :asteroid)
         @test status isa FlowMap.ApproachingDockStat
+        @test isempty(logs)
     end
 
     @testset "rejects placement too close to another ship" begin
@@ -1991,8 +2324,9 @@ end
 
         # Should not mutate the map (rejected via console message)
         original_tiles = collect_surface_tiles!(Set{TileCoord}(), gm; ship_name = :asteroid)
-        process_and_log!(cmd, gm)
+        logs = process_and_log!(cmd, gm)
         @test collect_surface_tiles!(Set{TileCoord}(), gm; ship_name = :asteroid) == original_tiles
+        @test logs == ["Cannot redock here: move the ship until its highlighted footprint no longer overlaps another ship's clearance area"]
     end
 
     @testset "rejects placement when pipe clearance overlaps another ship" begin
@@ -2003,16 +2337,34 @@ end
 
         cmd = create_redock_ship_command(cq, :asteroid, TileCoord(-15, 0))
         original_tiles = collect_surface_tiles!(Set{TileCoord}(), gm; ship_name = :asteroid)
-        process_and_log!(cmd, gm)
+        logs = process_and_log!(cmd, gm)
 
         @test collect_surface_tiles!(Set{TileCoord}(), gm; ship_name = :asteroid) == original_tiles
+        @test logs == ["Cannot redock here: move the ship until its highlighted footprint no longer overlaps another ship's clearance area"]
     end
 
     @testset "rejects redock of nonexistent ship" begin
         gm = GameMap()
         delta = TileCoord(1, 0)
         cmd = create_redock_ship_command(cq, :nonexistent, delta)
-        @test_throws Exception process_and_log!(cmd, gm)
+        @test isempty(process_and_log!(cmd, gm))
+    end
+
+    @testset "primary redock is a centrally logged programming failure" begin
+        gm = make_gamemap()
+        response = Channel{CommandStatus}(1)
+        cmd = create_redock_ship_command(cq, :primary, TileCoord(1, 0); response_channel = response)
+        logs, console = make_log_console()
+        logger = Test.TestLogger(min_level = Base.CoreLogging.Warn)
+
+        Base.CoreLogging.with_logger(logger) do
+            HexFlowCalculator.process_command!(cmd, gm, console; throw_errors = false)
+        end
+
+        @test take!(response) == REJECTED
+        @test !isready(response)
+        @test isempty(logs)
+        @test any(log -> log.message == "Map edit command threw an exception", logger.logs)
     end
 
     @testset "animation completes after redock" begin
@@ -2163,7 +2515,7 @@ end
         @test get_docking_status(gm, new_ship) isa ApproachingDockStat
         @test !has_active_manoeuvre(gm)
         @test encounter_point.spawn_time == 5.0
-        @test any(contains(log, "Encounter triggered: live_encounter") for log in logs)
+        @test isempty(logs)
         @test !any(contains(log, "Invalid map edit") for log in logs)
     end
 end
@@ -2175,11 +2527,21 @@ end
     cq = create_command_queue(4)
     cmd = create_set_tile_command(cq, TileCoord(0, 0), InvalidFluidBridgeCompBehav(), Q_POS)
     logs, console = make_log_console()
+    logger = Test.TestLogger(min_level = Base.CoreLogging.Warn)
 
-    @test_throws Exception HexFlowCalculator.process_command!(cmd, gm, console, throw_errors = true)
+    Base.CoreLogging.with_logger(logger) do
+        caught_error = try
+            HexFlowCalculator.process_command!(cmd, gm, console, throw_errors = true)
+            nothing
+        catch error
+            error
+        end
+        @test caught_error isa FluidCompatibilityError
+        @test caught_error isa ExpectedMapValidationError
+    end
     @test !has_component(gm, TileCoord(0, 0))
-    @test any(contains(log, "Invalid map edit") for log in logs)
-    @test any(contains(log, "incompatible with constraint") for log in logs)
+    @test logs == ["Invalid map edit: Fluid MONOPROP_GAS incompatible with constraint IS_LIQUID"]
+    @test isempty(logger.logs)
 end
 
 @testset "process_command! — response channels" begin
@@ -2209,7 +2571,7 @@ end
         @test take!(ch) == INVALID
     end
 
-    @testset "writes INVALID for unrecognised action" begin
+    @testset "writes REJECTED for unsupported action and logs once" begin
         gm = make_gamemap()
         set_component!(gm, TileCoord(0, 0),
             PlacedComponent(ActionCompBehav(), Q_POS, false, :primary))
@@ -2218,22 +2580,36 @@ end
         ch = Channel{CommandStatus}(1)
         cmd = create_do_action_command(cq, TileCoord(0, 0), :no_such_action;
             response_channel = ch)
-        HexFlowCalculator.process_command!(cmd, gm, silent_console, throw_errors = false)
+        logs, console = make_log_console()
+        logger = Test.TestLogger(min_level = Base.CoreLogging.Warn)
+        Base.CoreLogging.with_logger(logger) do
+            HexFlowCalculator.process_command!(cmd, gm, console, throw_errors = false)
+        end
 
-        @test take!(ch) == INVALID
+        @test take!(ch) == REJECTED
+        @test !isready(ch)
+        @test isempty(logs)
+        @test any(log -> log.message == "Map edit command threw an exception", logger.logs)
     end
 
-    @testset "writes REJECTED on sandbox failure" begin
+    @testset "writes REJECTED for expected candidate validation" begin
         gm = GameMap()
         set_surface_tile!(gm, TileCoord(0, 0))
         cq = create_command_queue(4)
         ch = Channel{CommandStatus}(1)
 
         cmd = create_set_tile_command(cq, TileCoord(0, 0), InvalidFluidBridgeCompBehav(), Q_POS; response_channel = ch)
-        HexFlowCalculator.process_command!(cmd, gm, silent_console, throw_errors = false)
+        logs, console = make_log_console()
+        logger = Test.TestLogger(min_level = Base.CoreLogging.Warn)
+        Base.CoreLogging.with_logger(logger) do
+            HexFlowCalculator.process_command!(cmd, gm, console, throw_errors = false)
+        end
 
         @test take!(ch) == REJECTED
+        @test !isready(ch)
         @test !has_component(gm, TileCoord(0, 0))
+        @test logs == ["Invalid map edit: Fluid MONOPROP_GAS incompatible with constraint IS_LIQUID"]
+        @test isempty(logger.logs)
     end
 end
 

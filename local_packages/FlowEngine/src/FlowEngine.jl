@@ -9,6 +9,7 @@ using SparseArrays, LinearAlgebra, KLU, SmallCollections, StructEquality
 # Type Exports
 export DerivedMapState, CalculatorScratchpad, MNA_State, MNA_StateSnapshot, AMatrixCache
 export RelativeFluidDeclaration, AbsoluteFluidDeclaration, RelFluidDecl, AbsFluidDecl
+export FluidCompatibilityError
 # Function Exports
 export add_pipes_abs_element!, abs_element_get_current, update_components!, index_grounded_source_elements!
 export list_elements, list_elements!, list_nodes, list_nodes!, prune!, ground_search!, clear_dangling_dependants!
@@ -64,6 +65,17 @@ const AbsFluidDecl = Union{
     AbsoluteFluidDeclaration{FluidTypeRule},
     AbsoluteFluidDeclaration{FluidConstraintRule},
 }
+
+"An expected rejection caused by incompatible fluid declarations or connected fluid regions."
+struct FluidCompatibilityError <: ExpectedMapValidationError
+    message::String
+end
+
+"Construct a fluid compatibility error from string-like input."
+FluidCompatibilityError(message::AbstractString) = FluidCompatibilityError(String(message))
+
+"Render the player-facing fluid compatibility explanation."
+Base.showerror(io::IO, error::FluidCompatibilityError) = print(io, error.message)
 
 "Map a relative fluid declaration to absolute using tile position, rotation, and mirroring."
 function map_declaration(decl::RelativeFluidDeclaration, tile::TileCoord, rotation::HexAxis, mirrored::Bool = false)
@@ -663,7 +675,7 @@ function prioritise_declarations(existing::FluidDeclaration, incoming::FluidDecl
     # Current constraints are mutually exclusive one-hot enums. If future work adds
     # overlapping constraints, this branch may need intersection semantics instead.
     existing.constraint === incoming.constraint ||
-        error("Conflicting fluid constraints: $(existing.constraint) vs $(incoming.constraint)")
+        throw(FluidCompatibilityError("Conflicting fluid constraints: $(existing.constraint) vs $(incoming.constraint)"))
 
     return incoming
 end
@@ -671,11 +683,13 @@ end
 "Check that a declaration is compatible with a concrete fluid type"
 function _check_compatible(decl::FluidDeclaration, fluid::FluidType)
     if decl isa FluidSource
-        decl.fluid_type === fluid || error("Conflicting fluid sources: $(decl.fluid_type) vs $(fluid)")
+        decl.fluid_type === fluid || throw(FluidCompatibilityError("Conflicting fluid sources: $(decl.fluid_type) vs $(fluid)"))
     elseif decl isa FluidTypeRule
-        decl.fluid_type === fluid || error("FluidTypeRule $(decl.fluid_type) incompatible with $(fluid)")
+        decl.fluid_type === fluid || throw(FluidCompatibilityError("FluidTypeRule $(decl.fluid_type) incompatible with $(fluid)"))
     elseif decl isa FluidConstraintRule
-        check_constraint(fluid, decl.constraint) || error("Fluid $(fluid) does not satisfy constraint $(decl.constraint)")
+        check_constraint(fluid, decl.constraint) || throw(
+            FluidCompatibilityError("Fluid $(fluid) does not satisfy constraint $(decl.constraint)"),
+        )
     end
     return nothing
 end
@@ -709,11 +723,17 @@ end
 "Check that a declaration at a traversed node is compatible with the region's fluid type"
 function _check_declaration_compatible(decl::FluidDeclaration, fluid_type::FluidType)
     if decl isa FluidConstraintRule
-        check_constraint(fluid_type, decl.constraint) || error("Fluid $(fluid_type) incompatible with constraint $(decl.constraint)")
+        check_constraint(fluid_type, decl.constraint) || throw(
+            FluidCompatibilityError("Fluid $(fluid_type) incompatible with constraint $(decl.constraint)"),
+        )
     elseif decl isa FluidTypeRule
-        decl.fluid_type === fluid_type || error("FluidTypeRule $(decl.fluid_type) conflicts with region fluid $(fluid_type)")
+        decl.fluid_type === fluid_type || throw(
+            FluidCompatibilityError("FluidTypeRule $(decl.fluid_type) conflicts with region fluid $(fluid_type)"),
+        )
     elseif decl isa FluidSource
-        decl.fluid_type === fluid_type || error("FluidSource $(decl.fluid_type) conflicts with region fluid $(fluid_type)")
+        decl.fluid_type === fluid_type || throw(
+            FluidCompatibilityError("FluidSource $(decl.fluid_type) conflicts with region fluid $(fluid_type)"),
+        )
     end
     return nothing
 end

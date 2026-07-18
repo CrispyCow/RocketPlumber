@@ -3,6 +3,7 @@ using HexFrame
 using HexElements
 using HexFluids
 using FlowEngine
+using FlowMap
 using HexComponentsAPI
 using HexFlowBasicComponents
 using HexFlowNozzleComponents
@@ -38,6 +39,22 @@ function make_basic_nozzle(; limit_temperature_k::Float64 = 3000.0)
         sprite = :TestSprite,
         limit_temperature_k = limit_temperature_k
     )
+end
+
+@testset "Nozzle placement guidance" begin
+    gamemap = GameMap()
+    set_surface_tile!(gamemap, TileCoord(0, 0))
+    expected = "Nozzles must be placed on a ship edge with their input connected to the surface"
+
+    for nozzle in (make_basic_nozzle(), make_switched_nozzle())
+        on_surface = placement_valid(nozzle, TileCoord(0, 0), gamemap; rotation = HexFrame.Q_POS)
+        @test !isvalidrequest(on_surface)
+        @test reason(on_surface) == expected
+
+        disconnected = placement_valid(nozzle, TileCoord(10, 10), gamemap; rotation = HexFrame.Q_POS)
+        @test !isvalidrequest(disconnected)
+        @test reason(disconnected) == expected
+    end
 end
 
 "Create the solved-state inputs needed for nozzle current and temperature updates."
@@ -96,8 +113,8 @@ end
     @test length(actions) == 1
     @test actions[1].id === :repair_component
 
-    repaired, _ = do_action!(nozzle, :repair_component)
-    @test repaired
+    result = do_action!(nozzle, :repair_component)
+    @test isvalidrequest(result)
     @test !is_damaged(nozzle)
 end
 

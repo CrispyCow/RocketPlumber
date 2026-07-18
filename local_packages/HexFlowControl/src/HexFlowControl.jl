@@ -1,7 +1,7 @@
 module HexFlowControl
 
 using HexFrame, HexComponentsAPI
-using StaticArrays, GLFW, Dates
+using StaticArrays, GLFW
 
 # Type exports
 export SimSpeed, SIM_1X, SIM_2X, SIM_4X, SIM_MAX
@@ -15,7 +15,7 @@ export PlacementDeleteState, PlacementTileState, PlacementSurfaceEditState, Plac
 export ActionPopupState, HintData, RedockModeState, InputState, ViewState, GameState
 
 # Function exports
-export create_consolebuffer, get_viewtransform
+export get_viewtransform
 export get_lastinstate!, update_lastinstate!, get_instate, get_inrising!, get_infalling!
 export placement_state, set_placement_state!, try_enter_placement_state!, clear_placement_pressed_state!, clear_placement_state!
 export selection_state, selected_component_coords, selected_pipe_coords
@@ -223,7 +223,7 @@ struct PlacementReadyState <: AbstractPlacementState end
     press_cursor_cart::CartesianCoord
     click_tile::Union{Nothing, TileCoord} = nothing
     move_target::Union{Nothing, PlacementMoveTarget} = nothing
-    move_target_valid::Bool = false
+    move_target_status::Union{Nothing, RequestStatus} = nothing  # `nothing` means no move candidate was captured
     hold_threshold_crossed::Bool = false
 end
 
@@ -586,38 +586,6 @@ function handle_world_escape!(inputstate::InputState)::Bool
     selected_element_count(inputstate) == 0 && return false
     clear_selection!(inputstate)
     return true
-end
-
-# ===============================================================
-# Console Buffer
-# ===============================================================
-
-"Creates a timestamped console message buffer, returning push and iterator functions for the hidden buffer"
-function create_consolebuffer(Length::Int)
-    # check length bounds
-    if Length < 1
-        error("Invalid Length of Console Buffer (must be more than 1)")
-    end
-
-    # internal variables
-    msg_buffer = String[]
-
-    "Closure function to add a message string to the internal message buffer"
-    push_message = (msg::String) -> begin
-        timestamp = Dates.format(now(), "HH:MM:SS")
-        stamped_msg = "[$timestamp]: $msg"
-        push!(msg_buffer, stamped_msg)
-        if length(msg_buffer) > Length
-            popfirst!(msg_buffer)
-        end
-    end
-
-    "Closure function which returns a shallow copy of the internal message buffer"
-    see_messages = () -> begin
-        copy(msg_buffer)
-    end
-
-    return push_message, see_messages
 end
 
 # ===============================================================

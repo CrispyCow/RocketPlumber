@@ -284,8 +284,8 @@ function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::
                     chosen_axis = map_rotation(comp_behav, random_axis)
 
                     # Check if placement is valid
-                    valid_pick, reason = placement_valid(comp_behav, selected_coord, map; rotation = chosen_axis)
-                    if valid_pick
+                    placement_status = placement_valid(comp_behav, selected_coord, map; rotation = chosen_axis)
+                    if isvalidrequest(placement_status)
                         set_component!(map, selected_coord, PlacedComponent(comp_behav, chosen_axis, :primary))
                         break
                     end
@@ -888,9 +888,10 @@ Collects all off-surface pipe coordinates (relative to the departing ship), floo
 from the departing ship's surface boundary, and checks whether any component reaches another
 ship's surface.
 
-Returns `(can_depart::Bool, reason::String)`.
+Returns `ValidRequest()` when departure is allowed, or `InvalidRequest(reason)` when
+a pipe chain still bridges the departing ship to another ship.
 """
-function check_departure_pipe_connections(gamemap::GameMap, ship_name::Symbol)::Tuple{Bool, String}
+function check_departure_pipe_connections(gamemap::GameMap, ship_name::Symbol)::RequestStatus
     offship_coords = Set{PipeCoord}()
     for (coord, _) in gamemap.pipe_behaviors
         v1_on = is_node_on_ship_surface(to_nodecoord(coord.v1), gamemap; ship_name)
@@ -898,7 +899,7 @@ function check_departure_pipe_connections(gamemap::GameMap, ship_name::Symbol)::
         !(v1_on && v2_on) && push!(offship_coords, coord)
     end
 
-    isempty(offship_coords) && return (true, "")
+    isempty(offship_coords) && return ValidRequest()
 
     # Starting nodes: endpoints of off-surface pipes that sit on the departing ship's surface
     starting_nodes = Set{NodeCoord}()
@@ -911,7 +912,7 @@ function check_departure_pipe_connections(gamemap::GameMap, ship_name::Symbol)::
         end
     end
 
-    isempty(starting_nodes) && return (true, "")
+    isempty(starting_nodes) && return ValidRequest()
 
     # Flood from each starting node, checking if any component reaches another ship
     visited_coords = Set{PipeCoord}()
@@ -929,14 +930,14 @@ function check_departure_pipe_connections(gamemap::GameMap, ship_name::Symbol)::
                 for (sname, _) in gamemap.ships
                     sname == ship_name && continue
                     if is_node_on_ship_surface(node, gamemap; ship_name = sname)
-                        return (false, "Can't depart: pipes still connect $(ship_name) to $(sname)")
+                        return InvalidRequest("Can't depart: pipes still connect $(ship_name) to $(sname)")
                     end
                 end
             end
         end
     end
 
-    return (true, "")
+    return ValidRequest()
 end
 
 
@@ -964,10 +965,8 @@ function depart_ship!(gamemap::GameMap, ship_name::Symbol; max_view_bounds::Unio
     end
 
     # Block departure if pipes still bridge to another ship
-    can_depart, reason = check_departure_pipe_connections(gamemap, ship_name)
-    if !can_depart
-        return false, reason
-    end
+    departure_status = check_departure_pipe_connections(gamemap, ship_name)
+    isvalidrequest(departure_status) || return false, reason(departure_status)
 
     # Compute departure direction from ship centroids
     depart_axis = compute_departure_axis(gamemap, ship_name)

@@ -4,7 +4,6 @@ version = "0.1.0"
 authors = ["Christos Lillis <christos.lillis@gmail.com>"]
 
 [deps]
-Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 GLFW = "f7f18e0c-5ee9-5ccd-a5bf-e8befd85ed98"
 HexComponentsAPI = "a2289db6-e3a5-4e05-9c21-8734dce2bbd4"
 HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"

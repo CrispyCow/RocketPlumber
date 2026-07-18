@@ -70,7 +70,7 @@ make_test_click(coord::TileCoord, clicksite::CartesianCoord = CartesianCoord(0.0
 
 "Build a `DoActionCommand` for harness use."
 make_test_action(coord::TileCoord, action_id::Symbol) =
-    DoActionCommand(id = UInt64(0), coord = coord, action_id = action_id, response_channel = nothing)
+    DoActionCommand(id = UInt64(0), component_coords = [coord], action_id = action_id, response_channel = nothing)
 
 "Build an `AddShipSurfaceCommand` for harness use."
 make_test_add_ship_surface(coord::TileCoord) =
@@ -189,7 +189,6 @@ function test_system_tick!(
         snapshot,
         inputstate::InputState,
         command_queue::CommandQueue,
-        console_push::Function,
         flowcalc_task::Union{Nothing, Task} = nothing,
     )
     isnothing(schedule) && return nothing
@@ -212,7 +211,7 @@ function test_system_tick!(
     step.tick > snapshot.gamestate.ticks && return nothing
 
     if !isnothing(step.command)
-        success, _ = try_enqueue_command!(command_queue, step.command, console_push)
+        success = try_enqueue_command!(command_queue, step.command)
         if !success && step.command.response_channel !== nothing
             put!(step.command.response_channel, QUEUED_FAILED)
         end

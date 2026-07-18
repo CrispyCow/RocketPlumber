@@ -626,7 +626,7 @@ function do_action!(comp::ElectricPumpCompBehav, action_id::Symbol; kwargs...)
     elseif action_id === :pump_off
         return do_action!(comp.switch, :close_valve)
     end
-    return (false, "Action :$(action_id) not recognised by ElectricPumpCompBehav")
+    throw(ArgumentError("Action :$(action_id) not recognised by ElectricPumpCompBehav"))
 end
 
 # Rendering traits for different electric pump types

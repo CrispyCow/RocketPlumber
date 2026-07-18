@@ -366,12 +366,12 @@ end
 function do_action!(behav::BoolSwitchBehavFrag, action_id::Symbol; kwargs...)
     if action_id === :open_valve
         set_target_conductance_to_max!(behav)
-        return (true, "Valve opened")
+        return ValidRequestResult("Valve opened")
     elseif action_id === :close_valve
         set_target_conductance_to_min!(behav)
-        return (true, "Valve closed")
+        return ValidRequestResult("Valve closed")
     end
-    return (false, "Action :$(action_id) not recognised by BoolSwitchBehavFrag")
+    throw(ArgumentError("Action :$(action_id) not recognised by BoolSwitchBehavFrag"))
 end
 
 "Sets the switch target conductance to its minimum value (OFF state)."
@@ -489,12 +489,12 @@ end
 function do_action!(behav::SteppedSwitchBehavFrag, action_id::Symbol; kwargs...)
     if action_id === :step_valve_open
         step_conductance_up!(behav)
-        return (true, "Valve stepped open")
+        return ValidRequestResult("Valve stepped open")
     elseif action_id === :step_valve_close
         step_conductance_down!(behav)
-        return (true, "Valve stepped closed")
+        return ValidRequestResult("Valve stepped closed")
     end
-    return (false, "Action :$(action_id) not recognised by SteppedSwitchBehavFrag")
+    throw(ArgumentError("Action :$(action_id) not recognised by SteppedSwitchBehavFrag"))
 end
 
 # ===============================================================

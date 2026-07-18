@@ -108,7 +108,7 @@ end
 "Enqueue a `MapOverrideCommand` on the flow calculator's command queue."
 function enqueue_map_override!(flowcalc_ipc::FlowCalculatorIPC, gamemap::GameMap)
     cmd = create_map_override_command(flowcalc_ipc.command_queue, deepcopy(gamemap))
-    try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+    try_enqueue_command!(flowcalc_ipc.command_queue, cmd)
     return nothing
 end
 
@@ -287,10 +287,9 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
                 success, reason = depart_ship!(modified_map, selected; max_view_bounds = max_view_bounds)
                 if success
                     enqueue_map_override!(flowcalc_ipc, modified_map)
-                    flowcalc_ipc.console_push(reason)
                     @info reason
                 else
-                    flowcalc_ipc.console_push(reason)
+                    @warn "Developer ship departure failed" ship_name = selected reason = reason
                 end
             end
             CImGui.TreePop()
@@ -304,10 +303,9 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
                 success, reason = swap_primary!(modified_map, selected)
                 if success
                     enqueue_map_override!(flowcalc_ipc, modified_map)
-                    flowcalc_ipc.console_push(reason)
                     @info reason
                 else
-                    flowcalc_ipc.console_push(reason)
+                    @warn "Developer primary swap failed" ship_name = selected reason = reason
                 end
             end
             CImGui.TreePop()
@@ -581,7 +579,7 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
                     flowcalc_ipc.command_queue, encounter_blueprint, display_name, enc_seed;
                     dir = enc_dir, max_view_bounds = max_view_bounds
                 )
-                try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+                try_enqueue_command!(flowcalc_ipc.command_queue, cmd)
                 @info "Dev: generated encounter" name = display_name class = enc_class richness = enc_richness
             end
 
@@ -597,7 +595,7 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
                     target_encounter_index = nothing,
                     max_view_bounds = max_view_bounds
                 )
-                try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+                try_enqueue_command!(flowcalc_ipc.command_queue, cmd)
                 @info "Dev: generated encounter (optimal dir)" name = display_name class = enc_class richness = enc_richness
             end
 
@@ -727,7 +725,7 @@ end
 "Execute an action, dispatching on popup target type. Closes the popup after success."
 function _execute_action!(inputstate, popup::ActionPopupState, action::ActionInfo, flowcalc_ipc, viewstate)
     result = _execute_target_action!(inputstate, popup.target, action, flowcalc_ipc, viewstate)
-    (!(result isa Tuple) || first(result)) && dismiss_action_popup!(inputstate)
+    result && dismiss_action_popup!(inputstate)
     return nothing
 end
 
@@ -738,7 +736,7 @@ function _execute_target_action!(inputstate, target::ComponentPopupTarget, actio
     else
         cmd = create_do_action_command(flowcalc_ipc.command_queue, target.coord, action.id)
     end
-    return try_enqueue_command!(flowcalc_ipc.command_queue, cmd, flowcalc_ipc.console_push)
+    return try_enqueue_command!(flowcalc_ipc.command_queue, cmd)
 end
 
 "Execute a shared component action as one calculator transaction."
@@ -747,13 +745,10 @@ function _execute_target_action!(inputstate, target::ElementGroupPopupTarget, ac
         command = create_delete_elements_command(
             flowcalc_ipc.command_queue, Set(target.component_coords), Set(target.pipe_coords),
         )
-        return try_enqueue_command!(flowcalc_ipc.command_queue, command, flowcalc_ipc.console_push)
+        return try_enqueue_command!(flowcalc_ipc.command_queue, command)
     end
-    commands = MapEditCommand[
-        create_do_action_command(flowcalc_ipc.command_queue, coord, action.id) for coord in target.component_coords
-    ]
-    batch = create_batch_command(flowcalc_ipc.command_queue, commands)
-    return try_enqueue_command!(flowcalc_ipc.command_queue, batch, flowcalc_ipc.console_push)
+    command = create_do_action_command(flowcalc_ipc.command_queue, target.component_coords, action.id)
+    return try_enqueue_command!(flowcalc_ipc.command_queue, command)
 end
 
 "Execute a ship action via the ship action dispatch system."

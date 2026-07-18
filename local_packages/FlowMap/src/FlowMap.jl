@@ -735,8 +735,8 @@ function collect_surface_tiles!(dest, gamemap::GameMap;
 end
 
 "Default: tile must be on the named ship's surface."
-function placement_valid(behav::T, coord::TileCoord, gamemap::GameMap; ship_name::Symbol = :primary, kwargs...) where {T <: ComponentBehavior}
-    return is_on_surface_tile(coord, gamemap; ship_name) ? (true, "") : (false, "Not on ship surface")
+function placement_valid(behav::T, coord::TileCoord, gamemap::GameMap; ship_name::Symbol = :primary, kwargs...)::RequestStatus where {T <: ComponentBehavior}
+    return is_on_surface_tile(coord, gamemap; ship_name) ? ValidRequest() : InvalidRequest("Place components on a ship surface")
 end
 
 "Find the tile with the largest projection along each `HexAxis` direction."
@@ -1042,19 +1042,21 @@ function is_node_on_ship_surface(node_abs::NodeCoord, gamemap::GameMap; ship_nam
     return false
 end
 
-"Check if a component can be placed at a coordinate"
-function can_place_component_at(coord::TileCoord, gamemap::GameMap; ship_name::Symbol = :primary)::Tuple{Bool, String}
+"Check whether a component can be placed at a coordinate."
+function can_place_component_at(coord::TileCoord, gamemap::GameMap; ship_name::Symbol = :primary)::RequestStatus
     if !is_on_surface_tile(coord, gamemap; ship_name = ship_name)
-        return (false, "Not on ship surface")
+        return InvalidRequest("Not on ship surface")
     end
     if has_pipe_component_conflict(coord, gamemap)
-        return (false, "Tile contains a pipe segment")
+        return InvalidRequest("Tile contains a pipe segment")
     end
-    return (true, "")
+    return ValidRequest()
 end
 
 """
-Validate an unchanged placed component at `destination` and return its destination ship.
+Validate a candidate placed component at `destination` and return a request result containing its destination ship.
+
+The candidate's existing `ship` field is not used to resolve destination ownership.
 
 Coordinates in `vacating_coords` relax component occupancy only. Pipe conflicts and
 component-specific placement rules are always checked.
@@ -1064,46 +1066,41 @@ function validate_component_destination(
         destination::TileCoord,
         gamemap::GameMap;
         vacating_coords::Union{Nothing, AbstractSet{TileCoord}} = nothing,
-    )::Tuple{Bool, Union{Nothing, Symbol}, String}
+    )::RequestResult{Symbol}
     occupant = get_component(gamemap, destination)
     destination_vacated = !isnothing(vacating_coords) && destination in vacating_coords
     if !isnothing(occupant) && !destination_vacated
-        return (false, nothing, "Destination tile is already occupied on $(occupant.ship)")
+        return InvalidRequest("a component already occupies the destination tile")
     end
 
     if has_pipe_component_conflict(destination, gamemap)
-        return (false, nothing, "Destination tile contains a pipe segment")
+        return InvalidRequest("a pipe segment crosses the destination tile")
     end
 
-    destination_ship = find_ship_for_placement(
+    return find_ship_for_placement(
         component.component,
         destination,
         gamemap;
         rotation = component.rotation,
         mirrored = component.mirrored,
     )
-    if isnothing(destination_ship)
-        return (false, nothing, "Destination is not a valid placement on any ship")
-    end
-
-    return (true, destination_ship, "")
 end
 
 "Check if a pipe can be placed at a pipe coordinate (both endpoint nodes must be on ship surface)."
-function can_place_pipe_at(coord::PipeCoord, gamemap::GameMap; ship_name::Symbol = :primary)::Tuple{Bool, String}
+function can_place_pipe_at(coord::PipeCoord, gamemap::GameMap; ship_name::Symbol = :primary)::RequestStatus
     if has_pipe_component_conflict(coord, gamemap)
-        return (false, "Pipe segment crosses an occupied tile")
+        return InvalidRequest("Pipe segment crosses an occupied tile")
     end
 
     v1_node = to_nodecoord(coord.v1)
     v2_node = to_nodecoord(coord.v2)
     if !is_node_on_ship_surface(v1_node, gamemap; ship_name = ship_name)
-        return (false, "Pipe endpoint node at $(coord.v1.tile) is not connected to ship surface")
+        return InvalidRequest("Pipe endpoint node at $(coord.v1.tile) is not connected to ship surface")
     end
     if !is_node_on_ship_surface(v2_node, gamemap; ship_name = ship_name)
-        return (false, "Pipe endpoint node at $(coord.v2.tile) is not connected to ship surface")
+        return InvalidRequest("Pipe endpoint node at $(coord.v2.tile) is not connected to ship surface")
     end
-    return (true, "")
+    return ValidRequest()
 end
 
 "Return true when a pipe segment would cross an occupied component tile."
@@ -1123,17 +1120,17 @@ function has_pipe_component_conflict(subject::TileCoord, gamemap::GameMap)::Bool
 end
 
 "Check if a surface tile can be removed (must not have a component on it)."
-function can_remove_surface_at(coord::TileCoord, gamemap::GameMap; ship_name::Symbol = :primary)::Tuple{Bool, String}
+function can_remove_surface_at(coord::TileCoord, gamemap::GameMap; ship_name::Symbol = :primary)::RequestStatus
     component = get_component(gamemap, coord)
     if !isnothing(component) && component.ship === ship_name
-        return (false, "Surface cannot be deleted under a component, delete component first")
+        return InvalidRequest("Surface cannot be deleted under a component, delete component first")
     end
     # TODO: This validation doesn't prevent nozzles from being left floating when their input node's
     # surface tile is removed. Consider adding a check that iterates through all components and validates
     # their placement after surface removal, or implement a separate validation pass that can be triggered
     # when editing surface tiles. For now, users can create invalid states by removing surface under
     # nozzle input nodes, but this won't cause crashes - just invalid placement that can be fixed.
-    return (true, "")
+    return ValidRequest()
 end
 
 # ===============================================================
@@ -1164,13 +1161,21 @@ function find_ships_adjacent_to_coord(gamemap::GameMap, coord::TileCoord)::Vecto
     return adjacent
 end
 
-"Find the first ship whose `placement_valid` accepts `(component, coord)`. Current placement rules are expected to make the match unique."
-function find_ship_for_placement(component::ComponentBehavior, coord::TileCoord, gamemap::GameMap; rotation::HexAxis, mirrored::Bool = false)::Union{Symbol, Nothing}
+"Find a ship accepting a component placement, or return the most specific placement rejection reason."
+function find_ship_for_placement(
+        component::ComponentBehavior, coord::TileCoord, gamemap::GameMap;
+        rotation::HexAxis, mirrored::Bool = false,
+    )::RequestResult{Symbol}
+    first_reason = "Place components on a ship surface"
     for (ship_name, _) in gamemap.ships
-        is_valid, _ = placement_valid(component, coord, gamemap; rotation, mirrored, ship_name)
-        is_valid && return ship_name
+        status = placement_valid(component, coord, gamemap; rotation, mirrored, ship_name)
+        isvalidrequest(status) && return ValidRequestResult(ship_name)
+        status_reason = reason(status)
+        if first_reason == "Place components on a ship surface" && status_reason != first_reason
+            first_reason = status_reason
+        end
     end
-    return nothing
+    return InvalidRequest(first_reason)
 end
 
 "Read the stored ship tag from the component wrapper at `coord`, if present."
@@ -1300,7 +1305,7 @@ Resolve ownership for a complete candidate pipe topology without mutating `gamem
 Off-surface networks touching multiple ships are assigned to the ship whose name sorts first,
 making ownership independent of dictionary and set iteration order.
 """
-function resolve_pipe_ownerships(gamemap::GameMap, pipe_coords)::Tuple{Bool, Dict{PipeCoord, Symbol}, String}
+function resolve_pipe_ownerships(gamemap::GameMap, pipe_coords)::RequestResult{Dict{PipeCoord, Symbol}}
     ownerships = Dict{PipeCoord, Symbol}()
     off_surface = Set{PipeCoord}()
 
@@ -1327,47 +1332,48 @@ function resolve_pipe_ownerships(gamemap::GameMap, pipe_coords)::Tuple{Bool, Dic
             target_ship = isnothing(target_ship) ? ship : min(target_ship, ship)
         end
         isnothing(target_ship) &&
-            return (false, ownerships, "Pipe network is not connected to a ship surface")
+            return InvalidRequest("Pipe network is not connected to a ship surface")
 
         for coord in connected
             ownerships[coord] = target_ship
         end
     end
-    return (true, ownerships, "")
+    return ValidRequestResult(ownerships)
 end
 
 "Normalise every placed pipe's owner from the map's complete final topology."
-function normalise_pipe_ownership!(gamemap::GameMap)::Tuple{Bool, String}
-    valid, ownerships, reason = resolve_pipe_ownerships(gamemap, keys(gamemap.pipe_behaviors))
-    valid || return (false, reason)
+function normalise_pipe_ownership!(gamemap::GameMap)::RequestStatus
+    ownership_result = resolve_pipe_ownerships(gamemap, keys(gamemap.pipe_behaviors))
+    isvalidrequest(ownership_result) || return ownership_result
+    ownerships = unwrap(ownership_result)
 
     for (coord, ship) in ownerships
         placed = gamemap.pipe_behaviors[coord]
         placed.ship === ship || (gamemap.pipe_behaviors[coord] = PlacedPipe(placed.pipe, ship))
     end
-    return (true, "")
+    return ValidRequest()
 end
 
 """
-    can_place_pipe_offship(coord, gamemap) → (valid, target_ship, reason)
+    can_place_pipe_offship(coord, gamemap) → RequestResult{Symbol}
 
 Perform the minimum local check needed to preview placing an off-surface pipe at `coord`.
 Requires an endpoint to touch a ship surface or an existing, authoritatively normalised pipe
 network. Committed map edits must subsequently resolve the complete pipe topology.
 """
-function can_place_pipe_offship(coord::PipeCoord, gamemap::GameMap)::Tuple{Bool, Union{Symbol, Nothing}, String}
+function can_place_pipe_offship(coord::PipeCoord, gamemap::GameMap)::RequestResult{Symbol}
     if has_pipe_component_conflict(coord, gamemap)
-        return (false, nothing, "Pipe segment crosses an occupied tile")
+        return InvalidRequest("Pipe segment crosses an occupied tile")
     end
 
     v1_ship = find_ship_for_node(to_nodecoord(coord.v1), gamemap; default = nothing)
     v2_ship = find_ship_for_node(to_nodecoord(coord.v2), gamemap; default = nothing)
 
     if isnothing(v1_ship) && isnothing(v2_ship)
-        return (false, nothing, "Neither endpoint is connected to a ship or existing pipe")
+        return InvalidRequest("Neither endpoint is connected to a ship or existing pipe")
     end
 
-    return (true, !isnothing(v1_ship) ? v1_ship : v2_ship, "")
+    return ValidRequestResult(!isnothing(v1_ship) ? v1_ship : v2_ship)
 end
 
 """
@@ -1405,9 +1411,11 @@ end
     reassign_pipe_ownership!(deleted_coord, gamemap)
 
 Compatibility wrapper that normalises ownership after deleting an off-surface pipe.
+The normalisation status is intentionally discarded because this compatibility API returns `nothing`.
 """
 function reassign_pipe_ownership!(::PipeCoord, gamemap::GameMap)
-    normalise_pipe_ownership!(gamemap)
+    normalisation_status = normalise_pipe_ownership!(gamemap)
+    isvalidrequest(normalisation_status) || return nothing
     return nothing
 end
 

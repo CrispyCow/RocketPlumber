@@ -259,13 +259,13 @@ end
         @test close_action.enabled == false
 
         # do_action! open
-        success, msg = do_action!(bsw, :open_valve)
-        @test success
+        result = do_action!(bsw, :open_valve)
+        @test isvalidrequest(result)
         @test bsw.switch.state.target_conductance ≈ 2.0
 
         # do_action! close
-        success, msg = do_action!(bsw, :close_valve)
-        @test success
+        result = do_action!(bsw, :close_valve)
+        @test isvalidrequest(result)
         @test bsw.switch.state.target_conductance ≈ 0.0
     end
 end
@@ -343,12 +343,12 @@ end
 
     @testset "do_action!" begin
         ssw = make_stepped_switch()
-        success, _ = do_action!(ssw, :step_valve_open)
-        @test success
+        result = do_action!(ssw, :step_valve_open)
+        @test isvalidrequest(result)
         @test ssw.switch.state.target_conductance > 0.0
 
-        success, _ = do_action!(ssw, :step_valve_close)
-        @test success
+        result = do_action!(ssw, :step_valve_close)
+        @test isvalidrequest(result)
         @test ssw.switch.state.target_conductance ≈ 0.0
     end
 end

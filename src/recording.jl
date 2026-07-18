@@ -175,7 +175,7 @@ function save_screenshot!(rec::RecordingState, fb_width::Int32, fb_height::Int32
         console_push("Screenshot saved: $(output_path)")
         @info "Screenshot saved: $(output_path)"
     catch e
-        console_push("Screenshot failed while saving to $(output_path): $(string(e))")
+        console_push("Screenshot failed; see the terminal log for details")
         @warn "Screenshot capture failed" output_path = output_path exception = (e, catch_backtrace())
     end
 
@@ -610,7 +610,7 @@ function start_recording!(rec::RecordingState, fb_width::Int32, fb_height::Int32
         rec.ffmpeg_stderr_pipe = nothing
         rec.ffmpeg_stderr_task = nothing
         rec.output_path = ""
-        console_push("Recording failed: could not start encoder")
+        console_push("Recording failed; see the terminal log for details")
         @warn "Recording start failed" exception = (e, catch_backtrace())
         return false
     end
@@ -620,10 +620,12 @@ function start_recording!(rec::RecordingState, fb_width::Int32, fb_height::Int32
     rec.frame_count = 0
     rec.is_recording = true
 
-    console_push("Recording started: $(rec.output_path) ($(fb_width)×$(fb_height) @ $(RECORDING_TARGET_FPS)fps)")
+    console_push("Recording started: $(rec.output_path)")
     encoded_width, encoded_height = recording_encoded_dims(fb_width, fb_height)
     if encoded_width != fb_width || encoded_height != fb_height
-        console_push("Recording output padded to $(encoded_width)×$(encoded_height) for H.264 compatibility")
+        source_dimensions = (fb_width, fb_height)
+        encoded_dimensions = (encoded_width, encoded_height)
+        @info "Recording dimensions padded for H.264 compatibility" source_dimensions = source_dimensions encoded_dimensions = encoded_dimensions
     end
     if !async_readback_started
         @warn "Async PBO readback unavailable; recording is using direct framebuffer capture"
@@ -633,7 +635,11 @@ function start_recording!(rec::RecordingState, fb_width::Int32, fb_height::Int32
 end
 
 "Stop the current recording session: close FFmpeg pipe, finalise video."
-function stop_recording!(rec::RecordingState, console_push::Function; stop_message::Union{Nothing, String} = nothing)
+function stop_recording!(
+        rec::RecordingState, console_push::Function;
+        stop_message::Union{Nothing, String} = nothing,
+        failure_message::Union{Nothing, String} = nothing,
+    )
     output = rec.output_path
     exit_code = nothing
     writer_failure = poll_writer_failure!(rec)
@@ -684,7 +690,7 @@ function stop_recording!(rec::RecordingState, console_push::Function; stop_messa
     end
 
     if !isnothing(writer_failure)
-        console_push("Recording failed: writer task error")
+        console_push("Recording failed; see the terminal log for details")
         captured_log = ffmpeg_log_text(rec)
         if isempty(captured_log)
             @warn "Recording failed: writer task error" exception = (writer_failure.exception, writer_failure.backtrace)
@@ -692,15 +698,18 @@ function stop_recording!(rec::RecordingState, console_push::Function; stop_messa
             @warn "Recording failed: writer task error" exception = (writer_failure.exception, writer_failure.backtrace) ffmpeg_log = captured_log
         end
     elseif !isnothing(readback_failure)
-        console_push("Recording failed: readback shutdown error")
+        console_push("Recording failed; see the terminal log for details")
         captured_log = ffmpeg_log_text(rec)
         if isempty(captured_log)
             @warn "Recording failed: readback shutdown error" exception = (readback_failure.exception, readback_failure.backtrace)
         else
             @warn "Recording failed: readback shutdown error" exception = (readback_failure.exception, readback_failure.backtrace) ffmpeg_log = captured_log
         end
+    elseif !isnothing(failure_message)
+        console_push("Recording failed; see the terminal log for details")
+        @warn "Recording stopped after a capture failure" reason = failure_message exit_code = exit_code output_path = output
     elseif !isnothing(stop_message)
-        console_push("Recording stopped: $(stop_message)")
+        console_push("Recording stopped because $(stop_message)")
         if isnothing(exit_code) || exit_code == 0
             @info "Recording stopped: $(stop_message)"
         else
@@ -713,7 +722,7 @@ function stop_recording!(rec::RecordingState, console_push::Function; stop_messa
         @info "Recording saved: $(output) ($(rec.frame_count) frames)"
     else
         failure_detail = isnothing(exit_code) ? "encoder process unavailable" : "encoder exited with code $(exit_code)"
-        console_push("Recording failed: $(failure_detail)")
+        console_push("Recording failed; see the terminal log for details")
         captured_log = ffmpeg_log_text(rec)
         if isempty(captured_log)
             @warn "Recording failed: $(failure_detail)"
@@ -791,7 +800,7 @@ function recording_tick!(rec::RecordingState, inputstate, viewstate, window, con
     catch e
         @warn "Recording frame capture failed, stopping recording" exception = (e, catch_backtrace())
         inputstate.is_recording = false
-        stop_recording!(rec, console_push; stop_message = "capture error")
+        stop_recording!(rec, console_push; failure_message = "frame capture failed")
     end
 
     return nothing

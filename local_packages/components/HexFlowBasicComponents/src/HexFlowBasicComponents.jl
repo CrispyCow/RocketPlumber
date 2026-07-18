@@ -173,12 +173,12 @@ function do_action!(stall::StallBehavFrag, action_id::Symbol; kwargs...)
     if action_id === :unstall
         if is_stalled(stall)
             unstall!(stall)
-            return (true, "Component unstalled")
+            return ValidRequestResult("Component unstalled")
         else
-            return (false, "Component is not currently stalled")
+            return InvalidRequest("Component is not currently stalled")
         end
     end
-    return (false, "Action :$(action_id) not recognised by StallBehavFrag")
+    throw(ArgumentError("Action :$(action_id) not recognised by StallBehavFrag"))
 end
 
 #= ---------- AutoDeactivationBehavFrag ----------- =#
@@ -230,12 +230,12 @@ function do_action!(damage::DamageStateBehavFrag, action_id::Symbol; kwargs...)
     if action_id === :repair_component
         if is_damaged(damage)
             undamage!(damage) # Temporary direct repair path until dedicated repair gameplay exists.
-            return (true, "Component repaired")
+            return ValidRequestResult("Component repaired")
         else
-            return (false, "Component is not currently damaged")
+            return InvalidRequest("Component is not currently damaged")
         end
     end
-    return (false, "Action :$(action_id) not recognised by DamageStateBehavFrag")
+    throw(ArgumentError("Action :$(action_id) not recognised by DamageStateBehavFrag"))
 end
 
 #= ---------- ComponentTemperatureBehavFrag ----------- =#

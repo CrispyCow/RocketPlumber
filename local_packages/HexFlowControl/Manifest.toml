@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "bc3df21175b39b4572008d29267aa23f61211d7f"
+project_hash = "ce3682c801e133dbb2445cbbc3ab5554c4c9094a"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "MacroTools"]
@@ -177,7 +177,7 @@ uuid = "2f6a9512-4d00-40fa-a3ea-0a7372983a4b"
 version = "0.1.0"
 
 [[deps.HexFlowControl]]
-deps = ["Dates", "GLFW", "HexComponentsAPI", "HexFrame", "StaticArrays"]
+deps = ["GLFW", "HexComponentsAPI", "HexFrame", "StaticArrays"]
 path = "."
 uuid = "c4f7b3e2-9a5d-4c8e-b1f2-3e8d9a5c7f1b"
 version = "0.1.0"

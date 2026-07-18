@@ -168,7 +168,10 @@ function user_handler!(
 
     state = placement_state(inputstate)
     if is_standard_family_state(state)
-        flowcalc_standard_interaction!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push, window; mouse_captured = mouse_captured)
+        flowcalc_standard_interaction!(
+            flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, window;
+            console_push = flowcalc_ipc.console_push, mouse_captured = mouse_captured,
+        )
 
         if !mouse_captured && placement_state(inputstate) isa PlacementReadyState
             flowcalc_rightclick_action!(inputstate, snapshot.gamemap, window)
@@ -176,11 +179,11 @@ function user_handler!(
     elseif state isa PlacementRedockState
         _handle_redock_click!(inputstate, flowcalc_ipc, window; mouse_captured = mouse_captured)
     elseif state isa PlacementTileState
-        flowcalc_tileplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push, window; mouse_captured = mouse_captured)
+        flowcalc_tileplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, window; mouse_captured = mouse_captured)
     elseif state isa PlacementDeleteState
-        flowcalc_deleteplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push, window; mouse_captured = mouse_captured)
+        flowcalc_deleteplacer!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, window; mouse_captured = mouse_captured)
     elseif state isa PlacementSurfaceEditState
-        flowcalc_surfaceeditor!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, flowcalc_ipc.console_push, window; mouse_captured = mouse_captured)
+        flowcalc_surfaceeditor!(flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, window; mouse_captured = mouse_captured)
     end
 
     return update_lastinstate!(inputstate, window)
@@ -340,7 +343,7 @@ function enter_gameloop(window::GLFW.Window;
         @timeit render_loop_timer "Get Snapshot" g_snapshot::FlowCalculatorSnapshot = g_flowcalc_ipc.get_snapshot()
 
         if !isnothing(test_commands)
-            test_system_tick!(test_commands, g_snapshot, g_inputstate, g_flowcalc_ipc.command_queue, g_flowcalc_ipc.console_push, g_flowcalc_task)
+            test_system_tick!(test_commands, g_snapshot, g_inputstate, g_flowcalc_ipc.command_queue, g_flowcalc_task)
         end
 
         # Learning system tick (main game only, not sandbox)

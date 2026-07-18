@@ -205,22 +205,22 @@ function do_action!(tank::TankBehavFrag, action_id::Symbol; kwargs...)
     if action_id === :vent_and_seal
         tank.state.charge = 0.0
         seal!(tank.sealstate)
-        return (true, "Tank vented and sealed")
+        return ValidRequestResult("Tank vented and sealed")
     elseif action_id === :seal_tank
         seal!(tank.sealstate)
-        return (true, "Tank sealed")
+        return ValidRequestResult("Tank sealed")
     elseif action_id === :unseal_tank
         unseal!(tank.sealstate)
-        return (true, "Tank unsealed")
+        return ValidRequestResult("Tank unsealed")
     end
-    return (false, "Action :$(action_id) not recognised by TankBehavFrag")
+    throw(ArgumentError("Action :$(action_id) not recognised by TankBehavFrag"))
 end
 
 function can_be_moved(tank::TankBehavFrag; kwargs...)
     if tank.state.charge <= 0.0
-        return (true, "")
+        return ValidRequest()
     else
-        return (false, "Tank cannot be moved unless empty")
+        return InvalidRequest("empty or vent the tank first")
     end
 end
 
@@ -661,30 +661,30 @@ function do_action!(tank::PressureFedTankBehavFrag, action_id::Symbol; kwargs...
     if action_id === :vent_and_seal_gas
         tank.gas_state.charge = 0.0
         seal!(tank.gas_sealstate)
-        return (true, "Gas vented and sealed")
+        return ValidRequestResult("Gas vented and sealed")
     elseif action_id === :vent_and_seal_liquid
         tank.liquid_state.charge = 0.0
         seal!(tank.liquid_sealstate)
-        return (true, "Liquid vented and sealed")
+        return ValidRequestResult("Liquid vented and sealed")
     elseif action_id === :seal_both
         seal!(tank.liquid_sealstate)
         seal!(tank.gas_sealstate)
-        return (true, "Both sides sealed")
+        return ValidRequestResult("Both sides sealed")
     elseif action_id === :unseal_gas
         unseal!(tank.gas_sealstate)
-        return (true, "Gas side unsealed")
+        return ValidRequestResult("Gas side unsealed")
     elseif action_id === :unseal_liquid
         unseal!(tank.liquid_sealstate)
-        return (true, "Liquid side unsealed")
+        return ValidRequestResult("Liquid side unsealed")
     end
-    return (false, "Action :$(action_id) not recognised by PressureFedTankBehavFrag")
+    throw(ArgumentError("Action :$(action_id) not recognised by PressureFedTankBehavFrag"))
 end
 
 function can_be_moved(tank::PressureFedTankBehavFrag; kwargs...)
     if tank.liquid_state.charge <= 0.0 && tank.gas_state.charge <= 0.0
-        return (true, "")
+        return ValidRequest()
     else
-        return (false, "Tank cannot be moved while it contains fuel or gas")
+        return InvalidRequest("empty or vent the tank first")
     end
 end
 
