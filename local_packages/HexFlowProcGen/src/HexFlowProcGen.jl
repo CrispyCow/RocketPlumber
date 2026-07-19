@@ -18,7 +18,8 @@ export PipePlacementStrategy, PipeSpawnOptions, roll_pipe
 export place_shipset!, place_random_pipes!, place_connected_pipes!, place_pipeset!
 export ScalingRule, NoScaling, LinearScaling, GatedLinearScaling, evaluate_scaling
 export WeightedComponentSet
-export select_encounter_class, select_fuel_tag
+export select_encounter_class, select_fuel_tag, select_encounter_fuel_tag
+export resolve_encounter_component_pool
 export generate_encounter, generate_encounter_name
 export encounter_ship!, encounter_ship_optimal_dir!, depart_ship!
 export check_departure_pipe_connections
@@ -28,7 +29,8 @@ export step_space_map_time!
 export calculate_minimum_intercept_dv, plan_intercept_manoeuvre, plan_intercept_manoeuvre_at_time
 export get_encounter_ship_seed
 export generate_base_velocities
-export HullSizeConfig, FuelTagConfig, EncounterClassConfig
+export HullSizeConfig, FuelTagConfig, DirectEncounterComponents, FluidTaggedEncounterComponents
+export EncounterComponentSource, EncounterClassConfig
 export compute_hull_size, compute_target_components, evaluate_component_pool, calculate_richness
 export SpaceMapState, get_encounter_config
 export estimate_min_delta_v
@@ -68,8 +70,9 @@ end
 
 "Select a weighted random item from `weights` using SquirrelNoise."
 function weighted_roll_noise(weights::Vector{Tuple{T, Float64}}, point, seed::UInt32) where {T}
-    isempty(weights) && error("weighted_roll_noise called with empty weights vector")
+    isempty(weights) && throw(ArgumentError("weighted_roll_noise called with empty weights vector"))
     total_weight = sum(w[2] for w in weights)
+    total_weight <= 0.0 && throw(ArgumentError("weighted_roll_noise requires a positive total weight"))
     roll = get_noise_zero_to_one(point, seed) * total_weight
 
     cumulative = 0.0
@@ -128,6 +131,8 @@ end
     NOZZLE_EDGE_PLACE
 end
 
+const MAX_NO_PROGRESS_PLACEMENT_REROLLS::Int = 2
+
 struct CompSpawnOptions
     kind::Symbol
     spawn_count_weights::Vector{Tuple{Int, Float64}}
@@ -157,8 +162,45 @@ function clear_tiles_around_component!(tiles::Set{TileCoord}, coord::TileCoord)
     return nothing
 end
 
+"Scale a rolled clustered spawn count, preserving the base count for other strategies."
+function scale_spawn_count(
+        base_count::Int,
+        placement::CompPlacementStrategy,
+        clustered_count_scale::Float64,
+    )::Int
+    base_count == 0 && return 0
+    placement != CLUSTERED_PLACE && return base_count
+
+    isfinite(clustered_count_scale) && clustered_count_scale > 0.0 || throw(ArgumentError(
+        "Clustered spawn-count scale must be finite and positive; " *
+        "got $clustered_count_scale for base count $base_count"
+    ))
+
+    raw_count = base_count * clustered_count_scale
+    isfinite(raw_count) && typemin(Int) <= raw_count <= typemax(Int) || throw(ArgumentError(
+        "Scaled spawn count is outside the Int range; " *
+        "base count $base_count and scale $clustered_count_scale produced $raw_count"
+    ))
+
+    rounded_count = try
+        round(Int, raw_count, RoundNearestTiesUp)
+    catch exception
+        (exception isa InexactError || exception isa OverflowError) || rethrow()
+        throw(ArgumentError(
+            "Scaled spawn count is outside the Int range; " *
+            "base count $base_count and scale $clustered_count_scale produced $raw_count"
+        ))
+    end
+    return raw_count > 0.0 ? max(1, rounded_count) : rounded_count
+end
+
 "Place all components from `shipset` onto the map. Returns `(success, message)`."
-function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::Tuple{Bool, String}
+function place_shipset!(
+        map::GameMap,
+        shipset::ShipComponentSet,
+        seed::UInt32;
+        clustered_count_scale::Float64 = 1.0,
+    )::Tuple{Bool, String}
     existing_components::Set{TileCoord} = Set(keys(get_components(map)))
 
     ship_surface_edge::Set{TileCoord} = Set{TileCoord}()
@@ -186,7 +228,8 @@ function place_shipset!(map::GameMap, shipset::ShipComponentSet, seed::UInt32)::
 
     for spawn_option in shipset.components
         empty!(component_location_list)
-        count = weighted_roll_rng(prng, spawn_option.spawn_count_weights)
+        base_count = weighted_roll_rng(prng, spawn_option.spawn_count_weights)
+        count = scale_spawn_count(base_count, spawn_option.placement, clustered_count_scale)
 
         # Build list of positions to place components
         if spawn_option.placement == CLUSTERED_PLACE
@@ -526,13 +569,36 @@ struct FuelTagConfig
     component_pool::Vector{WeightedComponentSet}
 end
 
+"A non-fluid encounter component source selected without a fuel tag."
+struct DirectEncounterComponents
+    component_pool::Vector{WeightedComponentSet}
+end
+
+"Encounter component sources selected by a real fluid tag."
+struct FluidTaggedEncounterComponents
+    fuel_configs::Dict{FluidType, FuelTagConfig}
+
+    function FluidTaggedEncounterComponents(fuel_configs::Dict{FluidType, FuelTagConfig})
+        isempty(fuel_configs) && throw(ArgumentError(
+            "FluidTaggedEncounterComponents requires at least one fuel configuration"
+        ))
+        return new(fuel_configs)
+    end
+end
+
+const EncounterComponentSource = Union{
+    DirectEncounterComponents,
+    FluidTaggedEncounterComponents,
+}
+
 "Complete generation configuration for one encounter class."
 struct EncounterClassConfig
     class_weight::ScalingRule
     hull_size::HullSizeConfig
     target_components::LinearScaling
-    fuel_configs::Dict{FluidType, FuelTagConfig}
+    component_source::EncounterComponentSource
     pipe_options::Vector{PipeSpawnOptions}
+    clustered_spawn_count_scale::ScalingRule
 end
 
 "Configuration for the encounter point system."
@@ -559,6 +625,19 @@ end
 "Compute target component count from scaling rule and richness."
 function compute_target_components(scaling::ScalingRule, richness::Float64)::Int
     return max(0, round(Int, evaluate_scaling(scaling, richness)))
+end
+
+"Evaluate and validate the clustered spawn-count scale for an encounter."
+function compute_clustered_spawn_count_scale(
+        config::EncounterClassConfig,
+        richness::Float64,
+    )::Float64
+    scale = evaluate_scaling(config.clustered_spawn_count_scale, richness)
+    isfinite(scale) && scale > 0.0 || throw(ArgumentError(
+        "Encounter clustered spawn-count scale must be finite and positive; " *
+        "got $scale at richness $richness"
+    ))
+    return scale
 end
 
 "Evaluate a component pool, returning (component_set, weight) pairs with nonzero weights."
@@ -609,10 +688,50 @@ function select_fuel_tag(
         richness::Float64, point, seed::UInt32
     )::FluidType
     sorted_tags = sort!(collect(keys(fuel_configs)))
-    evaluated = Tuple{FluidType, Float64}[
-        (tag, evaluate_scaling(fuel_configs[tag].weight, richness)) for tag in sorted_tags
-    ]
+    evaluated = Tuple{FluidType, Float64}[]
+    for tag in sorted_tags
+        weight = evaluate_scaling(fuel_configs[tag].weight, richness)
+        weight > 0.0 && push!(evaluated, (tag, weight))
+    end
+    isempty(evaluated) && throw(ArgumentError(
+        "No encounter fuel tags have positive weight at richness $richness"
+    ))
     return weighted_roll_noise(evaluated, point, seed)
+end
+
+"Select the UI/generation fuel tag for an encounter component source."
+function select_encounter_fuel_tag(
+        source::EncounterComponentSource,
+        richness::Float64,
+        point,
+        seed::UInt32,
+    )::Union{FluidType, Nothing}
+    source isa DirectEncounterComponents && return nothing
+    fluid_source = source::FluidTaggedEncounterComponents
+    return select_fuel_tag(fluid_source.fuel_configs, richness, point, seed)
+end
+
+"Resolve the raw weighted component-set pool for a selected encounter tag."
+function resolve_encounter_component_pool(
+        source::EncounterComponentSource,
+        fuel_tag::Union{FluidType, Nothing},
+    )::Vector{WeightedComponentSet}
+    if source isa DirectEncounterComponents
+        isnothing(fuel_tag) || throw(ArgumentError(
+            "Direct encounter components cannot use fuel tag $fuel_tag"
+        ))
+        return source.component_pool
+    end
+
+    isnothing(fuel_tag) && throw(ArgumentError(
+        "Fluid-tagged encounter components require a fuel tag"
+    ))
+    fluid_source = source::FluidTaggedEncounterComponents
+    fuel_config = get(fluid_source.fuel_configs, fuel_tag, nothing)
+    isnothing(fuel_config) && throw(ArgumentError(
+        "No encounter component pool configured for fuel tag $fuel_tag"
+    ))
+    return fuel_config.component_pool
 end
 
 """
@@ -659,18 +778,37 @@ function generate_encounter(
     set_surface_tile!(temp_gm, temp_tiles; ship_name = :primary)
 
     target_count = compute_target_components(class_config.target_components, richness)
+    clustered_count_scale = compute_clustered_spawn_count_scale(class_config, richness)
+    raw_pool = resolve_encounter_component_pool(class_config.component_source, fuel_tag)
+    pool = evaluate_component_pool(raw_pool, richness)
+    if target_count > 0 && isempty(pool)
+        throw(ArgumentError(
+            "Encounter $encounter_class has target $target_count at richness $richness " *
+            "but no eligible component sets"
+        ))
+    end
+
     draw_seed = seed
-    fuel_config = !isnothing(fuel_tag) ? get(class_config.fuel_configs, fuel_tag, nothing) : nothing
-    if !isnothing(fuel_config)
-        for iteration in 1:target_count + 10
-            count_components(temp_gm) >= target_count && break
-            pool = evaluate_component_pool(fuel_config.component_pool, richness)
-            isempty(pool) && break
-            draw_seed = get_noise(UInt32(iteration), draw_seed)
-            chosen_set = weighted_roll_noise(pool, iteration, draw_seed)
-            success, _ = place_shipset!(temp_gm, chosen_set, draw_seed)
-            !success && break
+    consecutive_no_progress_attempts = 0
+    for iteration in 1:(target_count + 10)
+        current_count = count_components(temp_gm)
+        current_count >= target_count && break
+
+        draw_seed = get_noise(UInt32(iteration), draw_seed)
+        chosen_set = weighted_roll_noise(pool, iteration, draw_seed)
+        before_count = current_count
+        place_shipset!(temp_gm, chosen_set, draw_seed; clustered_count_scale)
+
+        after_count = count_components(temp_gm)
+        after_count >= target_count && break
+
+        if after_count > before_count
+            consecutive_no_progress_attempts = 0
+            continue
         end
+
+        consecutive_no_progress_attempts += 1
+        consecutive_no_progress_attempts > MAX_NO_PROGRESS_PLACEMENT_REROLLS && break
     end
     place_pipeset!(temp_gm, class_config.pipe_options, seed)
 
@@ -1126,7 +1264,12 @@ function spawn_encounter_point!(ep::EncounterPoint, sm::SpaceMapState, current_t
 
     class_config = config.encounter_class_configs[ep.encounter_class]
     fuel_seed = get_noise(UInt32(200), ep.ship_type_seed)
-    ep.fuel_tag = isempty(class_config.fuel_configs) ? nothing : select_fuel_tag(class_config.fuel_configs, ep.richness, ep.index, fuel_seed)
+    ep.fuel_tag = select_encounter_fuel_tag(
+        class_config.component_source,
+        ep.richness,
+        ep.index,
+        fuel_seed,
+    )
 
     ep.display_name = generate_encounter_name(ep.ship_type_seed, ep.encounter_class)
 

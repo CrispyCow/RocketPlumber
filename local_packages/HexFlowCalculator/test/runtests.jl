@@ -23,10 +23,11 @@ function make_trigger_test_encounter_config()
         NoScaling(1.0),
         HullSizeConfig(LinearScaling(2.0, 0.0), LinearScaling(2.0, 0.0)),
         LinearScaling(0.0, 0.0),
-        Dict{FluidType, FuelTagConfig}(
+        FluidTaggedEncounterComponents(Dict{FluidType, FuelTagConfig}(
             HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), WeightedComponentSet[]),
-        ),
+        )),
         PipeSpawnOptions[],
+        NoScaling(1.0),
     )
 
     return EncounterSystemConfig(

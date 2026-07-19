@@ -134,14 +134,16 @@ end
 
 "Return deterministic fuel-tag options for an encounter class."
 function _encounter_fuel_options(class_config::EncounterClassConfig)
-    if isempty(class_config.fuel_configs)
+    source = class_config.component_source
+    if source isa DirectEncounterComponents
         return (
-            ["None (scrap)"],
+            ["No fuel classification"],
             Union{HexFluids.FluidType, Nothing}[nothing],
         )
     end
 
-    sorted_tags = sort!(collect(keys(class_config.fuel_configs)))
+    fluid_source = source::FluidTaggedEncounterComponents
+    sorted_tags = sort!(collect(keys(fluid_source.fuel_configs)))
     return (
         string.(sorted_tags),
         Union{HexFluids.FluidType, Nothing}[sorted_tags...],
@@ -154,13 +156,9 @@ function _encounter_set_options(
         fuel_tag::Union{HexFluids.FluidType, Nothing},
         richness::Float64,
     )
-    isnothing(fuel_tag) && return Tuple{ShipComponentSet, Float64}[]
-
-    fuel_config = get(class_config.fuel_configs, fuel_tag, nothing)
-    isnothing(fuel_config) && return Tuple{ShipComponentSet, Float64}[]
-
+    raw_pool = resolve_encounter_component_pool(class_config.component_source, fuel_tag)
     return [
-        (wcs.component_set, evaluate_scaling(wcs.weight, richness)) for wcs in fuel_config.component_pool
+        (wcs.component_set, evaluate_scaling(wcs.weight, richness)) for wcs in raw_pool
     ]
 end
 
@@ -554,8 +552,8 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             encounter_set_options = _encounter_set_options(class_config, enc_fuel, enc_richness)
             CImGui.SeparatorText("Encounter Set Options")
             if isempty(encounter_set_options)
-                if isnothing(enc_fuel)
-                    CImGui.TextWrapped("Scrap encounters do not use fuel-tagged ship sets.")
+                if class_config.component_source isa DirectEncounterComponents
+                    CImGui.TextWrapped("No component sets are registered for this direct encounter class.")
                 else
                     CImGui.TextWrapped("No encounter sets are registered for the selected fuel tag.")
                 end

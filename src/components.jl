@@ -671,33 +671,36 @@ ship_class_config = EncounterClassConfig(
     NoScaling(3.0),
     HullSizeConfig(LinearScaling(1.0, 0.6), LinearScaling(2.0, 8.0)),
     LinearScaling(1.0, 2.0),
-    Dict{FluidType, FuelTagConfig}(
+    FluidTaggedEncounterComponents(Dict{FluidType, FuelTagConfig}(
         HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), _ship_coldgas_pool),
         HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 2.5), _ship_monoprop_pool),
         HexFluids.FUEL_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 4.0), _ship_biprop_pool),
-    ),
+    )),
     standard_pipeoptions,
+    NoScaling(1.0),
 )
 
 fuel_cache_class_config = EncounterClassConfig(
     NoScaling(3.0),
-    HullSizeConfig(LinearScaling(1.0, 0.3), LinearScaling(8.0, 10.0)),
+    HullSizeConfig(LinearScaling(1.0, 0.8), LinearScaling(8.0, 10.0)),
     LinearScaling(2.0, 3.0),
-    Dict{FluidType, FuelTagConfig}(
+    FluidTaggedEncounterComponents(Dict{FluidType, FuelTagConfig}(
         HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), _cache_coldgas_pool),
         HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 2.5), _cache_monoprop_pool),
         HexFluids.FUEL_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 4.0), _cache_fuel_pool),
         HexFluids.OXIDISER_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 4.0), _cache_oxidiser_pool),
-    ),
+    )),
     fuel_cache_pipeoptions,
+    LinearScaling(0.8, 0.35),
 )
 
 scrap_class_config = EncounterClassConfig(
     NoScaling(3.0),
     HullSizeConfig(LinearScaling(1.0, 0.8), LinearScaling(2.0, 2.0)),
     LinearScaling(0.0, 1.0),
-    Dict{FluidType, FuelTagConfig}(),
+    DirectEncounterComponents(_scrap_pool),
     standard_pipeoptions,
+    NoScaling(1.0),
 )
 
 encounter_class_configs = Dict{EncounterClass, EncounterClassConfig}(
