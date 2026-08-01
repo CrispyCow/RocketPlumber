@@ -32,8 +32,9 @@ function mapgen_turbopumpintro2()
             cycle_efficiency = 0.6000000238418579,
             current_rpm = 0.0,
             max_rpm = 3000.0,
-            rotor_inertia = 100.0,
-            friction_coefficient = 0.019999999552965164,
+            rotor_inertia = 50.0,
+            friction_coefficient = 0.002,
+            drive_time_constant = 1.25,
         ),
         HexFrame.Q_POS,
         :_blueprint
