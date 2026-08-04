@@ -5,7 +5,7 @@ in vec2 local_texcoord;
 
 uniform sampler2D texunit;
 uniform vec4 colour_multiply;
-uniform float x_uncliped;
+uniform vec2 unclipped_texcoord; // maximum visible local texture coordinate per axis
 uniform float gameticks;
 uniform vec2 object_translation;
 
@@ -79,7 +79,7 @@ float fbm(vec2 p, float time_offset) {
 
 void main()
 {
-    if (local_texcoord.x > x_uncliped) {
+    if (any(greaterThan(local_texcoord, unclipped_texcoord))) {
         discard;
     } else {
         vec4 baseColor = texture(texunit, atlas_texcoord) * colour_multiply;

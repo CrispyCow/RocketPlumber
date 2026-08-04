@@ -190,6 +190,9 @@ const TURBOPUMP_LOW_SPEED_DRAG_RPM::Float64 = 300.0
 const TURBOPUMP_LOW_SPEED_DRAG_MAX_MULTIPLIER::Float64 = 4.0
 const TURBOPUMP_STOP_RPM_THRESHOLD::Float64 = 1.0
 const TURBOPUMP_MAX_EXTRA_OVERSPEED_VIBE_PX::Float64 = 10.0
+const TURBOPUMP_SPEED_SAFE_COLOUR = ColourType(0.25, 0.8, 0.25, 1.0)
+const TURBOPUMP_SPEED_OVERSPEED_COLOUR = ColourType(0.9, 0.55, 0.2, 1.0)
+const TURBOPUMP_SPEED_DAMAGED_COLOUR = ColourType(0.8, 0.25, 0.25, 1.0)
 
 "Compute branchless viscous and low-speed shaft drag for a non-negative RPM."
 function turbopump_shaft_drag(friction_coefficient::Real, rpm::Real)::Float64
@@ -299,6 +302,19 @@ end
 "Return an animation fraction that exposes RPM from zero through the failure threshold."
 function get_animation_rpm_fraction(comp::TurboPumpCompBehav)::Float64
     return clamp(get_current_rpm(comp.rotor) / get_rated_rpm(comp), 0.0, TURBOPUMP_FAILURE_RPM_RATIO)
+end
+
+"Return the turbopump speed indicator's fill fraction and status colour."
+function turbopump_speed_indicator(comp::TurboPumpCompBehav)
+    fill_fraction = get_rpm_fraction(comp.rotor)
+    colour = if is_damaged(comp.overheat)
+        TURBOPUMP_SPEED_DAMAGED_COLOUR
+    elseif get_current_rpm(comp.rotor) > get_rated_rpm(comp)
+        TURBOPUMP_SPEED_OVERSPEED_COLOUR
+    else
+        TURBOPUMP_SPEED_SAFE_COLOUR
+    end
+    return (; fill_fraction, colour)
 end
 
 "Compute total turbopump pipework vibration magnitude from the current component state."
@@ -514,10 +530,13 @@ end
 function render_base_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, mirrored::Bool = false, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     fluidmask_colour = DEFAULT_EMPTY_FLUID_COLOUR
     render_colours = turbopump_render_colours(colour, comp.overheat, get_overspeed_fraction(comp))
+    speed_indicator = turbopump_speed_indicator(comp)
     genturbine_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + TURBOPUMP_GENTURBINE_HEIGHT_OFFSET + render_height_offset)
 
     # Fluid mask.
     push!(queue, render_basic_tile(glmap, :TurboPump1_fluidmask, rotation, position; mirrored = mirrored, scale = scale, colour = fluidmask_colour, transparency = transparency, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
+    # Rated-RPM speed mask, including its opaque black empty region.
+    push!(queue, render_basic_tile(glmap, :TurboPump1_speedmask, rotation, position; mirrored = mirrored, scale = scale, transparency = transparency, colour = speed_indicator.colour, unclipped_texcoord = SVector(1.0, speed_indicator.fill_fraction), draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 10 + render_height_offset), pos_offset = pos_offset))
     # Rotor.
     push!(queue, render_basic_tile(glmap, :TurboPump1_rotor, rotation, position; mirrored = mirrored, scale = scale, transparency = transparency, colour = render_colours.base, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC - 10 + render_height_offset), pos_offset = pos_offset))
     # Static housing.
@@ -533,6 +552,7 @@ end
 "Renders turbopump with animations when active: spinning rotor, vibration, and smoke effects."
 function render_map_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot, gameticks::Int64, rotation::HexAxis, mirrored::Bool = false, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     render_colours = turbopump_render_colours(ColourType(1.0, 1.0, 1.0, 1.0), comp.overheat, get_overspeed_fraction(comp))
+    speed_indicator = turbopump_speed_indicator(comp)
     genturbine_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + TURBOPUMP_GENTURBINE_HEIGHT_OFFSET + render_height_offset)
 
     # Get turbine fluid colour
@@ -556,6 +576,8 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBeh
 
     # Fluid mask.
     push!(queue, render_basic_tile(glmap, :TurboPump1_fluidmask, rotation, position; mirrored = mirrored, colour = fluidmask_colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
+    # Rated-RPM speed mask, including its opaque black empty region.
+    push!(queue, render_basic_tile(glmap, :TurboPump1_speedmask, rotation, position; mirrored = mirrored, colour = speed_indicator.colour, unclipped_texcoord = SVector(1.0, speed_indicator.fill_fraction), draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 10 + render_height_offset), pos_offset = pos_offset))
 
     # Rotor.
     if animation_rpm_fraction > 0.0
@@ -765,7 +787,7 @@ function render_static!(
     )
     # Render charge bar
     energy_frac = get_current_energy(comp.energy) / get_max_energy(comp.energy)
-    push!(queue, render_basic_tile(glmap, chargemask_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = charge_bar_colour, x_unclipped = energy_frac, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, chargemask_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = charge_bar_colour, unclipped_texcoord = SVector(energy_frac, 1.0), draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
 
     # Render fluid mask if it exists
     if !isnothing(fluidmask_sprite(comp))

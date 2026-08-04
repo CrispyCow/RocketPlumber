@@ -165,7 +165,7 @@ struct BaseSpriteRenderProgram <: AbstractRenderProgram end
     object_translation::SVector{2, GLfloat}
     texunit::GLint
     colour_multiply::SVector{4, GLfloat}
-    x_uncliped::GLfloat
+    unclipped_texcoord::SVector{2, GLfloat}
 end
 uniforms_type(::Type{BaseSpriteRenderProgram}) = BaseSpriteUniforms
 get_vao_symbol(::BaseSpriteRenderProgram) = :UnitQuad_VAO
@@ -222,7 +222,7 @@ struct LiquidSpriteRenderProgram <: AbstractRenderProgram end
     object_translation::SVector{2, GLfloat}
     texunit::GLint
     colour_multiply::SVector{4, GLfloat}
-    x_uncliped::GLfloat
+    unclipped_texcoord::SVector{2, GLfloat}
     gameticks::GLfloat
 end
 uniforms_type(::Type{LiquidSpriteRenderProgram}) = LiquidSpriteUniforms
@@ -241,7 +241,7 @@ struct GasSpriteRenderProgram <: AbstractRenderProgram end
     object_translation::SVector{2, GLfloat}
     texunit::GLint
     colour_multiply::SVector{4, GLfloat}
-    x_uncliped::GLfloat
+    unclipped_texcoord::SVector{2, GLfloat}
     gameticks::GLfloat
 end
 uniforms_type(::Type{GasSpriteRenderProgram}) = GasSpriteUniforms
@@ -320,16 +320,19 @@ end
 const SHIP_SELECTED_TINT = SVector{4, Float32}(0.7f0, 1.0f0, 0.7f0, 1.0f0)
 
 """
-Compute BaseSpriteUniforms for any sprite. This function contains the common logic
-used by all sprite renderers. It returns a BaseSpriteUniforms value (not a RenderCommand)
-so callers can adapt or copy fields into their own uniform structs.
+Compute the shared sprite uniforms used by all sprite renderers.
+
+`unclipped_texcoord` gives the maximum visible local texture coordinate on each
+axis. Values are expected in the range 0 to 1, with `(1, 1)` disabling clipping.
+The result is a `BaseSpriteUniforms` value so animated renderers can copy the
+shared fields into their specialised uniform structs.
 """
 function setup_basesprite_uniforms(
         glmap::GLObjectMap, sprite::Symbol, rotation_matrix::SMatrix{2, 2, GLfloat}, position::SVector{2, Float32};
         colour::SVector{4, Float32} = SVector{4, Float32}(1.0, 1.0, 1.0, 1.0),
         scale::AbstractFloat = 1.0,
         transparency::AbstractFloat = 1.0,
-        x_unclipped::AbstractFloat = 1.0,
+        unclipped_texcoord::SVector{2, <:AbstractFloat} = SVector{2, Float32}(1.0, 1.0),
         sprite_offset_tweak_px::SVector{2, <:AbstractFloat} = SVector{2, Float32}(0.0, 0.0),
         sprite_rotation_tweak_mat::SMatrix{2, 2, GLfloat} = SMatrix{2, 2, GLfloat}(1, 0, 0, 1)
     )
@@ -361,7 +364,7 @@ function setup_basesprite_uniforms(
         object_translation = position,
         texunit = getdata_gltex(glmap, sprite_data.texname).tex_unit,
         colour_multiply = colour_out,
-        x_uncliped = GLfloat(x_unclipped)
+        unclipped_texcoord = SVector{2, GLfloat}(unclipped_texcoord)
     )
 end
 
@@ -443,7 +446,7 @@ function render_liquid_sprite(
         object_translation = base.object_translation,
         texunit = base.texunit,
         colour_multiply = base.colour_multiply,
-        x_uncliped = base.x_uncliped,
+        unclipped_texcoord = base.unclipped_texcoord,
         gameticks = GLfloat(gameticks)
     )
     return RenderCommand(u, draw_height)
@@ -475,7 +478,7 @@ function render_gas_sprite(
         object_translation = base.object_translation,
         texunit = base.texunit,
         colour_multiply = base.colour_multiply,
-        x_uncliped = base.x_uncliped,
+        unclipped_texcoord = base.unclipped_texcoord,
         gameticks = GLfloat(gameticks)
     )
     return RenderCommand(u, draw_height)

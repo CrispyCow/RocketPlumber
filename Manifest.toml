@@ -475,7 +475,7 @@ uuid = "2757ce39-ab9e-404a-8c92-d547522109e8"
 version = "0.1.0"
 
 [[deps.HexFlowTankComponents]]
-deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowRendering", "HexFluids", "HexFrame", "RenderEngine"]
+deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowRendering", "HexFluids", "HexFrame", "RenderEngine", "StaticArrays"]
 path = "local_packages/components/HexFlowTankComponents"
 uuid = "609e9a39-c1ed-488c-b014-91800377b13c"
 version = "0.1.0"

@@ -7,7 +7,7 @@ in vec2 local_texcoord;
 /*  UNIFORMS  */
 uniform sampler2D texunit;
 uniform vec4 colour_multiply;
-uniform float x_uncliped; // 0.0 to 1.0
+uniform vec2 unclipped_texcoord; // maximum visible local texture coordinate per axis
 uniform float gameticks;  // animation driver
 uniform vec2 object_translation;
 
@@ -28,7 +28,7 @@ float hash(vec2 p) {
 
 void main()
 {
-    if (local_texcoord.x > x_uncliped) {
+    if (any(greaterThan(local_texcoord, unclipped_texcoord))) {
         discard;
     } else {
         // Base colour

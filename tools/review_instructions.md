@@ -114,7 +114,7 @@ Do not excessively break function signatures across multiple lines. I have a wid
           colour::SVector{4, Float32} = SVector{4, Float32}(1.0, 1.0, 1.0, 1.0),
           scale::AbstractFloat = 1.0,
           transparency::AbstractFloat = 1.0,
-          x_unclipped::AbstractFloat = 1.0,
+          unclipped_texcoord::SVector{2, <:AbstractFloat} = SVector{2, Float32}(1.0, 1.0),
           sprite_offset_tweak_px::SVector{2, <:AbstractFloat} = SVector{2, Float32}(0.0, 0.0),
           sprite_rotation_tweak_mat::SMatrix{2, 2, GLfloat} = SMatrix{2, 2, GLfloat}(1, 0, 0, 1)
       )

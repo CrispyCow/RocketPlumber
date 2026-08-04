@@ -102,7 +102,7 @@ Three `DockingStatus` subtypes: `ConnectedDockStat`, `ApproachingDockStat`, `Dep
 
 | Program | Effect |
 |---------|--------|
-| `BaseSpriteRenderProgram` | General textured sprites with horizontal clipping |
+| `BaseSpriteRenderProgram` | General textured sprites with two-axis texture-coordinate clipping |
 | `LiquidSpriteRenderProgram` | Animated fBm noise-based liquid flow |
 | `GasSpriteRenderProgram` | Animated blocky pixel-noise gas effect |
 | `ParticleRenderProgram` | Points to billboarded quads via geometry shader |

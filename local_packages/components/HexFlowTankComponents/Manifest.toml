@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "d6fe1d0bad5872f242a47cf7a3f370bacb80d8b8"
+project_hash = "2cfa9145df5ddc18c0604038f644e21d1226e1de"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "MacroTools"]
@@ -291,7 +291,7 @@ uuid = "4ae3e4b3-9148-4249-9c49-b5ebbd5f9e90"
 version = "0.1.0"
 
 [[deps.HexFlowTankComponents]]
-deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowRendering", "HexFluids", "HexFrame", "RenderEngine"]
+deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowRendering", "HexFluids", "HexFrame", "RenderEngine", "StaticArrays"]
 path = "."
 uuid = "609e9a39-c1ed-488c-b014-91800377b13c"
 version = "0.1.0"

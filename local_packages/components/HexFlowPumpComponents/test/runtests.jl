@@ -7,6 +7,9 @@ using FlowEngine
 using HexFlowBasicComponents
 using HexFlowPumpComponents
 using HexFlowSwitchComponents
+using HexFlowRendering
+using RenderEngine
+using StaticArrays
 
 using HexElements: CONST_RESISTOR, CONST_VOLTAGE
 using HexFlowPumpComponents: EnergyStoreBehavFrag, RotorStateBehavFrag, DelayedDriveBehavFrag,
@@ -314,6 +317,78 @@ end
     @test !actions[1].enabled
     on_click!(comp)
     @test !is_inactive(comp.deactivation)
+end
+
+@testset "Turbopump speed indicator" begin
+    safe_colour = HexFlowPumpComponents.TURBOPUMP_SPEED_SAFE_COLOUR
+    overspeed_colour = HexFlowPumpComponents.TURBOPUMP_SPEED_OVERSPEED_COLOUR
+    damaged_colour = HexFlowPumpComponents.TURBOPUMP_SPEED_DAMAGED_COLOUR
+
+    cases = (
+        (name = "stopped", rpm = 0.0, damaged = false, fill_fraction = 0.0, colour = safe_colour),
+        (name = "half rated", rpm = 1500.0, damaged = false, fill_fraction = 0.5, colour = safe_colour),
+        (name = "rated", rpm = 3000.0, damaged = false, fill_fraction = 1.0, colour = safe_colour),
+        (name = "overspeed", rpm = 3300.0, damaged = false, fill_fraction = 1.0, colour = overspeed_colour),
+        (name = "damaged and stopped", rpm = 0.0, damaged = true, fill_fraction = 0.0, colour = damaged_colour),
+        (name = "damaged at half rated", rpm = 1500.0, damaged = true, fill_fraction = 0.5, colour = damaged_colour),
+        (name = "damaged and overspeed", rpm = 3300.0, damaged = true, fill_fraction = 1.0, colour = damaged_colour),
+    )
+
+    for case in cases
+        @testset "$(case.name)" begin
+            comp = make_turbopump_at_rpm(case.rpm)
+            case.damaged && damage!(comp.overheat)
+            indicator = HexFlowPumpComponents.turbopump_speed_indicator(comp)
+            @test indicator.fill_fraction == case.fill_fraction
+            @test indicator.colour == case.colour
+        end
+    end
+
+    heated = make_turbopump_at_rpm(1500.0)
+    set_component_temperature!(heated.overheat, 1400.0)
+    heated_indicator = HexFlowPumpComponents.turbopump_speed_indicator(heated)
+    @test !is_damaged(heated.overheat)
+    @test heated_indicator.fill_fraction == 0.5
+    @test heated_indicator.colour == safe_colour
+end
+
+function _mock_turbopump_glmap()
+    glmap = GLObjectMap()
+    glmap.textures[:TestAtlas] = RenderEngine.GLtexData(RenderEngine.GLtexID(0), UInt32(0), UInt(1024), UInt(1024))
+    sprites = (
+        :TurboPump1_fluidmask, :TurboPump1_speedmask, :TurboPump1_rotor,
+        :TurboPump1_static, :TurboPump1_genturbine, :TurboPump1_vibepart,
+    )
+    for sprite in sprites
+        uv_offset = sprite === :TurboPump1_speedmask ? SVector{2, Float32}(0.9f0, 0.9f0) : SVector{2, Float32}(0.0f0, 0.0f0)
+        glmap.sprites[sprite] = GLspriteData(
+            :TestAtlas,
+            SVector{2, Float32}(0.1f0, 0.1f0),
+            uv_offset,
+            SVector{2, Float32}(256.0f0, 256.0f0),
+            SVector{2, Float32}(256.0f0, 256.0f0),
+            SVector{2, Float32}(0.0f0, 0.0f0),
+        )
+    end
+    return glmap
+end
+
+@testset "Turbopump speed-mask render command" begin
+    queue = HexFlowRendering.SpriteRenderCommand[]
+    comp = make_turbopump_at_rpm(1500.0)
+    render_base_elem!(queue, comp;
+        glmap = _mock_turbopump_glmap(),
+        rotation = TEST_ROTATION,
+        position = TEST_TILE,
+        render_height_offset = 200
+    )
+
+    speed_commands = filter(command -> command.uniforms.uv_offset == SVector{2, Float32}(0.9f0, 0.9f0), queue)
+    @test length(speed_commands) == 1
+    speed_command = only(speed_commands)
+    @test speed_command.uniforms.unclipped_texcoord == SVector{2, Float32}(1.0f0, 0.5f0)
+    @test speed_command.uniforms.colour_multiply == HexFlowPumpComponents.TURBOPUMP_SPEED_SAFE_COLOUR
+    @test speed_command.draw_height == Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 10 + 200)
 end
 
 @testset "Turbopump overheat" begin

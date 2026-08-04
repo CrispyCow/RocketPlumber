@@ -254,6 +254,42 @@ function _mock_pipe_glmap()
     return glmap
 end
 
+function _mock_sprite_glmap()
+    glmap = GLObjectMap()
+    glmap.textures[:TestAtlas] = RenderEngine.GLtexData(RenderEngine.GLtexID(0), UInt32(0), UInt(1024), UInt(1024))
+    glmap.sprites[:TestSprite] = GLspriteData(
+        :TestAtlas,
+        SVector{2, Float32}(0.1f0, 0.2f0),
+        SVector{2, Float32}(0.3f0, 0.4f0),
+        SVector{2, Float32}(256.0f0, 256.0f0),
+        SVector{2, Float32}(128.0f0, 128.0f0),
+        SVector{2, Float32}(64.0f0, 32.0f0),
+    )
+    return glmap
+end
+
+@testset "sprite clipping uniforms" begin
+    glmap = _mock_sprite_glmap()
+    rotation = rotmat_2D(0.0)
+    position = TileCoord(0, 0)
+
+    default_uniforms = setup_basesprite_uniforms(glmap, :TestSprite, rotation, glvec(position))
+    @test default_uniforms.unclipped_texcoord == SVector{2, Float32}(1.0f0, 1.0f0)
+
+    requested_texcoord = SVector(0.25, 0.75)
+    base_uniforms = setup_basesprite_uniforms(glmap, :TestSprite, rotation, glvec(position); unclipped_texcoord = requested_texcoord)
+    @test base_uniforms.unclipped_texcoord == SVector{2, Float32}(0.25f0, 0.75f0)
+
+    basic_command = render_basic_sprite(glmap, :TestSprite, rotation, position; unclipped_texcoord = requested_texcoord)
+    @test basic_command.uniforms.unclipped_texcoord == SVector{2, Float32}(0.25f0, 0.75f0)
+
+    liquid_command = render_liquid_sprite(glmap, :TestSprite, rotation, position; gameticks = 1, unclipped_texcoord = requested_texcoord)
+    @test liquid_command.uniforms.unclipped_texcoord == SVector{2, Float32}(0.25f0, 0.75f0)
+
+    gas_command = render_gas_sprite(glmap, :TestSprite, rotation, position; gameticks = 1, unclipped_texcoord = requested_texcoord)
+    @test gas_command.uniforms.unclipped_texcoord == SVector{2, Float32}(0.25f0, 0.75f0)
+end
+
 @testset "pipe_queued_render! renders every PipeCoord span class" begin
     gm_pipes = GameMap()
     test_pipe = TestPipeRenderBehav()

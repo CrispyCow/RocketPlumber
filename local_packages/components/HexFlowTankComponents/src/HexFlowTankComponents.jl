@@ -10,7 +10,7 @@ All components follow the ComponentBehavior interface defined in HexComponentsAP
 """
 module HexFlowTankComponents
 
-using Accessors
+using Accessors, StaticArrays
 using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowEngine, FlowMap, RenderEngine, HexFlowRendering
 using HexFlowBasicComponents
 
@@ -388,7 +388,7 @@ end
 
 """
 Render liquid tank fluid visualization.
-Renders the fluid-colored mask with horizontal clipping based on fill fraction,
+Renders the fluid-coloured mask with texture-coordinate clipping based on fill fraction,
 always oriented horizontally (Q_POS) regardless of component rotation.
 Accepts `nothing` for fluid to render as empty (uses the default empty colour).
 """
@@ -399,7 +399,7 @@ function render_fluid!(queue::Vector{<:RenderCommand}, behav::LiquidTankBehavFra
 
     colour = get_fluid_colour(fluid)
     fill_frac = behav.tank.state.charge / behav.tank.max_charge
-    push!(queue, render_liquid_tile(glmap, fluidmask, fixed_rotation, position, gameticks; scale = scale, transparency = transparency, colour = colour, x_unclipped = fill_frac, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 100) + Int32(render_height_offset), pos_offset = pos_offset))
+    push!(queue, render_liquid_tile(glmap, fluidmask, fixed_rotation, position, gameticks; scale = scale, transparency = transparency, colour = colour, unclipped_texcoord = SVector(fill_frac, 1.0), draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 100) + Int32(render_height_offset), pos_offset = pos_offset))
     return nothing
 end
 
@@ -1260,11 +1260,11 @@ function render_base_elem!(queue::Vector{<:RenderCommand}, comp::PressureFedTank
     gas_fill_frac = headspace > 0.0 ? clamp(comp.tank.gas_state.charge / headspace, 0.0, 1.0) : 0.0
 
     gas_colour = get_fluid_colour(comp.gas_fluid)
-    push!(queue, render_gas_tile(glmap, mask, HexFrame.Q_NEG, position, gameticks; scale = scale, transparency = transparency * gas_fill_frac, colour = gas_colour, x_unclipped = 1.0 - liquid_fill_frac, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 50) + height_offset, pos_offset = pos_offset))
+    push!(queue, render_gas_tile(glmap, mask, HexFrame.Q_NEG, position, gameticks; scale = scale, transparency = transparency * gas_fill_frac, colour = gas_colour, unclipped_texcoord = SVector(1.0 - liquid_fill_frac, 1.0), draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 50) + height_offset, pos_offset = pos_offset))
 
     # Use stored runtime liquid identity for colour; renders as empty colour when nothing
     liquid_colour = get_fluid_colour(get_stored_fluid(comp))
-    push!(queue, render_liquid_tile(glmap, mask, fixed_rotation, position, gameticks; scale = scale, transparency = transparency, colour = liquid_colour, x_unclipped = liquid_fill_frac, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 100) + height_offset, pos_offset = pos_offset))
+    push!(queue, render_liquid_tile(glmap, mask, fixed_rotation, position, gameticks; scale = scale, transparency = transparency, colour = liquid_colour, unclipped_texcoord = SVector(liquid_fill_frac, 1.0), draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 100) + height_offset, pos_offset = pos_offset))
 
     push!(queue, render_basic_tile(glmap, tanksprite(comp), fixed_rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + height_offset, pos_offset = pos_offset))
 
