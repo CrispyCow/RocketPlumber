@@ -12,6 +12,7 @@
 - `tutorials.jl` — `LearningEntry` definitions for sandbox and in-game tutorials, demo map includes
 - `ui_common.jl` — shared UI constants, ImGui typed input helpers, formatting utilities
 - `ui_game.jl` — in-game ImGui windows: inspector (dispatched on coord type), velocity tracker, toolbar, property box, space map overlay with encounter planning
+- `ui_galaxy_escape.jl` — exclusive Galaxy Escape victory report and its formatting/drawing helpers
 - `ui_menus.jl` — pause menu, developer utilities (proc gen tools, docking viewer)
 - `ui_learning.jl` — Learning Helper overlay and Tutorial Detail pane UI
 - `recording.jl` — screen recording (FFmpeg H.264) and PNG screenshots, `RecordingState`, frame capture via `glReadPixels`

@@ -5,7 +5,7 @@ using StaticArrays, GLFW
 
 # Type exports
 export SimSpeed, SIM_1X, SIM_2X, SIM_4X, SIM_MAX
-export ExitReason, EXIT_QUIT, EXIT_MENU, EXIT_SANDBOX_COMPLETED, EXIT_SANDBOX_STARTED
+export ExitReason, EXIT_QUIT, EXIT_MENU, EXIT_RESTART, EXIT_SANDBOX_COMPLETED, EXIT_SANDBOX_STARTED
 export AbstractPopupTarget, ComponentPopupTarget, ElementGroupPopupTarget, ShipPopupTarget
 export AbstractSelectionState, SelectionEmptyState, WorldSelectionState, SelectionState
 export AbstractPlacementMoveTarget, TileComponentMoveTarget, PipeMoveTarget, SelectionMoveTarget
@@ -13,6 +13,7 @@ export AbstractPlacementState, AbstractEditorPlacementState
 export PlacementReadyState, PlacementPressedState, PlacementMoveState, PlacementMovePendingState, PlacementPipeChainState
 export PlacementDeleteState, PlacementTileState, PlacementSurfaceEditState, PlacementRedockState
 export ActionPopupState, HintData, RedockModeState, InputState, ViewState, GameState
+export PlaySessionTiming
 
 # Function exports
 export get_viewtransform
@@ -27,6 +28,36 @@ export dismiss_action_popup!, highlighted_ship, handle_world_escape!
 export clear_world_selection!, enter_ready_placement_state!, enter_editor_placement_state!, toggle_editor_placement_state!
 export enter_redock_placement_state!, editor_capabilities_enabled
 export sim_speed_to_ups, increase_sim_speed, decrease_sim_speed, sim_speed_label
+export get_current_play_time_seconds
+export GALAXY_ESCAPE_UNLOCK_ESTIMATED_DELTA_V, GALAXY_ESCAPE_TIER_DELTA_V
+export is_galaxy_escape_unlocked, galaxy_escape_tier, can_complete_galaxy_escape
+
+# ===============================================================
+# Galaxy Escape Rules
+# ===============================================================
+
+const GALAXY_ESCAPE_UNLOCK_ESTIMATED_DELTA_V::Float64 = 600.0
+const GALAXY_ESCAPE_TIER_DELTA_V::NTuple{3, Float64} = (2500.0, 4500.0, 5200.0)
+
+"Convert and validate a numeric input used by the fixed galaxy-escape rules."
+function _galaxy_escape_rule_value(value::Real)::Float64
+    converted = Float64(value)
+    isfinite(converted) || throw(ArgumentError("galaxy escape rule input must be finite"))
+    return converted
+end
+
+"Return whether the historical conservative delta-V peak has unlocked galaxy escape."
+is_galaxy_escape_unlocked(peak_estimated_delta_v::Real)::Bool =
+    _galaxy_escape_rule_value(peak_estimated_delta_v) >= GALAXY_ESCAPE_UNLOCK_ESTIMATED_DELTA_V
+
+"Return the currently attained galaxy-escape tier from zero through three."
+function galaxy_escape_tier(progress::Real)::UInt8
+    value = _galaxy_escape_rule_value(progress)
+    return UInt8(count(threshold -> value >= threshold, GALAXY_ESCAPE_TIER_DELTA_V))
+end
+
+"Return whether current progress is sufficient to complete galaxy escape."
+can_complete_galaxy_escape(progress::Real)::Bool = galaxy_escape_tier(progress) > 0x00
 
 # ===============================================================
 # Simulation Speed
@@ -77,8 +108,29 @@ end
 @enum ExitReason begin
     EXIT_QUIT
     EXIT_MENU
+    EXIT_RESTART
     EXIT_SANDBOX_COMPLETED
     EXIT_SANDBOX_STARTED
+end
+
+"Runtime-only play-session clock; this value is never persisted with a map."
+struct PlaySessionTiming
+    recorded_play_time_at_start_seconds::Float64
+    started_at_ns::UInt64
+end
+
+"Start a play-session clock from a validated recorded play-time baseline."
+function PlaySessionTiming(recorded_play_time_seconds::Real; started_at_ns::UInt64 = time_ns())
+    baseline = Float64(recorded_play_time_seconds)
+    (isfinite(baseline) && baseline >= 0.0) || throw(ArgumentError("recorded play time must be finite and non-negative"))
+    return PlaySessionTiming(baseline, started_at_ns)
+end
+
+"Return the live play time in seconds using an injectable monotonic timestamp."
+function get_current_play_time_seconds(timing::PlaySessionTiming; current_time_ns::UInt64 = time_ns())::Float64
+    current_time_ns < timing.started_at_ns && throw(ArgumentError("current timestamp precedes session start"))
+    elapsed_seconds = Float64(current_time_ns - timing.started_at_ns) / 1.0e9
+    return timing.recorded_play_time_at_start_seconds + elapsed_seconds
 end
 
 # ===============================================================
@@ -307,6 +359,7 @@ const PlacementState = Union{
     screenshot_requested::Bool = false
     action_popup::Union{Nothing, ActionPopupState} = nothing
     # loop status
+    galaxy_escape_completion_requested::Bool = false
     exit_reason::Union{Nothing, ExitReason} = nothing
     pending_sandbox_id::Union{Nothing, Symbol} = nothing
 end

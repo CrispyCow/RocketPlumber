@@ -2,7 +2,7 @@
 # Helper Functions for the Game Main Loop
 # ===============================================================
 
-using HexFlowTelemetry, FlowMap, FlowEngine, HexFlowProcGen, HexFluids
+using HexFlowTelemetry, FlowMap, FlowEngine, HexFlowProcGen, HexFluids, HexFlowControl
 using StaticArrays
 using LinearAlgebra
 
@@ -131,6 +131,7 @@ function user_handler!(
 
     # Set time progression flag and current spacemap time for input blocking and key handlers
     inputstate.gui_inputs[:time_progressing] = is_time_progressing(snapshot.gamemap)
+    inputstate.gui_inputs[:galaxy_escape_active] = is_galaxy_escape_active(snapshot.gamemap)
     current_time_years = get_time_years(snapshot.gamemap)
     inputstate.gui_inputs[:current_spacemap_time] = something(current_time_years, 0.0)
     inputstate.gui_inputs[:consume_right_click] = false
@@ -189,17 +190,26 @@ function user_handler!(
     return update_lastinstate!(inputstate, window)
 end
 
-"Renders the CImGui UI elements, which mutates the inputstate"
+"Render the CImGui UI elements, mutating render-owned input state."
 function ui_rendering!(
         inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, snapshot::FlowCalculatorSnapshot,
         viewstate::ViewState, window::GLFW.Window;
-        learning_state::Union{Nothing, LearningSystemState} = nothing
+        learning_state::Union{Nothing, LearningSystemState} = nothing,
+        session_timing::PlaySessionTiming,
+        completed_gamemap::Union{Nothing, GameMap},
     )
+    if !isnothing(completed_gamemap)
+        ui_renderwrap() do
+            ui_galaxy_escape_victory_render!(completed_gamemap, inputstate, window)
+        end
+        return nothing
+    end
+
     # Calculate bounds for interactions
     max_view_bounds = calc_max_reachable_bounds(viewstate)
     set_max_reachable_bounds!(flowcalc_ipc.shared_state, max_view_bounds)
 
-    return ui_renderwrap() do
+    ui_renderwrap() do
         if !isnothing(learning_state) && is_sandbox_learning(learning_state)
             active_entry = get_active_entry(learning_state)
             if !isnothing(active_entry)
@@ -208,20 +218,21 @@ function ui_rendering!(
         end
 
         if !inputstate.spacemap_active
-            ui_velocity_tracker_render(snapshot.gamestate, snapshot.gamemap, inputstate, flowcalc_ipc)
+            ui_velocity_tracker_render!(snapshot.gamestate, snapshot.gamemap, inputstate, flowcalc_ipc)
             ui_toolbar_render!(inputstate, GLFW.GetWindowSize(window), flowcalc_ipc.console_see)
             ui_propertybox_render!(inputstate, snapshot.gamemap, snapshot.derived, snapshot.mna, GLFW.GetWindowSize(window), flowcalc_ipc)
             ui_action_popup_render!(inputstate, viewstate, flowcalc_ipc)
-            ui_dev_utils_menu_render!(inputstate, flowcalc_ipc, snapshot, viewstate, GLFW.GetWindowSize(window), max_view_bounds)
+            ui_dev_utils_menu_render!(inputstate, flowcalc_ipc, snapshot, viewstate, GLFW.GetWindowSize(window), max_view_bounds; session_timing = session_timing)
         end
 
-        ui_pause_menu_render!(inputstate, snapshot, window, learning_state)
+        ui_pause_menu_render!(inputstate, snapshot, window, learning_state; session_timing = session_timing)
         ui_spacemap_render!(inputstate, flowcalc_ipc, snapshot, GLFW.GetWindowSize(window), max_view_bounds)
 
         if !isnothing(learning_state)
             ui_learning_system_render!(learning_state, inputstate, GLFW.GetWindowSize(window))
         end
     end
+    return nothing
 end
 
 """
@@ -281,6 +292,28 @@ function build_learning_runtime_state(gamemap::GameMap; initial_active_tutorial_
     )
 end
 
+"Capture a detached map with the render-owned session state materialised."
+function capture_session_gamemap(
+        gamemap::GameMap, session_timing::PlaySessionTiming, learning_state::Union{Nothing, LearningSystemState},
+    )::GameMap
+    captured_gamemap = deepcopy(gamemap)
+    set_recorded_play_time_seconds!(captured_gamemap, get_current_play_time_seconds(session_timing))
+    if !isnothing(learning_state)
+        set_learning_system!(captured_gamemap, deepcopy(learning_state.map_learning))
+    end
+    return captured_gamemap
+end
+
+"Build a fresh-session map from an escape attempt's recoverable departure checkpoint."
+function capture_galaxy_escape_restart_gamemap(
+        gamemap::GameMap, session_timing::PlaySessionTiming,
+        learning_state::Union{Nothing, LearningSystemState},
+    )::Union{Nothing, GameMap}
+    can_abort_galaxy_escape(gamemap) || return nothing
+    pre_escape_map = get_pre_escape_map(gamemap)::GameMap
+    return capture_session_gamemap(pre_escape_map, session_timing, learning_state)
+end
+
 """
 Enter the main game loop with a map loaded from a file path (String), a pre-generated GameMap, or an empty map (nothing).
 
@@ -304,6 +337,9 @@ function enter_gameloop(window::GLFW.Window;
 
     ui_loadingscreen_render(window, "Loading map")
     loaded_gamemap::GameMap = loadmap_from_source(map_source)
+    session_timing = PlaySessionTiming(get_recorded_play_time_seconds(loaded_gamemap))
+    completed_gamemap::Union{Nothing, GameMap} = nothing
+    restart_gamemap::Union{Nothing, GameMap} = nothing
     learning_state = build_learning_runtime_state(loaded_gamemap; initial_active_tutorial_id)
     initial_snapshot::FlowCalculatorSnapshot = FlowCalculatorSnapshot(
         gamemap = loaded_gamemap,
@@ -347,7 +383,7 @@ function enter_gameloop(window::GLFW.Window;
         end
 
         # Learning system tick (main game only, not sandbox)
-        if !isnothing(learning_state)
+        if !isnothing(learning_state) && isnothing(completed_gamemap)
             learning_inputs = LearningInputs(
                 gamemap = g_snapshot.gamemap,
                 derivedmapstate = g_snapshot.derived,
@@ -360,29 +396,57 @@ function enter_gameloop(window::GLFW.Window;
 
         # RENDERING Start
         glClear(GL_COLOR_BUFFER_BIT)
-        custom_rendering!(g_renderqueue, g_scratch_renderqueue, g_globjmap, g_snapshot, g_flowcalc_ipc.shared_state, g_inputstate, g_viewstate)
+        if isnothing(completed_gamemap)
+            custom_rendering!(
+                g_renderqueue, g_scratch_renderqueue, g_globjmap, g_snapshot,
+                g_flowcalc_ipc.shared_state, g_inputstate, g_viewstate,
+            )
+        end
         @timeit render_loop_timer "UI Rendering" ui_rendering!(
             g_inputstate, g_flowcalc_ipc, g_snapshot, g_viewstate, window;
-            learning_state = learning_state
+            learning_state = learning_state,
+            session_timing = session_timing,
+            completed_gamemap = completed_gamemap,
         )
+        if g_inputstate.exit_reason == EXIT_RESTART
+            restart_gamemap = capture_galaxy_escape_restart_gamemap(
+                g_snapshot.gamemap, session_timing, learning_state,
+            )
+            if !isnothing(restart_gamemap)
+                @atomic :monotonic g_flowcalc_ipc.shared_state.should_exit = true
+            else
+                g_inputstate.exit_reason = nothing
+                g_flowcalc_ipc.console_push("This escape attempt does not contain a recoverable pre-departure map.")
+            end
+        elseif g_inputstate.galaxy_escape_completion_requested
+            g_inputstate.galaxy_escape_completion_requested = false
+            # The displayed snapshot defines the result; only this detached copy becomes render-owned.
+            completed_gamemap = capture_session_gamemap(g_snapshot.gamemap, session_timing, learning_state)
+            @atomic :monotonic g_flowcalc_ipc.shared_state.should_exit = true
+        end
         recording_tick!(g_recording, g_inputstate, g_viewstate, window, g_flowcalc_ipc.console_push)
         GLFW.SwapBuffers(window)
         # RENDERING End
 
-        @timeit render_loop_timer "User Input Handling" user_handler!(g_flowcalc_ipc, g_inputstate, g_viewstate, g_snapshot, window)
+        if isnothing(completed_gamemap) && isnothing(restart_gamemap)
+            @timeit render_loop_timer "User Input Handling" user_handler!(g_flowcalc_ipc, g_inputstate, g_viewstate, g_snapshot, window)
+        else
+            GLFW.PollEvents()
+        end
 
         handle_diagnostics(render_loop_diagnostic_config, g_viewstate.frame_count)
         print_gc_statistics()
     end # main loop
 
     # Build result
-    saved_map = deepcopy(g_flowcalc_ipc.get_snapshot().gamemap)
-    if !isnothing(learning_state)
-        set_learning_system!(saved_map, deepcopy(learning_state.map_learning))
+    if !isnothing(restart_gamemap)
+        saved_map = restart_gamemap
+    elseif isnothing(completed_gamemap)
+        saved_map = capture_session_gamemap(g_flowcalc_ipc.get_snapshot().gamemap, session_timing, learning_state)
+    else
+        saved_map = completed_gamemap
     end
-
     reason = something(g_inputstate.exit_reason, EXIT_QUIT)
-
     result = GameLoopResult(
         exit_reason = reason,
         tutorial_id = g_inputstate.pending_sandbox_id,

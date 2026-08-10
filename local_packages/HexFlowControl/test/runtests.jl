@@ -69,6 +69,58 @@ end
 
 @testset "HexFlowControl" begin
 
+    @testset "Galaxy escape rules" begin
+        @test GALAXY_ESCAPE_UNLOCK_ESTIMATED_DELTA_V == 600.0
+        @test isfinite(GALAXY_ESCAPE_UNLOCK_ESTIMATED_DELTA_V)
+        @test GALAXY_ESCAPE_UNLOCK_ESTIMATED_DELTA_V > 0.0
+        @test all(isfinite, GALAXY_ESCAPE_TIER_DELTA_V)
+        @test all(>(0.0), GALAXY_ESCAPE_TIER_DELTA_V)
+        @test issorted(GALAXY_ESCAPE_TIER_DELTA_V)
+        @test GALAXY_ESCAPE_TIER_DELTA_V[1] < GALAXY_ESCAPE_TIER_DELTA_V[2] < GALAXY_ESCAPE_TIER_DELTA_V[3]
+        @test GALAXY_ESCAPE_UNLOCK_ESTIMATED_DELTA_V < first(GALAXY_ESCAPE_TIER_DELTA_V)
+
+        @test !is_galaxy_escape_unlocked(prevfloat(GALAXY_ESCAPE_UNLOCK_ESTIMATED_DELTA_V))
+        @test is_galaxy_escape_unlocked(GALAXY_ESCAPE_UNLOCK_ESTIMATED_DELTA_V)
+        @test is_galaxy_escape_unlocked(nextfloat(GALAXY_ESCAPE_UNLOCK_ESTIMATED_DELTA_V))
+        @test !is_galaxy_escape_unlocked(-1.0)
+
+        first_tier, second_tier, third_tier = GALAXY_ESCAPE_TIER_DELTA_V
+        @test galaxy_escape_tier(-1.0) == 0x00
+        @test galaxy_escape_tier(0.0) == 0x00
+        @test galaxy_escape_tier(prevfloat(first_tier)) == 0x00
+        @test galaxy_escape_tier(first_tier) == 0x01
+        @test galaxy_escape_tier(nextfloat(first_tier)) == 0x01
+        @test galaxy_escape_tier(prevfloat(second_tier)) == 0x01
+        @test galaxy_escape_tier(second_tier) == 0x02
+        @test galaxy_escape_tier(nextfloat(second_tier)) == 0x02
+        @test galaxy_escape_tier(prevfloat(third_tier)) == 0x02
+        @test galaxy_escape_tier(third_tier) == 0x03
+        @test galaxy_escape_tier(nextfloat(third_tier)) == 0x03
+        @test !can_complete_galaxy_escape(prevfloat(first_tier))
+        @test can_complete_galaxy_escape(first_tier)
+
+        for invalid_value in (NaN, Inf, -Inf)
+            @test_throws ArgumentError is_galaxy_escape_unlocked(invalid_value)
+            @test_throws ArgumentError galaxy_escape_tier(invalid_value)
+            @test_throws ArgumentError can_complete_galaxy_escape(invalid_value)
+        end
+    end
+
+    @testset "PlaySessionTiming" begin
+        timing = PlaySessionTiming(120.0; started_at_ns = UInt64(1_000_000_000))
+        @test get_current_play_time_seconds(timing; current_time_ns = UInt64(31_000_000_000)) == 150.0
+        @test get_current_play_time_seconds(timing; current_time_ns = UInt64(1_000_000_000)) == 120.0
+
+        @test get_current_play_time_seconds(timing; current_time_ns = UInt64(41_000_000_000)) == 160.0
+        @test timing.recorded_play_time_at_start_seconds == 120.0
+        @test timing.started_at_ns == UInt64(1_000_000_000)
+
+        @test_throws ArgumentError get_current_play_time_seconds(timing; current_time_ns = UInt64(999_999_999))
+        @test_throws ArgumentError PlaySessionTiming(-1.0; started_at_ns = UInt64(1))
+        @test_throws ArgumentError PlaySessionTiming(Inf; started_at_ns = UInt64(1))
+        @test_throws ArgumentError PlaySessionTiming(NaN; started_at_ns = UInt64(1))
+    end
+
     @testset "InputState defaults" begin
         is = make_test_inputstate()
         @test placement_state(is) isa PlacementReadyState
@@ -82,6 +134,7 @@ end
             @test !hasproperty(is, field)
         end
         @test !editor_capabilities_enabled(is)
+        @test !is.galaxy_escape_completion_requested
     end
 
     @testset "active placement tool state owns its configuration" begin

@@ -193,6 +193,7 @@ end
     node_voltages::Dict{NodeCoord, Float64} = Dict{NodeCoord, Float64}()
     vsource_currents::Dict{ElementID, Float64} = Dict{ElementID, Float64}()
     node_voltages_scaled::Dict{NodeCoord, Float64} = Dict{NodeCoord, Float64}()
+    node_voltage_scale_max::Float64 = eps(Float64)
 end
 @struct_hash_equal MNA_State
 

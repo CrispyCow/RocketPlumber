@@ -404,7 +404,15 @@ end
 #= ---------- Space Map Constants ---------- =#
 
 const SPACEMAP_LEFT_PANEL_WIDTH = 280.0
+const SPACEMAP_ESCAPE_PANEL_HEIGHT = 82.0
 const SPACEMAP_CLICK_RADIUS_SQ = 400.0   # Squared distance in plot units for click detection
+
+const GALAXY_ESCAPE_BUTTON_COLOUR = ImVec4(0.95, 0.72, 0.14, 1.0)
+const GALAXY_ESCAPE_BUTTON_HOVERED_COLOUR = ImVec4(1.0, 0.82, 0.22, 1.0)
+const GALAXY_ESCAPE_BUTTON_ACTIVE_COLOUR = ImVec4(0.85, 0.60, 0.08, 1.0)
+const GALAXY_ESCAPE_BUTTON_TEXT_COLOUR = ImVec4(0.12, 0.10, 0.04, 1.0)
+const GALAXY_ESCAPE_WARNING_BUTTON_COLOUR = ImVec4(0.65, 0.16, 0.12, 1.0)
+const GALAXY_ESCAPE_WARNING_BUTTON_HOVERED_COLOUR = ImVec4(0.78, 0.22, 0.16, 1.0)
 
 "Convert a `FluidType` or `nothing` to an `ImVec4` colour for UI display."
 function fluid_tag_to_imvec4(fluid::Union{HexFluids.FluidType, Nothing})::ImVec4
@@ -436,12 +444,35 @@ const DV_GRID_COLOUR = ImVec4(1.0, 0.7, 0.2, 0.15)      # faint amber grid
 const COMPASS_X_COLOUR = ImVec4(1.0, 0.5, 0.3, 0.45)
 const COMPASS_Y_COLOUR = ImVec4(0.3, 0.8, 1.0, 0.45)
 
+"Render the shared simulation speed and pause controls."
+function render_simulation_controls!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC)
+    is_paused = @atomic :monotonic flowcalc_ipc.shared_state.is_paused
+    is_paused && CImGui.BeginDisabled()
+    for speed in (SIM_1X, SIM_2X, SIM_4X, SIM_MAX)
+        label = sim_speed_label(speed)
+        is_current = inputstate.sim_speed === speed
+        is_current && CImGui.BeginDisabled()
+        if CImGui.Button(label, (60.0, 0.0))
+            inputstate.sim_speed = speed
+            @atomic :monotonic flowcalc_ipc.shared_state.target_ups = sim_speed_to_ups(speed)
+        end
+        is_current && CImGui.EndDisabled()
+        speed !== SIM_MAX && CImGui.SameLine()
+    end
+    is_paused && CImGui.EndDisabled()
+
+    pause_label = is_paused ? "Un-Pause" : "Pause"
+    if CImGui.Button(pause_label, ImVec2(CImGui.GetContentRegionAvail().x, 0.0))
+        @atomic :monotonic flowcalc_ipc.shared_state.is_paused = !is_paused
+    end
+    return nothing
+end
+
 """
-Render the velocity and manoeuvre tracker in the top-left corner.
-Uses ImPlot with axes coloured green (acceleration mode) or amber (manoeuvre/ΔV mode).
-Read-only: all phase transitions happen in the calculator.
+Render the velocity tracker and the active manoeuvre or galaxy-escape status.
+Uses ImPlot with axes coloured green (acceleration mode) or amber (manoeuvre/delta-V mode).
 """
-function ui_velocity_tracker_render(
+function ui_velocity_tracker_render!(
         gamestate::GameState, gamemap::GameMap,
         inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC,
     )
@@ -450,6 +481,7 @@ function ui_velocity_tracker_render(
     vel_mag = norm(velocity)
     accel_mag = norm(accel_world)
 
+    escape_active = is_galaxy_escape_active(gamemap)
     has_manoeuvre = has_active_manoeuvre(gamemap)
     manoeuvre = get_active_manoeuvre(gamemap)
 
@@ -469,35 +501,15 @@ function ui_velocity_tracker_render(
         accel_plot = rotate_vec2(accel_world, -compass_angle)
     end
 
-    # Window sizing: taller when manoeuvre text is shown
+    # Reserve the lower portion of the tracker for the active flight status.
     base_height = 320.0
     speed_controls_height = 60.0
-    manoeuvre_extra = has_manoeuvre ? 110.0 : 0.0
-    total_height = base_height + speed_controls_height + manoeuvre_extra
+    status_height = escape_active ? 120.0 : (has_manoeuvre ? 110.0 : 0.0)
+    total_height = base_height + speed_controls_height + status_height
 
     ui_window("Velocity Tracker", (0.0, 0.0), (VELOCITY_TRACKER_WIDTH, total_height))
 
-    # Speed buttons — greyed out when paused
-    is_paused = @atomic :monotonic flowcalc_ipc.shared_state.is_paused
-    is_paused && CImGui.BeginDisabled()
-    for speed in (SIM_1X, SIM_2X, SIM_4X, SIM_MAX)
-        label = sim_speed_label(speed)
-        is_current = inputstate.sim_speed === speed
-        is_current && CImGui.BeginDisabled()
-        if CImGui.Button(label, (60.0, 0.0))
-            inputstate.sim_speed = speed
-            @atomic :monotonic flowcalc_ipc.shared_state.target_ups = sim_speed_to_ups(speed)
-        end
-        is_current && CImGui.EndDisabled()
-        speed !== SIM_MAX && CImGui.SameLine()
-    end
-    is_paused && CImGui.EndDisabled()
-
-    # Pause button - full width of content area
-    pause_label = is_paused ? "Un-Pause" : "Pause"
-    if CImGui.Button(pause_label, ImVec2(CImGui.GetContentRegionAvail().x, 0.0))
-        @atomic :monotonic flowcalc_ipc.shared_state.is_paused = !is_paused
-    end
+    render_simulation_controls!(inputstate, flowcalc_ipc)
 
     CImGui.SeparatorText("Ship Info")
 
@@ -536,7 +548,7 @@ function ui_velocity_tracker_render(
     ImPlot.PushStyleColor(ImPlot.ImPlotCol_PlotBg, ImVec4(0.08, 0.08, 0.13, 1.0))
 
     available_plot_size = CImGui.GetContentRegionAvail()
-    plot_size = ImVec2(available_plot_size.x, available_plot_size.y - manoeuvre_extra)
+    plot_size = ImVec2(available_plot_size.x, available_plot_size.y - status_height)
 
     plot_flags = ImPlot.ImPlotFlags_Equal | ImPlot.ImPlotFlags_NoLegend |
         ImPlot.ImPlotFlags_NoMenus | ImPlot.ImPlotFlags_NoBoxSelect |
@@ -605,8 +617,48 @@ function ui_velocity_tracker_render(
 
     ImPlot.PopStyleColor(4)
 
-    # Manoeuvre phase status (read-only — all transitions in the calculator)
-    if has_manoeuvre
+    if escape_active
+        progress = get_galaxy_escape_progress(gamemap)::Float64
+        tier_number = Int(galaxy_escape_tier(progress))
+
+        CImGui.SeparatorText("Escape Progress")
+        CImGui.Text(@sprintf("Achieved delta-V: %.1f", progress))
+        if tier_number == 0
+            CImGui.TextColored(DV_COLOUR, "Escape not achieved")
+        elseif tier_number == 1
+            CImGui.TextColored(DV_COLOUR, "Minimum escape achieved - 1 Star")
+        elseif tier_number < length(GALAXY_ESCAPE_TIER_DELTA_V)
+            CImGui.TextColored(DV_COLOUR, "$tier_number-Star escape achieved")
+        else
+            CImGui.TextColored(DV_COLOUR, "$tier_number-Star escape achieved (maximum rating)")
+        end
+
+        if tier_number < length(GALAXY_ESCAPE_TIER_DELTA_V)
+            next_rating = tier_number + 1
+            next_rating_label = next_rating == 1 ? "1 Star" : "$next_rating Stars"
+            next_threshold = GALAXY_ESCAPE_TIER_DELTA_V[next_rating]
+            CImGui.Text(@sprintf("Next Target: %s at %.0f delta-V", next_rating_label, next_threshold))
+        else
+            CImGui.Text("Next Target: None")
+        end
+
+        CImGui.Spacing()
+        eligible = can_complete_galaxy_escape(progress)
+        if eligible
+            CImGui.PushStyleColor(CImGui.ImGuiCol_Text, GALAXY_ESCAPE_BUTTON_TEXT_COLOUR)
+            CImGui.PushStyleColor(CImGui.ImGuiCol_Button, GALAXY_ESCAPE_BUTTON_COLOUR)
+            CImGui.PushStyleColor(CImGui.ImGuiCol_ButtonHovered, GALAXY_ESCAPE_BUTTON_HOVERED_COLOUR)
+        end
+        complete_clicked = button_with_disable(
+                "Complete Escape", ImVec2(-1.0, 35.0), !eligible;
+                tooltip = "Achieve a 1-Star escape before completing the attempt.",
+            )
+        eligible && CImGui.PopStyleColor(3)
+        if complete_clicked
+            inputstate.galaxy_escape_completion_requested = true
+        end
+    elseif has_manoeuvre
+        # Manoeuvre status is read-only; all phase transitions happen in the calculator.
         CImGui.SeparatorText("Manoeuvre Info")
         phase = manoeuvre.phase
         CImGui.TextWrapped(phase_description(phase))
@@ -933,6 +985,104 @@ function render_spacemap_manoeuvre_planning_panel!(
     return nothing
 end
 
+"Render the prominent galaxy-escape discovery action."
+function render_galaxy_escape_discovery!(inputstate::InputState)
+    minimum_delta_v = first(GALAXY_ESCAPE_TIER_DELTA_V)
+    requirement = @sprintf("Requires %.0f delta-V", minimum_delta_v)
+
+    CImGui.PushFont(C_NULL, 20.0)
+    CImGui.PushStyleColor(CImGui.ImGuiCol_Text, GALAXY_ESCAPE_BUTTON_TEXT_COLOUR)
+    CImGui.PushStyleColor(CImGui.ImGuiCol_Button, GALAXY_ESCAPE_BUTTON_COLOUR)
+    CImGui.PushStyleColor(CImGui.ImGuiCol_ButtonHovered, GALAXY_ESCAPE_BUTTON_HOVERED_COLOUR)
+    CImGui.PushStyleColor(CImGui.ImGuiCol_ButtonActive, GALAXY_ESCAPE_BUTTON_ACTIVE_COLOUR)
+    clicked = CImGui.Button("Plan Galactic Escape!", CImGui.GetContentRegionAvail())
+    CImGui.PopStyleColor(4)
+    CImGui.PopFont()
+
+    CImGui.IsItemHovered() && CImGui.SetTooltip(requirement)
+
+    if clicked
+        inputstate.gui_inputs[:galaxy_escape_confirmation] = true
+    end
+    return nothing
+end
+
+"Render the galaxy-departure confirmation window."
+function render_galaxy_escape_confirmation!(
+        inputstate::InputState,
+        flowcalc_ipc::FlowCalculatorIPC,
+        snapshot::FlowCalculatorSnapshot,
+        winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}},
+    )
+    get(inputstate.gui_inputs, :galaxy_escape_confirmation, false)::Bool || return nothing
+
+    minimum_delta_v = first(GALAXY_ESCAPE_TIER_DELTA_V)
+    width = 560.0
+    win_float = to_float(winsize)
+    CImGui.SetNextWindowPos(
+        ImVec2(win_float.width / 2.0, win_float.height / 2.0),
+        CImGui.ImGuiCond_Always,
+        ImVec2(0.5, 0.5),
+    )
+    CImGui.SetNextWindowSizeConstraints(ImVec2(width, 0.0), ImVec2(width, win_float.height))
+    flags = CImGui.ImGuiWindowFlags_NoResize | CImGui.ImGuiWindowFlags_NoMove |
+        CImGui.ImGuiWindowFlags_NoCollapse | CImGui.ImGuiWindowFlags_AlwaysAutoResize
+    CImGui.Begin("Confirm Galaxy Escape Attempt?", C_NULL, flags)
+
+    CImGui.TextWrapped("Proceeding will plot an escape trajectory out of the galactic plane. If you succeed in this manoeuvre, you win the game!")
+    CImGui.Spacing()
+    CImGui.TextWrapped(
+        "This requires a minimum delta-V of $minimum_delta_v to reach escape velocity. " *
+        "There are no other ships outside the galactic plane to refuel from so ensure you are confident your ship has enough delta-V before departure. " *
+        "Remember that the in-game delta-V estimate is just based on fuel inventory and may not be accurate!",
+    )
+    CImGui.Spacing()
+    CImGui.TextWrapped(
+        "Once you start your escape this cannot be undone, however an autosave will be made you can restore from. "
+    )
+
+    below_minimum_escape_delta_v = snapshot.gamestate.estimated_min_delta_v < minimum_delta_v
+    if below_minimum_escape_delta_v
+        CImGui.Spacing()
+        CImGui.PushStyleColor(CImGui.ImGuiCol_Text, ImVec4(1.0, 0.35, 0.2, 1.0))
+        CImGui.TextWrapped(
+            "WARNING: Your delta-V estimate is below the minimum escape target. " *
+            "This attempt is unlikely to succeed and may consume most of your fuel. " *
+            "Are you sure you want to proceed?",
+        )
+        CImGui.PopStyleColor()
+    end
+
+    CImGui.Spacing()
+    available_width = CImGui.GetContentRegionAvail().x
+    item_spacing = unsafe_load(CImGui.GetStyle().ItemSpacing).x
+    button_width = (available_width - item_spacing) / 2.0
+    if CImGui.Button("Not Yet", ImVec2(button_width, 40.0))
+        inputstate.gui_inputs[:galaxy_escape_confirmation] = false
+    end
+    CImGui.SameLine()
+    begin_label = below_minimum_escape_delta_v ? "Attempt Anyway" : "Begin Final Escape"
+    button_colour = below_minimum_escape_delta_v ? GALAXY_ESCAPE_WARNING_BUTTON_COLOUR : GALAXY_ESCAPE_BUTTON_COLOUR
+    hovered_colour = below_minimum_escape_delta_v ? GALAXY_ESCAPE_WARNING_BUTTON_HOVERED_COLOUR : GALAXY_ESCAPE_BUTTON_HOVERED_COLOUR
+    !below_minimum_escape_delta_v && CImGui.PushStyleColor(CImGui.ImGuiCol_Text, GALAXY_ESCAPE_BUTTON_TEXT_COLOUR)
+    CImGui.PushStyleColor(CImGui.ImGuiCol_Button, button_colour)
+    CImGui.PushStyleColor(CImGui.ImGuiCol_ButtonHovered, hovered_colour)
+    begin_clicked = CImGui.Button(begin_label, ImVec2(button_width, 40.0))
+    CImGui.PopStyleColor(below_minimum_escape_delta_v ? 2 : 3)
+    if begin_clicked
+        command = create_start_galaxy_escape_command(flowcalc_ipc.command_queue)
+        if try_enqueue_command!(flowcalc_ipc.command_queue, command)
+            inputstate.gui_inputs[:galaxy_escape_confirmation] = false
+            inputstate.spacemap_active = false
+        else
+            flowcalc_ipc.console_push("Could not begin galaxy escape because the command queue is full.")
+        end
+    end
+
+    CImGui.End()
+    return nothing
+end
+
 function render_spacemap_left_panel!(
         inputstate::InputState,
         flowcalc_ipc::FlowCalculatorIPC,
@@ -947,8 +1097,12 @@ function render_spacemap_left_panel!(
     encounter_points = get_encounter_points(gamemap)
     has_manoeuvre = has_active_manoeuvre(gamemap)
     time_progressing = is_time_progressing(gamemap)
+    show_galaxy_escape = is_galaxy_escape_unlocked(get_peak_estimated_delta_v(gamemap))
 
-    CImGui.BeginChild("spacemap_left_panel", ImVec2(left_width, panel_height), true)
+    CImGui.BeginChild("spacemap_left_column", ImVec2(left_width, panel_height), false)
+
+    main_panel_height = show_galaxy_escape ? -SPACEMAP_ESCAPE_PANEL_HEIGHT : 0.0
+    CImGui.BeginChild("spacemap_main_panel", ImVec2(0.0, main_panel_height), true)
 
     #= ---------- Header ----------- =#
     CImGui.TextColored(ImVec4(0.7, 0.9, 1.0, 1.0), "SPACE MAP")
@@ -1009,6 +1163,14 @@ function render_spacemap_left_panel!(
         else
             render_spacemap_manoeuvre_planning_panel!(inputstate, flowcalc_ipc, gamemap, selected_idx)
         end
+    end
+
+    CImGui.EndChild()
+
+    if show_galaxy_escape
+        CImGui.BeginChild("spacemap_escape_panel", ImVec2(0.0, 0.0), true)
+        render_galaxy_escape_discovery!(inputstate)
+        CImGui.EndChild()
     end
 
     CImGui.EndChild()
@@ -1267,10 +1429,16 @@ function ui_spacemap_render!(
         max_view_bounds::Union{HexFrame.CartesianBounds, Nothing}
     )
     if !inputstate.spacemap_active
+        inputstate.gui_inputs[:galaxy_escape_confirmation] = false
         return nothing
     end
 
     gamemap = snapshot.gamemap
+    if is_galaxy_escape_active(gamemap)
+        inputstate.spacemap_active = false
+        inputstate.gui_inputs[:galaxy_escape_confirmation] = false
+        return nothing
+    end
     win_float = to_float(winsize)
 
     CImGui.SetNextWindowPos(ImVec2(0.0, 0.0))
@@ -1306,6 +1474,8 @@ function ui_spacemap_render!(
     CImGui.End()
     CImGui.PopStyleColor()
     CImGui.PopStyleVar()
+
+    render_galaxy_escape_confirmation!(inputstate, flowcalc_ipc, snapshot, winsize)
 
     return nothing
 end

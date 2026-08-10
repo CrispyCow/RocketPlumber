@@ -42,7 +42,7 @@ function ui_teardown()
     return nothing
 end
 
-"Wraps CImGui user code in the required frame context to render"
+"Wrap CImGui user code in the required frame context."
 function ui_renderwrap(usercode::Function)
     CImGui.lib.ImGui_ImplOpenGL3_NewFrame()
     CImGui.lib.ImGui_ImplGlfw_NewFrame()

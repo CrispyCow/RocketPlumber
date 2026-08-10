@@ -278,7 +278,8 @@ function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedSt
     # M key to toggle space map (blocked during time progression)
     if get_inrising!(inputstate, GLFW.KEY_M, window)
         time_prog = get(inputstate.gui_inputs, :time_progressing, false)::Bool
-        if !time_prog
+        galaxy_escape_active = get(inputstate.gui_inputs, :galaxy_escape_active, false)::Bool
+        if !time_prog && !galaxy_escape_active
             inputstate.spacemap_active = !inputstate.spacemap_active
         end
     end

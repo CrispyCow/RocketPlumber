@@ -463,18 +463,6 @@ shipset_simple_cold_gas = ShipComponentSet(
     ]
 )
 
-shipset_turbine_monoprop = ShipComponentSet(
-    "Turbine Monoprop",
-    [
-        CompSpawnOptions(:TriLiquidTank_comp, [(1, 20.0), (2, 200.0), (3, 200.0)], CLUSTERED_PLACE),
-        CompSpawnOptions(:TinyOnOffValve_comp, [(1, 200.0), (2, 200.0)], RANDOM_PLACE),
-        CompSpawnOptions(:TinyAdjValve_comp, [(0, 200.0), (1, 200.0)], RANDOM_PLACE),
-        CompSpawnOptions(:TurboPump_comp, [(1, 100.0),], RANDOM_PLACE),
-        CompSpawnOptions(:BasicDecompChamber_comp, [(1, 100.0), (2, 20.0)], RANDOM_PLACE),
-        CompSpawnOptions(:SmallNozzle_comp, [(2, 100.0), (3, 10.0)], NOZZLE_EDGE_PLACE),
-    ]
-)
-
 shipset_pressure_fed_monoprop = ShipComponentSet(
     "Pressure Fed Monoprop",
     [
@@ -588,9 +576,6 @@ compset_scrap_medium_nozzle = ShipComponentSet("Scrap Medium Nozzle", [
 compset_scrap_switched_nozzle = ShipComponentSet("Scrap Switched Nozzle", [
     CompSpawnOptions(:SwitchedTinyNozzle_comp, [(1, 1.0)], NOZZLE_EDGE_PLACE),
 ])
-compset_scrap_transfer_pump = ShipComponentSet("Scrap Transfer Pump", [
-    CompSpawnOptions(:ElecTransferPump_comp, [(1, 1.0)], RANDOM_PLACE),
-])
 compset_scrap_turbo_pump = ShipComponentSet("Scrap Turbo Pump", [
     CompSpawnOptions(:TurboPump_comp, [(1, 1.0)], RANDOM_PLACE),
 ])
@@ -609,6 +594,9 @@ compset_scrap_tiny_onoff_valve = ShipComponentSet("Scrap Tiny OnOff Valve", [
 compset_scrap_decomp = ShipComponentSet("Scrap Decomp Chamber", [
     CompSpawnOptions(:BasicDecompChamber_comp, [(1, 1.0)], RANDOM_PLACE),
 ])
+compset_scrap_biprop = ShipComponentSet("Scrap Biprop Chamber", [
+    CompSpawnOptions(:BasicBipropChamber_comp, [(1, 1.0)], RANDOM_PLACE),
+])
 
 #= ---------- Encounter Class Configs ----------- =#
 
@@ -620,7 +608,6 @@ _ship_coldgas_pool = WeightedComponentSet[
 
 _ship_monoprop_pool = WeightedComponentSet[
     WeightedComponentSet(shipset_pressure_fed_monoprop, NoScaling(1.0)),
-    WeightedComponentSet(shipset_turbine_monoprop, GatedLinearScaling(1.0, 0.2, 4.0)),
     WeightedComponentSet(compset_extra_liquid_tanks, GatedLinearScaling(0.3, 0.0, 2.0)),
 ]
 
@@ -651,13 +638,13 @@ _scrap_pool = WeightedComponentSet[
     WeightedComponentSet(compset_scrap_small_nozzle, GatedLinearScaling(2.6, 0.0, 0.5)),
     WeightedComponentSet(compset_scrap_medium_nozzle, GatedLinearScaling(0.8, 0.0, 2.0)),
     WeightedComponentSet(compset_scrap_switched_nozzle, NoScaling(0.8)),
-    WeightedComponentSet(compset_scrap_transfer_pump, GatedLinearScaling(0.6, 0.0, 0.3)),
-    WeightedComponentSet(compset_scrap_turbo_pump, GatedLinearScaling(0.8, 0.3, 2.0)),
-    WeightedComponentSet(compset_scrap_large_adj_valve, GatedLinearScaling(0.5, 0.0, 0.5)),
+    WeightedComponentSet(compset_scrap_turbo_pump, GatedLinearScaling(1.2, 1.0, 2.0)),
+    WeightedComponentSet(compset_scrap_large_adj_valve, GatedLinearScaling(1.0, 0.0, 1.0)),
     WeightedComponentSet(compset_scrap_tiny_adj_valve, GatedLinearScaling(0.5, 0.0, 0.5)),
-    WeightedComponentSet(compset_scrap_large_onoff_valve, GatedLinearScaling(0.5, 0.0, 0.5)),
+    WeightedComponentSet(compset_scrap_large_onoff_valve, GatedLinearScaling(1.0, 0.0, 1.0)),
     WeightedComponentSet(compset_scrap_tiny_onoff_valve, GatedLinearScaling(0.5, 0.0, 0.5)),
     WeightedComponentSet(compset_scrap_decomp, GatedLinearScaling(0.4, 0.0, 1.0)),
+    WeightedComponentSet(compset_scrap_biprop, GatedLinearScaling(0.4, 0.0, 1.0)),
 ]
 
 # Pipe options per class
@@ -673,8 +660,8 @@ ship_class_config = EncounterClassConfig(
     LinearScaling(1.0, 2.0),
     FluidTaggedEncounterComponents(Dict{FluidType, FuelTagConfig}(
         HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), _ship_coldgas_pool),
-        HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 2.5), _ship_monoprop_pool),
-        HexFluids.FUEL_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 4.0), _ship_biprop_pool),
+        HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 3.0), _ship_monoprop_pool),
+        HexFluids.FUEL_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 6.0), _ship_biprop_pool),
     )),
     standard_pipeoptions,
     NoScaling(1.0),
@@ -686,9 +673,9 @@ fuel_cache_class_config = EncounterClassConfig(
     LinearScaling(2.0, 3.0),
     FluidTaggedEncounterComponents(Dict{FluidType, FuelTagConfig}(
         HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), _cache_coldgas_pool),
-        HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 2.5), _cache_monoprop_pool),
-        HexFluids.FUEL_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 4.0), _cache_fuel_pool),
-        HexFluids.OXIDISER_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 4.0), _cache_oxidiser_pool),
+        HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 4.0), _cache_monoprop_pool),
+        HexFluids.FUEL_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 7.0), _cache_fuel_pool),
+        HexFluids.OXIDISER_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 7.0), _cache_oxidiser_pool),
     )),
     fuel_cache_pipeoptions,
     LinearScaling(0.8, 0.35),

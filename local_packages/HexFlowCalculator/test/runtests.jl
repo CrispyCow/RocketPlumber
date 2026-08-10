@@ -67,6 +67,34 @@ HexComponentsAPI.get_tunables(::MockCompBehav) = ()
 HexComponentsAPI.set_tunables(::MockCompBehav, ::NTuple{0, Real}) = MockCompBehav()
 HexComponentsAPI.render_base_elem!(queue, ::MockCompBehav; kwargs...) = nothing
 
+struct FixedThrustCompBehav <: ComponentBehavior
+    thrust::SVector{2, Float64}
+end
+HexComponentsAPI.produce_rel_elements(::FixedThrustCompBehav) = ()
+HexComponentsAPI.get_tunables(::FixedThrustCompBehav) = ()
+HexComponentsAPI.set_tunables(comp::FixedThrustCompBehav, ::NTuple{0, Real}) = comp
+HexComponentsAPI.render_base_elem!(queue, ::FixedThrustCompBehav; kwargs...) = nothing
+HexComponentsAPI.get_component_dry_mass(::FixedThrustCompBehav) = 0.0
+HexComponentsAPI.get_thrust(comp::FixedThrustCompBehav; kwargs...) = comp.thrust
+
+"Minimal component carrying cold gas for calculator-owned delta-V cache tests."
+struct DeltaVEstimateCompBehav <: ComponentBehavior
+    dry_mass::Float64
+    cold_gas_mass::Float64
+end
+HexComponentsAPI.produce_rel_elements(::DeltaVEstimateCompBehav) = ()
+HexComponentsAPI.get_tunables(::DeltaVEstimateCompBehav) = ()
+HexComponentsAPI.set_tunables(comp::DeltaVEstimateCompBehav, ::NTuple{0, Real}) = comp
+HexComponentsAPI.render_base_elem!(queue, ::DeltaVEstimateCompBehav; kwargs...) = nothing
+HexComponentsAPI.get_component_dry_mass(comp::DeltaVEstimateCompBehav; kwargs...) = comp.dry_mass
+function HexComponentsAPI.get_component_wet_mass(
+        comp::DeltaVEstimateCompBehav;
+        fluid::Union{Nothing, FluidType} = nothing,
+        kwargs...,
+    )::Float64
+    return isnothing(fluid) || fluid == HexFluids.COLD_GAS ? comp.cold_gas_mass : 0.0
+end
+
 struct DerivedStateCompBehav <: ComponentBehavior end
 HexComponentsAPI.produce_rel_elements(::DerivedStateCompBehav) = ()
 HexComponentsAPI.get_tunables(::DerivedStateCompBehav) = ()
@@ -491,6 +519,17 @@ function make_gamemap()
     gm = GameMap()
     set_surface_tile!(gm, TileCoord(0, 0); ship_name = :primary)
     return gm
+end
+
+"Build a normal galactic map whose historical estimate has unlocked galaxy escape."
+function make_galaxy_escape_ready_map(
+        ; velocity::SVector{2, Float64} = SVector(10.0, 0.0), time_years::Float64 = 0.0,
+    )::GameMap
+    gamemap = make_gamemap()
+    initialise_spacemap!(gamemap, UInt32(0x1234), _test_enc_config, velocity)
+    set_time_years!(gamemap, time_years)
+    record_peak_estimated_delta_v!(gamemap, GALAXY_ESCAPE_UNLOCK_ESTIMATED_DELTA_V)
+    return gamemap
 end
 
 "Create a two-ship GameMap for multi-ship routing tests.
@@ -1304,6 +1343,11 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         @test replacement_context.replacement_map == HexFlowCalculator.map_diagnostic(replacement.new_map)
         @test !hasproperty(replacement_context, :new_map)
         @test !hasproperty(replacement_context, :response_channel)
+
+        start_escape = create_start_galaxy_escape_command(cq_diag)
+        start_context = HexFlowCalculator.command_diagnostic(start_escape)
+        @test start_context == (type = :StartGalaxyEscapeCommand, id = start_escape.id)
+        @test !hasproperty(start_context, :response_channel)
     end
 
     @testset "DeleteElementsCommand singleton missing component" begin
@@ -1989,31 +2033,62 @@ end
 end
 
 # ===============================================================
-# Tests — scale_voltage_dict!
+# Tests — scale_node_voltages!
 # ===============================================================
 
-@testset "scale_voltage_dict! — empty" begin
-    out = Dict{NodeCoord, Float64}()
-    scale_voltage_dict!(out, Dict{NodeCoord, Float64}())
-    @test isempty(out)
+@testset "scale_node_voltages! — empty" begin
+    mna = MNA_State()
+    scale_node_voltages!(mna)
+    @test isempty(mna.node_voltages_scaled)
 end
 
-@testset "scale_voltage_dict! — single entry" begin
+@testset "scale_node_voltages! — single entry" begin
     nc = NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_POS)
-    out = Dict{NodeCoord, Float64}()
-    scale_voltage_dict!(out, Dict(nc => 10.0))
-    @test haskey(out, nc)
-    @test out[nc] <= 1.0 + 1.0e-10  # scaled to at most 1.0
-    @test out[nc] > 0.0
+    mna = MNA_State(node_voltages = Dict(nc => 10.0))
+    scale_node_voltages!(mna)
+    @test mna.node_voltage_scale_max == 10.0
+    @test mna.node_voltages_scaled[nc] == 1.0
 end
 
-@testset "scale_voltage_dict! — relative ordering preserved" begin
+@testset "scale_node_voltages! — zero solution repairs non-positive scale" begin
+    nc = NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_POS)
+    mna = MNA_State(node_voltages = Dict(nc => 0.0), node_voltage_scale_max = 0.0)
+    scale_node_voltages!(mna)
+    @test mna.node_voltage_scale_max == eps(Float64)
+    @test mna.node_voltages_scaled[nc] == 0.0
+end
+
+@testset "scale_node_voltages! — all-negative solution keeps finite scaled values" begin
+    nc = NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_POS)
+    mna = MNA_State(node_voltages = Dict(nc => -5.0))
+    scale_node_voltages!(mna)
+    @test mna.node_voltage_scale_max == eps(Float64)
+    @test isfinite(mna.node_voltages_scaled[nc])
+end
+
+@testset "scale_node_voltages! — relative ordering preserved" begin
     nc1 = NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_POS)
     nc2 = NodeCoord(TileCoord(1, 0), HexFrame.NODE_Q_POS)
 
-    out = Dict{NodeCoord, Float64}()
-    scale_voltage_dict!(out, Dict(nc1 => 100.0, nc2 => 50.0))
-    @test out[nc1] > out[nc2]  # higher voltage → higher scaled value
+    mna = MNA_State(node_voltages = Dict(nc1 => 100.0, nc2 => 50.0))
+    scale_node_voltages!(mna)
+    @test mna.node_voltages_scaled[nc1] > mna.node_voltages_scaled[nc2]  # higher voltage → higher scaled value
+end
+
+@testset "scale_node_voltages! — histories are isolated by MNA state" begin
+    nc = NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_POS)
+    high_voltage_mna = MNA_State(node_voltages = Dict(nc => 100.0))
+    scale_node_voltages!(high_voltage_mna)
+    high_voltage_mna.node_voltages[nc] = 10.0
+    scale_node_voltages!(high_voltage_mna)
+
+    low_voltage_mna = MNA_State(node_voltages = Dict(nc => 10.0))
+    scale_node_voltages!(low_voltage_mna)
+
+    @test high_voltage_mna.node_voltage_scale_max == 100.0
+    @test high_voltage_mna.node_voltages_scaled[nc] == 0.1
+    @test low_voltage_mna.node_voltage_scale_max == 10.0
+    @test low_voltage_mna.node_voltages_scaled[nc] == 1.0
 end
 
 # ===============================================================
@@ -2032,6 +2107,8 @@ end
     @test gs.thrust ≈ SVector(0.0, 0.0)
     @test gs.acceleration_ship_frame ≈ SVector(0.0, 0.0)
     @test gs.acceleration_space_map_frame ≈ SVector(0.0, 0.0)
+    @test get_total_delta_v(gm) == 0.0
+    @test get_peak_thrust(gm) == 0.0
 end
 
 @testset "handle_thrusters! — velocity unchanged with no thrust" begin
@@ -2059,6 +2136,219 @@ end
     handle_thrusters!(gs, gm, derived, mna; base_ups = BASE_UPS)
     @test gs.acceleration_ship_frame ≈ SVector(0.0, 0.0)  # zero thrust → zero accel
     @test gs.acceleration_space_map_frame ≈ SVector(0.0, 0.0)
+end
+
+@testset "handle_thrusters! — records propulsion statistics" begin
+    gm = make_gamemap()
+    set_component!(gm, TileCoord(0, 0), PlacedComponent(FixedThrustCompBehav(SVector(3.0, 4.0)), Q_POS, :primary))
+    gs = GameState()
+    derived = DerivedMapState()
+    mna = MNA_State()
+
+    initial_velocity = get_velocity(gm)
+    handle_thrusters!(gs, gm, derived, mna)
+    velocity_change = get_velocity(gm) - initial_velocity
+    expected_delta_v = norm(gs.acceleration_space_map_frame / BASE_UPS)
+
+    @test get_peak_thrust(gm) == 5.0
+    @test get_total_delta_v(gm) ≈ expected_delta_v
+    @test norm(velocity_change) ≈ expected_delta_v
+
+    set_component!(gm, TileCoord(0, 0), PlacedComponent(FixedThrustCompBehav(SVector(-3.0, -4.0)), Q_POS, :primary))
+    handle_thrusters!(gs, gm, derived, mna)
+    @test get_total_delta_v(gm) ≈ 2 * expected_delta_v
+    @test get_peak_thrust(gm) == 5.0
+
+    low_thrust = SVector(0.0, 1.0)
+    set_component!(gm, TileCoord(0, 0), PlacedComponent(FixedThrustCompBehav(low_thrust), Q_POS, :primary))
+    handle_thrusters!(gs, gm, derived, mna)
+    @test get_peak_thrust(gm) == 5.0
+
+    scaled_map = make_gamemap()
+    set_component!(scaled_map, TileCoord(0, 0), PlacedComponent(FixedThrustCompBehav(SVector(3.0, 4.0)), Q_POS, :primary))
+    scaled_state = GameState()
+    scaled_initial_velocity = get_velocity(scaled_map)
+    handle_thrusters!(scaled_state, scaled_map, DerivedMapState(), MNA_State(); base_ups = 10.0)
+    scaled_velocity_change = get_velocity(scaled_map) - scaled_initial_velocity
+    scaled_expected_delta_v = norm(scaled_state.acceleration_space_map_frame / 10.0)
+    @test get_total_delta_v(scaled_map) ≈ scaled_expected_delta_v
+    @test norm(scaled_velocity_change) ≈ scaled_expected_delta_v
+end
+
+# ===============================================================
+# Tests — Galaxy escape calculator integration
+# ===============================================================
+
+@testset "StartGalaxyEscapeCommand" begin
+    command_queue = create_command_queue(16)
+
+    @testset "creator and eligibility rejections" begin
+        response = Channel{CommandStatus}(1)
+        command = create_start_galaxy_escape_command(command_queue; response_channel = response)
+        @test command isa StartGalaxyEscapeCommand
+        @test command.response_channel === response
+
+        locked_map = make_gamemap()
+        initialise_spacemap!(locked_map, UInt32(1), _test_enc_config)
+        @test process_and_log!(command, locked_map) == ["Galaxy escape has not been discovered yet"]
+        @test take!(response) == INVALID
+        @test locked_map.space_map isa SpaceMapState
+
+        empty_map = GameMap()
+        record_peak_estimated_delta_v!(empty_map, GALAXY_ESCAPE_UNLOCK_ESTIMATED_DELTA_V)
+        @test process_and_log!(create_start_galaxy_escape_command(command_queue), empty_map) ==
+            ["Galaxy escape can only begin from normal galactic navigation"]
+        @test empty_map.space_map isa SpaceMapEmpty
+
+        active_map = GameMap(space_map = GalaxyEscapeSpaceMap(
+            velocity = SVector(5.0, 0.0), starting_velocity_x = 5.0, departure_time_years = 2.0,
+            pre_escape_map = GameMap(),
+        ))
+        record_peak_estimated_delta_v!(active_map, GALAXY_ESCAPE_UNLOCK_ESTIMATED_DELTA_V)
+        @test process_and_log!(create_start_galaxy_escape_command(command_queue), active_map) ==
+            ["Galaxy escape can only begin from normal galactic navigation"]
+        @test active_map.space_map isa GalaxyEscapeSpaceMap
+    end
+
+    @testset "rejects malformed normal navigation state" begin
+        invalid_velocity_map = make_galaxy_escape_ready_map()
+        invalid_velocity_map.space_map.velocity = SVector(Inf, 0.0)
+        @test process_and_log!(create_start_galaxy_escape_command(command_queue), invalid_velocity_map) ==
+            ["Cannot begin galaxy escape with a non-finite velocity"]
+        @test invalid_velocity_map.space_map isa SpaceMapState
+
+        invalid_time_map = make_galaxy_escape_ready_map()
+        invalid_time_map.space_map.time_years = -1.0
+        @test process_and_log!(create_start_galaxy_escape_command(command_queue), invalid_time_map) ==
+            ["Cannot begin galaxy escape with an invalid galactic time"]
+        @test invalid_time_map.space_map isa SpaceMapState
+    end
+
+    @testset "atomically replaces normal navigation and an active manoeuvre" begin
+        initial_velocity = SVector(120.0, -8.0)
+        gamemap = make_galaxy_escape_ready_map(velocity = initial_velocity, time_years = 35.0)
+        normal_space_map = gamemap.space_map::SpaceMapState
+        normal_space_map.position = SVector(400.0, -250.0)
+        normal_space_map.target_time_years = 80.0
+        normal_space_map.last_stop_time = 30.0
+        normal_space_map.is_time_progressing = true
+        push!(normal_space_map.encounter_points, EncounterPoint(index = 1, base_velocity = 50.0))
+        normal_space_map.active_manoeuvre = ManoeuvreData(
+            approach_burn_dv = SVector(3.0, 4.0),
+            capture_burn_dv = SVector(-3.0, -4.0),
+            target_encounter_index = 1,
+        )
+        response = Channel{CommandStatus}(1)
+        expected_pre_escape_map = deepcopy(gamemap)
+
+        logs = process_and_log!(create_start_galaxy_escape_command(command_queue; response_channel = response), gamemap)
+
+        @test take!(response) == APPLIED
+        @test logs == ["Galaxy escape begun. Galactic navigation is no longer available."]
+        @test gamemap.space_map isa GalaxyEscapeSpaceMap
+        escape_map = gamemap.space_map::GalaxyEscapeSpaceMap
+        captured_map = get_pre_escape_map(escape_map)
+        @test captured_map !== expected_pre_escape_map
+        @test captured_map.components == expected_pre_escape_map.components
+        @test captured_map.pipe_behaviors == expected_pre_escape_map.pipe_behaviors
+        @test captured_map.surface_shiptags == expected_pre_escape_map.surface_shiptags
+        @test captured_map.statistics == expected_pre_escape_map.statistics
+        captured_space_map = captured_map.space_map::SpaceMapState
+        expected_space_map = expected_pre_escape_map.space_map::SpaceMapState
+        @test captured_space_map.velocity == expected_space_map.velocity
+        @test captured_space_map.position == expected_space_map.position
+        @test captured_space_map.time_years == expected_space_map.time_years
+        @test captured_space_map.target_time_years == expected_space_map.target_time_years
+        @test captured_space_map.active_manoeuvre == expected_space_map.active_manoeuvre
+        @test length(captured_space_map.encounter_points) == length(expected_space_map.encounter_points)
+        @test only(captured_space_map.encounter_points) !== only(expected_space_map.encounter_points)
+        @test only(captured_space_map.encounter_points).index == only(expected_space_map.encounter_points).index
+        @test only(captured_space_map.encounter_points).base_velocity == only(expected_space_map.encounter_points).base_velocity
+        @test can_abort_galaxy_escape(gamemap)
+        @test get_velocity(escape_map) == initial_velocity
+        @test escape_map.starting_velocity_x == initial_velocity[1]
+        @test get_time_years(escape_map) == 35.0
+        @test galaxy_escape_progress(escape_map) == 0.0
+        @test get_position(escape_map) == SVector(0.0, 0.0)
+        @test get_target_time(escape_map) == 35.0
+        @test isempty(get_encounter_points(escape_map))
+        @test !has_active_manoeuvre(escape_map)
+    end
+
+    @testset "ordinary topology and component actions remain available" begin
+        gamemap = make_galaxy_escape_ready_map()
+        set_component!(gamemap, TileCoord(0, 0), PlacedComponent(StatefulActionCompBehav(0), Q_POS, :primary))
+        process_and_log!(create_start_galaxy_escape_command(command_queue), gamemap)
+
+        action_logs = process_and_log!(create_do_action_command(command_queue, TileCoord(0, 0), :activate), gamemap)
+        @test action_logs == ["Activated"]
+        @test get_component(gamemap, TileCoord(0, 0)).component.activations == 1
+        @test get_component(get_pre_escape_map(gamemap), TileCoord(0, 0)).component.activations == 0
+
+        new_surface = TileCoord(1, 0)
+        @test isempty(process_and_log!(create_add_ship_surface_command(command_queue, new_surface), gamemap))
+        @test is_on_surface_tile(new_surface, gamemap)
+        @test !is_on_surface_tile(new_surface, get_pre_escape_map(gamemap))
+        @test gamemap.space_map isa GalaxyEscapeSpaceMap
+    end
+end
+
+@testset "Galaxy escape burn progress uses authoritative velocity" begin
+    gamemap = make_galaxy_escape_ready_map(velocity = SVector(50.0, 7.0), time_years = 9.0)
+    add_ship!(gamemap, :docked_ship, ShipState())
+    set_surface_tile!(gamemap, TileCoord(20, 0); ship_name = :docked_ship)
+    thrust = 2.0 * get_tile_mass()
+    set_component!(gamemap, TileCoord(0, 0), PlacedComponent(FixedThrustCompBehav(SVector(thrust, 0.0)), Q_POS, :primary))
+
+    process_and_log!(create_start_galaxy_escape_command(create_command_queue()), gamemap)
+    escape_map = gamemap.space_map::GalaxyEscapeSpaceMap
+    gamestate = GameState()
+    derived = DerivedMapState()
+    mna = MNA_State()
+
+    handle_thrusters!(gamestate, gamemap, derived, mna; base_ups = 1.0)
+    @test gamestate.acceleration_space_map_frame == SVector(1.0, 0.0)
+    @test galaxy_escape_progress(escape_map) == 1.0
+
+    set_component!(gamemap, TileCoord(0, 0), PlacedComponent(FixedThrustCompBehav(SVector(-thrust, 0.0)), Q_POS, :primary))
+    handle_thrusters!(gamestate, gamemap, derived, mna; base_ups = 1.0)
+    @test galaxy_escape_progress(escape_map) == 0.0
+
+    set_component!(gamemap, TileCoord(0, 0), PlacedComponent(FixedThrustCompBehav(SVector(0.0, thrust)), Q_POS, :primary))
+    handle_thrusters!(gamestate, gamemap, derived, mna; base_ups = 1.0)
+    @test get_velocity(escape_map) == SVector(50.0, 8.0)
+    @test galaxy_escape_progress(escape_map) == 0.0
+    @test get_total_delta_v(gamemap) == 3.0
+
+    departure_time = get_time_years(escape_map)
+    @test !step_space_map_time!(escape_map, 1000.0)
+    @test get_time_years(escape_map) == departure_time
+end
+
+@testset "Calculator refresh records a permanent estimated delta-V peak" begin
+    gamemap = make_gamemap()
+    set_component!(
+        gamemap,
+        TileCoord(0, 0),
+        PlacedComponent(DeltaVEstimateCompBehav(10.0, 1000.0), Q_POS, :primary),
+    )
+    gamestate = GameState(ticks = 1)
+
+    HexFlowCalculator.refresh_estimated_min_delta_v!(gamestate, gamemap)
+    @test gamestate.estimated_min_delta_v == 0.0
+    @test get_peak_estimated_delta_v(gamemap) == 0.0
+
+    gamestate.ticks = 30
+    HexFlowCalculator.refresh_estimated_min_delta_v!(gamestate, gamemap)
+    recorded_peak = get_peak_estimated_delta_v(gamemap)
+    @test recorded_peak == gamestate.estimated_min_delta_v
+    @test is_galaxy_escape_unlocked(recorded_peak)
+
+    delete_component!(gamemap, TileCoord(0, 0))
+    HexFlowCalculator.refresh_estimated_min_delta_v!(gamestate, gamemap; force = true)
+    @test gamestate.estimated_min_delta_v == 0.0
+    @test get_peak_estimated_delta_v(gamemap) == recorded_peak
+    @test is_galaxy_escape_unlocked(get_peak_estimated_delta_v(gamemap))
 end
 
 # ===============================================================
@@ -2426,6 +2716,8 @@ end
         @test only_comp.rotation == Q_POS
 
         @test !any(contains(log, "Invalid map edit") for log in logs)
+        @test isempty(get_playthrough_statistics(gm).completed_encounters)
+        @test get_total_encounter_count(gm) == 0
     end
 
     @testset "optimal direction adds ship with approaching dock status" begin
@@ -2518,6 +2810,58 @@ end
         @test encounter_point.spawn_time == 5.0
         @test isempty(logs)
         @test !any(contains(log, "Invalid map edit") for log in logs)
+        @test get_encounter_count(gm, ENCOUNTER_SHIP) == 1
+        @test get_total_encounter_count(gm) == 1
+    end
+
+    @testset "rejected live encounter does not record statistics" begin
+        gm = make_gamemap()
+        invalid_blueprint = ShipBlueprint(
+            ship_tiles = Set([TileCoord(0, 0)]),
+            components = Dict(
+                TileCoord(0, 0) => PlacedComponent(InvalidFluidBridgeCompBehav(), Q_POS, :_blueprint),
+            ),
+        )
+        initialise_spacemap!(gm, UInt32(42), make_trigger_test_encounter_config())
+        push!(get_encounter_points(gm), make_trigger_test_encounter_point())
+
+        cmd = create_add_encounter_ship_command(
+            cq, invalid_blueprint, "invalid_live_encounter", UInt32(47);
+            dir = HexFrame.Q_POS,
+            target_encounter_index = 1,
+        )
+        logs, console = make_log_console()
+        HexFlowCalculator.process_command!(cmd, gm, console; throw_errors = false)
+
+        @test isempty(get_playthrough_statistics(gm).completed_encounters)
+        @test get_total_encounter_count(gm) == 0
+        @test get_all_ship_names(gm) == [:primary]
+        @test any(contains(log, "Invalid map edit") for log in logs)
+    end
+
+    @testset "queued live encounter becomes stale after galaxy departure" begin
+        gm = make_galaxy_escape_ready_map()
+        blueprint = make_encounter_test_blueprint(include_pipe = false)
+        before_ships = get_all_ship_names(gm)
+        response = Channel{CommandStatus}(1)
+        queued_encounter = create_add_encounter_ship_command(
+            cq,
+            blueprint,
+            "stale_live_encounter",
+            UInt32(48);
+            dir = HexFrame.Q_POS,
+            target_encounter_index = 1,
+            response_channel = response,
+        )
+        process_and_log!(create_start_galaxy_escape_command(cq), gm)
+
+        logs = process_and_log!(queued_encounter, gm)
+
+        @test take!(response) == INVALID
+        @test isempty(logs)
+        @test get_all_ship_names(gm) == before_ships
+        @test get_total_encounter_count(gm) == 0
+        @test gm.space_map isa GalaxyEscapeSpaceMap
     end
 end
 
@@ -2980,4 +3324,123 @@ end
     @test MANOEUVRE_COMPLETION_THRESHOLD > 0.0
     @test MANOEUVRE_THRUST_THRESHOLD == 0.1
     @test MANOEUVRE_COMPLETION_THRESHOLD == 0.05
+end
+
+@testset "PlaythroughStatistics persistence" begin
+    old_layout = (
+        components = Dict{TileCoord, PlacedComponent}(),
+        pipe_behaviors = Dict{PipeCoord, PlacedPipe}(),
+        surface_shiptags = Dict{TileCoord, Symbol}(),
+        ships = Dict{Symbol, ShipState}(),
+        space_map = SpaceMapEmpty(),
+        learning_system = NoLearningSystem(),
+    )
+    old_map = rconvert(FlowMap.GameMap, old_layout)
+    @test get_recorded_play_time_seconds(old_map) == 0.0
+    @test get_simulated_ticks(old_map) == 0
+    @test get_total_delta_v(old_map) == 0.0
+    @test get_peak_thrust(old_map) == 0.0
+    @test get_peak_estimated_delta_v(old_map) == 0.0
+    @test isempty(get_playthrough_statistics(old_map).completed_encounters)
+
+    partial_statistics = rconvert(FlowMap.PlaythroughStatistics, (total_delta_v = 2.5, peak_estimated_delta_v = 1700.0))
+    @test get_recorded_play_time_seconds(partial_statistics) == 0.0
+    @test get_total_delta_v(partial_statistics) == 2.5
+    @test get_peak_estimated_delta_v(partial_statistics) == 1700.0
+    @test get_simulated_ticks(partial_statistics) == 0
+    @test typeof(partial_statistics.completed_encounters) == Dict{EncounterClass, Int64}
+    for invalid_peak in (-1.0, Inf, NaN)
+        @test_throws ArgumentError rconvert(
+            FlowMap.PlaythroughStatistics,
+            (peak_estimated_delta_v = invalid_peak,),
+        )
+    end
+
+    typemap = _build_map_typemap()
+    @test haskey(typemap, "FlowMap.PlaythroughStatistics")
+    @test haskey(typemap, "FlowMap.GalaxyEscapeSpaceMap")
+
+    gamemap = GameMap()
+    set_recorded_play_time_seconds!(gamemap, 12.0)
+    for _ in 1:4
+        increment_simulated_ticks!(gamemap)
+    end
+    record_delta_v!(gamemap, 3.5)
+    record_peak_thrust!(gamemap, 8.0)
+    record_peak_estimated_delta_v!(gamemap, 1900.0)
+    record_completed_encounter!(gamemap, ENCOUNTER_SHIP)
+    record_completed_encounter!(gamemap, ENCOUNTER_FUEL_CACHE)
+
+    mktempdir() do directory
+        path = joinpath(directory, "statistics.jld2")
+        savemap(gamemap, path)
+        loaded_map = loadmap(path)
+
+        @test get_recorded_play_time_seconds(loaded_map) == 12.0
+        @test get_simulated_ticks(loaded_map) == 4
+        @test get_total_delta_v(loaded_map) == 3.5
+        @test get_peak_thrust(loaded_map) == 8.0
+        @test get_peak_estimated_delta_v(loaded_map) == 1900.0
+        @test get_encounter_count(loaded_map, ENCOUNTER_SHIP) == 1
+        @test get_encounter_count(loaded_map, ENCOUNTER_FUEL_CACHE) == 1
+        @test get_total_encounter_count(loaded_map) == 2
+        @test typeof(loaded_map.statistics.completed_encounters) == Dict{EncounterClass, Int64}
+    end
+end
+
+
+@testset "GalaxyEscapeSpaceMap persistence" begin
+    pre_escape_map = make_galaxy_escape_ready_map(velocity = SVector(100.0, -8.0), time_years = 42.0)
+    escape_map = GalaxyEscapeSpaceMap(
+        velocity = SVector(175.0, -8.0),
+        starting_velocity_x = 100.0,
+        departure_time_years = 42.0,
+        pre_escape_map = pre_escape_map,
+    )
+    gamemap = GameMap(space_map = escape_map)
+    record_peak_estimated_delta_v!(gamemap, 2100.0)
+
+    reconstructed = rconvert(FlowMap.GalaxyEscapeSpaceMap, (
+        velocity = SVector(130.0, 2.0),
+        starting_velocity_x = 100.0,
+        departure_time_years = 7.0,
+    ))
+    @test reconstructed == GalaxyEscapeSpaceMap(
+        velocity = SVector(130.0, 2.0), starting_velocity_x = 100.0, departure_time_years = 7.0,
+        pre_escape_map = GameMap(),
+    )
+    @test !can_abort_galaxy_escape(reconstructed)
+    @test_throws ErrorException rconvert(FlowMap.GalaxyEscapeSpaceMap, (
+        starting_velocity_x = 100.0, departure_time_years = 7.0,
+    ))
+    @test_throws ArgumentError rconvert(FlowMap.GalaxyEscapeSpaceMap, (
+        velocity = SVector(Inf, 0.0), starting_velocity_x = 100.0, departure_time_years = 7.0,
+    ))
+    @test_throws ArgumentError rconvert(FlowMap.GalaxyEscapeSpaceMap, (
+        velocity = SVector(130.0, 0.0), starting_velocity_x = 100.0, departure_time_years = -1.0,
+    ))
+
+    mktempdir() do directory
+        path = joinpath(directory, "galaxy_escape.jld2")
+        savemap(gamemap, path)
+        loaded_map = loadmap(path)
+
+        @test loaded_map.space_map isa GalaxyEscapeSpaceMap
+        loaded_escape = loaded_map.space_map::GalaxyEscapeSpaceMap
+        @test loaded_escape.velocity == escape_map.velocity
+        @test loaded_escape.starting_velocity_x == escape_map.starting_velocity_x
+        @test loaded_escape.departure_time_years == escape_map.departure_time_years
+        @test loaded_escape.pre_escape_map !== pre_escape_map
+        loaded_pre_escape_space_map = loaded_escape.pre_escape_map.space_map::SpaceMapState
+        original_pre_escape_space_map = pre_escape_map.space_map::SpaceMapState
+        @test loaded_pre_escape_space_map.seed == original_pre_escape_space_map.seed
+        @test loaded_pre_escape_space_map.velocity == original_pre_escape_space_map.velocity
+        @test loaded_pre_escape_space_map.time_years == original_pre_escape_space_map.time_years
+        @test loaded_escape.pre_escape_map.statistics == pre_escape_map.statistics
+        @test can_abort_galaxy_escape(loaded_map)
+        @test galaxy_escape_progress(loaded_escape) == 75.0
+        @test get_peak_estimated_delta_v(loaded_map) == 2100.0
+        @test isempty(get_encounter_points(loaded_escape))
+        @test !has_active_manoeuvre(loaded_escape)
+    end
 end

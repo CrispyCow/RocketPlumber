@@ -10,10 +10,10 @@ using DataStructures: Deque
 #= ---------- Type Exports ----------- =#
 export ShipState, ShipBlueprint, GameMap, RenderPosOffsetState
 export DockingStatus, ConnectedDockStat, ApproachingDockStat, DepartingDockStat
-export AbstractSpaceMap, SpaceMapEmpty, ManoeuvreData
+export AbstractSpaceMap, SpaceMapEmpty, GalaxyEscapeSpaceMap, ManoeuvreData
 export EncounterClass, ENCOUNTER_SHIP, ENCOUNTER_FUEL_CACHE, ENCOUNTER_SCRAP
 export ManoeuvrePhase, PHASE_APPROACH_BURN, PHASE_COAST, PHASE_CAPTURE_BURN, PHASE_ENCOUNTER_READY
-export EncounterPoint
+export EncounterPoint, PlaythroughStatistics
 
 #= ---------- Learning Progress Exports ----------- =#
 export TutorialStatus, TUTORIAL_WAITING, TUTORIAL_IN_PROGRESS, TUTORIAL_COMPLETED
@@ -59,6 +59,17 @@ export get_active_manoeuvre, set_active_manoeuvre!, clear_active_manoeuvre!, has
 export initialise_spacemap!, get_spacemap, get_mass, get_tile_mass, set_tile_mass!, get_dry_mass, get_wet_mass
 export get_position, set_position!, get_target_time, set_target_time!
 export is_time_progressing, get_encounter_points, get_last_stop_time, set_last_stop_time!
+export is_galaxy_escape_active, get_galaxy_escape_space_map, get_pre_escape_map
+export galaxy_escape_progress, get_galaxy_escape_progress
+
+#= ---------- Playthrough Statistics Exports ----------- =#
+export get_playthrough_statistics
+export get_recorded_play_time_seconds, set_recorded_play_time_seconds!
+export get_simulated_ticks, get_simulated_seconds, increment_simulated_ticks!
+export get_total_delta_v, record_delta_v!
+export get_peak_thrust, record_peak_thrust!
+export get_peak_estimated_delta_v, record_peak_estimated_delta_v!
+export get_encounter_count, get_total_encounter_count, record_completed_encounter!
 
 # ===============================================================
 # Game State Struct Types
@@ -148,6 +159,17 @@ update_render_offset!(status::DepartingDockStat)::Bool = update_render_offset!(s
     ENCOUNTER_SCRAP         # Random assortment of individual components
 end
 
+"Persistent aggregate facts for a map, with play time stored as an as-of-checkpoint value."
+@kwdef mutable struct PlaythroughStatistics
+    recorded_play_time_seconds::Float64 = 0.0
+    simulated_ticks::Int64 = 0
+    total_delta_v::Float64 = 0.0
+    peak_thrust::Float64 = 0.0
+    completed_encounters::Dict{EncounterClass, Int64} = Dict{EncounterClass, Int64}()
+    peak_estimated_delta_v::Float64 = 0.0
+end
+@struct_hash_equal PlaythroughStatistics
+
 "A single encounter point — a ship moving through space on a linear trajectory."
 @kwdef mutable struct EncounterPoint
     index::Int                                          # Unique, permanent index (1-based)
@@ -215,6 +237,9 @@ abstract type AbstractSpaceMap end
     velocity::SVector{2, Float64} = SVector{2, Float64}(0.0, 0.0)
 end
 @struct_hash_equal SpaceMapEmpty
+
+"Return whether a space map represents an active galaxy-escape attempt."
+is_galaxy_escape_active(::AbstractSpaceMap)::Bool = false
 
 # ===============================================================
 # AbstractSpaceMap Accessor Functions
@@ -379,8 +404,62 @@ end
     ships::Dict{Symbol, ShipState} = Dict(:primary => ShipState())
     space_map::AbstractSpaceMap = SpaceMapEmpty()
     learning_system::AbstractLearningSystem = NoLearningSystem()
+    statistics::PlaythroughStatistics = PlaythroughStatistics()
 end
 @struct_hash_equal GameMap
+
+"Terminal galaxy-escape map with authoritative flight state and the required pre-departure map."
+@kwdef mutable struct GalaxyEscapeSpaceMap <: AbstractSpaceMap
+    velocity::SVector{2, Float64}
+    starting_velocity_x::Float64
+    departure_time_years::Float64
+    pre_escape_map::GameMap
+
+    function GalaxyEscapeSpaceMap(
+            velocity::SVector{2, T}, starting_velocity_x::Real, departure_time_years::Real,
+            pre_escape_map::GameMap,
+        ) where {T <: Real}
+        velocity = SVector{2, Float64}(velocity)
+        starting_velocity_x = Float64(starting_velocity_x)
+        departure_time_years = Float64(departure_time_years)
+
+        all(isfinite, velocity) || throw(ArgumentError("velocity must be finite"))
+        isfinite(starting_velocity_x) || throw(ArgumentError("starting velocity must be finite"))
+        (isfinite(departure_time_years) && departure_time_years >= 0.0) ||
+            throw(ArgumentError("departure time must be finite and non-negative"))
+        pre_escape_map.space_map isa GalaxyEscapeSpaceMap &&
+            throw(ArgumentError("pre-escape map cannot contain a galaxy-escape attempt"))
+
+        return new(velocity, starting_velocity_x, departure_time_years, pre_escape_map)
+    end
+end
+@struct_hash_equal GalaxyEscapeSpaceMap
+
+is_galaxy_escape_active(::GalaxyEscapeSpaceMap)::Bool = true
+
+"Return net positive X velocity gained since galaxy departure."
+galaxy_escape_progress(space_map::GalaxyEscapeSpaceMap)::Float64 =
+    max(0.0, space_map.velocity[1] - space_map.starting_velocity_x)
+
+#= ---------- GalaxyEscapeSpaceMap accessor implementations ----------- =#
+get_space_map_seed(::GalaxyEscapeSpaceMap)::Nothing = nothing
+get_time_years(sm::GalaxyEscapeSpaceMap)::Float64 = sm.departure_time_years
+set_time_years!(::GalaxyEscapeSpaceMap, ::Float64) = nothing
+get_active_manoeuvre(::GalaxyEscapeSpaceMap)::Nothing = nothing
+has_active_manoeuvre(::GalaxyEscapeSpaceMap)::Bool = false
+set_active_manoeuvre!(::GalaxyEscapeSpaceMap, ::ManoeuvreData) = nothing
+clear_active_manoeuvre!(::GalaxyEscapeSpaceMap) = nothing
+get_position(::GalaxyEscapeSpaceMap)::SVector{2, Float64} = SVector(0.0, 0.0)
+set_position!(::GalaxyEscapeSpaceMap, ::SVector{2, Float64}) = nothing
+get_target_time(sm::GalaxyEscapeSpaceMap)::Float64 = sm.departure_time_years
+set_target_time!(::GalaxyEscapeSpaceMap, ::Float64) = nothing
+is_time_progressing(::GalaxyEscapeSpaceMap)::Bool = false
+get_last_stop_time(sm::GalaxyEscapeSpaceMap)::Float64 = sm.departure_time_years
+set_last_stop_time!(::GalaxyEscapeSpaceMap, ::Float64) = nothing
+get_encounter_points(::GalaxyEscapeSpaceMap)::Vector{EncounterPoint} = EncounterPoint[]
+
+"Return the complete map captured immediately before galaxy departure."
+get_pre_escape_map(space_map::GalaxyEscapeSpaceMap)::GameMap = space_map.pre_escape_map
 
 "Wrap a single `ShipState` as the primary ship (no components or pipes)."
 function GameMap(state::ShipState)
@@ -392,6 +471,106 @@ function GameMap(blueprint::ShipBlueprint)
     gamemap = GameMap(ships = Dict{Symbol, ShipState}(), surface_shiptags = Dict{TileCoord, Symbol}())
     merge_ship!(gamemap, :primary, blueprint)
     return gamemap
+end
+
+# ===============================================================
+# Playthrough Statistics
+# ===============================================================
+
+"Return the persistent playthrough statistics owned by a game map."
+get_playthrough_statistics(gamemap::GameMap)::PlaythroughStatistics = gamemap.statistics
+
+"Return real-world play time in seconds as of the last checkpoint."
+get_recorded_play_time_seconds(statistics::PlaythroughStatistics)::Float64 = statistics.recorded_play_time_seconds
+get_recorded_play_time_seconds(gamemap::GameMap)::Float64 = get_recorded_play_time_seconds(get_playthrough_statistics(gamemap))
+
+"Set real-world play time in seconds as a validated checkpoint value."
+function set_recorded_play_time_seconds!(statistics::PlaythroughStatistics, seconds::Real)
+    value = _validate_nonnegative_finite(seconds, "recorded play time")
+    statistics.recorded_play_time_seconds = value
+    return nothing
+end
+set_recorded_play_time_seconds!(gamemap::GameMap, seconds::Real) =
+    set_recorded_play_time_seconds!(get_playthrough_statistics(gamemap), seconds)
+
+"Return the number of completed fixed-step simulation ticks."
+get_simulated_ticks(statistics::PlaythroughStatistics)::Int64 = statistics.simulated_ticks
+get_simulated_ticks(gamemap::GameMap)::Int64 = get_simulated_ticks(get_playthrough_statistics(gamemap))
+
+"Return detailed simulated time in seconds derived from completed ticks."
+get_simulated_seconds(statistics::PlaythroughStatistics)::Float64 = statistics.simulated_ticks / BASE_UPS
+get_simulated_seconds(gamemap::GameMap)::Float64 = get_simulated_seconds(get_playthrough_statistics(gamemap))
+
+"Increment the count of completed fixed-step simulation ticks once."
+function increment_simulated_ticks!(statistics::PlaythroughStatistics)
+    statistics.simulated_ticks += 1
+    return nothing
+end
+increment_simulated_ticks!(gamemap::GameMap) = increment_simulated_ticks!(get_playthrough_statistics(gamemap))
+
+"Return the accumulated scalar path length through velocity space in delta-V units."
+get_total_delta_v(statistics::PlaythroughStatistics)::Float64 = statistics.total_delta_v
+get_total_delta_v(gamemap::GameMap)::Float64 = get_total_delta_v(get_playthrough_statistics(gamemap))
+
+"Add a non-negative delta-V increment to the playthrough total."
+function record_delta_v!(statistics::PlaythroughStatistics, delta_v::Real)
+    value = _validate_nonnegative_finite(delta_v, "delta-V increment")
+    statistics.total_delta_v += value
+    return nothing
+end
+record_delta_v!(gamemap::GameMap, delta_v::Real) = record_delta_v!(get_playthrough_statistics(gamemap), delta_v)
+
+"Return the greatest combined thrust magnitude recorded during a simulation tick."
+get_peak_thrust(statistics::PlaythroughStatistics)::Float64 = statistics.peak_thrust
+get_peak_thrust(gamemap::GameMap)::Float64 = get_peak_thrust(get_playthrough_statistics(gamemap))
+
+"Record a non-negative combined thrust magnitude, retaining the historical peak."
+function record_peak_thrust!(statistics::PlaythroughStatistics, thrust::Real)
+    value = _validate_nonnegative_finite(thrust, "thrust magnitude")
+    statistics.peak_thrust = max(statistics.peak_thrust, value)
+    return nothing
+end
+record_peak_thrust!(gamemap::GameMap, thrust::Real) = record_peak_thrust!(get_playthrough_statistics(gamemap), thrust)
+
+"Return the greatest conservative remaining delta-V estimate recorded for the playthrough."
+get_peak_estimated_delta_v(statistics::PlaythroughStatistics)::Float64 = statistics.peak_estimated_delta_v
+get_peak_estimated_delta_v(gamemap::GameMap)::Float64 = get_peak_estimated_delta_v(get_playthrough_statistics(gamemap))
+
+"Record a conservative remaining delta-V estimate, returning whether the historical peak increased."
+function record_peak_estimated_delta_v!(statistics::PlaythroughStatistics, estimate::Real)::Bool
+    value = _validate_nonnegative_finite(estimate, "estimated delta-V")
+    value <= statistics.peak_estimated_delta_v && return false
+
+    statistics.peak_estimated_delta_v = value
+    return true
+end
+record_peak_estimated_delta_v!(gamemap::GameMap, estimate::Real)::Bool =
+    record_peak_estimated_delta_v!(get_playthrough_statistics(gamemap), estimate)
+
+"Return the number of completed encounters for one class, or zero when absent."
+get_encounter_count(statistics::PlaythroughStatistics, encounter_class::EncounterClass)::Int64 =
+    get(statistics.completed_encounters, encounter_class, Int64(0))
+get_encounter_count(gamemap::GameMap, encounter_class::EncounterClass)::Int64 =
+    get_encounter_count(get_playthrough_statistics(gamemap), encounter_class)
+
+"Return the derived total of all completed encounter-class buckets."
+get_total_encounter_count(statistics::PlaythroughStatistics)::Int64 =
+    sum(values(statistics.completed_encounters); init = Int64(0))
+get_total_encounter_count(gamemap::GameMap)::Int64 =
+    get_total_encounter_count(get_playthrough_statistics(gamemap))
+
+"Increment the completed encounter bucket for a class."
+function record_completed_encounter!(statistics::PlaythroughStatistics, encounter_class::EncounterClass)
+    statistics.completed_encounters[encounter_class] = get_encounter_count(statistics, encounter_class) + Int64(1)
+    return nothing
+end
+record_completed_encounter!(gamemap::GameMap, encounter_class::EncounterClass) =
+    record_completed_encounter!(get_playthrough_statistics(gamemap), encounter_class)
+
+function _validate_nonnegative_finite(value::Real, name::AbstractString)::Float64
+    converted = Float64(value)
+    (isfinite(converted) && converted >= 0.0) || throw(ArgumentError("$name must be finite and non-negative"))
+    return converted
 end
 
 # ===============================================================
@@ -1612,6 +1791,27 @@ is_ship_moving(gamemap::GameMap, ship_name::Symbol)::Bool = is_ship_moving(_get_
 
 "Get the space map from the game map."
 get_spacemap(gamemap::GameMap)::AbstractSpaceMap = gamemap.space_map
+
+"Return whether a game map contains an active galaxy-escape attempt."
+is_galaxy_escape_active(gamemap::GameMap)::Bool = is_galaxy_escape_active(gamemap.space_map)
+
+"Return the active galaxy-escape map, or `nothing` for other space-map modes."
+function get_galaxy_escape_space_map(gamemap::GameMap)::Union{Nothing, GalaxyEscapeSpaceMap}
+    space_map = gamemap.space_map
+    return space_map isa GalaxyEscapeSpaceMap ? space_map : nothing
+end
+
+"Return the pre-departure map, or `nothing` outside a galaxy-escape attempt."
+function get_pre_escape_map(gamemap::GameMap)::Union{Nothing, GameMap}
+    space_map = get_galaxy_escape_space_map(gamemap)
+    return isnothing(space_map) ? nothing : get_pre_escape_map(space_map)
+end
+
+"Return current galaxy-escape progress, or `nothing` outside an escape attempt."
+function get_galaxy_escape_progress(gamemap::GameMap)::Union{Nothing, Float64}
+    space_map = get_galaxy_escape_space_map(gamemap)
+    return isnothing(space_map) ? nothing : galaxy_escape_progress(space_map)
+end
 
 "Get the ship's current velocity from the game map."
 get_velocity(gamemap::GameMap)::SVector{2, Float64} = get_velocity(gamemap.space_map)

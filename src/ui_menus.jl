@@ -4,7 +4,7 @@
 
 # Lightweight usings to help editor intellisense
 import CImGui
-using FilePathsBase, Printf, StaticArrays
+using FilePathsBase, LinearAlgebra, Printf, StaticArrays
 using HexFrame, FlowEngine, FlowMap, HexFlowProcGen
 using HexFluids
 using HexFlowCalculator, HexFlowControl
@@ -28,20 +28,21 @@ const _component_mass_editor_state = Dict{Symbol, Any}(:input_value => 0.0)
 const _tile_mass_editor_state = Dict{Symbol, Any}(:input_value => 0.0)
 const _particle_accel_editor_state = Dict{Symbol, Any}(:input_value => 0.0)
 
-"Render the pause menu when active, with options to close, save map, exit to menu, or quit."
+"Render the pause menu when active, including escape recovery when a departure checkpoint exists."
 function ui_pause_menu_render!(inputstate::InputState, snapshot::FlowCalculatorSnapshot, window::GLFW.Window,
-        learning_state::Union{Nothing, LearningSystemState} = nothing)
+        learning_state::Union{Nothing, LearningSystemState} = nothing; session_timing::PlaySessionTiming)
     # Menu must be active
     if !inputstate.escape_menu_active
         return nothing
     end
 
     is_sandbox = !isnothing(learning_state) && is_sandbox_learning(learning_state)
+    escape_active = is_galaxy_escape_active(snapshot.gamemap)
 
     # Centre the menu box
     winsize = GLFW.GetWindowSize(window)
     win_w, win_h = Float64(winsize.width), Float64(winsize.height)
-    box_w, box_h = 300.0, 350.0
+    box_w, box_h = 300.0, escape_active ? 420.0 : 350.0
     pos = ((win_w - box_w) / 2, (win_h - box_h) / 2)
 
     CImGui.SetNextWindowPos(pos, CImGui.ImGuiCond_Always)
@@ -72,15 +73,35 @@ function ui_pause_menu_render!(inputstate::InputState, snapshot::FlowCalculatorS
 
     # Save map button (hidden in sandbox mode)
     if !is_sandbox
-        if CImGui.Button("Save Map", (button_width, button_height))
+        save_label = escape_active ? "Save Escape Attempt" : "Save Map"
+        if CImGui.Button(save_label, (button_width, button_height))
             save_path = save_file(absolute(Path(joinpath(dirname(@__FILE__), "..", "maps"))); filterlist = "jld2")
             if !isnothing(save_path)
                 gamemap_to_save = deepcopy(snapshot.gamemap)
                 if !isnothing(learning_state)
-                    gamemap_to_save.learning_system = deepcopy(learning_state.map_learning)
+                    set_learning_system!(gamemap_to_save, deepcopy(learning_state.map_learning))
                 end
+                set_recorded_play_time_seconds!(gamemap_to_save, get_current_play_time_seconds(session_timing))
                 savemap(gamemap_to_save, "$save_path")
             end
+        end
+        CImGui.Dummy((0.0, 10.0))
+        CImGui.SetCursorPosX((box_w - button_width) / 2)
+    end
+
+    if escape_active
+        abort_available = can_abort_galaxy_escape(snapshot.gamemap)
+        !abort_available && CImGui.BeginDisabled()
+        if CImGui.Button("Abort Escape Attempt and Restore Backup", (button_width, button_height))
+            inputstate.exit_reason = EXIT_RESTART
+            inputstate.escape_menu_active = false
+        end
+        !abort_available && CImGui.EndDisabled()
+        if CImGui.IsItemHovered(CImGui.ImGuiHoveredFlags_AllowWhenDisabled)
+            tooltip = abort_available ?
+                "Restore the ship and galaxy to their pre-departure state." :
+                "This development save does not contain a recoverable pre-departure map."
+            CImGui.SetTooltip(tooltip)
         end
         CImGui.Dummy((0.0, 10.0))
         CImGui.SetCursorPosX((box_w - button_width) / 2)
@@ -162,7 +183,11 @@ function _encounter_set_options(
     ]
 end
 
-function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, snapshot::FlowCalculatorSnapshot, viewstate::ViewState, winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}}, max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing)
+function ui_dev_utils_menu_render!(
+        inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, snapshot::FlowCalculatorSnapshot,
+        viewstate::ViewState, winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}},
+        max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing;
+        session_timing::PlaySessionTiming)
     # Menu must be active
     if !inputstate.dev_utils_menu_active
         return nothing
@@ -176,6 +201,24 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
     CImGui.Text("Ticks: $(snapshot.gamestate.ticks)")
     CImGui.Text("Frames: $(viewstate.frame_count)")
     CImGui.Separator()
+
+    if CImGui.CollapsingHeader("Playthrough Statistics")
+        gamemap = snapshot.gamemap
+        game_time = get_time_years(gamemap)
+        game_time_text = isnothing(game_time) ? "N/A" : "$(format_value(game_time)) years"
+        CImGui.Text("Game time: $game_time_text")
+        CImGui.Text("Play time: $(format_value(get_current_play_time_seconds(session_timing) / 60.0)) minutes")
+        CImGui.Text("Simulated time: $(format_value(get_simulated_seconds(gamemap))) seconds ($(get_simulated_ticks(gamemap)) ticks)")
+        CImGui.Text("Current speed: $(format_value(norm(get_velocity(gamemap))))")
+        CImGui.Text("Total delta-V: $(format_value(get_total_delta_v(gamemap)))")
+        CImGui.Text("Peak thrust: $(format_value(get_peak_thrust(gamemap)))")
+        CImGui.Text("Completed encounters: $(get_total_encounter_count(gamemap))")
+        CImGui.Indent()
+        for encounter_class in instances(EncounterClass)
+            CImGui.Text("$(encounter_class_label(encounter_class)): $(get_encounter_count(gamemap, encounter_class))")
+        end
+        CImGui.Unindent()
+    end
 
     button_width = propertyboxwidth - 50.0
     button_height = 20.0
@@ -240,9 +283,38 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
 
         # Modify Space Map
         if CImGui.TreeNode("Modify Space Map")
+            current_velocity = get_velocity(snapshot.gamemap)
+            CImGui.Text(@sprintf("Current velocity: (%.3f, %.3f)", current_velocity...))
+
+            delta_vel_x = gui_input_double!(inputstate, :spacemap_delta_vel_x, "Velocity Delta X", 2500.0)
+            delta_vel_y = gui_input_double!(inputstate, :spacemap_delta_vel_y, "Velocity Delta Y", 0.0)
+            velocity_delta = SVector{2, Float64}(delta_vel_x, delta_vel_y)
+            new_velocity = current_velocity + velocity_delta
+            invalid_velocity = !all(isfinite, velocity_delta) || !all(isfinite, new_velocity)
+
+            if button_with_disable(
+                    "Add Velocity", ImVec2(button_width, button_height), invalid_velocity;
+                    tooltip = "Velocity and resulting velocity must be finite.",
+                )
+                modified_map = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
+                adjusted_velocity = get_velocity(modified_map) + velocity_delta
+                if all(isfinite, adjusted_velocity)
+                    set_velocity!(modified_map, adjusted_velocity)
+                    enqueue_map_override!(flowcalc_ipc, modified_map)
+                    @info "Added velocity ($delta_vel_x, $delta_vel_y); new velocity=($adjusted_velocity)"
+                else
+                    @warn "Could not add velocity because the resulting velocity is not finite" velocity_delta
+                end
+            end
+
+            CImGui.TreePop()
+        end
+
+        # Overwrite Space Map
+        if CImGui.TreeNode("Overwrite Space Map")
             spacemap_seed = gui_input_u32!(inputstate, :spacemap_init_seed, "Seed", UInt32(42))
-            init_vel_x = gui_input_double!(inputstate, :spacemap_init_vel_x, "Velocity X", 10.0)
-            init_vel_y = gui_input_double!(inputstate, :spacemap_init_vel_y, "Velocity Y", 0.0)
+            init_vel_x = gui_input_double!(inputstate, :spacemap_init_vel_x, "Initial Velocity X", 10.0)
+            init_vel_y = gui_input_double!(inputstate, :spacemap_init_vel_y, "Initial Velocity Y", 0.0)
 
             if CImGui.Button("Initialise Space Map", (button_width, button_height))
                 modified_map = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
@@ -451,7 +523,7 @@ function ui_dev_utils_menu_render!(inputstate::InputState, flowcalc_ipc::FlowCal
             all_component_sets = ShipComponentSet[
                 shipset_starter,
                 shipset_simple_cold_gas,
-                shipset_turbine_monoprop,
+                shipset_pressure_fed_monoprop,
                 compset_gas_cache,
                 compset_liquid_cache,
                 compset_extra_gas_tanks,

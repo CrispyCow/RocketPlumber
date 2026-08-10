@@ -1410,6 +1410,108 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
         clear_active_manoeuvre!(sm)
     end
 
+    @testset "GalaxyEscapeSpaceMap — validation, accessors, and progress" begin
+        initial_velocity = SVector(25.0, -4.0)
+        pre_escape_map = GameMap()
+        sm = GalaxyEscapeSpaceMap(
+            velocity = initial_velocity,
+            starting_velocity_x = 25.0,
+            departure_time_years = 12.5,
+            pre_escape_map = pre_escape_map,
+        )
+
+        @test sm == GalaxyEscapeSpaceMap(
+            velocity = initial_velocity,
+            starting_velocity_x = 25.0,
+            departure_time_years = 12.5,
+            pre_escape_map = deepcopy(pre_escape_map),
+        )
+        @test deepcopy(sm) == sm
+        @test deepcopy(sm) !== sm
+        @test get_pre_escape_map(sm) === pre_escape_map
+        @test_throws ArgumentError GalaxyEscapeSpaceMap(
+            velocity = SVector(Inf, 0.0), starting_velocity_x = 0.0, departure_time_years = 0.0,
+            pre_escape_map = pre_escape_map,
+        )
+        @test_throws ArgumentError GalaxyEscapeSpaceMap(
+            velocity = SVector(0.0, NaN), starting_velocity_x = 0.0, departure_time_years = 0.0,
+            pre_escape_map = pre_escape_map,
+        )
+        @test_throws ArgumentError GalaxyEscapeSpaceMap(
+            velocity = SVector(0.0, 0.0), starting_velocity_x = Inf, departure_time_years = 0.0,
+            pre_escape_map = pre_escape_map,
+        )
+        @test_throws ArgumentError GalaxyEscapeSpaceMap(
+            velocity = SVector(0.0, 0.0), starting_velocity_x = 0.0, departure_time_years = -1.0,
+            pre_escape_map = pre_escape_map,
+        )
+        @test_throws ArgumentError GalaxyEscapeSpaceMap(
+            velocity = SVector(0.0, 0.0), starting_velocity_x = 0.0, departure_time_years = NaN,
+            pre_escape_map = pre_escape_map,
+        )
+        nested_backup = GameMap(space_map = sm)
+        @test_throws ArgumentError GalaxyEscapeSpaceMap(
+            velocity = initial_velocity, starting_velocity_x = 25.0,
+            departure_time_years = 12.5, pre_escape_map = nested_backup,
+        )
+
+        @test get_velocity(sm) == initial_velocity
+        @test isnothing(get_space_map_seed(sm))
+        @test get_time_years(sm) == 12.5
+        @test get_position(sm) == SVector(0.0, 0.0)
+        @test get_target_time(sm) == 12.5
+        @test get_last_stop_time(sm) == 12.5
+        @test !is_time_progressing(sm)
+        @test !has_active_manoeuvre(sm)
+        @test isnothing(get_active_manoeuvre(sm))
+        @test get_encounter_points(sm) isa Vector{EncounterPoint}
+        @test isempty(get_encounter_points(sm))
+
+        set_time_years!(sm, 100.0)
+        set_position!(sm, SVector(8.0, 9.0))
+        set_target_time!(sm, 100.0)
+        set_last_stop_time!(sm, 100.0)
+        set_active_manoeuvre!(sm, ManoeuvreData(
+            approach_burn_dv = SVector(1.0, 0.0), capture_burn_dv = SVector(-1.0, 0.0),
+        ))
+        clear_active_manoeuvre!(sm)
+        @test get_time_years(sm) == 12.5
+        @test get_position(sm) == SVector(0.0, 0.0)
+        @test get_target_time(sm) == 12.5
+        @test get_last_stop_time(sm) == 12.5
+        @test !has_active_manoeuvre(sm)
+
+        @test galaxy_escape_progress(sm) == 0.0
+        set_velocity!(sm, SVector(30.0, -4.0))
+        @test galaxy_escape_progress(sm) == 5.0
+        set_velocity!(sm, SVector(27.0, -4.0))
+        @test galaxy_escape_progress(sm) == 2.0
+        set_velocity!(sm, SVector(20.0, -4.0))
+        @test galaxy_escape_progress(sm) == 0.0
+        set_velocity!(sm, SVector(25.0, 40.0))
+        @test galaxy_escape_progress(sm) == 0.0
+    end
+
+    @testset "Galaxy escape mode lookup" begin
+        empty_map = GameMap()
+        @test !is_galaxy_escape_active(empty_map.space_map)
+        @test !is_galaxy_escape_active(empty_map)
+        @test isnothing(get_galaxy_escape_space_map(empty_map))
+        @test isnothing(get_pre_escape_map(empty_map))
+        @test isnothing(get_galaxy_escape_progress(empty_map))
+
+        escape_map = GalaxyEscapeSpaceMap(
+            velocity = SVector(12.0, 3.0), starting_velocity_x = 10.0, departure_time_years = 4.0,
+            pre_escape_map = GameMap(),
+        )
+        gamemap = GameMap(space_map = escape_map)
+        @test is_galaxy_escape_active(escape_map)
+        @test is_galaxy_escape_active(gamemap)
+        @test get_galaxy_escape_space_map(gamemap) === escape_map
+        @test get_pre_escape_map(gamemap) === escape_map.pre_escape_map
+        @test get_galaxy_escape_progress(gamemap) == 2.0
+    end
+
     @testset "SpaceMapState — accessors (moved to HexFlowProcGen)" begin
         # SpaceMapState has been moved to HexFlowProcGen. These tests are now in HexFlowProcGen.
         @test true
@@ -1511,6 +1613,77 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
         @test Int(ENCOUNTER_SHIP) != Int(ENCOUNTER_FUEL_CACHE)
         @test Int(ENCOUNTER_FUEL_CACHE) != Int(ENCOUNTER_SCRAP)
         @test Int(ENCOUNTER_SHIP) != Int(ENCOUNTER_SCRAP)
+    end
+
+    @testset "PlaythroughStatistics" begin
+        statistics = PlaythroughStatistics()
+        @test get_recorded_play_time_seconds(statistics) == 0.0
+        @test get_simulated_ticks(statistics) == 0
+        @test get_simulated_seconds(statistics) == 0.0
+        @test get_total_delta_v(statistics) == 0.0
+        @test get_peak_thrust(statistics) == 0.0
+        @test get_peak_estimated_delta_v(statistics) == 0.0
+        @test get_total_encounter_count(statistics) == 0
+        @test isempty(statistics.completed_encounters)
+
+        first_map = GameMap()
+        second_map = GameMap()
+        record_completed_encounter!(first_map, ENCOUNTER_SHIP)
+        @test get_encounter_count(first_map, ENCOUNTER_SHIP) == 1
+        @test get_encounter_count(second_map, ENCOUNTER_SHIP) == 0
+        @test first_map.statistics.completed_encounters !== second_map.statistics.completed_encounters
+
+        set_recorded_play_time_seconds!(statistics, 12.5)
+        @test get_recorded_play_time_seconds(statistics) == 12.5
+        for invalid_value in (-1.0, Inf, NaN)
+            @test_throws ArgumentError set_recorded_play_time_seconds!(statistics, invalid_value)
+        end
+
+        increment_simulated_ticks!(statistics)
+        increment_simulated_ticks!(statistics)
+        @test get_simulated_ticks(statistics) == 2
+        @test get_simulated_seconds(statistics) == 2 / BASE_UPS
+
+        record_delta_v!(statistics, 1.25)
+        record_delta_v!(statistics, 0.75)
+        @test get_total_delta_v(statistics) == 2.0
+        for invalid_value in (-1.0, Inf, NaN)
+            @test_throws ArgumentError record_delta_v!(statistics, invalid_value)
+        end
+
+        record_peak_thrust!(statistics, 5.0)
+        record_peak_thrust!(statistics, 3.0)
+        @test get_peak_thrust(statistics) == 5.0
+        for invalid_value in (-1.0, Inf, NaN)
+            @test_throws ArgumentError record_peak_thrust!(statistics, invalid_value)
+        end
+
+        @test record_peak_estimated_delta_v!(statistics, 1200.0)
+        @test get_peak_estimated_delta_v(statistics) == 1200.0
+        @test !record_peak_estimated_delta_v!(statistics, 1200.0)
+        @test !record_peak_estimated_delta_v!(statistics, 900.0)
+        @test get_peak_estimated_delta_v(statistics) == 1200.0
+        for invalid_value in (-1.0, Inf, NaN)
+            @test_throws ArgumentError record_peak_estimated_delta_v!(statistics, invalid_value)
+        end
+
+        peak_map = GameMap()
+        @test record_peak_estimated_delta_v!(peak_map, 1500)
+        @test get_peak_estimated_delta_v(peak_map) == 1500.0
+        copied_statistics = deepcopy(peak_map.statistics)
+        @test copied_statistics == peak_map.statistics
+        @test copied_statistics !== peak_map.statistics
+
+        @test get_encounter_count(statistics, ENCOUNTER_FUEL_CACHE) == 0
+        record_completed_encounter!(statistics, ENCOUNTER_SHIP)
+        record_completed_encounter!(statistics, ENCOUNTER_SHIP)
+        record_completed_encounter!(statistics, ENCOUNTER_FUEL_CACHE)
+        @test get_encounter_count(statistics, ENCOUNTER_SHIP) == 2
+        @test get_encounter_count(statistics, ENCOUNTER_FUEL_CACHE) == 1
+        @test get_total_encounter_count(statistics) == 3
+
+        @test get_simulated_ticks(GameMap(ShipState())) == 0
+        @test get_recorded_play_time_seconds(GameMap(ShipBlueprint())) == 0.0
     end
 
     @testset "initialise_spacemap! (moved to HexFlowProcGen)" begin
@@ -1631,4 +1804,3 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
     end
 
 end # @testset "FlowMap"
-

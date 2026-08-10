@@ -15,7 +15,7 @@ export FlowCalculatorSnapshot, FlowCalculatorSharedState, FlowCalculatorIPC, Tim
 export CommandStatus, APPLIED, REJECTED, QUEUED_FAILED, INVALID
 export MapEditCommand, SetTileCommand, SetPipeBehaviorCommand, MoveCommand, TranslateElementsCommand
 export DeleteElementsCommand, ClickTileCommand, DoActionCommand, AddShipSurfaceCommand, RemoveShipSurfaceCommand
-export MapOverrideCommand, AddEncounterShipCommand, RedockShipCommand
+export MapOverrideCommand, StartGalaxyEscapeCommand, AddEncounterShipCommand, RedockShipCommand
 export CommandQueue
 
 # Function exports - Setup
@@ -27,14 +27,14 @@ export set_max_reachable_bounds!, get_max_reachable_bounds
 export create_set_tile_command, create_set_pipe_behavior_command, create_move_command, create_translate_elements_command
 export create_delete_elements_command, create_click_tile_command, create_do_action_command
 export create_add_ship_surface_command, create_remove_ship_surface_command
-export create_map_override_command, create_add_encounter_ship_command, create_redock_ship_command
+export create_map_override_command, create_start_galaxy_escape_command, create_add_encounter_ship_command, create_redock_ship_command
 export try_enqueue_command!
 
 # Function exports - Main loop
 export flowcalculator_loop!
 
 # Function exports - Map updates
-export update_map!, update_mna!, handle_thrusters!, scale_voltage_dict!
+export update_map!, update_mna!, handle_thrusters!, scale_node_voltages!
 export collect_primary_map_inputs!, update_map_from_inputs!, solve_from_inputs!
 
 # Constant exports - Manoeuvre thresholds
@@ -285,6 +285,13 @@ end
 end
 @struct_hash_equal AddEncounterShipCommand
 
+"Begin a galaxy-escape attempt while preserving a pre-departure recovery map."
+@kwdef struct StartGalaxyEscapeCommand <: MapEditCommand
+    id::UInt64
+    response_channel::Union{Nothing, Channel{CommandStatus}}
+end
+@struct_hash_equal StartGalaxyEscapeCommand
+
 "Relocate a ship by a tile offset, with approach animation and explicit overlap validation."
 @kwdef struct RedockShipCommand <: MapEditCommand
     id::UInt64
@@ -381,7 +388,11 @@ end
 "Refresh the cached conservative delta-V estimate when the cadence or caller requires it."
 function refresh_estimated_min_delta_v!(gamestate::GameState, gamemap::GameMap; force::Bool = false)
     if force || gamestate.ticks == 0 || gamestate.ticks % DELTA_V_CACHE_TICK_DIVISOR == 0
-        @timeit flowcalc_loop_timer "Update Delta-V Cache" gamestate.estimated_min_delta_v = estimate_min_delta_v(gamemap)
+        @timeit flowcalc_loop_timer "Update Delta-V Cache" begin
+            estimate = estimate_min_delta_v(gamemap)
+            gamestate.estimated_min_delta_v = estimate
+            record_peak_estimated_delta_v!(gamemap, estimate)
+        end
     end
     return nothing
 end
@@ -808,8 +819,34 @@ function apply_mapedit_command!(gamemap::GameMap, command::MapOverrideCommand)::
     return ValidRequest()
 end
 
+function apply_mapedit_command!(gamemap::GameMap, ::StartGalaxyEscapeCommand)::MapEditResult
+    space_map = gamemap.space_map
+    space_map isa SpaceMapState || return InvalidRequest("Galaxy escape can only begin from normal galactic navigation")
+    is_galaxy_escape_unlocked(get_peak_estimated_delta_v(gamemap)) ||
+        return InvalidRequest("Galaxy escape has not been discovered yet")
+
+    velocity = get_velocity(space_map)
+    all(isfinite, velocity) || return InvalidRequest("Cannot begin galaxy escape with a non-finite velocity")
+    departure_time = get_time_years(space_map)
+    (isfinite(departure_time) && departure_time >= 0.0) ||
+        return InvalidRequest("Cannot begin galaxy escape with an invalid galactic time")
+
+    pre_escape_map = deepcopy(gamemap)
+    gamemap.space_map = GalaxyEscapeSpaceMap(
+        velocity = velocity,
+        starting_velocity_x = velocity[1],
+        departure_time_years = departure_time,
+        pre_escape_map = pre_escape_map,
+    )
+    return ValidRequestResult("Galaxy escape begun. Galactic navigation is no longer available.")
+end
+
 "Add an encounter ship, with optional encounter point recycling for live encounters."
 function apply_mapedit_command!(gamemap::GameMap, command::AddEncounterShipCommand)::MapEditResult
+    if command.target_encounter_index !== nothing && !(gamemap.space_map isa SpaceMapState)
+        return StaleMapEdit()
+    end
+
     if command.dir === nothing
         encounter_ship_optimal_dir!(gamemap, command.blueprint, command.ship_name_base,
             command.seed; max_view_bounds = command.max_view_bounds)
@@ -820,8 +857,10 @@ function apply_mapedit_command!(gamemap::GameMap, command::AddEncounterShipComma
 
     # Recycle encounter point and clear manoeuvre if this is a live encounter
     if command.target_encounter_index !== nothing
-        sm = gamemap.space_map
+        sm = gamemap.space_map::SpaceMapState
         ep = sm.encounter_points[command.target_encounter_index]
+        encounter_class = ep.encounter_class
+        record_completed_encounter!(gamemap, encounter_class)
         spawn_encounter_point!(ep, sm, sm.time_years)
         clear_active_manoeuvre!(gamemap)
         return ValidRequest()
@@ -926,6 +965,7 @@ command_diagnostic(command::RemoveShipSurfaceCommand) = (type = nameof(typeof(co
 command_diagnostic(command::MapOverrideCommand) = (
     type = nameof(typeof(command)), id = command.id, replacement_map = map_diagnostic(command.new_map),
 )
+command_diagnostic(command::StartGalaxyEscapeCommand) = (type = nameof(typeof(command)), id = command.id)
 command_diagnostic(command::AddEncounterShipCommand) = (
     type = nameof(typeof(command)), id = command.id, ship_name_base = command.ship_name_base,
     seed = command.seed, dir = command.dir, target_encounter_index = command.target_encounter_index,
@@ -1204,6 +1244,14 @@ function create_map_override_command(
         new_map = deepcopy(new_map),
         response_channel = response_channel
     )
+end
+
+"Create a command that begins a recoverable galaxy-escape attempt."
+function create_start_galaxy_escape_command(
+        cq::CommandQueue;
+        response_channel::Union{Nothing, Channel} = nothing,
+    )::StartGalaxyEscapeCommand
+    return StartGalaxyEscapeCommand(id = cq.next_command_id(), response_channel = response_channel)
 end
 
 "Create an `AddEncounterShipCommand` to add a generated encounter ship."
@@ -1736,28 +1784,30 @@ function update_map!(gamemap::GameMap, derivedmapstate::DerivedMapState, mna_sta
     return nothing
 end
 
-# TODO: This closure hides mutable state (max_voltage_ever) with no way to reset on map reload.
-# Consider replacing with a proper struct + reset! method in a future cleanup pass.
-let max_voltage_ever::Float64 = -Inf
-    "Normalise node voltages to [0, 1] for colour rendering. Tracks the historical maximum. Mutates `out` in-place."
-    global function scale_voltage_dict!(out::Dict{NodeCoord, Float64}, dict::Dict{NodeCoord, Float64})
-        if isempty(dict)
-            empty!(out)
-            return nothing
-        end
+"Normalise node voltages to [0, 1] for colour rendering using the state's historical maximum."
+function scale_node_voltages!(mna_state::MNA_State)
+    node_voltages = mna_state.node_voltages
+    scaled_voltages = mna_state.node_voltages_scaled
 
-        # Get the maximum value
-        max_voltage_current = maximum(values(dict))
-        max_voltage_ever = max(max_voltage_current, max_voltage_ever)
-
-        # Scale so that the largest value is 1
-        empty!(out)
-        sizehint!(out, length(dict))
-        for (key, value) in dict
-            out[key] = value / max_voltage_ever
-        end
+    if isempty(node_voltages)
+        empty!(scaled_voltages)
         return nothing
     end
+
+    scale_max = max(mna_state.node_voltage_scale_max, eps(Float64))
+    for voltage in values(node_voltages)
+        if voltage > scale_max
+            scale_max = voltage
+        end
+    end
+    mna_state.node_voltage_scale_max = scale_max
+
+    empty!(scaled_voltages)
+    sizehint!(scaled_voltages, length(node_voltages))
+    for (node, voltage) in node_voltages
+        scaled_voltages[node] = voltage / mna_state.node_voltage_scale_max
+    end
+    return nothing
 end
 
 "Re-solve the MNA system (Z vector rebuild + linear solve). Called once per tick."
@@ -1766,7 +1816,7 @@ function update_mna!(derivedmapstate::DerivedMapState, mna_state::MNA_State, cur
         @timeit flowcalc_loop_timer "MNA Solve" begin
             @timeit flowcalc_loop_timer "get Z" MNA_getZ!(mna_state)
             @timeit flowcalc_loop_timer "MNA solve" MNA_solve!(mna_state)
-            @timeit flowcalc_loop_timer "MNA scale" scale_voltage_dict!(mna_state.node_voltages_scaled, mna_state.node_voltages)
+            @timeit flowcalc_loop_timer "MNA scale" scale_node_voltages!(mna_state)
         end
     end
     return nothing
@@ -1780,6 +1830,7 @@ function handle_thrusters!(gamestate::GameState, gamemap::GameMap, derivedmapsta
         thrust += get_thrust(comp; tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
     end
     gamestate.thrust = thrust
+    thrust_magnitude = norm(thrust)
 
     # Acceleration in per-second units (thrust is a continuous force, F/m gives accel/s²)
     mass = get_mass(gamemap)
@@ -1824,6 +1875,8 @@ function handle_thrusters!(gamestate::GameState, gamemap::GameMap, derivedmapsta
     current_velocity = get_velocity(gamemap)
     new_velocity = current_velocity + accel_per_tick
     set_velocity!(gamemap, new_velocity)
+    record_delta_v!(gamemap, norm(accel_per_tick))
+    record_peak_thrust!(gamemap, thrust_magnitude)
 
     return nothing
 end
@@ -2229,6 +2282,7 @@ function flowcalculator_loop!(
                     target_time = @atomic shared_state.target_spacemap_time
                     step_space_map_time!(gamemap.space_map, target_time)
                     refresh_estimated_min_delta_v!(gamestate, gamemap)
+                    increment_simulated_ticks!(gamemap)
 
                     _publish_snapshot!(publish_snapshot, gamemap, derivedmapstate, mna_state, gamestate, timing.current_time)
 

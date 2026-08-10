@@ -5,7 +5,7 @@ using HexFrame, FlowMap, SquirrelNoise, HexComponentsAPI, FlowEngine, HexFluids
 using StructEquality: @struct_hash_equal
 
 # Import FlowMap functions to extend with SpaceMapState methods
-import FlowMap: AbstractSpaceMap, get_velocity, set_velocity!, get_space_map_seed
+import FlowMap: AbstractSpaceMap, GalaxyEscapeSpaceMap, get_velocity, set_velocity!, get_space_map_seed
 import FlowMap: get_time_years, set_time_years!, get_active_manoeuvre, has_active_manoeuvre
 import FlowMap: set_active_manoeuvre!, clear_active_manoeuvre!, get_position, set_position!
 import FlowMap: get_target_time, set_target_time!, is_time_progressing, get_encounter_points
@@ -33,6 +33,7 @@ export HullSizeConfig, FuelTagConfig, DirectEncounterComponents, FluidTaggedEnco
 export EncounterComponentSource, EncounterClassConfig
 export compute_hull_size, compute_target_components, evaluate_component_pool, calculate_richness
 export SpaceMapState, get_encounter_config
+export can_abort_galaxy_escape
 export estimate_min_delta_v
 
 
@@ -1175,9 +1176,15 @@ get_last_stop_time(sm::SpaceMapState)::Float64 = sm.last_stop_time
 set_last_stop_time!(sm::SpaceMapState, t::Float64) = (sm.last_stop_time = t)
 get_encounter_points(sm::SpaceMapState) = sm.encounter_points
 
+"Return whether a space map contains a normal-navigation checkpoint that can be restored."
+can_abort_galaxy_escape(::AbstractSpaceMap)::Bool = false
+can_abort_galaxy_escape(sm::GalaxyEscapeSpaceMap)::Bool = get_spacemap(get_pre_escape_map(sm)) isa SpaceMapState
+can_abort_galaxy_escape(gamemap::GameMap)::Bool = can_abort_galaxy_escape(get_spacemap(gamemap))
+
 "Get the encounter system config from a space map."
 get_encounter_config(sm::SpaceMapState)::EncounterSystemConfig = sm.encounter_config
 get_encounter_config(::SpaceMapEmpty)::Nothing = nothing
+get_encounter_config(::GalaxyEscapeSpaceMap)::Nothing = nothing
 
 "Overwrite the game map's space map with a new `SpaceMapState`."
 function initialise_spacemap!(
@@ -1338,6 +1345,9 @@ end
 function step_space_map_time!(::SpaceMapEmpty, target_time::Float64; max_step::Float64 = 2.5 / BASE_UPS, ease_distance::Float64 = 1.0)
     return false
 end
+
+"Leave galactic time frozen throughout a galaxy-escape attempt."
+step_space_map_time!(::GalaxyEscapeSpaceMap, ::Float64; kwargs...) = false
 
 """
 Advance the space map time by one tick. Returns `true` if time was advanced.

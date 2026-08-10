@@ -322,6 +322,8 @@ end
 
 "Determine the next session after a map session exits."
 function next_session(::MapSession, result::GameLoopResult)::Union{Nothing, GameSession}
+    result.exit_reason == EXIT_RESTART && return MapSession(result.saved_gamemap)
+
     if result.exit_reason == EXIT_SANDBOX_STARTED && !isnothing(result.tutorial_id)
         definition = _find_sandbox_definition(result.tutorial_id)
         isnothing(definition) && return nothing

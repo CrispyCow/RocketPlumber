@@ -49,6 +49,32 @@ function rconvert(::Type{FlowMap.ShipState}, nt::NamedTuple)
     return FlowMap.ShipState(docking_status = docking_status)
 end
 
+function rconvert(::Type{FlowMap.PlaythroughStatistics}, nt::NamedTuple)
+    default_statistics = FlowMap.PlaythroughStatistics()
+    recorded_play_time_seconds = get(nt, :recorded_play_time_seconds, default_statistics.recorded_play_time_seconds)
+    simulated_ticks = get(nt, :simulated_ticks, default_statistics.simulated_ticks)
+    total_delta_v = get(nt, :total_delta_v, default_statistics.total_delta_v)
+    peak_thrust = get(nt, :peak_thrust, default_statistics.peak_thrust)
+    stored_encounters = get(nt, :completed_encounters, default_statistics.completed_encounters)
+    peak_estimated_delta_v = get(nt, :peak_estimated_delta_v, default_statistics.peak_estimated_delta_v)
+
+    completed_encounters = Dict{FlowMap.EncounterClass, Int64}()
+    for (encounter_class, count) in pairs(stored_encounters)
+        class = encounter_class isa FlowMap.EncounterClass ? encounter_class : FlowMap.EncounterClass(encounter_class)
+        completed_encounters[class] = Int64(count)
+    end
+
+    statistics = FlowMap.PlaythroughStatistics(
+        recorded_play_time_seconds = recorded_play_time_seconds,
+        simulated_ticks = simulated_ticks,
+        total_delta_v = total_delta_v,
+        peak_thrust = peak_thrust,
+        completed_encounters = completed_encounters,
+    )
+    FlowMap.record_peak_estimated_delta_v!(statistics, peak_estimated_delta_v)
+    return statistics
+end
+
 function rconvert(::Type{FlowMap.GameMap}, nt::NamedTuple)
     default_map = FlowMap.GameMap()
     components = get(nt, :components, default_map.components)
@@ -57,7 +83,9 @@ function rconvert(::Type{FlowMap.GameMap}, nt::NamedTuple)
     ships = get(nt, :ships, default_map.ships)
     space_map = get(nt, :space_map, default_map.space_map)
     learning_system = get(nt, :learning_system, default_map.learning_system)
-    return FlowMap.GameMap(; components, pipe_behaviors, surface_shiptags, ships, space_map, learning_system)
+    statistics = get(nt, :statistics, default_map.statistics)
+    statistics = statistics isa NamedTuple ? rconvert(FlowMap.PlaythroughStatistics, statistics) : statistics
+    return FlowMap.GameMap(; components, pipe_behaviors, surface_shiptags, ships, space_map, learning_system, statistics)
 end
 
 function rconvert(::Type{FlowMap.LearningProgress}, nt::NamedTuple)
@@ -86,6 +114,19 @@ function rconvert(::Type{FlowMap.SpaceMapEmpty}, nt::NamedTuple)
     default_space_map = FlowMap.SpaceMapEmpty()
     velocity = get(nt, :velocity, default_space_map.velocity)
     return FlowMap.SpaceMapEmpty(velocity = velocity)
+end
+
+function rconvert(::Type{FlowMap.GalaxyEscapeSpaceMap}, nt::NamedTuple)
+    velocity = get(nt, :velocity, nothing)
+    isnothing(velocity) && error("Stored GalaxyEscapeSpaceMap is missing :velocity")
+    starting_velocity_x = get(nt, :starting_velocity_x, nothing)
+    isnothing(starting_velocity_x) && error("Stored GalaxyEscapeSpaceMap is missing :starting_velocity_x")
+    departure_time_years = get(nt, :departure_time_years, nothing)
+    isnothing(departure_time_years) && error("Stored GalaxyEscapeSpaceMap is missing :departure_time_years")
+    pre_escape_map = get(nt, :pre_escape_map, FlowMap.GameMap())
+    pre_escape_map = pre_escape_map isa NamedTuple ? rconvert(FlowMap.GameMap, pre_escape_map) : pre_escape_map
+    pre_escape_map isa FlowMap.GameMap || error("Stored GalaxyEscapeSpaceMap has an invalid :pre_escape_map")
+    return FlowMap.GalaxyEscapeSpaceMap(; velocity, starting_velocity_x, departure_time_years, pre_escape_map)
 end
 
 function rconvert(::Type{FlowMap.ManoeuvreData}, nt::NamedTuple)
@@ -210,10 +251,12 @@ function _build_map_typemap()::Dict{String, Any}
     # Add `JLD2.Upgrade(...)` entries here when a persisted type changes package path or layout.
     typemap["HexComponentsAPI.ComponentOnTile"] = JLD2.Upgrade(HexComponentsAPI.PlacedComponent)
     typemap["HexComponentsAPI.PipeOnEdge"] = JLD2.Upgrade(HexComponentsAPI.PlacedPipe)
+    typemap["FlowMap.GameMap"] = JLD2.Upgrade(FlowMap.GameMap)
+    typemap["FlowMap.PlaythroughStatistics"] = JLD2.Upgrade(FlowMap.PlaythroughStatistics)
+    typemap["FlowMap.GalaxyEscapeSpaceMap"] = JLD2.Upgrade(FlowMap.GalaxyEscapeSpaceMap)
     # typemap["HexComponentsAPI.PlacedComponent"] = JLD2.Upgrade(HexComponentsAPI.PlacedComponent)
     # typemap["HexComponentsAPI.PlacedPipe"] = JLD2.Upgrade(HexComponentsAPI.PlacedPipe)
     # typemap["FlowMap.ShipState"] = JLD2.Upgrade(FlowMap.ShipState)
-    # typemap["FlowMap.GameMap"] = JLD2.Upgrade(FlowMap.GameMap)
     # typemap["FlowMap.LearningProgress"] = JLD2.Upgrade(FlowMap.LearningProgress)
     # typemap["FlowMap.SandboxLearningState"] = JLD2.Upgrade(FlowMap.SandboxLearningState)
     # typemap["FlowMap.TutorialState"] = JLD2.Upgrade(FlowMap.TutorialState)

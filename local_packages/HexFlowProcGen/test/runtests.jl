@@ -1669,6 +1669,52 @@ end
         advanced2 = step_space_map_time!(sm, sm.target_time_years; max_step=1.0)
         @test advanced2 == false
     end
+
+    @testset "galaxy escape disables encounter navigation and time progression" begin
+        pre_escape_map = GameMap(space_map = SpaceMapState(
+            encounter_config = make_mock_encounter_config(n_points = 0),
+        ))
+        sm = GalaxyEscapeSpaceMap(
+            velocity = SVector(40.0, -3.0),
+            starting_velocity_x = 25.0,
+            departure_time_years = 18.0,
+            pre_escape_map = pre_escape_map,
+        )
+        initial_velocity = get_velocity(sm)
+
+        @test !step_space_map_time!(sm, 1000.0; max_step = 100.0, ease_distance = 0.01)
+        @test get_time_years(sm) == 18.0
+        @test get_target_time(sm) == 18.0
+        @test get_position(sm) == SVector(0.0, 0.0)
+        @test get_velocity(sm) == initial_velocity
+        @test isnothing(get_encounter_config(sm))
+        @test isempty(get_encounter_points(sm))
+
+        gamemap = GameMap(space_map = sm)
+        @test is_galaxy_escape_active(gamemap)
+        @test can_abort_galaxy_escape(sm)
+        @test can_abort_galaxy_escape(gamemap)
+        @test get_galaxy_escape_space_map(gamemap) === sm
+
+        ordinary_space_map = SpaceMapState(encounter_config = make_mock_encounter_config(n_points = 0))
+        ordinary_map = GameMap(space_map = ordinary_space_map)
+        @test !is_galaxy_escape_active(ordinary_space_map)
+        @test !is_galaxy_escape_active(ordinary_map)
+        @test !can_abort_galaxy_escape(ordinary_map)
+        @test isnothing(get_galaxy_escape_space_map(ordinary_map))
+        @test isnothing(get_galaxy_escape_progress(ordinary_map))
+
+        empty_space_map = SpaceMapEmpty(velocity = SVector(2.0, 1.0))
+        @test !step_space_map_time!(empty_space_map, 1000.0)
+        @test get_velocity(empty_space_map) == SVector(2.0, 1.0)
+        @test isnothing(get_encounter_config(empty_space_map))
+
+        compatibility_escape = GalaxyEscapeSpaceMap(
+            velocity = SVector(1.0, 0.0), starting_velocity_x = 0.0,
+            departure_time_years = 0.0, pre_escape_map = GameMap(),
+        )
+        @test !can_abort_galaxy_escape(compatibility_escape)
+    end
 end
 
 # ===============================================================
