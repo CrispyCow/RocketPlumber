@@ -180,7 +180,7 @@ function _render_galaxy_escape_victory_statistics!(gamemap::GameMap)
 end
 
 "Render the exclusive final flight report shown after a galaxy escape is completed."
-function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputState, window::GLFW.Window)
+function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputState, timelapse_recorder::TimelapseRecorder, window::GLFW.Window)
     winsize = to_float(GLFW.GetWindowSize(window))
     CImGui.AddRectFilledMultiColor(
         CImGui.GetBackgroundDrawList(),
@@ -281,8 +281,7 @@ function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputSta
     if CImGui.Button("Save Pre-Escape Map", ImVec2(-1, action_button_height))
         save_path = save_file(absolute(Path(joinpath(dirname(@__FILE__), "..", "maps"))); filterlist = "jld2")
         if !isnothing(save_path)
-            pre_escape_map = get_pre_escape_map(gamemap)::GameMap
-            savemap(pre_escape_map, "$save_path")
+            save_pre_escape_map(timelapse_recorder, gamemap, "$save_path")
         end
     end
 

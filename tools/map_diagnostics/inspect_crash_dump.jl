@@ -30,6 +30,7 @@ using HexFlowBasicPipes
 
 const _src_dir = normpath(joinpath(@__DIR__, "..", "..", "src"))
 include(joinpath(_src_dir, "components.jl"))
+include(joinpath(_src_dir, "timelapse.jl"))
 include(joinpath(_src_dir, "map_loading.jl"))
 
 Base.@kwdef struct InspectOptions

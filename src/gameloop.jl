@@ -192,7 +192,7 @@ end
 
 "Render the CImGui UI elements, mutating render-owned input state."
 function ui_rendering!(
-        inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, snapshot::FlowCalculatorSnapshot,
+        inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, timelapse_recorder::TimelapseRecorder, snapshot::FlowCalculatorSnapshot,
         viewstate::ViewState, window::GLFW.Window;
         learning_state::Union{Nothing, LearningSystemState} = nothing,
         session_timing::PlaySessionTiming,
@@ -200,7 +200,7 @@ function ui_rendering!(
     )
     if !isnothing(completed_gamemap)
         ui_renderwrap() do
-            ui_galaxy_escape_victory_render!(completed_gamemap, inputstate, window)
+            ui_galaxy_escape_victory_render!(completed_gamemap, inputstate, timelapse_recorder, window)
         end
         return nothing
     end
@@ -222,10 +222,14 @@ function ui_rendering!(
             ui_toolbar_render!(inputstate, GLFW.GetWindowSize(window), flowcalc_ipc.console_see)
             ui_propertybox_render!(inputstate, snapshot.gamemap, snapshot.derived, snapshot.mna, GLFW.GetWindowSize(window), flowcalc_ipc)
             ui_action_popup_render!(inputstate, viewstate, flowcalc_ipc)
-            ui_dev_utils_menu_render!(inputstate, flowcalc_ipc, snapshot, viewstate, GLFW.GetWindowSize(window), max_view_bounds; session_timing = session_timing)
+            ui_dev_utils_menu_render!(
+                inputstate, flowcalc_ipc, timelapse_recorder, snapshot, viewstate,
+                GLFW.GetWindowSize(window), max_view_bounds;
+                session_timing = session_timing,
+            )
         end
 
-        ui_pause_menu_render!(inputstate, snapshot, window, learning_state; session_timing = session_timing)
+        ui_pause_menu_render!(inputstate, timelapse_recorder, snapshot, window, learning_state; session_timing = session_timing)
         ui_spacemap_render!(inputstate, flowcalc_ipc, snapshot, GLFW.GetWindowSize(window), max_view_bounds)
 
         if !isnothing(learning_state)
@@ -259,11 +263,11 @@ end
 # Game Main Loop
 # ===============================================================
 
-"Result returned from `enter_gameloop`. Always carries the exit reason, saved map, and optional tutorial ID."
+"Result returned from `enter_gameloop`, carrying the current map and its optional time-lapse together."
 @kwdef struct GameLoopResult
     exit_reason::ExitReason
     tutorial_id::Union{Nothing, Symbol} = nothing
-    saved_gamemap::GameMap
+    saved_bundle::GameMapBundle
 end
 
 "Build the runtime learning state from the loaded map's learning-system type."
@@ -314,6 +318,35 @@ function capture_galaxy_escape_restart_gamemap(
     return capture_session_gamemap(pre_escape_map, session_timing, learning_state)
 end
 
+"Return whether ordinary periodic capture should be suppressed for the current render state."
+function is_timelapse_capture_suppressed(inputstate::InputState, gamemap::GameMap; window_focused::Bool)::Bool
+    return inputstate.spacemap_active ||
+        inputstate.escape_menu_active ||
+        !window_focused ||
+        is_galaxy_escape_active(gamemap)
+end
+
+"Apply the render-owned save boundary and persist the current map/history bundle."
+function save_current_map(
+        recorder::TimelapseRecorder, snapshot::FlowCalculatorSnapshot, session_timing::PlaySessionTiming,
+        learning_state::Union{Nothing, LearningSystemState}, save_path::String,
+    )
+    gamemap_to_save = capture_session_gamemap(snapshot.gamemap, session_timing, learning_state)
+    if !is_galaxy_escape_active(snapshot.gamemap)
+        capture_timelapse_frame!(recorder, snapshot.gamemap; snapshot_timestamp = snapshot.timestamp)
+    end
+    savemap(GameMapBundle(gamemap_to_save, snapshot_timelapse_history(recorder)), save_path)
+    return nothing
+end
+
+"Persist a pre-escape map as the final normal ship frame without capturing escape flight."
+function save_pre_escape_map(recorder::TimelapseRecorder, gamemap::GameMap, save_path::String)
+    pre_escape_map = get_pre_escape_map(gamemap)::GameMap
+    capture_timelapse_frame!(recorder, pre_escape_map)
+    savemap(GameMapBundle(pre_escape_map, snapshot_timelapse_history(recorder)), save_path)
+    return nothing
+end
+
 """
 Enter the main game loop with a map loaded from a file path (String), a pre-generated GameMap, or an empty map (nothing).
 
@@ -324,6 +357,7 @@ and signalling a normal quit once the schedule is exhausted. See
 """
 function enter_gameloop(window::GLFW.Window;
         map_source::Union{Nothing, String, GameMap, ShipState} = nothing,
+        initial_bundle::Union{Nothing, GameMapBundle} = nothing,
         initial_active_tutorial_id::Union{Nothing, Symbol} = nothing,
         test_commands = nothing,
     )::GameLoopResult
@@ -336,7 +370,9 @@ function enter_gameloop(window::GLFW.Window;
     glViewport(0, 0, g_viewstate.fb_width, g_viewstate.fb_height)
 
     ui_loadingscreen_render(window, "Loading map")
-    loaded_gamemap::GameMap = loadmap_from_source(map_source)
+    loaded_bundle = isnothing(initial_bundle) ? loadmap_bundle_from_source(map_source) : initial_bundle
+    loaded_gamemap::GameMap = loaded_bundle.gamemap
+    timelapse_recorder = TimelapseRecorder(loaded_bundle.timelapse)
     session_timing = PlaySessionTiming(get_recorded_play_time_seconds(loaded_gamemap))
     completed_gamemap::Union{Nothing, GameMap} = nothing
     restart_gamemap::Union{Nothing, GameMap} = nothing
@@ -403,7 +439,7 @@ function enter_gameloop(window::GLFW.Window;
             )
         end
         @timeit render_loop_timer "UI Rendering" ui_rendering!(
-            g_inputstate, g_flowcalc_ipc, g_snapshot, g_viewstate, window;
+            g_inputstate, g_flowcalc_ipc, timelapse_recorder, g_snapshot, g_viewstate, window;
             learning_state = learning_state,
             session_timing = session_timing,
             completed_gamemap = completed_gamemap,
@@ -434,23 +470,39 @@ function enter_gameloop(window::GLFW.Window;
             GLFW.PollEvents()
         end
 
+        if isnothing(completed_gamemap) && isnothing(restart_gamemap)
+            capture_suppressed = is_timelapse_capture_suppressed(
+                g_inputstate, g_snapshot.gamemap;
+                window_focused = GLFW.GetWindowAttrib(window, GLFW.FOCUSED) != 0,
+            )
+            maybe_capture_timelapse!(
+                timelapse_recorder, g_snapshot;
+                capture_suppressed, now = Float64(time_ns()) / 1.0e9,
+            )
+        end
+
         handle_diagnostics(render_loop_diagnostic_config, g_viewstate.frame_count)
         print_gc_statistics()
     end # main loop
 
     # Build result
+    result_snapshot = g_flowcalc_ipc.get_snapshot()
     if !isnothing(restart_gamemap)
-        saved_map = restart_gamemap
+        saved_bundle = GameMapBundle(restart_gamemap, snapshot_timelapse_history(timelapse_recorder))
     elseif isnothing(completed_gamemap)
-        saved_map = capture_session_gamemap(g_flowcalc_ipc.get_snapshot().gamemap, session_timing, learning_state)
+        if timelapse_recorder.enabled && !is_galaxy_escape_active(result_snapshot.gamemap)
+            capture_timelapse_frame!(timelapse_recorder, result_snapshot.gamemap; snapshot_timestamp = result_snapshot.timestamp)
+        end
+        saved_map = capture_session_gamemap(result_snapshot.gamemap, session_timing, learning_state)
+        saved_bundle = GameMapBundle(saved_map, snapshot_timelapse_history(timelapse_recorder))
     else
-        saved_map = completed_gamemap
+        saved_bundle = GameMapBundle(completed_gamemap, snapshot_timelapse_history(timelapse_recorder))
     end
     reason = something(g_inputstate.exit_reason, EXIT_QUIT)
     result = GameLoopResult(
         exit_reason = reason,
         tutorial_id = g_inputstate.pending_sandbox_id,
-        saved_gamemap = saved_map,
+        saved_bundle = saved_bundle,
     )
 
     # Stop recording if still active

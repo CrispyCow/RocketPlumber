@@ -12,6 +12,7 @@ using HexFluids
 using StaticArrays
 using LinearAlgebra
 
+include(joinpath(@__DIR__, "..", "..", "..", "src", "timelapse.jl"))
 include(joinpath(@__DIR__, "..", "..", "..", "src", "map_loading.jl"))
 
 "Minimal encounter config for tests that only need a SpaceMapState."
@@ -1770,6 +1771,87 @@ end
     @test get_snap().timestamp == 200.0
 end
 
+@testset "render-thread time-lapse recorder" begin
+    gamemap = GameMap()
+    snapshot = (gamemap = gamemap, timestamp = 1.0)
+
+    recorder = TimelapseRecorder(nothing; now = 0.0)
+    @test !recorder.enabled
+    @test isnothing(recorder.history)
+    @test timelapse_frame_count(recorder) == 0
+    @test !capture_timelapse_frame!(recorder, GameMap(); snapshot_timestamp = 0.5)
+    @test isnothing(recorder.history)
+    @test_throws ArgumentError TimelapseRecorder(TimelapseHistory(format_version = UInt16(1)); now = 0.0)
+
+    loaded_recorder = TimelapseRecorder(TimelapseHistory(); now = 10.0)
+    @test loaded_recorder.enabled
+    @test loaded_recorder.next_capture_time_seconds == 40.0
+
+    set_timelapse_enabled!(recorder, true; now = 0.0)
+    @test recorder.enabled
+    @test maybe_capture_timelapse!(recorder, snapshot; now = 0.0)
+    @test timelapse_frame_count(recorder) == 1
+    @test only(recorder.history.frames) === gamemap
+    @test !maybe_capture_timelapse!(recorder, snapshot; now = 30.0)
+
+    changed_snapshot = (gamemap = GameMap(), timestamp = 2.0)
+    @test maybe_capture_timelapse!(recorder, changed_snapshot; now = 31.0)
+    @test timelapse_frame_count(recorder) == 2
+    @test recorder.next_capture_time_seconds == 61.0
+
+    suppressed_snapshot = (gamemap = GameMap(), timestamp = 3.0)
+    @test !maybe_capture_timelapse!(recorder, suppressed_snapshot; capture_suppressed = true, now = 100.0)
+    @test recorder.next_capture_time_seconds == 61.0
+    @test maybe_capture_timelapse!(recorder, suppressed_snapshot; now = 101.0)
+    @test timelapse_frame_count(recorder) == 3
+
+    before_disable = snapshot_timelapse_history(recorder)::TimelapseHistory
+    @test before_disable.frames !== recorder.history.frames
+    @test before_disable.frames[1] === gamemap
+    @test capture_timelapse_frame!(recorder, GameMap(); snapshot_timestamp = 4.0)
+    set_timelapse_enabled!(recorder, false; now = 110.0)
+    @test !recorder.enabled
+    @test !maybe_capture_timelapse!(recorder, (gamemap = GameMap(), timestamp = 5.0); now = 200.0)
+    @test timelapse_frame_count(recorder) == 4
+
+    set_timelapse_enabled!(recorder, true; now = 200.0)
+    reenabled_snapshot = (gamemap = GameMap(), timestamp = 6.0)
+    @test maybe_capture_timelapse!(recorder, reenabled_snapshot; now = 200.0)
+    @test timelapse_frame_count(recorder) == 5
+
+    prepared = snapshot_timelapse_history(recorder)::TimelapseHistory
+    @test capture_timelapse_frame!(recorder, GameMap(); snapshot_timestamp = 7.0)
+    @test length(prepared.frames) == 5
+
+    timestamped_map = GameMap()
+    @test capture_timelapse_frame!(recorder, timestamped_map; snapshot_timestamp = 8.0)
+    @test !capture_timelapse_frame!(recorder, timestamped_map; snapshot_timestamp = 8.0)
+    timestampless_map = GameMap()
+    @test capture_timelapse_frame!(recorder, timestampless_map)
+    @test recorder.last_captured_snapshot_timestamp === nothing
+    @test maybe_capture_timelapse!(recorder, (gamemap = GameMap(), timestamp = 8.0); now = 300.0)
+end
+
+@testset "retained render snapshot maps survive buffer reuse" begin
+    source_map = GameMap()
+    set_recorded_play_time_seconds!(source_map, 12.0)
+    initial_snapshot = FlowCalculatorSnapshot(gamemap = source_map, timestamp = 0.0)
+    publish_snap, get_snap = create_snapshot_storage(initial_snapshot)
+
+    publish_snap(source_map, DerivedMapState(), MNA_State(), GameState(), 1.0)
+    retained_map = get_snap().gamemap
+    set_recorded_play_time_seconds!(source_map, 99.0)
+
+    latest_snapshot = nothing
+    for timestamp in 2.0:8.0
+        publish_snap(source_map, DerivedMapState(), MNA_State(), GameState(), timestamp)
+        latest_snapshot = get_snap()
+    end
+
+    @test get_recorded_play_time_seconds(retained_map) == 12.0
+    @test latest_snapshot.gamemap !== retained_map
+end
+
 @testset "snapshot! methods" begin
     # DerivedMapState refill
     src_derived = DerivedMapState()
@@ -3442,5 +3524,68 @@ end
         @test get_peak_estimated_delta_v(loaded_map) == 2100.0
         @test isempty(get_encounter_points(loaded_escape))
         @test !has_active_manoeuvre(loaded_escape)
+    end
+end
+
+@testset "render-thread time-lapse persistence" begin
+    gamemap = GameMap()
+    first_frame = GameMap()
+    second_frame = GameMap()
+    increment_simulated_ticks!(first_frame)
+    for _ in 1:2
+        increment_simulated_ticks!(second_frame)
+    end
+    history = TimelapseHistory(frames = [first_frame, second_frame])
+
+    mktempdir() do directory
+        map_only_path = joinpath(directory, "map_only.jld2")
+        savemap(gamemap, map_only_path)
+        map_only = loadmap_bundle(map_only_path)
+        @test map_only.gamemap isa GameMap
+        @test isnothing(map_only.timelapse)
+        @test !JLD2.jldopen(map_only_path, "r") do file
+            haskey(file, "stored_timelapse")
+        end
+        @test loadmap(map_only_path) isa GameMap
+
+        bundled_path = joinpath(directory, "bundled.jld2")
+        savemap(GameMapBundle(gamemap, history), bundled_path)
+        bundled = loadmap_bundle(bundled_path)
+        @test bundled.gamemap isa GameMap
+        @test bundled.timelapse isa TimelapseHistory
+        loaded_history = bundled.timelapse::TimelapseHistory
+        @test loaded_history.format_version == TIMELAPSE_FORMAT_VERSION
+        @test length(loaded_history.frames) == 2
+        @test get_simulated_ticks(loaded_history.frames[1]) == 1
+        @test get_simulated_ticks(loaded_history.frames[2]) == 2
+
+        bundled_source = loadmap_bundle_from_source(bundled_path)
+        @test bundled_source.timelapse isa TimelapseHistory
+        @test length(bundled_source.timelapse.frames) == 2
+
+        direct_source = loadmap_bundle_from_source(gamemap)
+        @test direct_source.gamemap === gamemap
+        @test isnothing(direct_source.timelapse)
+
+        empty_path = joinpath(directory, "empty_history.jld2")
+        savemap(GameMapBundle(gamemap, TimelapseHistory()), empty_path)
+        empty_bundle = loadmap_bundle(empty_path)
+        @test empty_bundle.timelapse isa TimelapseHistory
+        @test isempty(empty_bundle.timelapse.frames)
+
+        malformed_path = joinpath(directory, "malformed_history.jld2")
+        JLD2.jldsave(malformed_path; stored_gamemap = gamemap, stored_timelapse = "invalid")
+        malformed_bundle = @test_logs (:warn, r"invalid type") loadmap_bundle(malformed_path)
+        @test malformed_bundle.gamemap isa GameMap
+        @test isnothing(malformed_bundle.timelapse)
+
+        unsupported_path = joinpath(directory, "unsupported_history.jld2")
+        unsupported = TimelapseHistory(format_version = UInt16(1))
+        JLD2.jldsave(unsupported_path; stored_gamemap = gamemap, stored_timelapse = unsupported)
+        unsupported_bundle = @test_logs (:warn, r"unsupported format version") loadmap_bundle(unsupported_path)
+        @test unsupported_bundle.gamemap isa GameMap
+        @test isnothing(unsupported_bundle.timelapse)
+
+        @test_throws ArgumentError savemap(GameMapBundle(gamemap, unsupported), joinpath(directory, "unsupported_save.jld2"))
     end
 end

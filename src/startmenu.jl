@@ -35,18 +35,20 @@ abstract type GameSession end
 
 "Map session for blank maps, loaded maps, and explorer mode."
 struct MapSession <: GameSession
-    map_source::Union{Nothing, GameMap}
+    bundle::GameMapBundle
     initial_active_tutorial_id::Union{Nothing, Symbol}
 end
 
-MapSession(map_source) = MapSession(map_source, nothing)
+MapSession(bundle::GameMapBundle) = MapSession(bundle, nothing)
+MapSession(gamemap::GameMap, initial_active_tutorial_id::Union{Nothing, Symbol} = nothing) =
+    MapSession(GameMapBundle(gamemap), initial_active_tutorial_id)
 
 "Sandbox tutorial session with level progression and optional parent explorer map."
 struct SandboxSession <: GameSession
     definition::SandboxTutorialDef
     tutorial_id::Symbol
     current_level::Int
-    parent_map::Union{Nothing, GameMap}
+    parent_bundle::Union{Nothing, GameMapBundle}
 end
 
 # ===============================================================
@@ -306,7 +308,7 @@ end
 
 "Run a map session by entering the main game loop with its map source."
 function run_session(window::GLFW.Window, session::MapSession)::GameLoopResult
-    return enter_gameloop(window; map_source = session.map_source, initial_active_tutorial_id = session.initial_active_tutorial_id)
+    return enter_gameloop(window; initial_bundle = session.bundle, initial_active_tutorial_id = session.initial_active_tutorial_id)
 end
 
 "Run a sandbox tutorial session for the current level."
@@ -317,17 +319,17 @@ function run_session(window::GLFW.Window, session::SandboxSession)::GameLoopResu
         sandbox_map,
         SandboxLearningState(tutorial_id = session.tutorial_id, level_index = session.current_level),
     )
-    return enter_gameloop(window; map_source = sandbox_map)
+    return enter_gameloop(window; initial_bundle = GameMapBundle(sandbox_map))
 end
 
 "Determine the next session after a map session exits."
 function next_session(::MapSession, result::GameLoopResult)::Union{Nothing, GameSession}
-    result.exit_reason == EXIT_RESTART && return MapSession(result.saved_gamemap)
+    result.exit_reason == EXIT_RESTART && return MapSession(result.saved_bundle)
 
     if result.exit_reason == EXIT_SANDBOX_STARTED && !isnothing(result.tutorial_id)
         definition = _find_sandbox_definition(result.tutorial_id)
         isnothing(definition) && return nothing
-        return SandboxSession(definition, result.tutorial_id, 1, result.saved_gamemap)
+        return SandboxSession(definition, result.tutorial_id, 1, result.saved_bundle)
     end
 
     return nothing
@@ -337,21 +339,22 @@ end
 function next_session(session::SandboxSession, result::GameLoopResult)::Union{Nothing, GameSession}
     if result.exit_reason == EXIT_SANDBOX_COMPLETED
         if session.current_level < length(session.definition.levels)
-            return SandboxSession(session.definition, session.tutorial_id, session.current_level + 1, session.parent_map)
+            return SandboxSession(session.definition, session.tutorial_id, session.current_level + 1, session.parent_bundle)
         end
 
-        if !isnothing(session.parent_map)
-            learning_system = get_learning_system(session.parent_map)
+        if !isnothing(session.parent_bundle)
+            parent_map = session.parent_bundle.gamemap
+            learning_system = get_learning_system(parent_map)
             if learning_system isa LearningProgress
                 complete_tutorial!(learning_system, session.tutorial_id)
             end
         end
 
-        return !isnothing(session.parent_map) ? MapSession(session.parent_map) : nothing
+        return !isnothing(session.parent_bundle) ? MapSession(session.parent_bundle) : nothing
     end
 
     if result.exit_reason == EXIT_MENU
-        return !isnothing(session.parent_map) ? MapSession(session.parent_map) : nothing
+        return !isnothing(session.parent_bundle) ? MapSession(session.parent_bundle) : nothing
     end
 
     return nothing
@@ -373,7 +376,7 @@ function _create_session_for_action(state::StartMenuState, action::StartMenuActi
         isnothing(file_path) && return nothing
 
         @info "Selected file: $file_path"
-        return MapSession(loadmap_from_source("$file_path"))
+        return MapSession(loadmap_bundle("$file_path"))
 
     elseif action == ACTION_START_EXPLORER
         seed = UInt32(get(state.menu_inputs, :explorer_seed, UInt32(42)))

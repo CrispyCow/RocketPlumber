@@ -32,7 +32,7 @@ export generate_base_velocities
 export HullSizeConfig, FuelTagConfig, DirectEncounterComponents, FluidTaggedEncounterComponents
 export EncounterComponentSource, EncounterClassConfig
 export compute_hull_size, compute_target_components, evaluate_component_pool, calculate_richness
-export SpaceMapState, get_encounter_config
+export SpaceMapState, get_encounter_config, replace_encounter_config!
 export can_abort_galaxy_escape
 export estimate_min_delta_v
 
@@ -1185,6 +1185,14 @@ can_abort_galaxy_escape(gamemap::GameMap)::Bool = can_abort_galaxy_escape(get_sp
 get_encounter_config(sm::SpaceMapState)::EncounterSystemConfig = sm.encounter_config
 get_encounter_config(::SpaceMapEmpty)::Nothing = nothing
 get_encounter_config(::GalaxyEscapeSpaceMap)::Nothing = nothing
+
+"Replace a live space map's encounter config while preserving its current encounters and manoeuvre."
+function replace_encounter_config!(sm::SpaceMapState, config::EncounterSystemConfig)
+    sm.encounter_config = deepcopy(config)
+    sm.viewport_half_width = config.viewport_half_width
+    sm.viewport_half_height = config.viewport_half_height
+    return nothing
+end
 
 "Overwrite the game map's space map with a new `SpaceMapState`."
 function initialise_spacemap!(

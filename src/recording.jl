@@ -510,14 +510,17 @@ end
 function flush_pending_pbo_readbacks!(rec::RecordingState; allow_enqueue::Bool = true)
     rec.async_readback_enabled || return nothing
 
-    for pbo_slot in eachindex(rec.pbo_syncs)
-        recording_pbo_pending(rec, pbo_slot) || continue
-
-        if allow_enqueue
-            try_collect_completed_pbo!(rec, pbo_slot; wait = true)
-        else
-            delete_recording_sync!(rec, pbo_slot)
+    pbo_slot = rec.next_pbo_issue_slot
+    for _ in eachindex(rec.pbo_syncs)
+        if recording_pbo_pending(rec, pbo_slot)
+            if allow_enqueue
+                try_collect_completed_pbo!(rec, pbo_slot; wait = true)
+            else
+                delete_recording_sync!(rec, pbo_slot)
+            end
         end
+
+        pbo_slot = recording_pbo_next_slot(pbo_slot, length(rec.pbo_syncs))
     end
 
     return nothing
@@ -554,19 +557,16 @@ function teardown_recording_readback!(rec::RecordingState; allow_enqueue::Bool):
     end
 end
 
-"Advance the PBO readback pipeline by collecting the previous slot and issuing the next readback."
+"Reclaim the next PBO slot when ready, then issue its replacement readback."
 function process_async_readback_tick!(rec::RecordingState)
-    issue_slot = rec.next_pbo_issue_slot
-    collect_slot = recording_pbo_next_slot(issue_slot)
-
-    try_collect_completed_pbo!(rec, collect_slot)
-
-    if recording_pbo_pending(rec, issue_slot)
+    pbo_slot = rec.next_pbo_issue_slot
+    if recording_pbo_pending(rec, pbo_slot) && !try_collect_completed_pbo!(rec, pbo_slot)
+        @debug "Recording frame skipped because GPU readback is still pending" pbo_slot captured_frames = rec.frame_count
         return nothing
     end
 
-    issue_readback_to_pbo!(rec, issue_slot)
-    rec.next_pbo_issue_slot = collect_slot
+    issue_readback_to_pbo!(rec, pbo_slot)
+    rec.next_pbo_issue_slot = recording_pbo_next_slot(pbo_slot)
     return nothing
 end
 

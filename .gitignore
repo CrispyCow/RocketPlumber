@@ -6,6 +6,7 @@ build/outputs/
 
 # Recorded captures
 recordings/
+maps/
 
 # Artifacts
 # Note: Keep Artifacts.toml tracked (it defines artifact bindings)

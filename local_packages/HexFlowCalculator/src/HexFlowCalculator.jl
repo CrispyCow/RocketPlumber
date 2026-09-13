@@ -46,7 +46,13 @@ const DELTA_V_CACHE_TICK_DIVISOR::Int64 = 30
 # Data Structures
 # ===============================================================
 
-"Snapshot of complete game state for rendering. Triple-buffered and filled in-place to reduce allocations."
+"""
+Snapshot of complete game state for rendering.
+
+Snapshot publication replaces each buffer's `gamemap` reference with a new
+deep-copied map. A render thread may therefore retain a published map while
+the triple-buffer slots are reused, provided it treats that map as read-only.
+"""
 @kwdef mutable struct FlowCalculatorSnapshot
     gamemap::GameMap = GameMap()
     derived::DerivedMapState = DerivedMapState()
@@ -432,7 +438,7 @@ function create_snapshot_storage(initial_snapshot::FlowCalculatorSnapshot)
     function publish_flowcalc_snapshot!(gamemap::GameMap, derived::DerivedMapState, mna_state::MNA_State, gamestate::GameState, timestamp::Float64)
         buf = buffers[writer_idx[]]
 
-        # GameMap: deepcopy (contains mutable component leaf state)
+        # Replace the map reference so previously published maps remain detached and stable.
         buf.gamemap = deepcopy(gamemap)
         # DerivedMapState: in-place refill (all containers hold immutable values)
         snapshot!(buf.derived, derived)

@@ -1458,6 +1458,37 @@ end
 
 @testset "Encounter point system" begin
 
+    @testset "replace_encounter_config! updates the live config without reshuffling encounters" begin
+        sm = make_encounter_sm(n_points = 3)
+        original_points = sm.encounter_points
+        original_manoeuvre = ManoeuvreData(
+            approach_burn_dv = SVector(1.0, 0.0),
+            capture_burn_dv = SVector(0.0, 1.0),
+            target_encounter_index = 1,
+        )
+        sm.active_manoeuvre = original_manoeuvre
+        replacement = make_mock_encounter_config(n_points = 7)
+        replacement = EncounterSystemConfig(
+            n_points = replacement.n_points,
+            viewport_half_width = 123.0,
+            viewport_half_height = 456.0,
+            encounter_class_configs = replacement.encounter_class_configs,
+        )
+
+        replace_encounter_config!(sm, replacement)
+
+        @test sm.encounter_points === original_points
+        @test sm.active_manoeuvre === original_manoeuvre
+        @test length(sm.encounter_points) == 3
+        @test sm.encounter_config.n_points == 7
+        @test sm.encounter_config.viewport_half_width == 123.0
+        @test sm.encounter_config.viewport_half_height == 456.0
+        @test sm.viewport_half_width == 123.0
+        @test sm.viewport_half_height == 456.0
+        @test sm.encounter_config !== replacement
+        @test sm.encounter_config.encounter_class_configs !== replacement.encounter_class_configs
+    end
+
     @testset "spawn_encounter_point! places encounters on the spawn perimeter" begin
         sm = make_encounter_sm(player_pos = SVector(10.0, -20.0))
         ep = sm.encounter_points[1]

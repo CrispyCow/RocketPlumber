@@ -29,7 +29,8 @@ const _tile_mass_editor_state = Dict{Symbol, Any}(:input_value => 0.0)
 const _particle_accel_editor_state = Dict{Symbol, Any}(:input_value => 0.0)
 
 "Render the pause menu when active, including escape recovery when a departure checkpoint exists."
-function ui_pause_menu_render!(inputstate::InputState, snapshot::FlowCalculatorSnapshot, window::GLFW.Window,
+function ui_pause_menu_render!(inputstate::InputState, timelapse_recorder::TimelapseRecorder,
+        snapshot::FlowCalculatorSnapshot, window::GLFW.Window,
         learning_state::Union{Nothing, LearningSystemState} = nothing; session_timing::PlaySessionTiming)
     # Menu must be active
     if !inputstate.escape_menu_active
@@ -77,12 +78,7 @@ function ui_pause_menu_render!(inputstate::InputState, snapshot::FlowCalculatorS
         if CImGui.Button(save_label, (button_width, button_height))
             save_path = save_file(absolute(Path(joinpath(dirname(@__FILE__), "..", "maps"))); filterlist = "jld2")
             if !isnothing(save_path)
-                gamemap_to_save = deepcopy(snapshot.gamemap)
-                if !isnothing(learning_state)
-                    set_learning_system!(gamemap_to_save, deepcopy(learning_state.map_learning))
-                end
-                set_recorded_play_time_seconds!(gamemap_to_save, get_current_play_time_seconds(session_timing))
-                savemap(gamemap_to_save, "$save_path")
+                save_current_map(timelapse_recorder, snapshot, session_timing, learning_state, "$save_path")
             end
         end
         CImGui.Dummy((0.0, 10.0))
@@ -184,7 +180,8 @@ function _encounter_set_options(
 end
 
 function ui_dev_utils_menu_render!(
-        inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, snapshot::FlowCalculatorSnapshot,
+        inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, timelapse_recorder::TimelapseRecorder,
+        snapshot::FlowCalculatorSnapshot,
         viewstate::ViewState, winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}},
         max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing;
         session_timing::PlaySessionTiming)
@@ -218,6 +215,19 @@ function ui_dev_utils_menu_render!(
             CImGui.Text("$(encounter_class_label(encounter_class)): $(get_encounter_count(gamemap, encounter_class))")
         end
         CImGui.Unindent()
+    end
+
+    if CImGui.CollapsingHeader("Time Lapse")
+        if is_sandbox_learning(snapshot.gamemap)
+            CImGui.TextWrapped("Parent-map time-lapse recording is suspended during tutorials.")
+        else
+            CImGui.Text("Frames: $(timelapse_frame_count(timelapse_recorder))")
+            recording_enabled = timelapse_recorder.enabled
+            @cref CImGui.Checkbox("Record Time Lapse", &recording_enabled)
+            if recording_enabled != timelapse_recorder.enabled
+                set_timelapse_enabled!(timelapse_recorder, recording_enabled)
+            end
+            recording_enabled && CImGui.TextWrapped("Capturing every $(Int(TIMELAPSE_CAPTURE_INTERVAL_SECONDS)) seconds.")
     end
 
     button_width = propertyboxwidth - 50.0
@@ -304,6 +314,22 @@ function ui_dev_utils_menu_render!(
                     @info "Added velocity ($delta_vel_x, $delta_vel_y); new velocity=($adjusted_velocity)"
                 else
                     @warn "Could not add velocity because the resulting velocity is not finite" velocity_delta
+                end
+            end
+
+            has_encounter_system = snapshot.gamemap.space_map isa SpaceMapState
+            if button_with_disable(
+                "Apply Loaded Encounter Config", ImVec2(button_width, button_height), !has_encounter_system;
+                    tooltip = "Requires an active encounter space map. Existing encounters are preserved.",
+                )
+                modified_map = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
+                space_map = get_spacemap(modified_map)
+                if space_map isa SpaceMapState
+                    replace_encounter_config!(space_map, encounter_system_config)
+                    enqueue_map_override!(flowcalc_ipc, modified_map)
+                    @info "Applied encounter system config loaded from components.jl"
+                else
+                    @info "Encounter config reload skipped because the space map changed"
                 end
             end
 

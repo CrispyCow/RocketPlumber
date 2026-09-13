@@ -30,8 +30,10 @@ using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowMap
 using HexFlowProcGen, HexFlowNozzleComponents
 
 # Import components to ensure types are available for JLD2 reconstruction
-include(joinpath(dirname(@__FILE__), "..", "..", "src", "components.jl"))
-include(joinpath(dirname(@__FILE__), "..", "..", "src", "map_loading.jl"))
+const _src_dir = normpath(joinpath(@__DIR__, "..", "..", "src"))
+include(joinpath(_src_dir, "components.jl"))
+include(joinpath(_src_dir, "timelapse.jl"))
+include(joinpath(_src_dir, "map_loading.jl"))
 
 # Helper function to resolve a .jld2 map path
 function resolve_map_path(input::String)
