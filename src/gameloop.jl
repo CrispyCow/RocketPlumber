@@ -171,7 +171,7 @@ function user_handler!(
     if is_standard_family_state(state)
         flowcalc_standard_interaction!(
             flowcalc_ipc.command_queue, inputstate, snapshot.gamemap, window;
-            console_push = flowcalc_ipc.console_push, mouse_captured = mouse_captured,
+            mouse_captured = mouse_captured,
         )
 
         if !mouse_captured && placement_state(inputstate) isa PlacementReadyState

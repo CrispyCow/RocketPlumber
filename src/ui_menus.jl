@@ -228,6 +228,7 @@ function ui_dev_utils_menu_render!(
                 set_timelapse_enabled!(timelapse_recorder, recording_enabled)
             end
             recording_enabled && CImGui.TextWrapped("Capturing every $(Int(TIMELAPSE_CAPTURE_INTERVAL_SECONDS)) seconds.")
+        end
     end
 
     button_width = propertyboxwidth - 50.0
@@ -808,8 +809,11 @@ _render_target_extras!(popup, target::AbstractPopupTarget, inputstate, flowcalc_
 function _render_target_extras!(popup, target::ComponentPopupTarget, inputstate, flowcalc_ipc, viewstate)
     isempty(popup.actions) || CImGui.Separator()
     delete_action = ActionInfo(
-        :delete_component, "Delete Component", true,
-        "Remove this component from the ship.", "Delete this component permanently?"
+        id = :delete_component,
+        label = "Delete Component",
+        enabled = true,
+        tooltip = "Remove this component from the ship.",
+        confirmation_message = "Delete this component permanently?",
     )
     return if button_with_disable(delete_action.label, ImVec2(-1, 0), false; tooltip = delete_action.tooltip)
         popup.pending_confirmation = delete_action
@@ -857,8 +861,13 @@ end
 function _render_target_extras!(popup, target::ElementGroupPopupTarget, inputstate, flowcalc_ipc, viewstate)
     isempty(popup.actions) || CImGui.Separator()
     count = length(target.component_coords) + length(target.pipe_coords)
-    delete_action = ActionInfo(:delete_component, "Delete $count Selected Items", true,
-        "Remove the selected components and pipes.", "Delete all $count selected items permanently?")
+    delete_action = ActionInfo(
+        id = :delete_component,
+        label = "Delete $count Selected Items",
+        enabled = true,
+        tooltip = "Remove the selected components and pipes.",
+        confirmation_message = "Delete all $count selected items permanently?",
+    )
     return if button_with_disable(delete_action.label, ImVec2(-1, 0), false; tooltip = delete_action.tooltip)
         popup.pending_confirmation = delete_action
     end

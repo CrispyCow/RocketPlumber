@@ -651,7 +651,7 @@ function collect_pipe_chain_candidates(state::PlacementPipeChainState, gamemap::
                 pipe_coord = pipe,
                 far_node = far_node,
                 ghost_payload = existing_pipe,
-                can_commit = can_delete_pipe_segment(pipe, gamemap),
+                preview_valid = can_delete_pipe_segment(pipe, gamemap),
                 commit_kind = :delete,
             ))
             continue
@@ -661,7 +661,7 @@ function collect_pipe_chain_candidates(state::PlacementPipeChainState, gamemap::
             pipe_coord = pipe,
             far_node = far_node,
             ghost_payload = state.pipe_behavior,
-            can_commit = isvalidrequest(can_place_pipe_segment(pipe, gamemap)),
+            preview_valid = isvalidrequest(can_place_pipe_segment(pipe, gamemap)),
             commit_kind = :place,
         ))
     end
@@ -764,7 +764,7 @@ function nearest_tile_rotation_axis(cursor_cart::CartesianCoord, tile::TileCoord
     return nearest_hex_axis(direction)
 end
 
-"Resolve the current MOVE hover target under the cursor."
+"Resolve the current MOVE hover target under the cursor without validating mobility."
 function get_move_hover_target(inputstate::InputState, gamemap::GameMap)
     target = resolve_edit_target_from_cursor(inputstate, gamemap)
     target === nothing && return nothing
@@ -773,39 +773,16 @@ function get_move_hover_target(inputstate::InputState, gamemap::GameMap)
     if target isa TileCoord
         tilecomp = get_component(gamemap, target)
         isnothing(tilecomp) && return nothing
-        status = can_be_moved(tilecomp)
-        return (; coord = target, kind = :tile_component, status)
+        return (; coord = target, kind = :tile_component)
     end
 
     pipe_behav = get_pipe(gamemap, target)
     isnothing(pipe_behav) && return nothing
-    status = can_pipe_be_moved(pipe_behav)
-    return (; coord = target, kind = :pipe, status)
-end
-
-"Return the captured movement status for a selection in calculator source order."
-function get_selection_move_status(move_target::SelectionMoveTarget, gamemap::GameMap)::RequestStatus
-    component_sources = sort!(collect(move_target.component_coords); by = coord -> (coord.q, coord.r))
-    for coord in component_sources
-        component = get_component(gamemap, coord)
-        isnothing(component) && return InvalidRequest("one or more selected elements are no longer available")
-        status = can_be_moved(component)
-        isvalidrequest(status) || return status
-    end
-
-    pipe_sources = sort!(collect(move_target.pipe_coords); by = string)
-    for coord in pipe_sources
-        pipe = get_pipe(gamemap, coord)
-        isnothing(pipe) && return InvalidRequest("one or more selected elements are no longer available")
-        status = can_pipe_be_moved(pipe)
-        isvalidrequest(status) || return status
-    end
-
-    return ValidRequest()
+    return (; coord = target, kind = :pipe)
 end
 
 "Record a pending MOVE hold on the current target and clear any stale popup state."
-function set_move_hold_target!(inputstate::InputState, target, gamemap::GameMap)::Bool
+function set_move_hold_target!(inputstate::InputState, target)::Bool
     cursor_cart = get_cursor_cart(inputstate)
     cursor_cart === nothing && return false
     click_tile = round_to_tile(cursor_cart)
@@ -826,37 +803,13 @@ function set_move_hold_target!(inputstate::InputState, target, gamemap::GameMap)
         PipeMoveTarget(target.coord)
     end
 
-    move_target_status = if move_target isa SelectionMoveTarget
-        get_selection_move_status(move_target, gamemap)
-    else
-        target.status
-    end
-
     set_placement_state!(inputstate, PlacementPressedState(
         press_started_at = time(),
         press_cursor_cart = cursor_cart,
         click_tile = click_tile,
         move_target = move_target,
-        move_target_status = move_target_status,
     ))
     return true
-end
-
-"Return whether the captured move status permits drag activation."
-move_target_is_valid(state::PlacementPressedState)::Bool = !isnothing(state.move_target_status) && isvalidrequest(state.move_target_status)
-
-"Format a movement rejection using the same prefix as calculator-side validation."
-function move_rejection_message(move_target::AbstractPlacementMoveTarget, status::InvalidRequest)::String
-    prefix = if move_target isa TileComponentMoveTarget
-        "Cannot move component"
-    elseif move_target isa PipeMoveTarget
-        "Cannot move pipe"
-    elseif move_target isa SelectionMoveTarget
-        "Cannot move selection"
-    else
-        throw(ArgumentError("unsupported move target type: $(typeof(move_target))"))
-    end
-    return "$prefix: $(reason(status))"
 end
 
 
@@ -921,7 +874,11 @@ function create_move_short_click_command(command_queue::CommandQueue, inputstate
     return create_click_tile_command(command_queue, hold_coord, unrotated_clicksite)
 end
 
-"Return whether the active MOVE ghost has an obviously valid destination."
+"""
+Return deliberately approximate render-snapshot validity for active MOVE ghost colouring only.
+
+A false result must not prevent the release command from being created or enqueued.
+"""
 function can_preview_active_move(inputstate::InputState, gamemap::GameMap)::Bool
     state = placement_state(inputstate)
     state isa PlacementMoveState || return false
@@ -1194,7 +1151,7 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
 
         candidate = get_active_pipe_chain_candidate(state, inputstate, gamemap)
         if !isnothing(candidate)
-            ghost_colour = (candidate.commit_kind === :delete || !candidate.can_commit) ? GHOST_COLOUR_INVALID : GHOST_COLOUR_VALID
+            ghost_colour = (candidate.commit_kind === :delete || !candidate.preview_valid) ? GHOST_COLOUR_INVALID : GHOST_COLOUR_VALID
             if !isnothing(candidate.ghost_payload)
                 render_pipe_base!(
                     queue, candidate.ghost_payload;
@@ -1205,27 +1162,7 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
         end
     end
 
-    if state isa PlacementPressedState && !isnothing(state.move_target) && state.hold_threshold_crossed
-        #= ---------- Move activation indicator ----------- =#
-        if state.move_target isa Union{TileComponentMoveTarget, SelectionMoveTarget}
-            coord = state.move_target isa SelectionMoveTarget ? state.move_target.anchor : state.move_target.coord
-            move_colour = move_target_is_valid(state) ? GHOST_MOVE_SELECTION_COLOUR : GHOST_COLOUR_INVALID
-            push!(
-                queue, render_basic_sprite(
-                    glmap, :MoveArrow_arrow_start, rotmat_2D(0.0), coord;
-                    colour = move_colour, draw_height = GHOST_MOVE_SELECTION_HEIGHT_OFFSET, scale = 1.5
-                )
-            )
-        elseif state.move_target isa PipeMoveTarget
-            move_colour = move_target_is_valid(state) ? GHOST_MOVE_SELECTION_COLOUR : GHOST_PIPE_COLOUR_INVALID
-            actual_pipe = get_pipe(gamemap, state.move_target.coord)
-            !isnothing(actual_pipe) && render_pipe_base!(
-                queue, actual_pipe; glmap = glmap,
-                rotation = HexFrame.Q_POS, position = state.move_target.coord, transparency = 0.7, colour = move_colour,
-                render_height_offset = GHOST_MOVE_SELECTION_HEIGHT_OFFSET,
-            )
-        end
-    elseif state isa PlacementMoveState
+    if state isa PlacementMoveState
         move_target = state.move_target
 
         if move_target isa TileComponentMoveTarget
@@ -1501,7 +1438,6 @@ function flowcalc_standard_interaction!(
         inputstate::InputState,
         gamemap::GameMap,
         window::GLFW.Window;
-        console_push::Function,
         mouse_captured::Bool = false
     )
     state = placement_state(inputstate)
@@ -1555,10 +1491,12 @@ function flowcalc_standard_interaction!(
         end
 
         candidate = get_active_pipe_chain_candidate(state, inputstate, gamemap)
-        if isnothing(candidate) || !candidate.can_commit
+        if isnothing(candidate)
             return nothing
         end
 
+        # Preview validity controls the ghost only. The calculator owns the authoritative
+        # rejection and its player-facing feedback against the latest map state.
         response_channel = Channel{CommandStatus}(1)
         command = create_pipe_chain_command(command_queue, state, candidate; response_channel = response_channel)
         isnothing(command) && return nothing
@@ -1600,27 +1538,9 @@ function flowcalc_standard_interaction!(
     end
 
     if state isa PlacementPressedState
-        if !isnothing(state.move_target) && !state.hold_threshold_crossed && time() - state.press_started_at >= 0.5
-            if move_target_is_valid(state)
-                activate_move_drag!(inputstate)
-                return nothing
-            end
-
-            move_target = state.move_target
-            move_target_status = state.move_target_status
-            set_placement_state!(inputstate, PlacementPressedState(
-                press_started_at = state.press_started_at,
-                press_cursor_cart = state.press_cursor_cart,
-                click_tile = state.click_tile,
-                move_target = move_target,
-                move_target_status = move_target_status,
-                hold_threshold_crossed = true,
-            ))
-            if move_target_status isa InvalidRequest
-                console_push(move_rejection_message(move_target, move_target_status))
-            elseif isnothing(move_target_status)
-                @warn "Move target is missing its captured movement status" target_type = nameof(typeof(move_target))
-            end
+        if !isnothing(state.move_target) && time() - state.press_started_at >= 0.5
+            activate_move_drag!(inputstate)
+            return nothing
         end
 
         if left_falling
@@ -1674,7 +1594,7 @@ function flowcalc_standard_interaction!(
         return nothing
     end
 
-    set_move_hold_target!(inputstate, target, gamemap)
+    set_move_hold_target!(inputstate, target)
     return nothing
 end
 
@@ -1850,14 +1770,18 @@ function get_ship_actions(gamemap::GameMap, ship_name::Symbol)::Tuple
     is_connected = status isa ConnectedDockStat
 
     make_primary_action = ActionInfo(
-        :make_primary, "Make Primary", !is_primary && is_connected,
-        is_primary ? "This is already the primary ship" : (!is_connected ? "Ship is not docked" : "Swap this ship to be your primary"),
-        is_primary ? nothing : "Make this your primary ship? The current primary will become a docked ship."
+        id = :make_primary,
+        label = "Make Primary",
+        enabled = !is_primary && is_connected,
+        tooltip = is_primary ? "This is already the primary ship" : (!is_connected ? "Ship is not docked" : "Swap this ship to be your primary"),
+        confirmation_message = is_primary ? nothing : "Make this your primary ship? The current primary will become a docked ship.",
     )
 
     redock_action = ActionInfo(
-        :redock, "Redock", !is_primary && is_connected,
-        is_primary ? "Cannot redock the primary ship" : "Choose a new docking position",
+        id = :redock,
+        label = "Redock",
+        enabled = !is_primary && is_connected,
+        tooltip = is_primary ? "Cannot redock the primary ship" : "Choose a new docking position",
     )
 
     departure_status = if !is_primary && is_connected
@@ -1876,9 +1800,11 @@ function get_ship_actions(gamemap::GameMap, ship_name::Symbol)::Tuple
         "Undock and depart this ship"
     end
     undock_action = ActionInfo(
-        :undock, "Undock", !is_primary && is_connected && can_depart,
-        undock_tooltip,
-        !is_primary && is_connected && can_depart ? "Undock this ship? It will depart along its docking axis." : nothing
+        id = :undock,
+        label = "Undock",
+        enabled = !is_primary && is_connected && can_depart,
+        tooltip = undock_tooltip,
+        confirmation_message = !is_primary && is_connected && can_depart ? "Undock this ship? It will depart along its docking axis." : nothing,
     )
 
     return (make_primary_action, redock_action, undock_action)
@@ -1944,7 +1870,7 @@ function _render_redock_ghost!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
 
     cursor_tile = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
     delta = cursor_tile - rs.original_centre
-    valid = _check_redock_valid(rs, delta)
+    valid = is_redock_preview_valid(rs, delta)
     core_colour = valid ? REDOCK_GHOST_VALID : REDOCK_GHOST_INVALID
 
     ghost_height = Int32(HexFlowRendering.RENDER_HEIGHT_OVERLAY_BASE + 500)
@@ -1994,19 +1920,12 @@ function _enter_redock_mode!(inputstate::InputState, flowcalc_ipc::FlowCalculato
     return nothing
 end
 
-"Check whether the given tile offset produces a valid placement for the redocking ship."
-function _check_redock_valid(rs::RedockModeState, delta::TileCoord)::Bool
+"Check cached redock render data for ghost colouring only."
+function is_redock_preview_valid(rs::RedockModeState, delta::TileCoord)::Bool
     return !ship_footprints_overlap(rs.other_exclusion, rs.ship_footprint, delta)
 end
 
-"Enqueue a `RedockShipCommand` to relocate the ship after the player confirms placement."
-function _execute_redock!(rs::RedockModeState, delta::TileCoord, flowcalc_ipc::FlowCalculatorIPC)
-    cmd = create_redock_ship_command(flowcalc_ipc.command_queue, rs.ship_name, delta)
-    try_enqueue_command!(flowcalc_ipc.command_queue, cmd)
-    return nothing
-end
-
-"Handle left-click during redock mode: validate placement and enqueue the redock command."
+"Handle left-click during redock mode and enqueue the authoritative redock command."
 function _handle_redock_click!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, window::GLFW.Window; mouse_captured::Bool = false)
     state = placement_state(inputstate)
     state isa PlacementRedockState || return nothing
@@ -2027,14 +1946,7 @@ function _handle_redock_click!(inputstate::InputState, flowcalc_ipc::FlowCalcula
     cursor_tile = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
     delta = cursor_tile - rs.original_centre
 
-    if !_check_redock_valid(rs, delta)
-        flowcalc_ipc.console_push(
-            "Cannot redock here: move the ship until its highlighted footprint no longer overlaps another ship's clearance area",
-        )
-        return nothing
-    end
-
-    _execute_redock!(rs, delta, flowcalc_ipc)
-    enter_ready_placement_state!(inputstate)
+    command = create_redock_ship_command(flowcalc_ipc.command_queue, rs.ship_name, delta)
+    try_enqueue_command!(flowcalc_ipc.command_queue, command) && enter_ready_placement_state!(inputstate)
     return nothing
 end

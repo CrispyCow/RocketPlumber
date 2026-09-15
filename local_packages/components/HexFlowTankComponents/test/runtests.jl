@@ -84,7 +84,7 @@ end
     tank = make_pressurefed_tank().tank
 
     @test get_tunables(tank) isa NTuple{4, TunableProps}
-    @test compute_gas_pressure(tank) ≈ 9.090909090909092
+    @test compute_gas_pressure(tank) ≈ 16.666666666666668
 
     # Default: both seal states are unsealed
     @test !liquid_is_sealed(tank)
@@ -128,17 +128,25 @@ end
     )
     @test compute_gas_pressure(zero_gas) == 0.0
 
-    half_pressure = PressureFedTankBehavFrag(
+    empty_tank = PressureFedTankBehavFrag(
         initial_liquid_charge = 0.0, initial_gas_charge = 10.0,
         max_liquid_charge = 40.0, max_gas_pressure = 80.0, gas_node = HexFrame.NODE_Q_POS
     )
-    @test compute_gas_pressure(half_pressure) ≈ 19.047619047619047
+    @test compute_gas_pressure(empty_tank) ≈ 36.36363636363637
+
+    # One unit of gas charge supports two units of liquid displacement after the fixed 5% starting headspace.
+    full_tank = make_pressurefed_tank(liquid_charge = 40.0, gas_charge = 2.0).tank
+    half_full_tank = make_pressurefed_tank(liquid_charge = 20.0, gas_charge = 12.0).tank
+    drained_tank = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 22.0).tank
+    @test compute_gas_pressure(full_tank) ≈ 50.0
+    @test compute_gas_pressure(half_full_tank) ≈ 50.0
+    @test compute_gas_pressure(drained_tank) ≈ 50.0
 
     negative_gas = PressureFedTankBehavFrag(
         initial_liquid_charge = 20.0, initial_gas_charge = -1.0,
         max_liquid_charge = 40.0, max_gas_pressure = 50.0, gas_node = HexFrame.NODE_Q_POS
     )
-    @test compute_gas_pressure(negative_gas) ≈ -22.727272727272727
+    @test compute_gas_pressure(negative_gas) ≈ -41.666666666666664
 end
 
 @testset "Pressure-fed tank fragment: derived state helpers" begin
@@ -172,8 +180,8 @@ end
     @test pressurefed_liquid_source_active(gas_empty)  # liquid unaffected by gas empty
 
     # Gas overpressure disables both sides
-    # max_gas_pressure = 50.0; at liquid_charge = 0 headspace = 1.05*40 = 42, charge = 42 => pressure = 50.0
-    overpressure = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 42.0).tank
+    # At liquid_charge = 0, effective headspace = 5% * 40 + 40 / 2 = 22, so charge 22 reaches max pressure.
+    overpressure = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 22.0).tank
     @test pressurefed_gas_is_auto_full_pressure(overpressure)
     @test !pressurefed_gas_source_active(overpressure)
     @test !pressurefed_liquid_source_active(overpressure)  # cross-side coupling
@@ -313,7 +321,7 @@ end
     @test all(elem.active for elem in elements)
 
     # Gas auto-full-pressure: both sources and resistor inactive
-    overpressure_comp = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 42.0)
+    overpressure_comp = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 22.0)
     op_elements = produce_rel_elements(overpressure_comp)
     @test all(!elem.active for elem in op_elements)
 
@@ -406,6 +414,47 @@ end
     @test :seal_both in ids
     @test :unseal_gas in ids
     @test :unseal_liquid in ids
+    @test all(action -> action.group_enabled == action.enabled, actions[3:end])
+
+    @testset "vent metadata follows gas state" begin
+        for (charge, sealed, expected_enabled, expected_group_enabled) in (
+                (3.0, false, true, true),
+                (0.0, false, false, true),
+                (0.0, true, false, true),
+                (3.0, true, false, false),
+            )
+            state = make_pressurefed_tank(liquid_charge = 12.0, gas_charge = charge).tank
+            sealed && seal!(state.gas_sealstate)
+            action = only(item for item in get_actions(state) if item.id === :vent_and_seal_gas)
+
+            @test action.enabled == expected_enabled
+            @test action.group_enabled == expected_group_enabled
+            @test action.confirmation_message == "Are you sure? This will vent all stored pressurising gas."
+            if charge == 0.0
+                @test occursin("already empty", action.tooltip)
+            end
+        end
+    end
+
+    @testset "vent metadata follows liquid state" begin
+        for (charge, sealed, expected_enabled, expected_group_enabled) in (
+                (12.0, false, true, true),
+                (0.0, false, false, true),
+                (0.0, true, false, true),
+                (12.0, true, false, false),
+            )
+            state = make_pressurefed_tank(liquid_charge = charge, gas_charge = 3.0).tank
+            sealed && seal!(state.liquid_sealstate)
+            action = only(item for item in get_actions(state) if item.id === :vent_and_seal_liquid)
+
+            @test action.enabled == expected_enabled
+            @test action.group_enabled == expected_group_enabled
+            @test action.confirmation_message == "Are you sure? This will vent all stored liquid fuel."
+            if charge == 0.0
+                @test occursin("already empty", action.tooltip)
+            end
+        end
+    end
 
     # Vent and Seal Gas: zeroes gas charge and seals gas side only
     result = do_action!(tank, :vent_and_seal_gas)
@@ -453,6 +502,26 @@ end
     @test_throws ArgumentError do_action!(tank, :nonexistent)
 end
 
+@testset "Pressure-fed tank: empty vent actions are safe" begin
+    for initially_sealed in (false, true)
+        empty_gas = make_pressurefed_tank(liquid_charge = 12.0, gas_charge = 0.0).tank
+        initially_sealed && seal!(empty_gas.gas_sealstate)
+        result = do_action!(empty_gas, :vent_and_seal_gas)
+        @test isvalidrequest(result)
+        @test empty_gas.gas_state.charge == 0.0
+        @test gas_is_sealed(empty_gas)
+        @test empty_gas.liquid_state.charge == 12.0
+
+        empty_liquid = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 3.0).tank
+        initially_sealed && seal!(empty_liquid.liquid_sealstate)
+        result = do_action!(empty_liquid, :vent_and_seal_liquid)
+        @test isvalidrequest(result)
+        @test empty_liquid.liquid_state.charge == 0.0
+        @test liquid_is_sealed(empty_liquid)
+        @test empty_liquid.gas_state.charge == 3.0
+    end
+end
+
 @testset "Pressure-fed tank: reactivation probe get" begin
     # Both sides active: no probe
     mid = make_pressurefed_tank(liquid_charge = 20.0, gas_charge = 4.0)
@@ -484,7 +553,7 @@ end
     @test !probe_ge.rel_elements[3].active  # resistor inactive when liquid not probed
 
     # Gas overpressure: both sides probed
-    overpressure = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 42.0)
+    overpressure = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 22.0)
     probe_op = get_reactivation_probe(overpressure)
     @test probe_op isa ReactivationProbe
     @test probe_op.rel_elements[1].active   # liquid probed
@@ -570,7 +639,7 @@ end
     @test !gas_is_force_reactivated(liq_empty_gas_pruned.tank)
 
     # Gas overpressure: useful when gas outflow is useful and liquid side stays neutral
-    overpressure = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 42.0)
+    overpressure = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 22.0)
     dm_op_gas, mna_op_gas = setup_pf_probe(overpressure, TEST_TILE, 2, -5.0)  # gas outflow: useful
     # Must also register the liquid vsource since both sides are probed
     (frag_liq, _) = produce_rel_elements(overpressure.tank)
@@ -930,6 +999,29 @@ end
     @test :vent_and_seal in ids
     @test :seal_tank in ids
     @test :unseal_tank in ids
+    @test all(action -> action.group_enabled == action.enabled, actions[2:end])
+
+    @testset "vent metadata follows tank state" begin
+        for make_tank in (make_gas_tank, make_liquid_tank)
+            for (charge, sealed, expected_enabled, expected_group_enabled) in (
+                    (20.0, false, true, true),
+                    (0.0, false, false, true),
+                    (0.0, true, false, true),
+                    (20.0, true, false, false),
+                )
+                state = make_tank(initial_charge = charge)
+                sealed && seal!(state.tank.tank.sealstate)
+                action = only(item for item in get_actions(state) if item.id === :vent_and_seal)
+
+                @test action.enabled == expected_enabled
+                @test action.group_enabled == expected_group_enabled
+                @test action.confirmation_message == "Are you sure? This will vent all stored fuel."
+                if charge == 0.0
+                    @test occursin("already empty", action.tooltip)
+                end
+            end
+        end
+    end
 
     # Vent and Seal: empties tank and seals it
     result = do_action!(gas, :vent_and_seal)
@@ -965,6 +1057,21 @@ end
     # Sealed tank with charge: still not movable
     seal!(gas2.tank.tank.sealstate)
     @test !isvalidrequest(can_be_moved(gas2))
+end
+
+@testset "ThevininTankCompBehav: empty vent actions are safe" begin
+    empty_unsealed = make_gas_tank(initial_charge = 0.0)
+    result = do_action!(empty_unsealed, :vent_and_seal)
+    @test isvalidrequest(result)
+    @test empty_unsealed.tank.tank.state.charge == 0.0
+    @test is_sealed(empty_unsealed.tank.tank.sealstate)
+
+    empty_sealed = make_gas_tank(initial_charge = 0.0)
+    seal!(empty_sealed.tank.tank.sealstate)
+    result = do_action!(empty_sealed, :vent_and_seal)
+    @test isvalidrequest(result)
+    @test empty_sealed.tank.tank.state.charge == 0.0
+    @test is_sealed(empty_sealed.tank.tank.sealstate)
 end
 
 @testset "ThevininTankCompBehav: reactivation probe (get)" begin

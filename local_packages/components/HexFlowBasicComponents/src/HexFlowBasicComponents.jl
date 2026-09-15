@@ -166,7 +166,12 @@ end
 function get_actions(stall::StallBehavFrag; kwargs...)
     stalled = is_stalled(stall)
     tooltip = stalled ? "Try to reactivate stalled component" : "Component is not currently stalled"
-    return (ActionInfo(:unstall, "Unstall Component", stalled, tooltip),)
+    return (ActionInfo(
+        id = :unstall,
+        label = "Unstall Component",
+        enabled = stalled,
+        tooltip = tooltip,
+    ),)
 end
 
 function do_action!(stall::StallBehavFrag, action_id::Symbol; kwargs...)
@@ -223,7 +228,12 @@ end
 function get_actions(damage::DamageStateBehavFrag; kwargs...)
     damaged = is_damaged(damage)
     tooltip = damaged ? "Temporarily repair this damaged component" : "Component is not currently damaged"
-    return (ActionInfo(:repair_component, "Repair Component", damaged, tooltip),)
+    return (ActionInfo(
+        id = :repair_component,
+        label = "Repair Component",
+        enabled = damaged,
+        tooltip = tooltip,
+    ),)
 end
 
 function do_action!(damage::DamageStateBehavFrag, action_id::Symbol; kwargs...)

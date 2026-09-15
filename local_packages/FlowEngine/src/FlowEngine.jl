@@ -845,7 +845,7 @@ function compute_region_temperatures!(derivedmapstate::DerivedMapState, scratchp
         region_fluid_type[rid] = source.fluid_type
 
         flow = _get_source_flow_rate(node, derivedmapstate, scratchpad, mna_state)
-        if flow > 0.0
+        if abs(flow) > 1.0E-9
             region_weighted_temp[rid] = get(region_weighted_temp, rid, 0.0) + flow * source.temperature
             region_total_flow[rid]    = get(region_total_flow, rid, 0.0) + flow
         end

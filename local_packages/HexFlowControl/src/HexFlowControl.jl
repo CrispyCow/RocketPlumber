@@ -214,15 +214,15 @@ end
 
 """
 State for the interactive redock placement state. Entered when the player selects
-'Redock' from a ship's right-click menu. Pre-computed tile/node sets are cached on
-entry so per-frame validity checking is cheap.
+'Redock' from a ship's right-click menu. Cached footprint fields are preview data
+for ghost colouring only; the calculator owns authoritative placement validation.
 """
 @kwdef mutable struct PlacementRedockState <: AbstractPlacementState
     ship_name::Symbol                           # ship being redocked
     ship_tiles::Set{TileCoord}                  # original surface tiles (green/red ghost)
     exclusion_ring::Set{TileCoord}              # surface and pipe clearance rendered around the ghost
-    ship_footprint::Set{TileCoord}              # untranslated surface and pipe clearance for validation
-    other_exclusion::Set{TileCoord}             # fixed docking exclusion of all other ships
+    ship_footprint::Set{TileCoord}              # preview-only untranslated surface and pipe clearance
+    other_exclusion::Set{TileCoord}             # preview-only docking exclusion of all other ships
     original_centre::TileCoord                  # centre tile for computing mouse delta
 end
 
@@ -269,14 +269,12 @@ const PlacementMoveTarget = Union{TileComponentMoveTarget, PipeMoveTarget, Selec
 "Idle placement state: inspect-hover plus click classification."
 struct PlacementReadyState <: AbstractPlacementState end
 
-"Pending placement click state while resolving inspect short-click versus move hold."
+"Pending placement click state while resolving an inspect short-click versus a move hold."
 @kwdef struct PlacementPressedState <: AbstractPlacementState
     press_started_at::Float64
     press_cursor_cart::CartesianCoord
     click_tile::Union{Nothing, TileCoord} = nothing
     move_target::Union{Nothing, PlacementMoveTarget} = nothing
-    move_target_status::Union{Nothing, RequestStatus} = nothing  # `nothing` means no move candidate was captured
-    hold_threshold_crossed::Bool = false
 end
 
 "Active placement move-drag state."
@@ -498,11 +496,32 @@ function shared_component_actions(action_sets)::Tuple
                 action.confirmation_message != reference_action.confirmation_message, actions)
             @warn "Inconsistent metadata for shared component action" action_id = reference_action.id
         end
-        disabled_count = count(!action.enabled for action in actions)
-        tooltip = disabled_count == 0 ? reference_action.tooltip :
-            "Unavailable for $disabled_count of $(length(actions)) selected components."
-        push!(shared, ActionInfo(reference_action.id, reference_action.label, disabled_count == 0, tooltip,
-            reference_action.confirmation_message))
+        enabled_count = count(action.enabled for action in actions)
+        blocked_count = count(!action.group_enabled for action in actions)
+        group_action_enabled = enabled_count > 0 && blocked_count == 0
+        selected_count = length(actions)
+        tooltip = if blocked_count > 0
+            "Unavailable for $blocked_count of $selected_count selected components."
+        elseif enabled_count == 0
+            "None of the $selected_count selected components can currently perform this action."
+        elseif enabled_count < selected_count
+            "Available as a group; enabled individually for $enabled_count of $selected_count selected components."
+        else
+            reference_action.tooltip
+        end
+
+        confirmation_messages = String[
+            action.confirmation_message for action in actions if !isnothing(action.confirmation_message)
+        ]
+        # Keep the confirmation choice independent of selected-component ordering.
+        confirmation_message = isempty(confirmation_messages) ? nothing : minimum(confirmation_messages)
+        push!(shared, ActionInfo(
+            id = reference_action.id,
+            label = reference_action.label,
+            enabled = group_action_enabled,
+            tooltip = tooltip,
+            confirmation_message = confirmation_message,
+        ))
     end
     return Tuple(shared)
 end

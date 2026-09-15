@@ -137,17 +137,21 @@ function produce_rel_elements(behav::T) where {T <: ComponentBehavior}
     error("Required method produce_rel_elements not implemented for $(nameof(T))")
 end
 
-"Describes a single action that a component can perform, for display in a popup UI."
-struct ActionInfo
+"""
+Describes a component action.
+
+`enabled` and `group_enabled` control if an action is possible and are optionally settable separately,
+to allow you to have a behavior disabled individually but have it not block group actions.
+A non-nothing `confirmation_message` is shown in a confirmation window before the action executes.
+"""
+@kwdef struct ActionInfo
     id::Symbol                                  # Unique identifier for this action on this component
     label::String                               # Button text displayed in the UI
-    enabled::Bool                               # Whether the action button is currently clickable
+    enabled::Bool                               # Whether the action is meaningful for an individual component
+    group_enabled::Bool = enabled               # Whether the component permits the action in a group
     tooltip::String                             # Hover text — explains the action or why it's disabled
-    confirmation_message::Union{Nothing, String} # If set, show a confirmation pane before executing
+    confirmation_message::Union{Nothing, String} = nothing # If set, show a confirmation pane before executing
 end
-
-"Convenience constructor preserving the existing 4-arg call sites."
-ActionInfo(id, label, enabled, tooltip) = ActionInfo(id, label, enabled, tooltip, nothing)
 
 "Tunable descriptor for a scalar (Float64) component parameter."
 struct TunableProps

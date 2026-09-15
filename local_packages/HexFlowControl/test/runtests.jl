@@ -49,17 +49,12 @@ function make_test_redock_state()
     )
 end
 
-function make_pressed_state(
-        ; move_target = nothing, move_target_status = nothing, click_tile = TileCoord(1, 2), hold_threshold_crossed = false
-    )
-    move_target_status = isnothing(move_target) ? nothing : something(move_target_status, ValidRequest())
+function make_pressed_state(; move_target = nothing, click_tile = TileCoord(1, 2))
     return PlacementPressedState(
         press_started_at = 3.5,
         press_cursor_cart = CartesianCoord(1.5, 2.5),
         click_tile = click_tile,
         move_target = move_target,
-        move_target_status = move_target_status,
-        hold_threshold_crossed = hold_threshold_crossed,
     )
 end
 
@@ -193,29 +188,19 @@ end
         @test !is_standard_family_state(state)
     end
 
-    @testset "pressed state captures movement status" begin
+    @testset "pressed state stores click and optional move target" begin
         no_target = make_pressed_state()
-        @test no_target.move_target_status === nothing
+        @test no_target.press_started_at == 3.5
+        @test no_target.press_cursor_cart == CartesianCoord(1.5, 2.5)
+        @test no_target.click_tile == TileCoord(1, 2)
+        @test isnothing(no_target.move_target)
 
         move_target = TileComponentMoveTarget(TileCoord(2, 3))
-        valid_target = make_pressed_state(move_target = move_target, move_target_status = ValidRequest())
-        @test valid_target.move_target_status isa ValidRequest
-
-        rejection_reason = "empty or vent the tank first"
-        invalid_target = make_pressed_state(
-            move_target = move_target,
-            move_target_status = InvalidRequest(rejection_reason),
-        )
-        @test invalid_target.move_target_status isa InvalidRequest
-        @test reason(invalid_target.move_target_status) == rejection_reason
-
-        crossed_target = make_pressed_state(
-            move_target = move_target,
-            move_target_status = invalid_target.move_target_status,
-            hold_threshold_crossed = true,
-        )
-        @test crossed_target.hold_threshold_crossed
-        @test crossed_target.move_target_status === invalid_target.move_target_status
+        with_target = make_pressed_state(move_target = move_target)
+        @test with_target.press_started_at == 3.5
+        @test with_target.press_cursor_cart == CartesianCoord(1.5, 2.5)
+        @test with_target.click_tile == TileCoord(1, 2)
+        @test with_target.move_target === move_target
     end
 
     @testset "editor capability gate" begin
@@ -383,21 +368,101 @@ end
     end
 
     @testset "shared component actions" begin
-        first_actions = (
-            ActionInfo(:first, "First", true, "Ready"),
-            ActionInfo(:shared, "Shared", true, "Ready", "Confirm?"),
-        )
-        second_actions = (
-            ActionInfo(:shared, "Shared", false, "Blocked", "Confirm?"),
-            ActionInfo(:other, "Other", true, "Ready"),
-        )
+        make_shared_action(; enabled, group_enabled = enabled, tooltip = "Ready", confirmation_message = nothing) =
+            ActionInfo(
+                id = :shared,
+                label = "Shared",
+                enabled = enabled,
+                group_enabled = group_enabled,
+                tooltip = tooltip,
+                confirmation_message = confirmation_message,
+            )
 
-        actions = shared_component_actions((first_actions, second_actions))
-        @test length(actions) == 1
-        @test actions[1].id === :shared
-        @test !actions[1].enabled
-        @test actions[1].tooltip == "Unavailable for 1 of 2 selected components."
-        @test actions[1].confirmation_message == "Confirm?"
+        @testset "all components enabled" begin
+            actions = shared_component_actions((
+                (make_shared_action(enabled = true),),
+                (make_shared_action(enabled = true),),
+            ))
+            @test length(actions) == 1
+            @test actions[1].enabled
+            @test actions[1].group_enabled
+            @test actions[1].tooltip == "Ready"
+        end
+
+        @testset "group-disabled component blocks action" begin
+            actions = shared_component_actions((
+                (make_shared_action(enabled = true),),
+                (make_shared_action(enabled = false, group_enabled = false, tooltip = "Blocked"),),
+            ))
+            @test !actions[1].enabled
+            @test !actions[1].group_enabled
+            @test actions[1].tooltip == "Unavailable for 1 of 2 selected components."
+        end
+
+        @testset "group-enabled disabled component permits action" begin
+            actions = shared_component_actions((
+                (make_shared_action(enabled = true),),
+                (make_shared_action(enabled = false, group_enabled = true, tooltip = "Already empty"),),
+            ))
+            @test actions[1].enabled
+            @test actions[1].group_enabled
+            @test actions[1].tooltip ==
+                "Available as a group; enabled individually for 1 of 2 selected components."
+        end
+
+        @testset "no selected component currently needs action" begin
+            actions = shared_component_actions((
+                (make_shared_action(enabled = false, group_enabled = true),),
+                (make_shared_action(enabled = false, group_enabled = true),),
+            ))
+            @test !actions[1].enabled
+            @test !actions[1].group_enabled
+            @test actions[1].tooltip ==
+                "None of the 2 selected components can currently perform this action."
+        end
+
+        @testset "only blocking components count as unavailable" begin
+            actions = shared_component_actions((
+                (make_shared_action(enabled = true),),
+                (make_shared_action(enabled = false, group_enabled = true),),
+                (make_shared_action(enabled = false, group_enabled = false),),
+            ))
+            @test !actions[1].enabled
+            @test actions[1].tooltip == "Unavailable for 1 of 3 selected components."
+        end
+
+        @testset "missing actions remain absent from intersection" begin
+            actions = shared_component_actions((
+                (make_shared_action(enabled = true),),
+                (ActionInfo(id = :other, label = "Other", enabled = true, tooltip = "Ready"),),
+            ))
+            @test isempty(actions)
+        end
+
+        @testset "confirmation is retained when a later component requires it" begin
+            actions = @test_logs (:warn, r"Inconsistent metadata for shared component action") begin
+                shared_component_actions((
+                    (make_shared_action(enabled = true),),
+                    (make_shared_action(enabled = true, confirmation_message = "Confirm?"),),
+                ))
+            end
+            @test actions[1].confirmation_message == "Confirm?"
+        end
+
+        @testset "conflicting confirmations warn and use a deterministic message" begin
+            action_sets = (
+                (make_shared_action(enabled = true, confirmation_message = "Confirm later"),),
+                (make_shared_action(enabled = true, confirmation_message = "Confirm earlier"),),
+            )
+            actions = @test_logs (:warn, r"Inconsistent metadata for shared component action") begin
+                shared_component_actions(action_sets)
+            end
+            reversed_actions = @test_logs (:warn, r"Inconsistent metadata for shared component action") begin
+                shared_component_actions(reverse(action_sets))
+            end
+            @test actions[1].confirmation_message == "Confirm earlier"
+            @test reversed_actions[1].confirmation_message == actions[1].confirmation_message
+        end
     end
 
     @testset "editor transition helpers" begin

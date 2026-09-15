@@ -730,13 +730,23 @@ function get_actions(comp::ElectricPumpCompBehav; kwargs...)
     # Rewrite to pump-appropriate labels
     rewritten = map(switch_actions) do action
         if action.id === :open_valve
-            label = "Turn Pump On"
             tooltip = action.enabled ? "Activate pump to begin pumping fluid" : "Pump is already on"
-            return ActionInfo(:pump_on, label, action.enabled, tooltip)
+            return ActionInfo(
+                id = :pump_on,
+                label = "Turn Pump On",
+                enabled = action.enabled,
+                group_enabled = action.group_enabled,
+                tooltip = tooltip,
+            )
         elseif action.id === :close_valve
-            label = "Turn Pump Off"
             tooltip = action.enabled ? "Deactivate pump" : "Pump is already off"
-            return ActionInfo(:pump_off, label, action.enabled, tooltip)
+            return ActionInfo(
+                id = :pump_off,
+                label = "Turn Pump Off",
+                enabled = action.enabled,
+                group_enabled = action.group_enabled,
+                tooltip = tooltip,
+            )
         else
             return action
         end

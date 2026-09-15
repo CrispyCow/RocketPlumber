@@ -732,8 +732,12 @@ function apply_mapedit_command!(gamemap::GameMap, command::DeleteElementsCommand
     foreach(coord -> delete_component!(gamemap, coord), component_coords)
     foreach(coord -> delete_pipe!(gamemap, coord), pipe_coords)
     normalisation_status = normalise_pipe_ownership!(gamemap)
-    isvalidrequest(normalisation_status) ||
+    if !isvalidrequest(normalisation_status)
+        if isempty(component_coords) && length(pipe_coords) == 1
+            return InvalidRequest("Cannot delete pipe: this would leave part of the pipe network disconnected from every ship")
+        end
         return InvalidRequest("Cannot delete selection: remove or reconnect the dependent pipes as well")
+    end
     return ValidRequest()
 end
 

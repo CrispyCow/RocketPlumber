@@ -298,7 +298,7 @@ HexComponentsAPI.set_tunables(::ActionCompBehav, ::NTuple{0, Real}) = ActionComp
 HexComponentsAPI.render_base_elem!(queue, ::ActionCompBehav; kwargs...) = nothing
 import HexComponentsAPI: get_actions, do_action!, placement_valid
 function get_actions(comp::ActionCompBehav; kwargs...)
-    return (ActionInfo(:flip, "Flip", true, "Flip state"),)
+    return (ActionInfo(id = :flip, label = "Flip", enabled = true, tooltip = "Flip state"),)
 end
 function do_action!(comp::ActionCompBehav, action_id::Symbol; kwargs...)
     if action_id === :flip
@@ -315,7 +315,8 @@ HexComponentsAPI.produce_rel_elements(::StatefulActionCompBehav) = ()
 HexComponentsAPI.get_tunables(::StatefulActionCompBehav) = ()
 HexComponentsAPI.set_tunables(comp::StatefulActionCompBehav, ::NTuple{0, Real}) = comp
 HexComponentsAPI.render_base_elem!(queue, ::StatefulActionCompBehav; kwargs...) = nothing
-HexComponentsAPI.get_actions(::StatefulActionCompBehav; kwargs...) = (ActionInfo(:activate, "Activate", true, "Activate action"),)
+HexComponentsAPI.get_actions(::StatefulActionCompBehav; kwargs...) =
+    (ActionInfo(id = :activate, label = "Activate", enabled = true, tooltip = "Activate action"),)
 function HexComponentsAPI.do_action!(comp::StatefulActionCompBehav, ::Symbol; kwargs...)
     comp.activations += 1
     return ValidRequestResult("Activated")
@@ -328,7 +329,8 @@ HexComponentsAPI.produce_rel_elements(::ActionValidationFailCompBehav) = ()
 HexComponentsAPI.get_tunables(::ActionValidationFailCompBehav) = ()
 HexComponentsAPI.set_tunables(comp::ActionValidationFailCompBehav, ::NTuple{0, Real}) = comp
 HexComponentsAPI.render_base_elem!(queue, ::ActionValidationFailCompBehav; kwargs...) = nothing
-HexComponentsAPI.get_actions(::ActionValidationFailCompBehav; kwargs...) = (ActionInfo(:activate, "Activate", true, "Activate action"),)
+HexComponentsAPI.get_actions(::ActionValidationFailCompBehav; kwargs...) =
+    (ActionInfo(id = :activate, label = "Activate", enabled = true, tooltip = "Activate action"),)
 function HexComponentsAPI.do_action!(comp::ActionValidationFailCompBehav, ::Symbol; kwargs...)
     comp.activations += 1
     return ValidRequestResult("Activated")
@@ -355,7 +357,8 @@ HexComponentsAPI.produce_rel_elements(::ThrowingActionCompBehav) = ()
 HexComponentsAPI.get_tunables(::ThrowingActionCompBehav) = ()
 HexComponentsAPI.set_tunables(::ThrowingActionCompBehav, ::NTuple{0, Real}) = ThrowingActionCompBehav()
 HexComponentsAPI.render_base_elem!(queue, ::ThrowingActionCompBehav; kwargs...) = nothing
-HexComponentsAPI.get_actions(::ThrowingActionCompBehav; kwargs...) = (ActionInfo(:activate, "Activate", true, "Activate action"),)
+HexComponentsAPI.get_actions(::ThrowingActionCompBehav; kwargs...) =
+    (ActionInfo(id = :activate, label = "Activate", enabled = true, tooltip = "Activate action"),)
 HexComponentsAPI.do_action!(::ThrowingActionCompBehav, ::Symbol; kwargs...) = error("action execution failed")
 function placement_valid(comp::ActionCompBehav, coord::TileCoord, gamemap::GameMap; kwargs...)
     return ValidRequest()
@@ -368,7 +371,8 @@ HexComponentsAPI.produce_rel_elements(::ResultActionCompBehav) = ()
 HexComponentsAPI.get_tunables(::ResultActionCompBehav) = ()
 HexComponentsAPI.set_tunables(comp::ResultActionCompBehav, ::NTuple{0, Real}) = comp
 HexComponentsAPI.render_base_elem!(queue, ::ResultActionCompBehav; kwargs...) = nothing
-HexComponentsAPI.get_actions(::ResultActionCompBehav; kwargs...) = (ActionInfo(:run, "Run", true, "Run action"),)
+HexComponentsAPI.get_actions(::ResultActionCompBehav; kwargs...) =
+    (ActionInfo(id = :run, label = "Run", enabled = true, tooltip = "Run action"),)
 HexComponentsAPI.do_action!(comp::ResultActionCompBehav, ::Symbol; kwargs...) = comp.result
 
 mutable struct ValidationMutationCompBehav <: ComponentBehavior
@@ -429,6 +433,14 @@ HexComponentsAPI.get_tunables(::ImmovableCompBehav) = ()
 HexComponentsAPI.set_tunables(::ImmovableCompBehav, ::NTuple{0, Real}) = ImmovableCompBehav()
 HexComponentsAPI.render_base_elem!(queue, ::ImmovableCompBehav; kwargs...) = nothing
 HexComponentsAPI.can_be_moved(::ImmovableCompBehav; kwargs...) = InvalidRequest("Test component is fixed")
+
+struct ImmovablePipeBehav <: PipeBehavior end
+HexComponentsAPI.get_conductance(::ImmovablePipeBehav) = 1.0
+HexComponentsAPI.get_pipe_tunables(::ImmovablePipeBehav) = ()
+HexComponentsAPI.set_pipe_tunables(::ImmovablePipeBehav, ::NTuple{0, Real}) = ImmovablePipeBehav()
+HexComponentsAPI.render_pipe_base!(queue, ::ImmovablePipeBehav; kwargs...) = nothing
+HexComponentsAPI.get_pipe_click_radius(::ImmovablePipeBehav) = 0.1
+HexComponentsAPI.can_pipe_be_moved(::ImmovablePipeBehav; kwargs...) = InvalidRequest("Test pipe is fixed")
 
 struct DestinationInvalidCompBehav <: ComponentBehavior
     invalid_coord::TileCoord
@@ -741,6 +753,21 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         end
     end
 
+    @testset "SetPipeBehaviorCommand rejects a detached pipe with feedback" begin
+        gamemap = make_gamemap()
+        pipe = side_pipe(TileCoord(50, 50))
+        response = Channel{CommandStatus}(1)
+        command = create_set_pipe_behavior_command(
+            cq, pipe, MockPipeBehav(); response_channel = response,
+        )
+
+        logs = process_and_log!(command, gamemap)
+
+        @test take!(response) == INVALID
+        @test !has_pipe(gamemap, pipe)
+        @test logs == ["Cannot place pipe: connect it to a ship surface or an attached pipe network"]
+    end
+
     #= ---------- MoveCommand{TileCoord} ----------- =#
     @testset "MoveCommand{TileCoord}" begin
         gamemap = make_gamemap()
@@ -774,6 +801,26 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 
         # No component at source — destination should remain empty
         @test isnothing(get_component(gamemap, TileCoord(0, 1)))
+    end
+
+    @testset "MoveCommand{TileCoord} — rejects immovable source" begin
+        gamemap = make_gamemap()
+        source = TileCoord(0, 0)
+        destination = TileCoord(0, 1)
+        set_surface_tile!(gamemap, destination; ship_name = :primary)
+        set_component!(gamemap, source, PlacedComponent(ImmovableCompBehav(), Q_POS, :primary))
+        original_hash = hash(gamemap)
+        response = Channel{CommandStatus}(1)
+
+        logs = process_and_log!(
+            create_move_command(cq, source, destination, Q_POS; response_channel = response), gamemap,
+        )
+
+        @test take!(response) == INVALID
+        @test logs == ["Cannot move component: Test component is fixed"]
+        @test hash(gamemap) == original_hash
+        @test get_component(gamemap, source).component isa ImmovableCompBehav
+        @test isnothing(get_component(gamemap, destination))
     end
 
     @testset "MoveCommand{TileCoord} — rejects invalid in-place rotation" begin
@@ -1009,10 +1056,11 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 
             set_component!(gamemap, missing, PlacedComponent(ImmovableCompBehav(), Q_POS, :primary))
             original_hash = hash(gamemap)
-            process_and_log!(
+            logs = process_and_log!(
                 create_translate_elements_command(cq, Set([source, missing]), TileCoord(0, 1)),
                 gamemap,
             )
+            @test logs == ["Cannot move selection: Test component is fixed"]
             @test hash(gamemap) == original_hash
 
             external_destination = TileCoord(0, 1)
@@ -1036,6 +1084,24 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 
             @test logs == ["Cannot move selection: clear the occupied destination edge first"]
             @test hash(gamemap) == original_hash
+        end
+
+        @testset "rejects an immovable pipe atomically" begin
+            gamemap = make_gamemap()
+            translation = TileCoord(0, 1)
+            source = side_pipe(TileCoord(0, 0))
+            destination = offset_by_tile(source, translation)
+            set_pipe!(gamemap, source, PlacedPipe(ImmovablePipeBehav(), :primary))
+            original_hash = hash(gamemap)
+
+            logs = process_and_log!(
+                create_translate_elements_command(cq, Set{TileCoord}(), Set([source]), translation), gamemap,
+            )
+
+            @test logs == ["Cannot move selection: Test pipe is fixed"]
+            @test hash(gamemap) == original_hash
+            @test get_pipe(gamemap, source).pipe isa ImmovablePipeBehav
+            @test isnothing(get_pipe(gamemap, destination))
         end
 
         @testset "enforces pipe and component placement rules" begin
@@ -1164,6 +1230,25 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         @test isnothing(get_pipe(gamemap, src_pipe))
         @test !isnothing(get_pipe(gamemap, dst_pipe))
 
+    end
+
+    @testset "MoveCommand{PipeCoord} — rejects immovable source" begin
+        gamemap = make_gamemap()
+        source = side_pipe(TileCoord(0, 0))
+        destination = offset_by_tile(source, TileCoord(0, 1))
+        set_pipe!(gamemap, source, PlacedPipe(ImmovablePipeBehav(), :primary))
+        original_hash = hash(gamemap)
+        response = Channel{CommandStatus}(1)
+
+        logs = process_and_log!(
+            create_move_command(cq, source, destination, Q_POS; response_channel = response), gamemap,
+        )
+
+        @test take!(response) == INVALID
+        @test logs == ["Cannot move pipe: Test pipe is fixed"]
+        @test hash(gamemap) == original_hash
+        @test get_pipe(gamemap, source).pipe isa ImmovablePipeBehav
+        @test isnothing(get_pipe(gamemap, destination))
     end
 
     @testset "MoveCommand{PipeCoord} — re-tags pipe on cross-ship move" begin
@@ -1381,6 +1466,25 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         logs = process_and_log!(cmd, gamemap)
         @test isnothing(get_pipe(gamemap, pipe))
         @test isempty(logs)
+    end
+
+    @testset "DeleteElementsCommand rejects disconnecting a pipe network with feedback" begin
+        gamemap = make_gamemap()
+        source = VertexCoord(TileCoord(0, 0), Q_POS)
+        anchor = get_pipe_segments(source)[1]
+        anchor_end = anchor.v1 == to_proper(source) ? anchor.v2 : anchor.v1
+        branch = first(pipe for pipe in get_pipe_segments(anchor_end) if pipe != anchor && !is_side_span(pipe))
+        set_pipe!(gamemap, anchor, PlacedPipe(MockPipeBehav(), :primary))
+        set_pipe!(gamemap, branch, PlacedPipe(MockPipeBehav(), :primary))
+        response = Channel{CommandStatus}(1)
+        command = create_delete_elements_command(cq, anchor; response_channel = response)
+
+        logs = process_and_log!(command, gamemap)
+
+        @test take!(response) == INVALID
+        @test has_pipe(gamemap, anchor)
+        @test has_pipe(gamemap, branch)
+        @test logs == ["Cannot delete pipe: this would leave part of the pipe network disconnected from every ship"]
     end
 
     @testset "DeleteElementsCommand singleton missing pipe" begin

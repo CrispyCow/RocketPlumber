@@ -6,6 +6,31 @@ struct TestExpectedMapValidationError <: ExpectedMapValidationError end
 status_result()::RequestStatus = ValidRequest()
 payload_result()::RequestResult{Symbol} = ValidRequestResult(:ship)
 
+@testset "ActionInfo" begin
+    enabled_action = ActionInfo(id = :open, label = "Open", enabled = true, tooltip = "Ready")
+    disabled_action = ActionInfo(id = :close, label = "Close", enabled = false, tooltip = "Already closed")
+    group_enabled_action = ActionInfo(
+        id = :vent,
+        label = "Vent",
+        enabled = false,
+        group_enabled = true,
+        tooltip = "Already empty",
+    )
+    confirmed_action = ActionInfo(
+        id = :delete,
+        label = "Delete",
+        enabled = true,
+        tooltip = "Remove it",
+        confirmation_message = "Are you sure?",
+    )
+
+    @test enabled_action.group_enabled
+    @test !disabled_action.group_enabled
+    @test group_enabled_action.group_enabled
+    @test isnothing(enabled_action.confirmation_message)
+    @test confirmed_action.confirmation_message == "Are you sure?"
+end
+
 @testset "ExpectedMapValidationError contract" begin
     @test ExpectedMapValidationError <: Exception
     @test TestExpectedMapValidationError() isa ExpectedMapValidationError

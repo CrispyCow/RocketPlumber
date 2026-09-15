@@ -172,30 +172,38 @@ end
 function get_actions(tank::TankBehavFrag; kwargs...)
     sealed = is_sealed(tank.sealstate)
     has_fuel = tank.state.charge > 0.0
+    vent_tooltip = if !has_fuel
+        "Tank is already empty"
+    elseif sealed
+        "Tank is sealed"
+    else
+        "Vent all stored fuel and seal the tank"
+    end
 
     # Vent and Seal: empties and seals; only meaningful when unsealed with fuel
     vent_and_seal = ActionInfo(
-        :vent_and_seal,
-        "Vent and Seal",
-        !sealed && has_fuel,
-        sealed ? "Tank is sealed" : (has_fuel ? "Vent all stored fuel and seal the tank" : "Tank is already empty"),
-        (!sealed && has_fuel) ? "Are you sure? This will vent all stored fuel." : nothing
+        id = :vent_and_seal,
+        label = "Vent and Seal",
+        enabled = !sealed && has_fuel,
+        group_enabled = !sealed || !has_fuel,
+        tooltip = vent_tooltip,
+        confirmation_message = "Are you sure? This will vent all stored fuel.",
     )
 
     # Seal Tank: seals without venting; only when unsealed
     seal_action = ActionInfo(
-        :seal_tank,
-        "Seal Tank",
-        !sealed,
-        sealed ? "Tank is already sealed" : "Seal the tank to prevent flow"
+        id = :seal_tank,
+        label = "Seal Tank",
+        enabled = !sealed,
+        tooltip = sealed ? "Tank is already sealed" : "Seal the tank to prevent flow",
     )
 
     # Unseal Tank: reopens a sealed tank
     unseal_action = ActionInfo(
-        :unseal_tank,
-        "Unseal Tank",
-        sealed,
-        sealed ? "Reopen the tank and resume normal flow" : "Tank is not currently sealed"
+        id = :unseal_tank,
+        label = "Unseal Tank",
+        enabled = sealed,
+        tooltip = sealed ? "Reopen the tank and resume normal flow" : "Tank is not currently sealed",
     )
 
     return (vent_and_seal, seal_action, unseal_action)
@@ -513,10 +521,14 @@ pressurefed_liquid_path_active(tank::PressureFedTankBehavFrag) = pressurefed_liq
 
 const pressurefed_liquid_vsource_index::Int = 1
 const pressurefed_gas_vsource_index::Int = 2
+const PRESSUREFED_GAS_DISPLACEMENT_RATIO::Float64 = 2.0
+const PRESSUREFED_MINIMUM_GAS_HEADSPACE_RATIO::Float64 = 0.05
 
 "Compute the current pressure produced by the coupled gas/liquid state"
 function compute_gas_pressure(tank::PressureFedTankBehavFrag)::Float64
-    headspace = (1.05 * tank.max_liquid_charge) - tank.liquid_state.charge # always allow 5% headspace for gas
+    minimum_headspace = PRESSUREFED_MINIMUM_GAS_HEADSPACE_RATIO * tank.max_liquid_charge
+    displaced_liquid = tank.max_liquid_charge - tank.liquid_state.charge
+    headspace = minimum_headspace + displaced_liquid / PRESSUREFED_GAS_DISPLACEMENT_RATIO
     if headspace <= 0.0
         return 0.0
     end
@@ -621,37 +633,59 @@ function get_actions(tank::PressureFedTankBehavFrag; kwargs...)
     gas_sealed = gas_is_sealed(tank)
     has_liquid = tank.liquid_state.charge > 0.0
     has_gas = tank.gas_state.charge > 0.0
+    
+    gas_vent_tooltip = if !has_gas
+        "Gas chamber is already empty"
+    elseif gas_sealed
+        "Gas side is already sealed"
+    else
+        "Vent all pressurising gas and seal the gas side"
+    end
+    liquid_vent_tooltip = if !has_liquid
+        "Liquid chamber is already empty"
+    elseif liq_sealed
+        "Liquid side is already sealed"
+    else
+        "Vent all liquid fuel and seal the liquid side"
+    end
 
     vent_and_seal_gas = ActionInfo(
-        :vent_and_seal_gas, "Vent and Seal Gas",
-        !gas_sealed,
-        gas_sealed ? "Gas side is already sealed" : "Vent all pressurising gas and seal the gas side",
-        (!gas_sealed && has_gas) ? "Are you sure? This will vent all stored pressurising gas." : nothing
+        id = :vent_and_seal_gas,
+        label = "Vent and Seal Gas",
+        enabled = !gas_sealed && has_gas,
+        group_enabled = !gas_sealed || !has_gas,
+        tooltip = gas_vent_tooltip,
+        confirmation_message = "Are you sure? This will vent all stored pressurising gas.",
     )
 
     vent_and_seal_liquid = ActionInfo(
-        :vent_and_seal_liquid, "Vent and Seal Liquid",
-        !liq_sealed,
-        liq_sealed ? "Liquid side is already sealed" : "Vent all liquid fuel and seal the liquid side",
-        (!liq_sealed && has_liquid) ? "Are you sure? This will vent all stored liquid fuel." : nothing
+        id = :vent_and_seal_liquid,
+        label = "Vent and Seal Liquid",
+        enabled = !liq_sealed && has_liquid,
+        group_enabled = !liq_sealed || !has_liquid,
+        tooltip = liquid_vent_tooltip,
+        confirmation_message = "Are you sure? This will vent all stored liquid fuel.",
     )
 
     seal_both = ActionInfo(
-        :seal_both, "Seal Both Sides",
-        !liq_sealed || !gas_sealed,
-        (!liq_sealed || !gas_sealed) ? "Seal both sides to prevent flow" : "Both sides are already sealed"
+        id = :seal_both,
+        label = "Seal Both Sides",
+        enabled = !liq_sealed || !gas_sealed,
+        tooltip = (!liq_sealed || !gas_sealed) ? "Seal both sides to prevent flow" : "Both sides are already sealed",
     )
 
     unseal_gas = ActionInfo(
-        :unseal_gas, "Unseal Gas",
-        gas_sealed,
-        gas_sealed ? "Reopen the gas side and resume normal flow" : "Gas side is not sealed"
+        id = :unseal_gas,
+        label = "Unseal Gas",
+        enabled = gas_sealed,
+        tooltip = gas_sealed ? "Reopen the gas side and resume normal flow" : "Gas side is not sealed",
     )
 
     unseal_liquid = ActionInfo(
-        :unseal_liquid, "Unseal Liquid",
-        liq_sealed,
-        liq_sealed ? "Reopen the liquid side and resume normal flow" : "Liquid side is not sealed"
+        id = :unseal_liquid,
+        label = "Unseal Liquid",
+        enabled = liq_sealed,
+        tooltip = liq_sealed ? "Reopen the liquid side and resume normal flow" : "Liquid side is not sealed",
     )
 
     return (vent_and_seal_gas, vent_and_seal_liquid, seal_both, unseal_gas, unseal_liquid)

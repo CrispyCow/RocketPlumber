@@ -357,8 +357,18 @@ function get_actions(behav::BoolSwitchBehavFrag; kwargs...)
     open_tooltip = is_open ? "Valve is already open" : "Open valve to allow flow"
     close_tooltip = is_closed ? "Valve is already closed" : "Close valve to block flow"
 
-    open_action = ActionInfo(:open_valve, "Open Valve", !is_open, open_tooltip)
-    close_action = ActionInfo(:close_valve, "Close Valve", !is_closed, close_tooltip)
+    open_action = ActionInfo(
+        id = :open_valve,
+        label = "Open Valve",
+        enabled = !is_open,
+        tooltip = open_tooltip,
+    )
+    close_action = ActionInfo(
+        id = :close_valve,
+        label = "Close Valve",
+        enabled = !is_closed,
+        tooltip = close_tooltip,
+    )
 
     return (open_action, close_action)
 end
@@ -480,8 +490,18 @@ function get_actions(behav::SteppedSwitchBehavFrag; kwargs...)
     open_tooltip = at_max ? "Valve is already fully open" : "Step valve further open"
     close_tooltip = at_min ? "Valve is already fully closed" : "Step valve further closed"
 
-    open_action = ActionInfo(:step_valve_open, "Step Valve Open", !at_max, open_tooltip)
-    close_action = ActionInfo(:step_valve_close, "Step Valve Close", !at_min, close_tooltip)
+    open_action = ActionInfo(
+        id = :step_valve_open,
+        label = "Step Valve Open",
+        enabled = !at_max,
+        tooltip = open_tooltip,
+    )
+    close_action = ActionInfo(
+        id = :step_valve_close,
+        label = "Step Valve Close",
+        enabled = !at_min,
+        tooltip = close_tooltip,
+    )
 
     return (open_action, close_action)
 end
