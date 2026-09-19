@@ -781,6 +781,104 @@ const encounter_system_config = EncounterSystemConfig(
     encounter_class_configs = encounter_class_configs
 )
 
+#= ---------- Explorer Opening ----------- =#
+
+const EXPLORER_OPENING_ENCOUNTER_INDEX = 1
+const EXPLORER_OPENING_RICHNESS = 1.0
+const EXPLORER_OPENING_MIN_CAPTURE_DELTA_V = 20.0
+const EXPLORER_OPENING_MAX_CAPTURE_DELTA_V = 30.0
+const EXPLORER_OPENING_NOISE_SALT::Int32 = Int32(0x4f50454e)
+
+"Initialise the Explorer encounter population and stage its opening capture burn."
+function initialise_explorer_opening_capture!(gamemap::GameMap)
+    space_map = gamemap.space_map
+    space_map isa SpaceMapState || error("Explorer opening requires an initialised SpaceMapState")
+
+    # Derive the capture vector
+    opening_seed = get_noise((EXPLORER_OPENING_NOISE_SALT,), space_map.seed)
+    capture_magnitude = pick_from_range(
+        EXPLORER_OPENING_MIN_CAPTURE_DELTA_V,
+        EXPLORER_OPENING_MAX_CAPTURE_DELTA_V,
+        Int32(0),
+        opening_seed,
+    )
+    capture_angle = pick_from_range(0.0, 2pi, Int32(1), opening_seed)
+    capture_delta_v = capture_magnitude * SVector(cos(capture_angle), sin(capture_angle))
+
+    # Populate the map in its planned post-capture velocity frame
+    reference_velocity = space_map.velocity + capture_delta_v
+    initialise_encounter_system!(space_map; reference_velocity)
+    isempty(space_map.encounter_points) && error("Explorer opening requires at least one encounter point")
+
+    # Configure the reserved encounter point
+    point = space_map.encounter_points[EXPLORER_OPENING_ENCOUNTER_INDEX]
+    point.position = space_map.position
+    point.velocity = reference_velocity
+    point.spawn_time = space_map.time_years
+    point.encounter_class = ENCOUNTER_SHIP
+    point.fuel_tag = HexFluids.COLD_GAS
+    point.richness = EXPLORER_OPENING_RICHNESS
+    point.display_name = generate_encounter_name(point.ship_type_seed, ENCOUNTER_SHIP)
+
+    # Begin directly in the capture burn
+    ship_space_capture_delta_v = SVector(capture_magnitude, 0.0)
+    manoeuvre = ManoeuvreData(
+        phase = PHASE_CAPTURE_BURN,
+        burn_target_dv = ship_space_capture_delta_v,
+        burn_remaining_dv = ship_space_capture_delta_v,
+        approach_burn_dv = SVector(0.0, 0.0),
+        capture_burn_dv = capture_delta_v,
+        approach_burn_time = space_map.time_years,
+        intercept_time = space_map.time_years,
+        target_encounter_index = EXPLORER_OPENING_ENCOUNTER_INDEX,
+        capture_burn_position = space_map.position,
+    )
+    set_active_manoeuvre!(space_map, manoeuvre)
+
+    return nothing
+end
+
+"Return whether the map is still in the specially staged Explorer opening capture."
+function is_explorer_opening_capture(gamemap::GameMap)::Bool
+    space_map = gamemap.space_map
+    space_map isa SpaceMapState || return false
+    get_total_encounter_count(gamemap) == 0 || return false
+
+    # Opening manoeuvre shape
+    manoeuvre = get_active_manoeuvre(space_map)
+    isnothing(manoeuvre) && return false
+    manoeuvre.phase == PHASE_CAPTURE_BURN || return false
+    manoeuvre.target_encounter_index == EXPLORER_OPENING_ENCOUNTER_INDEX || return false
+    manoeuvre.approach_burn_dv == SVector(0.0, 0.0) || return false
+    manoeuvre.approach_burn_time == 0.0 || return false
+    manoeuvre.intercept_time == 0.0 || return false
+
+    capture_magnitude = norm(manoeuvre.capture_burn_dv)
+    magnitude_tolerance = 1.0e-9
+    capture_magnitude >= EXPLORER_OPENING_MIN_CAPTURE_DELTA_V - magnitude_tolerance || return false
+    capture_magnitude <= EXPLORER_OPENING_MAX_CAPTURE_DELTA_V + magnitude_tolerance || return false
+
+    # Opening time and position
+    origin = SVector(0.0, 0.0)
+    space_map.time_years == 0.0 || return false
+    space_map.target_time_years == 0.0 || return false
+    space_map.position == origin || return false
+    manoeuvre.capture_burn_position == space_map.position || return false
+
+    # Reserved encounter identity
+    length(space_map.encounter_points) >= EXPLORER_OPENING_ENCOUNTER_INDEX || return false
+    point = space_map.encounter_points[EXPLORER_OPENING_ENCOUNTER_INDEX]
+    point.index == EXPLORER_OPENING_ENCOUNTER_INDEX || return false
+    point.iteration == 1 || return false
+    point.encounter_class == ENCOUNTER_SHIP || return false
+    point.fuel_tag == HexFluids.COLD_GAS || return false
+    point.richness == EXPLORER_OPENING_RICHNESS || return false
+    point.spawn_time == 0.0 || return false
+    point.position == manoeuvre.capture_burn_position || return false
+
+    return true
+end
+
 #= ---------- Starter Ship ----------- =#
 
 const STARTER_SHIP_REROLL_SALT::Int32 = Int32(0x53544152)

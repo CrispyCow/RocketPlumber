@@ -1263,10 +1263,11 @@ function get_encounter_position(ep::EncounterPoint, time::Float64)::SVector{2, F
     return ep.position + ep.velocity * dt
 end
 
-"Spawn (or respawn) an encounter point on the perimeter of the spawn box with a new random trajectory."
+"Spawn an encounter relative to `reference_velocity`, defaulting to the player's current velocity."
 function spawn_encounter_point!(
         ep::EncounterPoint, sm::SpaceMapState, current_time::Float64;
-        velocity_override::Union{Nothing, SVector{2, Float64}} = nothing
+        velocity_override::Union{Nothing, SVector{2, Float64}} = nothing,
+        reference_velocity::SVector{2, Float64} = sm.velocity,
     )
     config = get_encounter_config(sm)
     ep.iteration += 1
@@ -1304,11 +1305,11 @@ function spawn_encounter_point!(
     angle_noise = get_noise_zero_to_one(ep.index * 3000 + ep.iteration, point_seed)
     angle = config.max_angle_rad * (2.0 * angle_noise - 1.0)
 
-    # Velocity is relative to the player's velocity
+    # Velocity is relative to the selected player reference frame
     relative_vel = SVector(speed * cos(angle), speed * sin(angle))
-    ep.velocity = velocity_override === nothing ? sm.velocity + relative_vel : velocity_override
+    ep.velocity = isnothing(velocity_override) ? reference_velocity + relative_vel : velocity_override
 
-    player_speed = norm(sm.velocity)
+    player_speed = norm(reference_velocity)
     ep.richness = calculate_richness(config, player_speed, ep.base_velocity)
 
     class_seed = get_noise(UInt32(100), ep.ship_type_seed)
@@ -1350,8 +1351,11 @@ function check_encounter_bounds!(sm::SpaceMapState)
     return nothing
 end
 
-"Initialise the encounter point system on a `SpaceMapState`."
-function initialise_encounter_system!(sm::SpaceMapState)
+"Initialise encounters relative to `reference_velocity` without changing the player state."
+function initialise_encounter_system!(
+        sm::SpaceMapState;
+        reference_velocity::SVector{2, Float64} = sm.velocity,
+    )
     config = get_encounter_config(sm)
     current_time = sm.time_years
 
@@ -1372,7 +1376,7 @@ function initialise_encounter_system!(sm::SpaceMapState)
     # Scatter the initial points throughout the recycling bounds
     for i in 1:config.n_points
         ep = EncounterPoint(index = i, base_velocity = base_velocities[i])
-        spawn_encounter_point!(ep, sm, current_time)
+        spawn_encounter_point!(ep, sm, current_time; reference_velocity)
 
         point_seed = get_noise(UInt32(ep.index), get_noise(UInt32(ep.iteration), sm.seed))
         x_pos = pick_from_range(

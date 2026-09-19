@@ -704,6 +704,54 @@ function ui_velocity_tracker_render!(
     return nothing
 end
 
+#= ---------- Explorer Opening Wake ----------- =#
+
+"Render the acknowledgement shown at the start of a new Explorer game."
+function ui_explorer_opening_wake_render!(
+        gamemap::GameMap,
+        inputstate::InputState,
+        winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}},
+    )
+    acknowledged = get(inputstate.gui_inputs, :explorer_opening_wake_acknowledged, false)::Bool
+    (is_explorer_opening_capture(gamemap) && !acknowledged) || return nothing
+
+    # Centred window
+    width = 540.0
+    win_float = to_float(winsize)
+    CImGui.SetNextWindowPos(
+        ImVec2(win_float.width / 2.0, win_float.height / 2.0),
+        CImGui.ImGuiCond_Always,
+        ImVec2(0.5, 0.5),
+    )
+    CImGui.SetNextWindowSizeConstraints(ImVec2(width, 0.0), ImVec2(width, win_float.height))
+    flags = CImGui.ImGuiWindowFlags_NoTitleBar | CImGui.ImGuiWindowFlags_NoResize |
+        CImGui.ImGuiWindowFlags_NoMove | CImGui.ImGuiWindowFlags_NoCollapse |
+        CImGui.ImGuiWindowFlags_NoSavedSettings | CImGui.ImGuiWindowFlags_AlwaysAutoResize
+    CImGui.Begin("##explorer_opening_wake", C_NULL, flags)
+
+    # Wake message
+    CImGui.PushFont(C_NULL, 20.0)
+    CImGui.PushStyleColor(CImGui.ImGuiCol_Text, ImVec4(1.0, 0.75, 0.25, 1.0))
+    CImGui.Text("WAKE SIGNAL: SHIP PROXIMITY")
+    CImGui.PopStyleColor()
+    CImGui.PopFont()
+    CImGui.Spacing()
+    CImGui.TextWrapped("Useful resources detected, intercept planned.")
+    CImGui.Spacing()
+    CImGui.TextWrapped("Complete the capture burn to match velocity and establish contact.")
+    CImGui.Spacing()
+
+    # Centred acknowledgement
+    button_width = 140.0
+    CImGui.SetCursorPosX(CImGui.GetCursorPosX() + (CImGui.GetContentRegionAvail().x - button_width) / 2.0)
+    if CImGui.Button("Acknowledge", ImVec2(button_width, 36.0))
+        inputstate.gui_inputs[:explorer_opening_wake_acknowledged] = true
+    end
+
+    CImGui.End()
+    return nothing
+end
+
 """
 Renders the terminal toolbar at the bottom of the window.
 Must be called within ui_renderwrap.
@@ -858,6 +906,17 @@ Must be called within ui_renderwrap.
 function render_spacemap_no_map_message!(win_float)
     centre_y = win_float.height / 2.0
     text = "No space map available — initialise from the developer menu."
+    text_size = CImGui.CalcTextSize(text)
+    CImGui.SetCursorPos(ImVec2((win_float.width - text_size.x) / 2.0, centre_y))
+    CImGui.Text(text)
+
+    return nothing
+end
+
+"Display the centred navigation lock message during the Explorer opening capture."
+function render_spacemap_opening_lock_message!(win_float)
+    centre_y = win_float.height / 2.0
+    text = "Navigation is not yet available."
     text_size = CImGui.CalcTextSize(text)
     CImGui.SetCursorPos(ImVec2((win_float.width - text_size.x) / 2.0, centre_y))
     CImGui.Text(text)
@@ -1483,6 +1542,14 @@ function ui_spacemap_render!(
     CImGui.PushStyleColor(CImGui.ImGuiCol_WindowBg, ImVec4(0.05, 0.05, 0.1, 0.97))
 
     CImGui.Begin("##spacemap_overlay", C_NULL, flags)
+
+    if is_explorer_opening_capture(gamemap)
+        render_spacemap_opening_lock_message!(win_float)
+        CImGui.End()
+        CImGui.PopStyleColor()
+        CImGui.PopStyleVar()
+        return nothing
+    end
 
     if isnothing(get_space_map_seed(gamemap))
         render_spacemap_no_map_message!(win_float)

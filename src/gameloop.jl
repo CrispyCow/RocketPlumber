@@ -244,6 +244,8 @@ function ui_rendering!(
         if !isnothing(learning_state)
             ui_learning_system_render!(learning_state, inputstate, GLFW.GetWindowSize(window))
         end
+
+        ui_explorer_opening_wake_render!(snapshot.gamemap, inputstate, GLFW.GetWindowSize(window))
     end
     return nothing
 end

@@ -388,14 +388,11 @@ function _create_session_for_action(state::StartMenuState, action::StartMenuActi
         blueprint = generate_starter_ship(seed)
         gamemap = GameMap(blueprint)
         initialise_spacemap!(gamemap, seed, encounter_system_config)
-        initialise_encounter_system!(gamemap.space_map)
+        initialise_explorer_opening_capture!(gamemap)
         learning_system = learning_enabled ? LearningProgress(get_explorer_learning_entry_ids()) : NoLearningSystem()
         set_learning_system!(gamemap, learning_system)
-        if learning_system isa LearningProgress
-            activate_tutorial!(learning_system, :welcome_explorer)
-        end
 
-        return MapSession(gamemap, :welcome_explorer)
+        return MapSession(gamemap)
 
     elseif action == ACTION_LAUNCH_SANDBOX
         id = state.selected_tutorial_id

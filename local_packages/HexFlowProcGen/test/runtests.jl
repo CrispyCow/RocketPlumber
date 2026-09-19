@@ -1648,6 +1648,34 @@ end
         end
     end
 
+    @testset "initialise_encounter_system! supports a separate reference velocity" begin
+        config = make_mock_encounter_config(n_points = 5)
+        player_velocity = SVector(4.0, -3.0)
+        reference_velocity = SVector(30.0, 20.0)
+        sm = SpaceMapState(
+            seed = UInt32(0x1234ABCD),
+            velocity = player_velocity,
+            encounter_config = config,
+        )
+        reference_sm = SpaceMapState(
+            seed = sm.seed,
+            velocity = reference_velocity,
+            encounter_config = config,
+        )
+
+        initialise_encounter_system!(sm; reference_velocity)
+        initialise_encounter_system!(reference_sm)
+
+        @test sm.velocity == player_velocity
+        @test length(sm.encounter_points) == length(reference_sm.encounter_points)
+        for (point, reference_point) in zip(sm.encounter_points, reference_sm.encounter_points)
+            @test all(
+                field -> isequal(getfield(point, field), getfield(reference_point, field)),
+                fieldnames(EncounterPoint),
+            )
+        end
+    end
+
     @testset "check_encounter_bounds! recycles only out-of-bounds points" begin
         cases = [
             (label = "inside", offset = SVector(0.0, 0.0), should_recycle = false),

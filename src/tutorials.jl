@@ -439,8 +439,8 @@ end
 function get_entry_space_map_intro()::LearningEntry
     return LearningEntry(
         id = :space_map_intro,
-        trigger = inputs -> !isnothing(get_space_map_seed(inputs.gamemap)),
-        priority = 500,
+        trigger = inputs -> !isnothing(get_space_map_seed(inputs.gamemap)) && get_total_encounter_count(inputs.gamemap) > 0,
+        priority = 600,
         definition = InGameTutorialDef(
             title = "Space Map",
             description = "Learn how to navigate the space map.",
@@ -520,7 +520,11 @@ end
 function get_entry_manoeuvre_execution()::LearningEntry
     return LearningEntry(
         id = :manoeuvre_execution,
-        trigger = inputs -> has_active_manoeuvre(inputs.gamemap),
+        trigger = function(inputs)
+            manoeuvre = get_active_manoeuvre(inputs.gamemap)
+            isnothing(manoeuvre) && return false
+            return manoeuvre.phase == PHASE_APPROACH_BURN
+        end,
         priority = 550,
         definition = InGameTutorialDef(
             title = "Manoeuvre Execution",
@@ -642,7 +646,7 @@ function get_entry_docking_intro()::LearningEntry
     return LearningEntry(
         id = :docking_intro,
         trigger = inputs -> length(inputs.gamemap.ships) > 1,
-        priority = 600,
+        priority = 500,
         definition = InGameTutorialDef(
             title = "Docking",
             description = "Learn about docking with other ships.",
