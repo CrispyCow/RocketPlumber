@@ -1,3 +1,8 @@
+#=
+Scope: Contract tests for action metadata, validation errors, and request results
+Formatter: Runic
+=#
+
 using Test
 using HexComponentsAPI
 

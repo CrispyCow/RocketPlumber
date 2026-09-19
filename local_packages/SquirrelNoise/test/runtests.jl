@@ -1,8 +1,14 @@
+#=
+Scope: Tests for SquirrelNoise noise and selection utilities
+Formatter: Runic
+=#
+
 using Test
+using Random
+
 # Load local module source (keeps tests runnable without Pkg install)
 include(joinpath(@__DIR__, "..", "src", "SquirrelNoise.jl"))
 using .SquirrelNoise
-using Random
 
 @testset "pick_element_from_rng basic" begin
     rng1 = SquirrelRNG(1234)
@@ -83,12 +89,12 @@ end
 @testset "Basic API correctness" begin
     # 1..4 dimensional calls should not throw for small ints
     @test typeof(get_noise((1,))) <: UInt32
-    @test typeof(get_noise((1,2))) <: UInt32
-    @test typeof(get_noise((1,2,3))) <: UInt32
-    @test typeof(get_noise((1,2,3,4))) <: UInt32
+    @test typeof(get_noise((1, 2))) <: UInt32
+    @test typeof(get_noise((1, 2, 3))) <: UInt32
+    @test typeof(get_noise((1, 2, 3, 4))) <: UInt32
 
     @test typeof(get_noise_zero_to_one((1,))) <: Float32
-    @test typeof(get_noise_zero_to_one((1,2))) <: Float32
+    @test typeof(get_noise_zero_to_one((1, 2))) <: Float32
     @test typeof(get_noise_neg_one_to_one((1,))) <: Float32
 end
 
@@ -118,7 +124,7 @@ end
 @testset "Vector dispatch" begin
     # Integer vector
     a = [1, 2]
-    @test get_noise(a) == get_noise((1,2))
+    @test get_noise(a) == get_noise((1, 2))
 
     # UInt32 vector preserves bit-pattern behaviour
     uv = UInt32[0x01020304, 0x05060708]
@@ -133,9 +139,9 @@ end
     @test get_noise(f64v) == get_noise((f64v[1], f64v[2]))
 
     # Length bounds
-    @test_throws ArgumentError get_noise([1,2,3,4,5])
-    @test_throws ArgumentError get_noise_zero_to_one([1,2,3,4,5])
-    @test_throws ArgumentError get_noise_neg_one_to_one([1,2,3,4,5])
+    @test_throws ArgumentError get_noise([1, 2, 3, 4, 5])
+    @test_throws ArgumentError get_noise_zero_to_one([1, 2, 3, 4, 5])
+    @test_throws ArgumentError get_noise_neg_one_to_one([1, 2, 3, 4, 5])
 end
 
 @testset "Range and distribution checks" begin
@@ -168,8 +174,8 @@ end
 
 @testset "Error cases and bounds" begin
     # Dimension errors
-    @test_throws ArgumentError get_noise_zero_to_one( (1,2,3,4,5) )
-    @test_throws ArgumentError get_noise_neg_one_to_one( (1,2,3,4,5) )
+    @test_throws ArgumentError get_noise_zero_to_one((1, 2, 3, 4, 5))
+    @test_throws ArgumentError get_noise_neg_one_to_one((1, 2, 3, 4, 5))
 
     # Non-numeric input should throw MethodError at conversion
     @test_throws MethodError get_noise(("a",))
@@ -208,10 +214,10 @@ end
     @test SquirrelNoise.pick_element_from_noise(coll, 1) == SquirrelNoise.pick_element_from_noise(coll, (1,))
 
     # Vector overload should forward to tuple form
-    @test SquirrelNoise.pick_element_from_noise(coll, [1,2]) == SquirrelNoise.pick_element_from_noise(coll, (1,2))
+    @test SquirrelNoise.pick_element_from_noise(coll, [1, 2]) == SquirrelNoise.pick_element_from_noise(coll, (1, 2))
 
     # Vector length bounds
-    @test_throws ArgumentError SquirrelNoise.pick_element_from_noise(coll, [1,2,3,4,5])
+    @test_throws ArgumentError SquirrelNoise.pick_element_from_noise(coll, [1, 2, 3, 4, 5])
 
     # Seed changes outcome (very likely for at least one point in a small sample)
     pt = (12345,)
@@ -225,7 +231,7 @@ end
 
     # Distribution sanity: for a simple range of x positions, ensure each index appears at least once
     coll3 = collect(1:5)
-    hits = Dict(i=>0 for i in 1:5)
+    hits = Dict(i => 0 for i in 1:5)
     for x in -100:100
         picked = SquirrelNoise.pick_element_from_noise(coll3, (x,))
         hits[picked] += 1
@@ -235,8 +241,6 @@ end
 
 
 @testset "SquirrelRNG" begin
-    using .SquirrelNoise: SquirrelRNG
-
     # Reproducibility for UInt32
     r1 = SquirrelRNG(1234)
     r2 = SquirrelRNG(1234)

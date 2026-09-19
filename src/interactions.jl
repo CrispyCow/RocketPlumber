@@ -1,42 +1,39 @@
-# ===============================================================
-# Keyboard Input Polling
-# ===============================================================
+#=
+Scope: Player input, world interaction state, cursor previews, and map-edit command dispatch
+Formatter: Runic
+=#
 
 using FlowMap
 
 # ===============================================================
-# Keyboard Input Polling
+# View and Input Polling
 # ===============================================================
 
-"Poll raw key state and mutate only ViewState (movement + zoom)"
+"Poll continuous movement and zoom keys into the view state."
 function poll_keys!(viewstate::ViewState, window::GLFW.Window)
-    # Skip on first frame (last_update_time not yet initialized)
+    # Establish the frame-time baseline
     if viewstate.last_update_time == 0.0
         viewstate.last_update_time = time()
         return nothing
     end
 
-    # Framerate-independent rates
+    # Frame timing and input rates
     pan_rate_per_sec = 7.0f0
     zoom_rate_per_sec = 2.5f0
-
-    # Calculate time delta and update timestamp
     current_time = time()
     delta_time = current_time - viewstate.last_update_time
     viewstate.last_update_time = current_time
 
-    # Calculate framerate-independent scale factors
+    # Frame-rate-independent movement scales
     pan_amount = pan_rate_per_sec * delta_time / viewstate.view_zoom
     zoom_factor_in = exp(zoom_rate_per_sec * delta_time)
     zoom_factor_out = exp(-zoom_rate_per_sec * delta_time)
 
-    # Movement (pan) - apply before clamping
+    # Apply pan and exponential zoom before enforcing view limits
     get_instate(GLFW.KEY_A, window) && (viewstate.view_x += pan_amount)
     get_instate(GLFW.KEY_D, window) && (viewstate.view_x -= pan_amount)
     get_instate(GLFW.KEY_S, window) && (viewstate.view_y += pan_amount)
     get_instate(GLFW.KEY_W, window) && (viewstate.view_y -= pan_amount)
-
-    # Zoom (exponential scaling) - apply before clamping
     get_instate(GLFW.KEY_Q, window) && (viewstate.view_zoom *= zoom_factor_out)
     get_instate(GLFW.KEY_E, window) && (viewstate.view_zoom *= zoom_factor_in)
 
@@ -45,26 +42,21 @@ function poll_keys!(viewstate::ViewState, window::GLFW.Window)
     return nothing
 end
 
-"""
-Update the ship bounds in ViewState based on the current GameMap.
-Expands bounds if necessary to ensure a minimum span of 10 units (symmetric around centre).
-"""
+"Update view-state ship bounds, expanding each axis symmetrically to at least 10 units."
 function update_ship_bounds!(viewstate::ViewState, gamemap::GameMap)
-    # Get raw bounds from map
+    # Raw map geometry
     raw_bounds = get_cartesian_bounds(gamemap)
 
-    # Calculate centre and span
+    # Minimum viewport footprint, centred on the actual ship bounds
     centre_x = (raw_bounds.X_POS + raw_bounds.X_NEG) / 2.0
     centre_y = (raw_bounds.Y_POS + raw_bounds.Y_NEG) / 2.0
     span_x = raw_bounds.X_POS - raw_bounds.X_NEG
     span_y = raw_bounds.Y_POS - raw_bounds.Y_NEG
-
-    # Enforce minimum span of 10 units (5 in each direction from centre)
     MIN_SPAN = 10.0
     half_span_x = max(span_x / 2.0, MIN_SPAN / 2.0)
     half_span_y = max(span_y / 2.0, MIN_SPAN / 2.0)
 
-    # Calculate expanded bounds centred on the actual centre
+    # Expanded view limits
     viewstate.ship_bounds = (
         X_POS = centre_x + half_span_x,
         X_NEG = centre_x - half_span_x,
@@ -75,58 +67,35 @@ function update_ship_bounds!(viewstate::ViewState, gamemap::GameMap)
     return nothing
 end
 
-"""
-Apply zoom and pan limits based on ship bounds.
-- Zoom: Limit so the longer ship axis takes up ~1/3 of screen
-- Pan: Ensure at least 5% of ship bounds remains visible on screen
-"""
+"Constrain zoom and pan so the bounded ship remains meaningfully visible."
 function apply_view_limits!(viewstate::ViewState)
     bounds = viewstate.ship_bounds
 
-    # Calculate ship span in cartesian units
+    # Ship extent in world units
     ship_span_x = bounds.X_POS - bounds.X_NEG
     ship_span_y = bounds.Y_POS - bounds.Y_NEG
     ship_span_max = max(ship_span_x, ship_span_y)
-
-    # Calculate visible area in world units (inverse of zoom)
-    # The hex_size_pixels constant is 256 (from get_viewtransform)
     hex_size_pixels = 256.0f0
-    visible_width = viewstate.fb_width / (viewstate.view_zoom * hex_size_pixels)
-    visible_height = viewstate.fb_height / (viewstate.view_zoom * hex_size_pixels)
 
-    # === Zoom Limit ===
-    # Ship should take up at least 1/3 of the smaller screen dimension
-    # So visible area should be at most 5x the ship span
+    # Minimum zoom keeps the ship within five times its longest span
     max_visible_span = ship_span_max * 5.0f0
-
-    # Calculate minimum zoom based on screen dimensions
     min_zoom_x = viewstate.fb_width / (max_visible_span * hex_size_pixels)
     min_zoom_y = viewstate.fb_height / (max_visible_span * hex_size_pixels)
     min_zoom = max(min_zoom_x, min_zoom_y)
-
-    # Enforce a reasonable hard minimum zoom to prevent unusable views
     MIN_VIEW_ZOOM = 0.01f0
     min_zoom = max(min_zoom, MIN_VIEW_ZOOM)
-
-    # Clamp zoom (allow zooming in indefinitely, but limit zoom out)
     viewstate.view_zoom = max(viewstate.view_zoom, min_zoom)
 
-    # Recalculate visible area after zoom clamp
+    # Visible area and required ship margin after zoom clamping
     visible_width = viewstate.fb_width / (viewstate.view_zoom * hex_size_pixels)
     visible_height = viewstate.fb_height / (viewstate.view_zoom * hex_size_pixels)
-
-    # === Pan Limit ===
-    # Ensure some of ship remains visible
     margin_fraction = 0.1f0  # 10% of ship must stay visible
     margin_x = ship_span_x * margin_fraction
     margin_y = ship_span_y * margin_fraction
-
-    # Calculate bounds centre
     bounds_centre_x = (bounds.X_POS + bounds.X_NEG) / 2.0f0
     bounds_centre_y = (bounds.Y_POS + bounds.Y_NEG) / 2.0f0
 
-    # Calculate pan limits
-    # When view_x is 0, camera is at origin. view_x positive = camera moves left (sees right side)
+    # Pan limits; view_x positive moves the camera left, revealing the ship's right side
     # We want: camera_centre_x - visible_width/2 < bounds.X_POS - margin (can't pan too far right)
     # And: camera_centre_x + visible_width/2 > bounds.X_NEG + margin (can't pan too far left)
     # camera_centre = -view (since view is offset applied to world)
@@ -136,7 +105,7 @@ function apply_view_limits!(viewstate::ViewState)
     max_pan_y = -(bounds.Y_NEG + margin_y - visible_height / 2.0f0)
     min_pan_y = -(bounds.Y_POS - margin_y + visible_height / 2.0f0)
 
-    # Handle case where visible area is larger than ship (can't scroll at all)
+    # Centre an axis when its visible area exceeds the permitted pan range
     if min_pan_x > max_pan_x
         viewstate.view_x = -bounds_centre_x
     else
@@ -152,52 +121,35 @@ function apply_view_limits!(viewstate::ViewState)
     return nothing
 end
 
-"""
-Calculate the maximum reachable viewport bounds given the current ship bounds and zoom limits.
-Returns a HexFrame.CartesianBounds representing the union of all possible viewports the user can pan/zoom to.
-"""
+"Return the union of viewports reachable within the current ship bounds and zoom limits."
 function calc_max_reachable_bounds(viewstate::ViewState)
     bounds = viewstate.ship_bounds
 
-    # Calculate limits based on ship span
+    # Minimum reachable zoom, matching `apply_view_limits!`
     ship_span_x = bounds.X_POS - bounds.X_NEG
     ship_span_y = bounds.Y_POS - bounds.Y_NEG
     ship_span_max = max(ship_span_x, ship_span_y)
-
-    # Max visible span allowed by zoom limit
-    # Matches constant in apply_view_limits!
     max_visible_span = ship_span_max * 5.0f0
-
-    # Using the same constant as apply_view_limits!
     hex_size_pixels = 256.0f0
-
-    # Calculate minimum zoom based on screen dimensions
     min_zoom_x = viewstate.fb_width / (max_visible_span * hex_size_pixels)
     min_zoom_y = viewstate.fb_height / (max_visible_span * hex_size_pixels)
     min_zoom = max(min_zoom_x, min_zoom_y)
-
-    # Enforce hard minimum
     MIN_VIEW_ZOOM = 0.01f0
     min_zoom = max(min_zoom, MIN_VIEW_ZOOM)
 
-    # Calculate world dimensions at this minimum zoom (max potential view size)
+    # Largest viewport at that zoom
     max_view_width = viewstate.fb_width / (min_zoom * hex_size_pixels)
     max_view_height = viewstate.fb_height / (min_zoom * hex_size_pixels)
 
-    # Pan limits (margin logic) based on current apply_view_limits! implementation
+    # Required ship margin at each pan extreme
     margin_fraction = 0.1f0
     margin_x = ship_span_x * margin_fraction
     margin_y = ship_span_y * margin_fraction
 
-    # Calculate maximal extents
-    # Max right view edge: Ship Right Edge - Margin + Full View Width
+    # Union of the extreme reachable viewport edges
     max_right = bounds.X_POS - margin_x + max_view_width
-    # Min left view edge: Ship Left Edge + Margin - Full View Width
     min_left = bounds.X_NEG + margin_x - max_view_width
-
-    # Max top view edge: Ship Top Edge - Margin + Full View Height
     max_top = bounds.Y_POS - margin_y + max_view_height
-    # Min bottom view edge: Ship Bottom Edge + Margin - Full View Height
     min_bottom = bounds.Y_NEG + margin_y - max_view_height
 
     return (X_POS = Float64(max_right), X_NEG = Float64(min_left), Y_POS = Float64(max_top), Y_NEG = Float64(min_bottom))
@@ -226,31 +178,32 @@ function cycle_tile_component!(state::PlacementTileState, step::Int)
     return nothing
 end
 
-"Poll key rising edges and mutate InputState and FlowCalculatorSharedState (tile tool rotation/mirroring, placement state, pause, time warp, exit)"
+"Handle action-key edges for placement tools, application modes, and simulation controls."
 function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedState, window::GLFW.Window)
     state = placement_state(inputstate)
 
-    # R key for tile-placement rotation
+    # Placement-tool rotation and mirroring (R/F)
     if state isa PlacementTileState && get_inrising!(inputstate, GLFW.KEY_R, window)
         state.toolrotation = next_enum_val(state.toolrotation)
     end
 
-    # F key for tile-placement and active-move mirroring
     if get_inrising!(inputstate, GLFW.KEY_F, window)
         if state isa PlacementTileState
             state.toolmirrored = !state.toolmirrored
         elseif state isa PlacementMoveState
-            set_placement_state!(inputstate, PlacementMoveState(
-                move_target = state.move_target,
-                drag_reference_axis = state.drag_reference_axis,
-                toolrotation = state.toolrotation,
-                toolmirrored = !state.toolmirrored,
-            ))
+            set_placement_state!(
+                inputstate, PlacementMoveState(
+                    move_target = state.move_target,
+                    drag_reference_axis = state.drag_reference_axis,
+                    toolrotation = state.toolrotation,
+                    toolmirrored = !state.toolmirrored,
+                )
+            )
             state = placement_state(inputstate)
         end
     end
 
-    # ESC key — cancel world interaction > dismiss popup > clear selection > cancel time warp > toggle pause menu
+    # Escape prioritises world interactions over application overlays
     if get_inrising!(inputstate, GLFW.KEY_ESCAPE, window)
         if handle_world_escape!(inputstate)
             # World interactions consume Escape before space-map and pause-menu handling.
@@ -267,15 +220,13 @@ function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedSt
         end
     end
 
-    # SPACE key — toggle FlowCalculator pause
+    # Pause and application overlays (Space, Backslash, M)
     if get_inrising!(inputstate, GLFW.KEY_SPACE, window)
         current_paused = @atomic :monotonic shared_state.is_paused
         @atomic :monotonic shared_state.is_paused = !current_paused
     end
 
-    # \ key to toggle dev utils menu
     get_inrising!(inputstate, GLFW.KEY_BACKSLASH, window) && (inputstate.dev_utils_menu_active = !inputstate.dev_utils_menu_active)
-    # M key to toggle space map (blocked during time progression)
     if get_inrising!(inputstate, GLFW.KEY_M, window)
         time_prog = get(inputstate.gui_inputs, :time_progressing, false)::Bool
         galaxy_escape_active = get(inputstate.gui_inputs, :galaxy_escape_active, false)::Bool
@@ -284,20 +235,19 @@ function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedSt
         end
     end
 
-    # Number keys 4-6 for editor-only placement states when editor capability is enabled
+    # Editor-only tools (4–6)
     if editor_capabilities_enabled(inputstate)
         get_inrising!(inputstate, GLFW.KEY_4, window) && toggle_editor_placement_state!(inputstate, PlacementDeleteState())
         get_inrising!(inputstate, GLFW.KEY_5, window) && toggle_tile_placement_state!(inputstate)
         get_inrising!(inputstate, GLFW.KEY_6, window) && toggle_editor_placement_state!(inputstate, PlacementSurfaceEditState())
     end
 
-    # ] key — increase sim speed
+    # Simulation speed ([ and ])
     if get_inrising!(inputstate, GLFW.KEY_RIGHT_BRACKET, window)
         inputstate.sim_speed = increase_sim_speed(inputstate.sim_speed)
         @atomic :monotonic shared_state.target_ups = sim_speed_to_ups(inputstate.sim_speed)
     end
 
-    # [ key — decrease sim speed
     if get_inrising!(inputstate, GLFW.KEY_LEFT_BRACKET, window)
         inputstate.sim_speed = decrease_sim_speed(inputstate.sim_speed)
         @atomic :monotonic shared_state.target_ups = sim_speed_to_ups(inputstate.sim_speed)
@@ -317,7 +267,7 @@ function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedSt
         end
     end
 
-    # Tile component cycling (Z = previous, C = next) — wraps around while the tool is active.
+    # Tile component cycling (Z/C) wraps around while the tool is active
     if state isa PlacementTileState
         get_inrising!(inputstate, GLFW.KEY_Z, window) && cycle_tile_component!(state, -1)
         get_inrising!(inputstate, GLFW.KEY_C, window) && cycle_tile_component!(state, 1)
@@ -326,7 +276,7 @@ function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedSt
     return nothing
 end
 
-"Poll cursor position and transform it to map space, updating inputstate cursor_x/y"
+"Poll the cursor and update its map-space position."
 function poll_cursorpos!(inputstate::InputState, viewstate::ViewState, window::GLFW.Window)
     x, y = GLFW.GetCursorPos(window)
 
@@ -342,7 +292,7 @@ function poll_cursorpos!(inputstate::InputState, viewstate::ViewState, window::G
     x_fb = x * fb_scale_x
     y_fb = y * fb_scale_y
 
-    # Flip Y coordinate and center, then transform to map space
+    # Flip Y coordinate and centre, then transform to map space
     y_origin = viewstate.fb_height - y_fb
     xy = @SVector [(x_fb - viewstate.fb_width / 2), (y_origin - viewstate.fb_height / 2)]
     view_offset = @SVector [viewstate.view_x, viewstate.view_y]
@@ -360,7 +310,7 @@ function poll_cursorpos!(inputstate::InputState, viewstate::ViewState, window::G
     return nothing
 end
 
-"Convert world-space CartesianCoord to window-space pixel coordinates (inverse of poll_cursorpos!)"
+"Convert a world-space position to window-space pixels."
 function world_to_screen(world_x::Float64, world_y::Float64, viewstate::ViewState)
     # Apply pan, zoom, and scale to framebuffer pixels (inverse of cursor transform)
     x_fb = (world_x + Float64(viewstate.view_x)) * Float64(viewstate.view_zoom) * hex_size_pixels + Float64(viewstate.fb_width) / 2.0
@@ -372,7 +322,7 @@ function world_to_screen(world_x::Float64, world_y::Float64, viewstate::ViewStat
     return (x_fb / fb_scale_x, y_fb / fb_scale_y)
 end
 
-"Poll window and framebuffer sizes and update ViewState, adjusting viewport if sizes changed"
+"Update window and framebuffer dimensions, including the OpenGL viewport."
 function poll_windowstate!(viewstate::ViewState, window::GLFW.Window)
     wsize = GLFW.GetWindowSize(window)
     if viewstate.window_width != wsize.width || viewstate.window_height != wsize.height
@@ -383,12 +333,12 @@ function poll_windowstate!(viewstate::ViewState, window::GLFW.Window)
     if viewstate.fb_width != fbsize.width || viewstate.fb_height != fbsize.height
         viewstate.fb_width = fbsize.width
         viewstate.fb_height = fbsize.height
-        ModernGL.glViewport(0, 0, viewstate.fb_width, viewstate.fb_height) # Keep viewport synchronized
+        ModernGL.glViewport(0, 0, viewstate.fb_width, viewstate.fb_height) # Keep the viewport synchronised
     end
     return nothing
 end
 
-"Poll scroll wheel deltas and apply cursor-centred zoom to ViewState"
+"Apply scroll-wheel zoom while keeping the world point beneath the cursor fixed."
 function poll_scrollwheel_zoom!(
         inputstate::InputState, viewstate::ViewState,
         cimgui_io::Union{Nothing, Ptr{CImGui.lib.ImGuiIO}} = nothing
@@ -426,7 +376,7 @@ function poll_scrollwheel_zoom!(
     return nothing
 end
 
-"Handle middle-click pan: drag to move the camera, anchoring the world point under the cursor"
+"Pan with middle-button dragging while anchoring the world point beneath the cursor."
 function poll_middleclick_pan!(viewstate::ViewState, inputstate::InputState, window::GLFW.Window)
     middle_pressed = get_instate(GLFW.MOUSE_BUTTON_MIDDLE, window)
 
@@ -469,17 +419,14 @@ function poll_middleclick_pan!(viewstate::ViewState, inputstate::InputState, win
     return nothing
 end
 
-"""
-Unified per-frame input handling. Polls window state, cursor position, view keys, scroll wheel, and action keys.
-Order matters: window sizes must be updated before cursor transform.
-Accepts optional CImGui IO pointer to guard keyboard input when typing in UI fields.
-"""
+"Poll per-frame input in dependency order, respecting CImGui keyboard and mouse capture."
 function handle_inputs!(inputstate::InputState, viewstate::ViewState, shared_state::FlowCalculatorSharedState, window::GLFW.Window, cimgui_io::Union{Nothing, Ptr{CImGui.lib.ImGuiIO}} = nothing)
-    poll_windowstate!(viewstate, window) # Window/framebuffer sizes (needed for correct cursor mapping)
-    poll_cursorpos!(inputstate, viewstate, window) # Cursor position (uses updated window sizes)
-    poll_keys!(viewstate, window) # View keys (WASD pan / QE zoom) — always active
-    poll_middleclick_pan!(viewstate, inputstate, window) # Middle-click drag pan — always active
-    poll_scrollwheel_zoom!(inputstate, viewstate, cimgui_io) # Scroll wheel zoom (gated by WantCaptureMouse)
+    # View input uses the dimensions and cursor position from this frame
+    poll_windowstate!(viewstate, window)
+    poll_cursorpos!(inputstate, viewstate, window)
+    poll_keys!(viewstate, window)
+    poll_middleclick_pan!(viewstate, inputstate, window)
+    poll_scrollwheel_zoom!(inputstate, viewstate, cimgui_io)
 
     # Action/mode/pause/exit keys — only when not typing in UI
     if isnothing(cimgui_io) || !unsafe_load(cimgui_io.WantCaptureKeyboard)
@@ -490,16 +437,16 @@ function handle_inputs!(inputstate::InputState, viewstate::ViewState, shared_sta
 end
 
 # ===============================================================
-# Click Detection and Coordinate Identification
+# Hit Testing and Move Rendering
 # ===============================================================
 
 """
-Determine what coordinate element (TileCoord, PipeCoord, or VertexCoord) the cursor is pointing at.
-Returns the most specific element: VertexCoord if near a node, PipeCoord if near a tile-side gap,
-or TileCoord as a fallback. Use `get_clicked_pipe` when detecting real placed pipes of any span class.
+Resolve the most specific coordinate beneath the cursor, preferring vertices and tile-side pipes.
+
+Use `get_clicked_pipe` instead when detecting placed pipes of any span class.
 """
 function get_clicked(inputstate::InputState)
-    # Escape if no cursor location or invalid coordinates
+    # Reject unavailable or invalid cursor positions
     if isnothing(inputstate.cursor_x) || isnothing(inputstate.cursor_y)
         return nothing
     end
@@ -507,7 +454,7 @@ function get_clicked(inputstate::InputState)
         return nothing
     end
 
-    # Detection thresholds (in cartesian space)
+    # Prefer small vertex and pipe hit regions over the containing tile
     noderange = 0.15 # Acceptable distance to node
     edgerange = 0.15 # Acceptable distance to pipe
 
@@ -525,11 +472,11 @@ function get_clicked(inputstate::InputState)
         return side
     end
 
-    # Fallback: always return the tile containing the cursor
+    # Fall back to the tile containing the cursor
     return round_to_tile(cursor_cart)
 end
 
-"Shortest distance from a point to a line segment defined by endpoints a and b"
+"Return the shortest distance from a point to a line segment."
 function point_to_segment_distance(p::CartesianCoord, a::CartesianCoord, b::CartesianCoord)::Float64
     ab = b .- a
     ap = p .- a
@@ -626,14 +573,14 @@ end
 "Resolve the existing pipe segment currently targeted by the cursor."
 function resolve_pipe_target_from_cursor(inputstate::InputState, gamemap::GameMap)::Union{Nothing, PipeCoord}
     cursor_cart = get_cursor_cart(inputstate)
-    cursor_cart === nothing && return nothing
+    isnothing(cursor_cart) && return nothing
     return get_clicked_pipe(cursor_cart, gamemap)
 end
 
 "Resolve the candidate pipe segment currently targeted by the cursor."
 function resolve_pipe_destination_from_cursor(inputstate::InputState)::Union{Nothing, PipeCoord}
     cursor_cart = get_cursor_cart(inputstate)
-    cursor_cart === nothing && return nothing
+    isnothing(cursor_cart) && return nothing
     return nearest_pipe_segment_from_vertex(closest_vertex(cursor_cart), cursor_cart)
 end
 
@@ -647,23 +594,27 @@ function collect_pipe_chain_candidates(state::PlacementPipeChainState, gamemap::
         existing_pipe = get_pipe(gamemap, pipe)
 
         if !isnothing(existing_pipe)
-            push!(candidates, (
-                pipe_coord = pipe,
-                far_node = far_node,
-                ghost_payload = existing_pipe,
-                preview_valid = can_delete_pipe_segment(pipe, gamemap),
-                commit_kind = :delete,
-            ))
+            push!(
+                candidates, (
+                    pipe_coord = pipe,
+                    far_node = far_node,
+                    ghost_payload = existing_pipe,
+                    preview_valid = can_delete_pipe_segment(pipe, gamemap),
+                    commit_kind = :delete,
+                )
+            )
             continue
         end
 
-        push!(candidates, (
-            pipe_coord = pipe,
-            far_node = far_node,
-            ghost_payload = state.pipe_behavior,
-            preview_valid = isvalidrequest(can_place_pipe_segment(pipe, gamemap)),
-            commit_kind = :place,
-        ))
+        push!(
+            candidates, (
+                pipe_coord = pipe,
+                far_node = far_node,
+                ghost_payload = state.pipe_behavior,
+                preview_valid = isvalidrequest(can_place_pipe_segment(pipe, gamemap)),
+                commit_kind = :place,
+            )
+        )
     end
 
     return candidates
@@ -672,7 +623,7 @@ end
 "Resolve the currently active PIPE candidate from the cursor direction around the selected source node."
 function get_active_pipe_chain_candidate(state::PlacementPipeChainState, inputstate::InputState, gamemap::GameMap)
     cursor_pos = get_cursor_cart(inputstate)
-    cursor_pos === nothing && return nothing
+    isnothing(cursor_pos) && return nothing
 
     target_pipe = nearest_pipe_segment_from_vertex(state.source_node, cursor_pos)
 
@@ -685,7 +636,7 @@ function get_active_pipe_chain_candidate(state::PlacementPipeChainState, inputst
     return nothing
 end
 
-"Advance or clear PIPE chaining state when a queued command reports back from the calculator thread." 
+"Advance or clear PIPE chaining state when the calculator reports a queued command's result."
 function poll_pipe_chain_response!(inputstate::InputState)
     state = placement_state(inputstate)
     state isa PlacementPipeChainState || return nothing
@@ -697,20 +648,24 @@ function poll_pipe_chain_response!(inputstate::InputState)
     status = take!(channel)
     if status == APPLIED
         next_source = something(state.pending_next_source_node, state.source_node)
-        set_placement_state!(inputstate, PlacementPipeChainState(
-            source_node = next_source,
-            pipe_behavior = state.pipe_behavior,
-        ))
+        set_placement_state!(
+            inputstate, PlacementPipeChainState(
+                source_node = next_source,
+                pipe_behavior = state.pipe_behavior,
+            )
+        )
     else
-        set_placement_state!(inputstate, PlacementPipeChainState(
-            source_node = state.source_node,
-            pipe_behavior = state.pipe_behavior,
-        ))
+        set_placement_state!(
+            inputstate, PlacementPipeChainState(
+                source_node = state.source_node,
+                pipe_behavior = state.pipe_behavior,
+            )
+        )
     end
     return nothing
 end
 
-"Build the map-edit command for the currently active PIPE candidate." 
+"Build the map-edit command for the active PIPE candidate."
 function create_pipe_chain_command(
         command_queue::CommandQueue,
         state::PlacementPipeChainState,
@@ -747,7 +702,7 @@ end
 "Resolve the editable map target under the cursor, preferring real pipes over tile components."
 function resolve_edit_target_from_cursor(inputstate::InputState, gamemap::GameMap)::Union{Nothing, TileCoord, PipeCoord}
     cursor_cart = get_cursor_cart(inputstate)
-    cursor_cart === nothing && return nothing
+    isnothing(cursor_cart) && return nothing
 
     pipe = get_clicked_pipe(cursor_cart, gamemap)
     !isnothing(pipe) && return pipe
@@ -767,7 +722,7 @@ end
 "Resolve the current MOVE hover target under the cursor without validating mobility."
 function get_move_hover_target(inputstate::InputState, gamemap::GameMap)
     target = resolve_edit_target_from_cursor(inputstate, gamemap)
-    target === nothing && return nothing
+    isnothing(target) && return nothing
     is_on_offset_ship(target, gamemap) && return nothing
 
     if target isa TileCoord
@@ -784,7 +739,7 @@ end
 "Record a pending MOVE hold on the current target and clear any stale popup state."
 function set_move_hold_target!(inputstate::InputState, target)::Bool
     cursor_cart = get_cursor_cart(inputstate)
-    cursor_cart === nothing && return false
+    isnothing(cursor_cart) && return false
     click_tile = round_to_tile(cursor_cart)
 
     component_sources = selected_component_coords(inputstate)
@@ -803,12 +758,14 @@ function set_move_hold_target!(inputstate::InputState, target)::Bool
         PipeMoveTarget(target.coord)
     end
 
-    set_placement_state!(inputstate, PlacementPressedState(
-        press_started_at = time(),
-        press_cursor_cart = cursor_cart,
-        click_tile = click_tile,
-        move_target = move_target,
-    ))
+    set_placement_state!(
+        inputstate, PlacementPressedState(
+            press_started_at = time(),
+            press_cursor_cart = cursor_cart,
+            click_tile = click_tile,
+            move_target = move_target,
+        )
+    )
     return true
 end
 
@@ -831,12 +788,14 @@ function activate_move_drag!(inputstate::InputState)
         nothing
     end
 
-    set_placement_state!(inputstate, PlacementMoveState(
-        move_target = move_target,
-        drag_reference_axis = reference_axis,
-        toolrotation = HexFrame.Q_POS,
-        toolmirrored = false,
-    ))
+    set_placement_state!(
+        inputstate, PlacementMoveState(
+            move_target = move_target,
+            drag_reference_axis = reference_axis,
+            toolrotation = HexFrame.Q_POS,
+            toolmirrored = false,
+        )
+    )
     return nothing
 end
 
@@ -848,16 +807,18 @@ function update_active_move_rotation!(inputstate::InputState)
     isnothing(state.drag_reference_axis) && return nothing
 
     cursor_cart = get_cursor_cart(inputstate)
-    cursor_cart === nothing && return nothing
+    isnothing(cursor_cart) && return nothing
 
     destination = round_to_tile(cursor_cart)
     current_axis = nearest_tile_rotation_axis(cursor_cart, destination)
-    set_placement_state!(inputstate, PlacementMoveState(
-        move_target = state.move_target,
-        drag_reference_axis = state.drag_reference_axis,
-        toolrotation = rotate(current_axis, rotate_reverse(state.drag_reference_axis)),
-        toolmirrored = state.toolmirrored,
-    ))
+    set_placement_state!(
+        inputstate, PlacementMoveState(
+            move_target = state.move_target,
+            drag_reference_axis = state.drag_reference_axis,
+            toolrotation = rotate(current_axis, rotate_reverse(state.drag_reference_axis)),
+            toolmirrored = state.toolmirrored,
+        )
+    )
     return nothing
 end
 
@@ -884,9 +845,10 @@ function can_preview_active_move(inputstate::InputState, gamemap::GameMap)::Bool
     state isa PlacementMoveState || return false
 
     cursor_cart = get_cursor_cart(inputstate)
-    cursor_cart === nothing && return false
+    isnothing(cursor_cart) && return false
 
     if state.move_target isa TileComponentMoveTarget
+        # Tile-component destination and orientation
         selected = state.move_target.coord
         tilecomp = get_component(gamemap, selected)
         isnothing(tilecomp) && return false
@@ -909,9 +871,10 @@ function can_preview_active_move(inputstate::InputState, gamemap::GameMap)::Bool
         )
         return isvalidrequest(placement)
     elseif state.move_target isa PipeMoveTarget
+        # Pipe destination and mobility
         selected = state.move_target.coord
         destination = resolve_pipe_destination_from_cursor(inputstate)
-        destination === nothing && return false
+        isnothing(destination) && return false
         destination == selected && return false
 
         source_pipe = get_pipe(gamemap, selected)
@@ -920,6 +883,7 @@ function can_preview_active_move(inputstate::InputState, gamemap::GameMap)::Bool
         has_pipe(gamemap, destination) && return false
         return isvalidrequest(can_place_pipe_segment(destination, gamemap))
     elseif state.move_target isa SelectionMoveTarget
+        # Group destinations and collisions
         translation = selection_move_translation(state.move_target, cursor_cart)
         translation == TileCoord(0, 0) && return false
 
@@ -938,8 +902,10 @@ function can_preview_active_move(inputstate::InputState, gamemap::GameMap)::Bool
                 get_tile_containing_pipe(pipe) == destination || continue
                 has_pipe(gamemap, pipe) && pipe ∉ state.move_target.pipe_coords && return false
             end
-            placement = find_ship_for_placement(component.component, destination, gamemap;
-                rotation = component.rotation, mirrored = component.mirrored)
+            placement = find_ship_for_placement(
+                component.component, destination, gamemap;
+                rotation = component.rotation, mirrored = component.mirrored
+            )
             isvalidrequest(placement) || return false
         end
         for source in state.move_target.pipe_coords
@@ -965,27 +931,32 @@ function create_active_move_command(
     state = placement_state(inputstate)
     state isa PlacementMoveState || return nothing
     cursor_cart = get_cursor_cart(inputstate)
-    if cursor_cart === nothing
+    if isnothing(cursor_cart)
         return nothing
     end
 
     if state.move_target isa TileComponentMoveTarget
         selected = state.move_target.coord
         destination = round_to_tile(cursor_cart)
-        return create_move_command(command_queue, selected, destination, state.toolrotation, state.toolmirrored;
-            response_channel = response_channel)
+        return create_move_command(
+            command_queue, selected, destination, state.toolrotation, state.toolmirrored;
+            response_channel = response_channel
+        )
     elseif state.move_target isa PipeMoveTarget
         selected = state.move_target.coord
         destination = resolve_pipe_destination_from_cursor(inputstate)
-        destination === nothing && return nothing
-        return create_move_command(command_queue, selected, destination, state.toolrotation, state.toolmirrored;
-            response_channel = response_channel)
+        isnothing(destination) && return nothing
+        return create_move_command(
+            command_queue, selected, destination, state.toolrotation, state.toolmirrored;
+            response_channel = response_channel
+        )
     elseif state.move_target isa SelectionMoveTarget
         translation = selection_move_translation(state.move_target, cursor_cart)
         translation == TileCoord(0, 0) && return nothing
         return create_translate_elements_command(
             command_queue, state.move_target.component_coords, state.move_target.pipe_coords, translation;
-            response_channel = response_channel)
+            response_channel = response_channel
+        )
     end
 
     return nothing
@@ -1091,13 +1062,10 @@ const COMPONENT_SELECTION_COLOUR = SVector{4, Float32}(0.3, 1.0, 0.3, 0.4)
 const COMPONENT_SELECTION_HEIGHT = Int32(100100)
 const COMPONENT_SELECTION_SCALE = 2.5
 
-"""
-Render cursor ghosts for tile/pipe placement and move operations.
-Shows semi-transparent previews of where components will be placed/moved.
-"""
+"Render selection markers and cursor previews for placement, movement, and editing tools."
 function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMap, inputstate::InputState, gamemap::GameMap, gamestate::GameState)
-    if inputstate.cursor_x === nothing || inputstate.cursor_y === nothing
-        return
+    if isnothing(inputstate.cursor_x) || isnothing(inputstate.cursor_y)
+        return nothing
     end
 
     state = placement_state(inputstate)
@@ -1105,10 +1073,10 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
     # Redock ghost — show ship footprint and exclusion zone following the cursor
     if state isa PlacementRedockState
         _render_redock_ghost!(queue, glmap, inputstate)
-        return # suppress all other placement ghosts during redock
+        return nothing # Suppress all other placement ghosts during redock
     end
 
-    # Render selection circles for every selected component.
+    # Selected components and pipes
     for selected in selected_component_coords(inputstate)
         push!(
             queue, render_basic_sprite(
@@ -1121,9 +1089,11 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
     for selected in selected_pipe_coords(inputstate)
         pipe = get_pipe(gamemap, selected)
         isnothing(pipe) && continue
-        render_pipe_base!(queue, pipe; glmap = glmap, rotation = HexFrame.Q_POS, position = selected,
+        render_pipe_base!(
+            queue, pipe; glmap = glmap, rotation = HexFrame.Q_POS, position = selected,
             transparency = 0.6, colour = COMPONENT_SELECTION_COLOUR,
-            render_height_offset = COMPONENT_SELECTION_HEIGHT)
+            render_height_offset = COMPONENT_SELECTION_HEIGHT
+        )
     end
 
     if state isa PlacementTileState
@@ -1168,7 +1138,7 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
         if move_target isa TileComponentMoveTarget
             tilecomp = get_component(gamemap, move_target.coord)
             if !isnothing(tilecomp)
-                #= ---------- Tile move ghost ----------- =#
+                # Tile-component move ghost
                 coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
                 rotation = map_rotation(tilecomp, rotate(tilecomp.rotation, state.toolrotation))
                 requested_mirror = xor(tilecomp.mirrored, state.toolmirrored)
@@ -1177,7 +1147,7 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
 
                 render_base_elem!(queue, tilecomp; glmap = glmap, rotation = rotation, mirrored = mirrored, position = coord, transparency = 0.5, colour = ghost_colour, render_height_offset = Int32(100000))
 
-                #= ---------- Move arrow (start circle, end arrowhead, animated dashes) ----------- =#
+                # Movement path
                 render_move_arrow_overlay!(
                     queue, glmap, gamestate.ticks, move_target.coord, coord;
                     draw_start_marker = true,
@@ -1189,7 +1159,7 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
             end
         elseif move_target isa SelectionMoveTarget
             cursor_cart = get_cursor_cart(inputstate)
-            cursor_cart === nothing && return nothing
+            isnothing(cursor_cart) && return nothing
             translation = selection_move_translation(move_target, cursor_cart)
             ghost_colour = can_preview_active_move(inputstate, gamemap) ? GHOST_COLOUR_VALID : GHOST_COLOUR_INVALID
 
@@ -1211,9 +1181,11 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
             for source in move_target.pipe_coords
                 pipe = get_pipe(gamemap, source)
                 isnothing(pipe) && continue
-                render_pipe_base!(queue, pipe; glmap = glmap, rotation = HexFrame.Q_POS,
+                render_pipe_base!(
+                    queue, pipe; glmap = glmap, rotation = HexFrame.Q_POS,
                     position = offset_by_tile(source, translation), transparency = 0.5,
-                    colour = ghost_colour, render_height_offset = Int32(100000))
+                    colour = ghost_colour, render_height_offset = Int32(100000)
+                )
             end
 
             anchor_source = move_target.anchor
@@ -1230,9 +1202,9 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
         elseif move_target isa PipeMoveTarget
             actual_pipe = get_pipe(gamemap, move_target.coord)
             if !isnothing(actual_pipe)
-                #= ---------- Pipe move ghost ----------- =#
+                # Pipe move ghost
                 ghost_pipe = resolve_pipe_destination_from_cursor(inputstate)
-                ghost_pipe === nothing && return nothing
+                isnothing(ghost_pipe) && return nothing
                 ghost_colour = can_preview_active_move(inputstate, gamemap) ? GHOST_COLOUR_VALID : GHOST_PIPE_COLOUR_INVALID
                 render_pipe_base!(
                     queue, actual_pipe; glmap = glmap,
@@ -1244,7 +1216,7 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
                     colour = GHOST_MOVE_SELECTION_COLOUR, render_height_offset = GHOST_MOVE_SELECTION_HEIGHT_OFFSET,
                 )
 
-                #= ---------- Move arrow (start circle and end arrowhead) ----------- =#
+                # Movement path
                 render_move_arrow_overlay!(
                     queue, glmap, gamestate.ticks, move_target.coord, ghost_pipe;
                     draw_start_marker = true,
@@ -1259,19 +1231,19 @@ function render_cursor_ghosts!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
     if state isa PlacementSurfaceEditState
         coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
 
-        # Check which ship owns this surface, or which ship it would be added to
+        # Surface-edit validity and intent
         existing_ship = get_surface_shiptag(gamemap, coord)
         if !isnothing(existing_ship)
-            # Surface exists - show removal ghost
-            colour = SVector{4, Float32}(1.0, 0.3, 0.3, 0.5) # Red for removal
+            # Existing surface will be removed
+            colour = SVector{4, Float32}(1.0, 0.3, 0.3, 0.5) # Removal
         else
-            # No surface - check if adjacent to exactly one ship (valid addition)
+            # New surface must adjoin exactly one ship
             adjacent_ships = find_ships_adjacent_to_coord(gamemap, coord)
             if length(adjacent_ships) == 1
-                colour = SVector{4, Float32}(0.3, 1.0, 0.3, 0.5) # Green for valid addition
+                colour = SVector{4, Float32}(0.3, 1.0, 0.3, 0.5) # Valid addition
             else
-                # Invalid placement (no adjacent or multiple adjacent)
-                colour = SVector{4, Float32}(0.5, 0.5, 0.5, 0.3) # Gray for invalid
+                # No adjacent ship or an ambiguous choice
+                colour = SVector{4, Float32}(0.5, 0.5, 0.5, 0.3) # Invalid addition
             end
         end
 
@@ -1308,7 +1280,7 @@ end
 "Render tractor beams between the primary ship and other docked ships."
 function render_docking_beams!(queue::Vector{<:RenderCommand}, glmap::GLObjectMap, gamemap::GameMap, gameticks::Int64)
     primary_centroid = get_surface_centroid(gamemap, :primary)
-    primary_centroid === nothing && return nothing
+    isnothing(primary_centroid) && return nothing
     primary_offset = get_ship_render_offset(gamemap, :primary)
     primary_pos = primary_centroid + primary_offset
 
@@ -1316,7 +1288,7 @@ function render_docking_beams!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
         ship_name == :primary && continue
 
         ship_centroid = get_surface_centroid(gamemap, ship_name)
-        ship_centroid === nothing && continue
+        isnothing(ship_centroid) && continue
         ship_pos = ship_centroid + get_render_offset(ship)
 
         status = get_docking_status(ship)
@@ -1331,9 +1303,9 @@ function render_docking_beams!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
             nothing
         end
 
-        beam_colour === nothing && continue
+        isnothing(beam_colour) && continue
 
-        # Beam parameter tuning: default num_elements now 50; connected ships have reduced scale and noise
+        # Connected beams are narrower and steadier
         local_num_elements = 50
         local_noise = 0.1
         local_scale = 1.0f0
@@ -1360,20 +1332,15 @@ function render_docking_beams!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
 end
 
 # ===============================================================
-# FlowCalculator Command System Input Handlers
+# Calculator Command Input
 # ===============================================================
-# These functions enqueue commands to the FlowCalculator thread
-# instead of directly mutating the game map, decoupling UI from
-# simulation logic.
-# ===============================================================
+# These handlers enqueue commands rather than mutating the calculator-owned map.
 
-"Check if clicked coordinate is on a ship with non-zero render position offset (blocks interactions during visual effects)"
+"Return whether a coordinate belongs to a ship displaced by a visual effect."
 function is_on_offset_ship(coord, gamemap::GameMap)::Bool
     if coord isa TileCoord
-        # Check if tile is on a ship with offset
         ship_name = get_surface_shiptag(gamemap, coord)
         if isnothing(ship_name)
-            # Check if there's a component at this coord
             ship_name = get_component_shiptag(gamemap, coord)
         end
         if !isnothing(ship_name)
@@ -1381,14 +1348,12 @@ function is_on_offset_ship(coord, gamemap::GameMap)::Bool
             return offset != AxialCoord(0.0, 0.0)
         end
     elseif coord isa PipeCoord
-        # Check if pipe is on a ship with offset
         ship_name = get_pipe_shiptag(gamemap, coord)
         if !isnothing(ship_name)
             offset = get_ship_render_offset(gamemap, ship_name)
             return offset != AxialCoord(0.0, 0.0)
         end
     elseif coord isa VertexCoord
-        # Check node's ship
         node = to_nodecoord(coord)
         ship_name = find_ship_for_node(node, gamemap)
         offset = get_ship_render_offset(gamemap, ship_name)
@@ -1397,7 +1362,7 @@ function is_on_offset_ship(coord, gamemap::GameMap)::Bool
     return false
 end
 
-"Enqueue tile placement command when in TILE mode and mouse clicked"
+"Handle tile-tool cancellation and enqueue requested tile placement."
 function flowcalc_tileplacer!(
         command_queue::CommandQueue,
         inputstate::InputState,
@@ -1422,7 +1387,7 @@ function flowcalc_tileplacer!(
 
     coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
 
-    # Block interactions on ships with non-zero render offset
+    # Displaced ships are temporarily non-interactive
     if is_on_offset_ship(coord, gamemap)
         return nothing
     end
@@ -1461,6 +1426,8 @@ function flowcalc_standard_interaction!(
     left_held = get_instate(GLFW.MOUSE_BUTTON_LEFT, window)
 
     shift_held = get_instate(GLFW.KEY_LEFT_SHIFT, window) || get_instate(GLFW.KEY_RIGHT_SHIFT, window)
+
+    # Shift-click selection
     if state isa PlacementReadyState && left_rising && shift_held && !mouse_captured
         dismiss_action_popup!(inputstate)
         cursor_cart = get_cursor_cart(inputstate)
@@ -1476,6 +1443,7 @@ function flowcalc_standard_interaction!(
         return nothing
     end
 
+    # Active pipe chain
     if state isa PlacementPipeChainState
         if !isnothing(state.pending_response_channel)
             return nothing
@@ -1503,16 +1471,19 @@ function flowcalc_standard_interaction!(
 
         success = try_enqueue_command!(command_queue, command)
         if success
-            set_placement_state!(inputstate, PlacementPipeChainState(
-                source_node = source_node,
-                pipe_behavior = state.pipe_behavior,
-                pending_next_source_node = candidate.far_node,
-                pending_response_channel = response_channel,
-            ))
+            set_placement_state!(
+                inputstate, PlacementPipeChainState(
+                    source_node = source_node,
+                    pipe_behavior = state.pipe_behavior,
+                    pending_next_source_node = candidate.far_node,
+                    pending_response_channel = response_channel,
+                )
+            )
         end
         return nothing
     end
 
+    # Cancel released gestures when CImGui owns the mouse
     if mouse_captured
         if !(state isa PlacementReadyState) && !left_held
             clear_placement_state!(inputstate)
@@ -1520,6 +1491,7 @@ function flowcalc_standard_interaction!(
         return nothing
     end
 
+    # Active or pending move gesture
     if state isa PlacementMoveState
         update_active_move_rotation!(inputstate)
 
@@ -1560,6 +1532,7 @@ function flowcalc_standard_interaction!(
         return nothing
     end
 
+    # Start a pipe chain, move hold, or empty-space press
     if !left_rising
         return nothing
     end
@@ -1568,10 +1541,12 @@ function flowcalc_standard_interaction!(
     if !isnothing(source_node)
         if !is_pipe_source_on_offset_ship(source_node, gamemap)
             clear_world_selection!(inputstate)
-            set_placement_state!(inputstate, PlacementPipeChainState(
-                source_node = source_node,
-                pipe_behavior = ScrapPipeBehav(),
-            ))
+            set_placement_state!(
+                inputstate, PlacementPipeChainState(
+                    source_node = source_node,
+                    pipe_behavior = ScrapPipeBehav(),
+                )
+            )
         end
         return nothing
     end
@@ -1582,13 +1557,15 @@ function flowcalc_standard_interaction!(
         pressed_element = get_clicked(inputstate)
         if pressed_element isa TileCoord || pressed_element isa PipeCoord
             cursor_cart = get_cursor_cart(inputstate)
-            if cursor_cart !== nothing
-                set_placement_state!(inputstate, PlacementPressedState(
-                    press_started_at = time(),
-                    press_cursor_cart = cursor_cart,
-                    click_tile = round_to_tile(cursor_cart),
-                    move_target = nothing,
-                ))
+            if !isnothing(cursor_cart)
+                set_placement_state!(
+                    inputstate, PlacementPressedState(
+                        press_started_at = time(),
+                        press_cursor_cart = cursor_cart,
+                        click_tile = round_to_tile(cursor_cart),
+                        move_target = nothing,
+                    )
+                )
             end
         end
         return nothing
@@ -1598,7 +1575,7 @@ function flowcalc_standard_interaction!(
     return nothing
 end
 
-"Enqueue delete command when in DELETE mode and mouse clicked"
+"Handle delete-tool cancellation and enqueue the targeted deletion."
 function flowcalc_deleteplacer!(
         command_queue::CommandQueue,
         inputstate::InputState,
@@ -1622,9 +1599,9 @@ function flowcalc_deleteplacer!(
     end
 
     target = resolve_edit_target_from_cursor(inputstate, gamemap)
-    target === nothing && return nothing
+    isnothing(target) && return nothing
 
-    # Block interactions on ships with non-zero render offset
+    # Displaced ships are temporarily non-interactive
     if is_on_offset_ship(target, gamemap)
         return nothing
     end
@@ -1635,7 +1612,7 @@ function flowcalc_deleteplacer!(
     return nothing
 end
 
-"Enqueue surface tile add/remove command when in SURFACE_EDIT mode and mouse clicked"
+"Handle surface-tool cancellation and enqueue the requested surface edit."
 function flowcalc_surfaceeditor!(
         command_queue::CommandQueue,
         inputstate::InputState,
@@ -1660,12 +1637,12 @@ function flowcalc_surfaceeditor!(
 
     coord = round_to_tile(CartesianCoord(inputstate.cursor_x, inputstate.cursor_y))
 
-    # Block interactions on ships with non-zero render offset
+    # Displaced ships are temporarily non-interactive
     if is_on_offset_ship(coord, gamemap)
         return nothing
     end
 
-    # Toggle: if surface exists on any ship, remove it; otherwise add it
+    # Toggle the surface at the cursor
     foundsurf, _ = is_on_surface_tile_any_ship(coord, gamemap)
     if foundsurf
         command = create_remove_ship_surface_command(command_queue, coord)
@@ -1677,11 +1654,14 @@ function flowcalc_surfaceeditor!(
     return nothing
 end
 
+# ===============================================================
+# Action Popups and Ship Actions
+# ===============================================================
+
 """
-Handle right-click: cancel an active MOVE or PIPE interaction, or open an action popup.
-Uses `get_clicked` hit-testing to route precisely. Clicking on a component opens
-the component popup, clicking on gaps between components or empty surface opens
-the ship popup. Works in all placement modes.
+Open the action popup for the selected group, component, or ship beneath a right-click.
+
+Node and edge hit regions expose ship actions through gaps between components.
 """
 function flowcalc_rightclick_action!(inputstate::InputState, gamemap::GameMap, window::GLFW.Window)
     get(inputstate.gui_inputs, :consume_right_click, false)::Bool && return nothing
@@ -1693,7 +1673,7 @@ function flowcalc_rightclick_action!(inputstate::InputState, gamemap::GameMap, w
 
     dismiss_action_popup!(inputstate)
 
-    # Need valid cursor position
+    # Resolve the clicked map element
     isnothing(inputstate.cursor_x) && return nothing
     isnothing(inputstate.cursor_y) && return nothing
 
@@ -1713,9 +1693,7 @@ function flowcalc_rightclick_action!(inputstate::InputState, gamemap::GameMap, w
         return nothing
     end
 
-    #= ---------- Component target ----------- =#
-    # Node and edge hit regions represent the visible gaps between components,
-    # allowing access to ship actions even when every surface tile is occupied.
+    # Component or selected-group target
     if element isa TileCoord
         tilecomp = get_component(gamemap, element)
         if !isnothing(tilecomp)
@@ -1723,8 +1701,12 @@ function flowcalc_rightclick_action!(inputstate::InputState, gamemap::GameMap, w
             if has_selected_component(inputstate, element) && selected_element_count(inputstate) > 1
                 components = selected_component_coords(inputstate)
                 pipes = selected_pipe_coords(inputstate)
-                actions = isempty(pipes) ? shared_component_actions([get_actions(get_component(gamemap, coord))
-                    for coord in sort!(collect(components); by = coord -> (coord.q, coord.r))]) : ()
+                actions = isempty(pipes) ? shared_component_actions(
+                        [
+                            get_actions(get_component(gamemap, coord))
+                            for coord in sort!(collect(components); by = coord -> (coord.q, coord.r))
+                        ]
+                    ) : ()
                 inputstate.action_popup = ActionPopupState(
                     target = ElementGroupPopupTarget(components, pipes),
                     world_position = to_cartesian(element), actions = actions,
@@ -1742,7 +1724,7 @@ function flowcalc_rightclick_action!(inputstate::InputState, gamemap::GameMap, w
         end
     end
 
-    #= ---------- Ship target (non-component surface) ----------- =#
+    # Ship surface target
     ship_name = get_surface_shiptag(gamemap, tile)
     isnothing(ship_name) && return nothing
     is_on_offset_ship(tile, gamemap) && return nothing
@@ -1761,14 +1743,13 @@ function flowcalc_rightclick_action!(inputstate::InputState, gamemap::GameMap, w
     return nothing
 end
 
-"""
-Build docking action list for a ship. Returns a tuple of `ActionInfo`.
-"""
+"Build the docking actions currently available for a ship."
 function get_ship_actions(gamemap::GameMap, ship_name::Symbol)::Tuple
     is_primary = (ship_name === :primary)
     status = get_docking_status(gamemap, ship_name)
     is_connected = status isa ConnectedDockStat
 
+    # Primary-ship and redocking eligibility
     make_primary_action = ActionInfo(
         id = :make_primary,
         label = "Make Primary",
@@ -1784,6 +1765,7 @@ function get_ship_actions(gamemap::GameMap, ship_name::Symbol)::Tuple
         tooltip = is_primary ? "Cannot redock the primary ship" : "Choose a new docking position",
     )
 
+    # Departure eligibility and player-facing reason
     departure_status = if !is_primary && is_connected
         check_departure_pipe_connections(gamemap, ship_name)
     else
@@ -1810,10 +1792,7 @@ function get_ship_actions(gamemap::GameMap, ship_name::Symbol)::Tuple
     return (make_primary_action, redock_action, undock_action)
 end
 
-"""
-Execute a ship-level docking action. Runs on the render thread.
-`:redock` enters interactive placement mode; others create commands directly.
-"""
+"Execute a ship action on the render thread, entering redock mode or queuing a map override."
 function execute_ship_action!(;
         ship_name::Symbol,
         action_id::Symbol,
@@ -1856,9 +1835,11 @@ function execute_ship_action!(;
     end
 end
 
-#= ---------- Redock Placement Mode ----------- =#
+# ===============================================================
+# Redock Placement
+# ===============================================================
 
-const REDOCK_GHOST_VALID   = SVector{4, Float32}(0.3, 1.0, 0.3, 0.6)
+const REDOCK_GHOST_VALID = SVector{4, Float32}(0.3, 1.0, 0.3, 0.6)
 const REDOCK_GHOST_INVALID = SVector{4, Float32}(1.0, 0.3, 0.3, 0.6)
 const REDOCK_EXCLUSION_COL = SVector{4, Float32}(1.0, 0.78, 0.2, 0.15)
 
@@ -1875,20 +1856,24 @@ function _render_redock_ghost!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
 
     ghost_height = Int32(HexFlowRendering.RENDER_HEIGHT_OVERLAY_BASE + 500)
 
-    # Core ship tiles
+    # Ship footprint
     for tile in rs.ship_tiles
-        push!(queue, render_basic_tile(
-            glmap, :ShipSurface_basic, HexFrame.Q_POS, tile + delta;
-            colour = core_colour, transparency = 0.5, draw_height = ghost_height,
-        ))
+        push!(
+            queue, render_basic_tile(
+                glmap, :ShipSurface_basic, HexFrame.Q_POS, tile + delta;
+                colour = core_colour, transparency = 0.5, draw_height = ghost_height,
+            )
+        )
     end
 
-    # Exclusion ring (surface buffer and pipe clearance)
+    # Surface buffer and pipe-clearance ring
     for tile in rs.exclusion_ring
-        push!(queue, render_basic_tile(
-            glmap, :ShipSurface_basic, HexFrame.Q_POS, tile + delta;
-            colour = REDOCK_EXCLUSION_COL, transparency = 0.5, draw_height = ghost_height,
-        ))
+        push!(
+            queue, render_basic_tile(
+                glmap, :ShipSurface_basic, HexFrame.Q_POS, tile + delta;
+                colour = REDOCK_EXCLUSION_COL, transparency = 0.5, draw_height = ghost_height,
+            )
+        )
     end
 
     return nothing
@@ -1909,14 +1894,16 @@ function _enter_redock_mode!(inputstate::InputState, flowcalc_ipc::FlowCalculato
     centroid = get_surface_centroid(gamemap, ship_name)
     original_centre = isnothing(centroid) ? TileCoord(0, 0) : round_to_tile(centroid)
 
-    enter_redock_placement_state!(inputstate, PlacementRedockState(
-        ship_name = ship_name,
-        ship_tiles = core_tiles,
-        exclusion_ring = setdiff(display_footprint, core_tiles),
-        ship_footprint = ship_footprint,
-        other_exclusion = other_exclusion,
-        original_centre = original_centre,
-    ))
+    enter_redock_placement_state!(
+        inputstate, PlacementRedockState(
+            ship_name = ship_name,
+            ship_tiles = core_tiles,
+            exclusion_ring = setdiff(display_footprint, core_tiles),
+            ship_footprint = ship_footprint,
+            other_exclusion = other_exclusion,
+            original_centre = original_centre,
+        )
+    )
     return nothing
 end
 
@@ -1931,7 +1918,7 @@ function _handle_redock_click!(inputstate::InputState, flowcalc_ipc::FlowCalcula
     state isa PlacementRedockState || return nothing
     rs = state
 
-    # Right-click cancels redock mode (same as ESC)
+    # Right-click cancels redock mode, matching Escape
     if get_inrising!(inputstate, GLFW.MOUSE_BUTTON_RIGHT, window)
         inputstate.gui_inputs[:consume_right_click] = true
         enter_ready_placement_state!(inputstate)

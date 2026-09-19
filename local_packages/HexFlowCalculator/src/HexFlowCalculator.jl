@@ -1,3 +1,8 @@
+#=
+Scope: Authoritative simulation updates, command transactions, reactivation trials, and snapshot publication
+Formatter: Runic
+=#
+
 module HexFlowCalculator
 
 # Packages
@@ -429,7 +434,7 @@ function create_snapshot_storage(initial_snapshot::FlowCalculatorSnapshot)
         deepcopy(initial_snapshot),
     )
     writer_idx = Threads.Atomic{Int}(1)
-    ready_idx  = Threads.Atomic{Int}(2)
+    ready_idx = Threads.Atomic{Int}(2)
     reader_idx = Threads.Atomic{Int}(3)
     has_new_data = Threads.Atomic{Int}(0)  # 1 when writer has published but reader hasn't consumed
     snapshot_lock = ReentrantLock()
@@ -444,7 +449,7 @@ function create_snapshot_storage(initial_snapshot::FlowCalculatorSnapshot)
         snapshot!(buf.derived, derived)
         # MNA_State → MNA_StateSnapshot: in-place refill of the render-relevant subset
         snapshot!(buf.mna, mna_state)
-        # GameState: field copy (4 isbits fields)
+        # GameState: field copy
         snapshot!(buf.gamestate, gamestate)
         buf.timestamp = timestamp
 
@@ -561,9 +566,11 @@ function apply_mapedit_command!(gamemap::GameMap, command::SetTileCommand)::MapE
     destination_status = validate_component_destination(provisional_component, command.coord, gamemap)
     isvalidrequest(destination_status) || return InvalidRequest("Cannot place component: $(reason(destination_status))")
 
-    set_component!(gamemap, command.coord, PlacedComponent(
-        deepcopy(command.component), mapped_rotation, mapped_mirror, unwrap(destination_status),
-    ))
+    set_component!(
+        gamemap, command.coord, PlacedComponent(
+            deepcopy(command.component), mapped_rotation, mapped_mirror, unwrap(destination_status),
+        )
+    )
     return ValidRequest()
 end
 
@@ -692,12 +699,14 @@ function apply_mapedit_command!(gamemap::GameMap, command::TranslateElementsComm
 
     for (source, component, destination_ship) in zip(sources, components, destination_ships)
         destination = source + command.translation
-        set_component!(gamemap, destination, PlacedComponent(
-            component.component,
-            component.rotation,
-            component.mirrored,
-            destination_ship,
-        ))
+        set_component!(
+            gamemap, destination, PlacedComponent(
+                component.component,
+                component.rotation,
+                component.mirrored,
+                destination_ship,
+            )
+        )
     end
 
     for source in pipe_sources
@@ -853,20 +862,24 @@ end
 
 "Add an encounter ship, with optional encounter point recycling for live encounters."
 function apply_mapedit_command!(gamemap::GameMap, command::AddEncounterShipCommand)::MapEditResult
-    if command.target_encounter_index !== nothing && !(gamemap.space_map isa SpaceMapState)
+    if !isnothing(command.target_encounter_index) && !(gamemap.space_map isa SpaceMapState)
         return StaleMapEdit()
     end
 
-    if command.dir === nothing
-        encounter_ship_optimal_dir!(gamemap, command.blueprint, command.ship_name_base,
-            command.seed; max_view_bounds = command.max_view_bounds)
+    if isnothing(command.dir)
+        encounter_ship_optimal_dir!(
+            gamemap, command.blueprint, command.ship_name_base,
+            command.seed; max_view_bounds = command.max_view_bounds
+        )
     else
-        encounter_ship!(gamemap, command.blueprint, command.ship_name_base,
-            command.seed, command.dir; max_view_bounds = command.max_view_bounds)
+        encounter_ship!(
+            gamemap, command.blueprint, command.ship_name_base,
+            command.seed, command.dir; max_view_bounds = command.max_view_bounds
+        )
     end
 
     # Recycle encounter point and clear manoeuvre if this is a live encounter
-    if command.target_encounter_index !== nothing
+    if !isnothing(command.target_encounter_index)
         sm = gamemap.space_map::SpaceMapState
         ep = sm.encounter_points[command.target_encounter_index]
         encounter_class = ep.encounter_class
@@ -920,7 +933,7 @@ end
 
 "Write `status` to a command's response channel if one is attached.\nSwallows put! errors so a closed channel cannot crash the calculator loop."
 function _try_put_status!(command::MapEditCommand, status::CommandStatus)
-    command.response_channel === nothing && return nothing
+    isnothing(command.response_channel) && return nothing
     try
         put!(command.response_channel, status)
     catch
@@ -1040,7 +1053,7 @@ function process_transaction!(
     end
 
     replace_by_mutation!(gamemap, working_map)
-    committed_feedback === nothing || threadsafe_console_push(committed_feedback)
+    isnothing(committed_feedback) || threadsafe_console_push(committed_feedback)
     return CommandTransactionResult(APPLIED, nothing)
 end
 
@@ -1054,7 +1067,7 @@ function process_command!(
     result = process_transaction!(command, gamemap, threadsafe_console_push)
     _try_put_status!(command, result.status)
 
-    throw_errors && result.exception !== nothing && throw(result.exception)
+    throw_errors && !isnothing(result.exception) && throw(result.exception)
     return nothing
 end
 
@@ -1084,7 +1097,7 @@ end
 "Create a `SetPipeBehaviorCommand` for placing a pipe."
 function create_set_pipe_behavior_command(
         cq::CommandQueue,
-    coord::PipeCoord,
+        coord::PipeCoord,
         pipe_behavior::PipeBehavior;
         response_channel::Union{Nothing, Channel} = nothing
     )::SetPipeBehaviorCommand
@@ -1500,9 +1513,10 @@ function solve_reactivation_trial!(scheduler::ReactivationScheduler, derivedmaps
     end
 end
 
-"Classify one component against the scheduler's current speculative trial state." 
+"Classify one component against the scheduler's current speculative trial state."
 function classify_trial_outcome(comp::PlacedComponent, coord::TileCoord, gamemap::GameMap, scheduler::ReactivationScheduler)::ReactivationProbeOutcome
-    return classify_reactivation_probe(comp;
+    return classify_reactivation_probe(
+        comp;
         tile = coord,
         ship_name = comp.ship,
         gamemap = gamemap,
@@ -1511,9 +1525,10 @@ function classify_trial_outcome(comp::PlacedComponent, coord::TileCoord, gamemap
     )
 end
 
-"Commit one useful component against the scheduler's current speculative trial state." 
+"Commit one useful component against the scheduler's current speculative trial state."
 function commit_trial_outcome!(comp::PlacedComponent, coord::TileCoord, gamemap::GameMap, scheduler::ReactivationScheduler)
-    commit_reactivation_probe!(comp;
+    commit_reactivation_probe!(
+        comp;
         tile = coord,
         ship_name = comp.ship,
         gamemap = gamemap,
@@ -1664,8 +1679,10 @@ Persist a crash dump for the FlowCalculator loop. Returns the file path written.
 Drains the pending `MapEditCommand` channel into a Vector so the queue contents are
 captured (subsequent ticks would not see them, but the loop is exiting anyway).
 """
-function _write_crash_dump(gamemap::GameMap, mna_state::MNA_State,
-        command_queue::CommandQueue, exception, trace_str::String)::String
+function _write_crash_dump(
+        gamemap::GameMap, mna_state::MNA_State,
+        command_queue::CommandQueue, exception, trace_str::String
+    )::String
     pending_commands = MapEditCommand[]
     while isready(command_queue.command_channel)
         push!(pending_commands, take!(command_queue.command_channel))
@@ -1675,12 +1692,13 @@ function _write_crash_dump(gamemap::GameMap, mna_state::MNA_State,
     crashpath = joinpath("maps", "crash_$(timestamp).jld2")
     mkpath(dirname(crashpath))
 
-    jldsave(crashpath;
-        stored_gamemap     = gamemap,
-        pending_commands   = pending_commands,
-        node_voltages      = mna_state.node_voltages,
-        vsource_currents   = mna_state.vsource_currents,
-        exception_message  = sprint(showerror, exception),
+    jldsave(
+        crashpath;
+        stored_gamemap = gamemap,
+        pending_commands = pending_commands,
+        node_voltages = mna_state.node_voltages,
+        vsource_currents = mna_state.vsource_currents,
+        exception_message = sprint(showerror, exception),
         exception_backtrace = trace_str,
     )
 
@@ -2137,8 +2155,10 @@ end
 # ===============================================================
 
 "Time the snapshot publish and delegate to the triple-buffer closure."
-function _publish_snapshot!(publish_fn::Function, gamemap::GameMap, derived::DerivedMapState,
-        mna_state::MNA_State, gamestate::GameState, timestamp::Float64)
+function _publish_snapshot!(
+        publish_fn::Function, gamemap::GameMap, derived::DerivedMapState,
+        mna_state::MNA_State, gamestate::GameState, timestamp::Float64
+    )
     @timeit flowcalc_loop_timer "Snapshot Publishing" begin
         publish_fn(gamemap, derived, mna_state, gamestate, timestamp)
     end

@@ -1,40 +1,38 @@
+#=
+Scope: Turbopump and electric-pump component behaviours with shared pump fragments
+Formatter: Runic
+=#
 """
-Pump component implementations for fluid pressurization.
+Turbopump and electric-pump component behaviours for fluid pressurisation.
 
-This module provides concrete implementations of ComponentBehavior for pumps:
-- TurboPumpCompBehav: Gas-driven turbopump for rocket engines
-- ElectricPumpCompBehav: Battery-powered pump with energy management
+Exported concrete `ComponentBehavior` implementations:
 
-All components follow the ComponentBehavior interface defined in HexComponentsAPI.
+- `TurboPumpCompBehav`: Gas-driven turbopump with delayed shaft drive
+- `ElectricPumpCompBehav`: Electrically driven pump with energy management
 """
 module HexFlowPumpComponents
 
-using ColorSchemes
-using StaticArrays
-using HexFrame, HexElements, HexFluids, FlowEngine, FlowMap, HexComponentsAPI, RenderEngine, HexFlowRendering
-using HexFlowBasicComponents, HexFlowSwitchComponents
+using ColorSchemes, StaticArrays
+using FlowEngine, FlowMap, HexElements, HexFluids, HexFrame
+using HexComponentsAPI, HexFlowBasicComponents, HexFlowSwitchComponents
+using HexFlowRendering, RenderEngine
 
-# ComponentBehavior Mandatories
+# `ComponentBehavior` mandatory methods
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
-# ComponentBehavior Optional
+# `ComponentBehavior` optional methods
 import HexComponentsAPI: on_click!, update_flowbehav!, render_map_elem!, get_actions, do_action!, produce_rel_fluid_declarations, map_mirroring, get_component_temperature
-import HexComponentsAPI: ReactivationProbe, ReactivationProbeOutcome, get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe!
-# Behavior Fragment Dependencies
-import HexFlowBasicComponents: deactivate!, reactivate!, is_inactive, damage!, undamage!, is_damaged
-import HexFlowBasicComponents: get_overheat_percentage, get_overheat_tint, update_overheat_state!
-import HexFlowBasicComponents: OverheatLimitBehavFrag, ComponentTemperatureBehavFrag, DamageStateBehavFrag
-import HexFlowSwitchComponents: set_target_conductance_to_min!, set_target_conductance_to_max!
+# Reactivation probe interface
+import HexComponentsAPI: get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe!
 
-# Behavior Fragment Exports
-export PumpBehavFrag
-export RotorStateBehavFrag
-export DelayedDriveBehavFrag
-# Concrete Component Behavior Exports
-export TurboPumpCompBehav
-export ElectricPumpCompBehav, ElectricTurboPump, ElectricTransferPump
+# Behaviour Fragment Exports
+export PumpBehavFrag, RotorStateBehavFrag, DelayedDriveBehavFrag
+# Support Type Exports
+export ElectricTurboPump, ElectricTransferPump
+# Concrete Component Behaviour Exports
+export TurboPumpCompBehav, ElectricPumpCompBehav
 
 # ===============================================================
-# Behavior Fragments
+# Behaviour Fragments
 # ===============================================================
 
 #= ---------- PumpBehavFrag ----------- =#
@@ -46,7 +44,7 @@ end
 
 const pump_element_index::Int = 1 # Pump voltage source element index
 const turbine_element_index::Int = 3 # Turbine shunt resistor element index
-const pump_probe_tol = 1e-9 # Tolerance for probe acceptance and deactivation detection
+const pump_probe_tol = 1.0e-9 # Tolerance for probe acceptance and deactivation detection
 
 "Return the pump voltage after applying a clamped 0-1 scale factor."
 get_scaled_pump_voltage(p::PumpBehavFrag, voltage_scale::Real)::Float64 = p.pump_voltage * clamp(Float64(voltage_scale), 0.0, 1.0)
@@ -62,7 +60,6 @@ function make_pump_element(p::PumpBehavFrag, voltage_scale::Real; active::Bool =
     )
 end
 
-"Produces a single voltage source element for the pump, active only when powered."
 function produce_rel_elements(p::PumpBehavFrag, is_pump_powered::Bool)::NTuple{1, RelativeElement}
     return (make_pump_element(p, is_pump_powered ? 1.0 : 0.0; active = true),)
 end
@@ -85,10 +82,8 @@ struct EnergyStoreBehavFrag
     max_energy::Float64
 end
 
-"Gets current energy level from state."
 get_current_energy(frag::EnergyStoreBehavFrag)::Float64 = getstate(frag.stored_energy)
 
-"Gets maximum energy capacity."
 get_max_energy(frag::EnergyStoreBehavFrag)::Float64 = frag.max_energy
 
 "Changes energy by delta, clamped between [0, max_energy]."
@@ -111,9 +106,9 @@ struct RotorStateBehavFrag
 
     function RotorStateBehavFrag(rpm::FloatStateBehavFrag, max_rpm::Float64, rotor_inertia::Float64, friction_coefficient::Float64)
         # clamp above zero to prevent weird edge cases with negative or zero values
-        friction_coefficient = max(friction_coefficient, 1e-6)
-        rotor_inertia = max(rotor_inertia, 1e-6)
-        max_rpm = max(max_rpm, 1e-6)
+        friction_coefficient = max(friction_coefficient, 1.0e-6)
+        rotor_inertia = max(rotor_inertia, 1.0e-6)
+        max_rpm = max(max_rpm, 1.0e-6)
         setstate!(rpm, max(getstate(rpm), 0.0))
 
         return new(rpm, max_rpm, rotor_inertia, friction_coefficient)
@@ -127,7 +122,6 @@ function RotorStateBehavFrag(; current_rpm::Real = 0.0, max_rpm::Real, rotor_ine
     return RotorStateBehavFrag(rpm_state, max_rpm_f, Float64(rotor_inertia), Float64(friction_coefficient))
 end
 
-"Gets current rotor RPM from state."
 get_current_rpm(frag::RotorStateBehavFrag)::Float64 = getstate(frag.rpm)
 
 "Gets the current rotor RPM as a clamped 0-1 fraction of rated RPM."
@@ -175,6 +169,7 @@ function update_delayed_drive!(frag::DelayedDriveBehavFrag, raw_drive_power::Rea
     return nothing
 end
 
+# Turbopump tuning, thresholds, and palette
 const TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE::Float64 = 1.0e-3
 const TURBOPUMP_TURBINE_POWER_SCALING::Float64 = 1.0e-4
 const TURBOPUMP_TURBINE_TEMPERATURE_POWER_SCALING::Float64 = 0.45
@@ -183,7 +178,7 @@ const TURBOPUMP_SMOKE_CURRENT_THRESHOLD::Float64 = 0.02
 const TURBOPUMP_GENTURBINE_HEIGHT_OFFSET::Int = 5
 const TURBOPUMP_VIBE_ACTIVITY_THRESHOLD::Float64 = 1.0e-3
 const TURBOPUMP_MIN_ACTIVE_VIBE_MAGNITUDE_PX::Float64 = 0.75
-const TURBOPUMP_FAILURE_RPM_RATIO::Float64 = 1.20
+const TURBOPUMP_FAILURE_RPM_RATIO::Float64 = 1.2
 const TURBOPUMP_TURBINE_RUNAWAY_RPM_RATIO::Float64 = 1.25
 const TURBOPUMP_TURBINE_CONDUCTANCE_EXPONENT::Float64 = 0.7
 const TURBOPUMP_LOW_SPEED_DRAG_RPM::Float64 = 300.0
@@ -218,7 +213,7 @@ end
 
 
 # ===============================================================
-# Concrete Component Behaviors
+# Concrete Component Behaviours
 # ===============================================================
 
 #= ---------- TurboPumpCompBehav ----------- =#
@@ -241,7 +236,6 @@ struct TurboPumpCompBehav <: ComponentBehavior
     overheat::OverheatLimitBehavFrag  # turbine thermal state and persistent damage
 end
 
-"Practical keyword-based constructor for TurboPumpCompBehav."
 function TurboPumpCompBehav(;
         max_pump_voltage::Real,
         series_conductance::Real,
@@ -276,7 +270,7 @@ function TurboPumpCompBehav(;
         Float64(max_pump_voltage),
         max(Float64(series_conductance), 0.0),
         max(Float64(max_turbine_conductance), 0.0),
-        max(Float64(cycle_efficiency), 1e-6),
+        max(Float64(cycle_efficiency), 1.0e-6),
         delayed_drive,
         rotor,
         deactivation,
@@ -284,13 +278,12 @@ function TurboPumpCompBehav(;
     )
 end
 
-"Return the Turbo Pump's rated RPM."
 get_rated_rpm(comp::TurboPumpCompBehav)::Float64 = comp.rotor.max_rpm
 
-"Return the Turbo Pump's persistent-damage RPM threshold."
+"Return the RPM threshold at which the turbopump is persistently damaged by overspeed."
 get_failure_rpm(comp::TurboPumpCompBehav)::Float64 = get_rated_rpm(comp) * TURBOPUMP_FAILURE_RPM_RATIO
 
-"Return the RPM at which turbine conductance reaches zero."
+"Return the RPM at which turbine conductance falls to zero."
 get_turbine_runaway_rpm(comp::TurboPumpCompBehav)::Float64 = get_rated_rpm(comp) * TURBOPUMP_TURBINE_RUNAWAY_RPM_RATIO
 
 "Return the current RPM's fraction through the rated-to-failure overspeed band."
@@ -335,7 +328,6 @@ function effective_turbine_conductance(comp::TurboPumpCompBehav)::Float64
     return comp.max_turbine_conductance * max(1.0 - rpm_fraction^TURBOPUMP_TURBINE_CONDUCTANCE_EXPONENT, 0.0)
 end
 
-"Produces pump voltage source, series resistor, and variable-conductance turbine resistor."
 function produce_rel_elements(comp::TurboPumpCompBehav)::NTuple{3, RelativeElement}
     active = !is_inactive(comp.deactivation) && !is_damaged(comp.overheat)
     rpm_fraction = get_rpm_fraction(comp.rotor)
@@ -388,7 +380,7 @@ function set_tunables(comp::TurboPumpCompBehav, tunables::NTuple{13, T})::TurboP
         vals[1],
         max(vals[2], 0.0),
         max(vals[3], 0.0),
-        max(vals[8], 1e-6),
+        max(vals[8], 1.0e-6),
         newdrive,
         newrotor,
         comp.deactivation,
@@ -407,16 +399,21 @@ function produce_rel_fluid_declarations(::TurboPumpCompBehav)
     )
 end
 
-"Enable map mirroring for TurboPumpCompBehav"
 map_mirroring(::TurboPumpCompBehav, mirrored::Bool) = mirrored
 
-# No on_click! override needed; auto-deactivation requires no manual reset.
+# Auto-deactivation requires no manual reset on click.
 on_click!(comp::TurboPumpCompBehav; kwargs...) = nothing
 get_component_temperature(comp::TurboPumpCompBehav; kwargs...) = get_component_temperature(comp.overheat)
 get_actions(comp::TurboPumpCompBehav; kwargs...) = get_actions(comp.overheat; kwargs...)
 do_action!(comp::TurboPumpCompBehav, action_id::Symbol; kwargs...) = do_action!(comp.overheat, action_id; kwargs...)
 
-"Updates delayed turbine drive, rotor RPM, thermal state, and harmful-flow deactivation."
+"""
+Update delayed turbine drive, rotor RPM, thermal state, and harmful-flow deactivation.
+
+Turbine drive is filtered before rotor power is integrated against pump load and
+shaft drag; reverse turbine flow deactivates the pump, while overspeed damages it
+at the failure threshold.
+"""
 function update_flowbehav!(comp::TurboPumpCompBehav; mna_state::MNA_State, tile::TileCoord, rotation::HexAxis, mirrored::Bool = false, derivedmapstate::DerivedMapState, kwargs...)
     applied_inertia = comp.rotor.rotor_inertia * TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
     shaft_drag = turbopump_shaft_drag(comp.rotor.friction_coefficient, get_current_rpm(comp.rotor))
@@ -466,9 +463,11 @@ function update_flowbehav!(comp::TurboPumpCompBehav; mna_state::MNA_State, tile:
     end
     get_current_rpm(comp.rotor) >= get_failure_rpm(comp) && damage!(comp.overheat)
 
-    update_overheat_state!(comp.overheat;
+    update_overheat_state!(
+        comp.overheat;
         fluid_temperature_k = fluid_temperature_k,
-        mass_flow_rate = mass_flow_rate)
+        mass_flow_rate = mass_flow_rate
+    )
 
     return nothing
 end
@@ -520,13 +519,12 @@ function classify_reactivation_probe(comp::TurboPumpCompBehav; tile::TileCoord, 
     return HexComponentsAPI.PROBE_USEFUL
 end
 
-"Reactivate the pump after a useful speculative probe result." 
+"Reactivate the pump after the scheduler accepts a useful speculative probe."
 function commit_reactivation_probe!(comp::TurboPumpCompBehav; kwargs...)
     reactivate!(comp.deactivation)
     return nothing
 end
 
-"Renders static turbopump elements: fluid mask, rotor, and static parts."
 function render_base_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, mirrored::Bool = false, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     fluidmask_colour = DEFAULT_EMPTY_FLUID_COLOUR
     render_colours = turbopump_render_colours(colour, comp.overheat, get_overspeed_fraction(comp))
@@ -549,7 +547,6 @@ function render_base_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBe
     return nothing
 end
 
-"Renders turbopump with animations when active: spinning rotor, vibration, and smoke effects."
 function render_map_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot, gameticks::Int64, rotation::HexAxis, mirrored::Bool = false, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     render_colours = turbopump_render_colours(ColourType(1.0, 1.0, 1.0, 1.0), comp.overheat, get_overspeed_fraction(comp))
     speed_indicator = turbopump_speed_indicator(comp)
@@ -559,7 +556,7 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBeh
     turbine_input_node = map_element(HexFrame.NODE_S_POS, position, rotation, mirrored)
     fluid = get(derivedmapstate.nodeactualfluids, turbine_input_node, nothing)
     temperature = get(derivedmapstate.node_temperatures, turbine_input_node, HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
-    fluidmask_colour = fluid !== nothing ? get_fluid_colour(fluid, temperature) : DEFAULT_EMPTY_FLUID_COLOUR
+    fluidmask_colour = !isnothing(fluid) ? get_fluid_colour(fluid, temperature) : DEFAULT_EMPTY_FLUID_COLOUR
 
     # get turbine state from MNA solution
     source_current = get(mna_state.vsource_currents, ElementID(position, pump_element_index), 0.0)
@@ -622,7 +619,6 @@ struct ElectricPumpCompBehav{T <: ElectricPumpType} <: ComponentBehavior
     energy::EnergyStoreBehavFrag
     switch::BoolSwitchBehavFrag
 end
-"Practical keyword-based constructor for ElectricPumpCompBehav."
 function ElectricPumpCompBehav(
         ::Type{T};
         pump_voltage::Float64,
@@ -652,7 +648,6 @@ function ElectricPumpCompBehav(
     return ElectricPumpCompBehav{T}(pumpfrag, energyfrag, switchfrag)
 end
 
-"Produces pump voltage source and switch resistor elements."
 function produce_rel_elements(comp::ElectricPumpCompBehav)::NTuple{2, RelativeElement}
     # Pump is powered when there is energy in the store
     has_energy = get_current_energy(comp.energy) > 0.0
@@ -714,7 +709,6 @@ function update_flowbehav!(comp::ElectricPumpCompBehav; mna_state::MNA_State, ti
     return nothing
 end
 
-"Clicking the pump toggles the switch, while there is energy."
 function on_click!(comp::ElectricPumpCompBehav; kwargs...)
     has_energy = get_current_energy(comp.energy) > 0.0
     if has_energy
@@ -764,7 +758,7 @@ function do_action!(comp::ElectricPumpCompBehav, action_id::Symbol; kwargs...)
     throw(ArgumentError("Action :$(action_id) not recognised by ElectricPumpCompBehav"))
 end
 
-# Rendering traits for different electric pump types
+# Electric-pump render traits
 "Rendering trait type for electric turbopump variant"
 struct ElectricTurboPump <: ElectricPumpType end
 chargemask_sprite(::ElectricPumpCompBehav{ElectricTurboPump}) = :ElectroPump1_chargemask
@@ -781,27 +775,15 @@ static_sprite(::ElectricPumpCompBehav{ElectricTransferPump}) = :ElectroTransferP
 vibrating_sprite(::ElectricPumpCompBehav{ElectricTransferPump}) = nothing
 rotor_sprite(::ElectricPumpCompBehav{ElectricTransferPump}) = :ElectroTransferPump_rotor
 
-"Renders static elements of an electric pump: charge bar, fluid mask, and background."
-function render_static!(
-        queue::Vector{<:RenderCommand}, comp::ElectricPumpCompBehav;
-        glmap::GLObjectMap, rotation::HexAxis, position::TileCoord,
-        fluid::Union{FluidType, Nothing} = nothing, gameticks::Int64 = 0,
-        temperature::Float64 = HexFluids.THERMAL_AMBIENT_TEMPERATURE_K,
-        charge_bar_colour::ColourType = let c = get(ColorSchemes.summer, 0.0)
-            ColourType(c.r, c.g, c.b, 1.0)
-        end,
-        pos_offset = nothing,
-        scale::Float64 = 1.0, transparency::Float64 = 1.0,
-        colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0),
-        render_height_offset::Integer = 0
-    )
+# Electric-pump render helpers
+function render_static!(queue::Vector{<:RenderCommand}, comp::ElectricPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, fluid::Union{FluidType, Nothing} = nothing, gameticks::Int64 = 0, temperature::Float64 = HexFluids.THERMAL_AMBIENT_TEMPERATURE_K, charge_bar_colour::ColourType = (c = get(ColorSchemes.summer, 0.0); ColourType(c.r, c.g, c.b, 1.0)), pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0)
     # Render charge bar
     energy_frac = get_current_energy(comp.energy) / get_max_energy(comp.energy)
     push!(queue, render_basic_tile(glmap, chargemask_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = charge_bar_colour, unclipped_texcoord = SVector(energy_frac, 1.0), draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
 
     # Render fluid mask if it exists
     if !isnothing(fluidmask_sprite(comp))
-        if fluid === nothing
+        if isnothing(fluid)
             push!(queue, render_basic_tile(glmap, fluidmask_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = DEFAULT_EMPTY_FLUID_COLOUR, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + render_height_offset), pos_offset = pos_offset))
         elseif is_liquid(fluid)
             fluidmask_colour = get_fluid_colour(fluid, temperature)
@@ -818,7 +800,6 @@ function render_static!(
     return nothing
 end
 
-"Renders static electric pump elements without animation."
 function render_base_elem!(queue::Vector{<:RenderCommand}, comp::ElectricPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     # Render non-animated elements
     render_static!(queue, comp; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, scale = scale, transparency = transparency, colour = colour, render_height_offset = render_height_offset)
@@ -834,7 +815,6 @@ function render_base_elem!(queue::Vector{<:RenderCommand}, comp::ElectricPumpCom
     return nothing
 end
 
-"Renders electric pump with animations when running: vibration and rotating rotor."
 function render_map_elem!(queue::Vector{<:RenderCommand}, comp::ElectricPumpCompBehav; glmap::GLObjectMap, mna_state::MNA_StateSnapshot, derivedmapstate::DerivedMapState, gameticks::Int64, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     # Get fluid at pump input node
     pump_input_node = map_element(HexFrame.NODE_Q_NEG, position, rotation)

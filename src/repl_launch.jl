@@ -1,4 +1,9 @@
 #=
+Scope: Interactive development entry point with Revise and staged loading
+Formatter: Runic
+=#
+
+#=
     ╔════════════════════════════════════════════════════════════════════╗
     ║                                                                    ║
     ║   ██████╗  ██████╗  ██████╗██╗  ██╗███████╗████████╗               ║
@@ -35,23 +40,25 @@
     
     To run from REPL (recommended for development):
         julia> include("src/repl_launch.jl")
-        (or use an IDE like VSCode to run this file directly)
+        (or use an IDE like VS Code to run this file directly)
 =#
 
 # ===============================================================
 # Project Dependencies
 # ===============================================================
 
-# Start Revise.jl First
+# Start Revise first
 using Revise
-# Packages
+
+# External packages
 using LinearAlgebra, StaticArrays, GeometryBasics
 using ModernGL, GLFW, JLD2, CSyntax.CRef
 using TimerOutputs, Accessors, Printf, CSyntax
 using FilePathsBase, NativeFileDialog, FFMPEG
 import CImGui, CImGui.lib
 using ImPlot
-# Custom Packages (working title: HexFlow; project: Rocket Plumber)
+
+# Project packages (working title: HexFlow; project: Rocket Plumber)
 using HexFrame, HexElements, HexFluids, HexFlowTelemetry
 using HexComponentsAPI, FlowEngine, FlowMap, RenderEngine, HexFlowProcGen
 using HexFlowControl, HexFlowCalculator, HexFlowRendering
@@ -62,13 +69,13 @@ using HexFlowLearningSystem
 # Startup Sequence
 # ===============================================================
 
-# minimal load to get a window + ImGui context up quickly
+# Open the window and ImGui context with minimal initial loading
 includet(joinpath(dirname(@__FILE__), "initial_window_setup.jl"))
-configure_threads() # needs minimum of 2 threads to run properly
+configure_threads()  # Requires at least two threads
 window = start_window()
 ui_loadingscreen_render(window, "Initialising")
 
-# load the rest of the game code, showing a loading screen at each step.
+# Load the game with visible loading screens for each stage
 include_with_loadingscreen(window, "recording.jl")
 include_with_loadingscreen(window, "interactions.jl")
 include_with_loadingscreen(window, "components.jl")
@@ -82,7 +89,7 @@ include_with_loadingscreen(window, "ui_menus.jl")
 include_with_loadingscreen(window, "ui_learning.jl")
 include_with_loadingscreen(window, "tutorials.jl")
 
-# GAME LAUNCH
+# Launch the game
 include_with_loadingscreen(window, "startmenu.jl")
 
 enter_start_menu(window)

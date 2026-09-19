@@ -1,13 +1,11 @@
+#=
+Scope: JLD2 game-map persistence and saved-state upgrade conversions
+Formatter: Runic
+Note: Kept free of rendering and UI dependencies for use by headless tools
+=#
+
 # ===============================================================
 # Map Loading and Saving
-# ===============================================================
-#
-# JLD2 serialisation for GameMap persistence.
-#
-# This file is intentionally lean — it only imports what is needed
-# for loading and saving, with no rendering or UI dependencies.
-# That allows it to be included in both the full game and in
-# headless diagnostic / tooling scripts.
 # ===============================================================
 
 using JLD2
@@ -17,7 +15,7 @@ using HexFlowProcGen
 using HexFrame
 import JLD2: rconvert
 
-#= ---------- JLD2 Upgrade Helpers ----------- =#
+#= ---------- JLD2 Upgrade Helpers ---------- =#
 
 "Normalise stored manoeuvre phase values to the current enum."
 function _load_manoeuvre_phase(value)::FlowMap.ManoeuvrePhase
@@ -26,7 +24,7 @@ function _load_manoeuvre_phase(value)::FlowMap.ManoeuvrePhase
     return FlowMap.PHASE_APPROACH_BURN
 end
 
-#= ---------- JLD2 Upgrade Converters ----------- =#
+#= ---------- Component Placement Upgrades ---------- =#
 
 function rconvert(::Type{HexComponentsAPI.PlacedComponent}, nt::NamedTuple)
     component = get(nt, :component, nothing)
@@ -44,13 +42,18 @@ function rconvert(::Type{HexComponentsAPI.PlacedPipe}, nt::NamedTuple)
     return HexComponentsAPI.PlacedPipe(pipe, ship)
 end
 
+#= ---------- Game-State Upgrades ---------- =#
+
 function rconvert(::Type{FlowMap.ShipState}, nt::NamedTuple)
     docking_status = get(nt, :docking_status, FlowMap.ConnectedDockStat())
     return FlowMap.ShipState(docking_status = docking_status)
 end
 
+"Reconstruct playthrough statistics and normalise legacy encounter-class keys."
 function rconvert(::Type{FlowMap.PlaythroughStatistics}, nt::NamedTuple)
     default_statistics = FlowMap.PlaythroughStatistics()
+
+    # Restore persisted measurements
     recorded_play_time_seconds = get(nt, :recorded_play_time_seconds, default_statistics.recorded_play_time_seconds)
     simulated_ticks = get(nt, :simulated_ticks, default_statistics.simulated_ticks)
     total_delta_v = get(nt, :total_delta_v, default_statistics.total_delta_v)
@@ -58,6 +61,7 @@ function rconvert(::Type{FlowMap.PlaythroughStatistics}, nt::NamedTuple)
     stored_encounters = get(nt, :completed_encounters, default_statistics.completed_encounters)
     peak_estimated_delta_v = get(nt, :peak_estimated_delta_v, default_statistics.peak_estimated_delta_v)
 
+    # Normalise dictionary key and value types from older layouts
     completed_encounters = Dict{FlowMap.EncounterClass, Int64}()
     for (encounter_class, count) in pairs(stored_encounters)
         class = encounter_class isa FlowMap.EncounterClass ? encounter_class : FlowMap.EncounterClass(encounter_class)
@@ -71,10 +75,13 @@ function rconvert(::Type{FlowMap.PlaythroughStatistics}, nt::NamedTuple)
         peak_thrust = peak_thrust,
         completed_encounters = completed_encounters,
     )
+
+    # Preserve the invariant maintained by the public recorder
     FlowMap.record_peak_estimated_delta_v!(statistics, peak_estimated_delta_v)
     return statistics
 end
 
+"Reconstruct a game map and upgrade nested statistics stored as a named tuple."
 function rconvert(::Type{FlowMap.GameMap}, nt::NamedTuple)
     default_map = FlowMap.GameMap()
     components = get(nt, :components, default_map.components)
@@ -87,6 +94,8 @@ function rconvert(::Type{FlowMap.GameMap}, nt::NamedTuple)
     statistics = statistics isa NamedTuple ? rconvert(FlowMap.PlaythroughStatistics, statistics) : statistics
     return FlowMap.GameMap(; components, pipe_behaviors, surface_shiptags, ships, space_map, learning_system, statistics)
 end
+
+#= ---------- Learning-State Upgrades ---------- =#
 
 function rconvert(::Type{FlowMap.LearningProgress}, nt::NamedTuple)
     default_progress = FlowMap.LearningProgress()
@@ -110,19 +119,25 @@ function rconvert(::Type{FlowMap.TutorialState}, nt::NamedTuple)
     return FlowMap.TutorialState(; status, unlocked_step, step_blocker)
 end
 
+#= ---------- Space-Map Upgrades ---------- =#
+
 function rconvert(::Type{FlowMap.SpaceMapEmpty}, nt::NamedTuple)
     default_space_map = FlowMap.SpaceMapEmpty()
     velocity = get(nt, :velocity, default_space_map.velocity)
     return FlowMap.SpaceMapEmpty(velocity = velocity)
 end
 
+"Reconstruct an escaped-galaxy map after validating its required persisted fields."
 function rconvert(::Type{FlowMap.GalaxyEscapeSpaceMap}, nt::NamedTuple)
+    # Validate fields with no safe compatibility default
     velocity = get(nt, :velocity, nothing)
     isnothing(velocity) && error("Stored GalaxyEscapeSpaceMap is missing :velocity")
     starting_velocity_x = get(nt, :starting_velocity_x, nothing)
     isnothing(starting_velocity_x) && error("Stored GalaxyEscapeSpaceMap is missing :starting_velocity_x")
     departure_time_years = get(nt, :departure_time_years, nothing)
     isnothing(departure_time_years) && error("Stored GalaxyEscapeSpaceMap is missing :departure_time_years")
+
+    # Upgrade a nested pre-escape map when JLD2 presents its old layout directly
     pre_escape_map = get(nt, :pre_escape_map, FlowMap.GameMap())
     pre_escape_map = pre_escape_map isa NamedTuple ? rconvert(FlowMap.GameMap, pre_escape_map) : pre_escape_map
     pre_escape_map isa FlowMap.GameMap || error("Stored GalaxyEscapeSpaceMap has an invalid :pre_escape_map")
@@ -244,6 +259,8 @@ function rconvert(::Type{HexFlowProcGen.EncounterSystemConfig}, nt::NamedTuple)
     )
 end
 
+#= ---------- Upgrade Registration ---------- =#
+
 "Build the JLD2 typemap used for save migrations when persisted types change shape."
 function _build_map_typemap()::Dict{String, Any}
     typemap = Dict{String, Any}()
@@ -269,9 +286,9 @@ function _build_map_typemap()::Dict{String, Any}
     return typemap
 end
 
-"""
-Load a `GameMap` from the given path, or return an empty map on failure.
-"""
+#= ---------- Load and Save Entry Points ---------- =#
+
+"Load a `GameMap` from the given path, or return an empty map on failure."
 function loadmap(mappath::Union{Nothing, String})::GameMap
     isnothing(mappath) && (@info "No map path provided; starting empty."; return GameMap())
     try
@@ -291,6 +308,7 @@ end
 function loadmap_bundle(mappath::String)::GameMapBundle
     typemap = _build_map_typemap()
     try
+        # Load the map while isolating optional time-lapse failures
         loaded_gamemap, loaded_timelapse, timelapse_error = JLD2.jldopen(mappath, "r"; typemap) do file
             stored_gamemap = file["stored_gamemap"]
             history = nothing
@@ -305,11 +323,13 @@ function loadmap_bundle(mappath::String)::GameMapBundle
             return stored_gamemap, history, history_error
         end
 
+        # Reject an invalid authoritative map
         loaded_gamemap isa GameMap || begin
             @warn "Loaded object was not a GameMap; returning empty." loaded_type = typeof(loaded_gamemap)
             return GameMapBundle(GameMap())
         end
 
+        # Retain only supported time-lapse history
         if !isnothing(timelapse_error)
             @warn "Time-lapse load failed; continuing with the loaded map." exception = timelapse_error
         elseif isnothing(loaded_timelapse)
@@ -329,9 +349,7 @@ function loadmap_bundle(mappath::String)::GameMapBundle
     end
 end
 
-"""
-Dispatch map loading from multiple source types.
-"""
+"Dispatch map loading from multiple source types."
 function loadmap_from_source(map_source::Union{Nothing, String, GameMap, ShipState})::GameMap
     map_source isa GameMap && (@info "Using pre-generated GameMap"; return map_source)
     map_source isa ShipState && (@info "Wrapping ShipState as primary ship"; return GameMap(map_source))
@@ -346,11 +364,13 @@ end
 
 "Save a `GameMapBundle` to disk via JLD2, retaining the legacy map key."
 function savemap(bundle::GameMapBundle, mappath::String)
+    # Reject history that this build cannot read back
     timelapse = bundle.timelapse
     if !isnothing(timelapse) && timelapse.format_version != TIMELAPSE_FORMAT_VERSION
         throw(ArgumentError("unsupported time-lapse format version $(timelapse.format_version)"))
     end
 
+    # Preserve map-only files when no history has been recorded
     try
         if isnothing(timelapse)
             JLD2.jldsave(mappath; stored_gamemap = bundle.gamemap)

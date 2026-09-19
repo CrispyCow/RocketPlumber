@@ -1,27 +1,30 @@
+#=
+Scope: Shared basic component behaviour fragments and simple component compositions
+Formatter: Runic
+=#
 """
-Basic component behavior fragments and compositions.
+Basic component behaviour fragments and compositions.
 
-This module provides fundamental building blocks for component behaviors:
-- PlainSpriteBehavFrag: Simple sprite rendering
-- BasicElemBehavFrag: Circuit element composition
-- BinaryStateBehavFrag/FloatStateBehavFrag: Mutable state tracking
-- StallBehavFrag: Stall state management
-- BasicCompBehav: Complete basic component composition
+This module provides fundamental building blocks for component behaviours and
+the basic component composition.
 
-All components follow the ComponentBehavior interface defined in HexComponentsAPI.
+Exported concrete `ComponentBehavior` implementations:
+
+- `BasicCompBehav`: Basic circuit-element component with a predefined sprite
 """
 module HexFlowBasicComponents
 
 using Accessors
-using HexFrame, HexElements, HexComponentsAPI, RenderEngine, HexFlowRendering
-using HexFluids: THERMAL_AMBIENT_TEMPERATURE_K
+using HexElements, HexFluids, HexFrame
+using HexComponentsAPI
+using HexFlowRendering, RenderEngine
 
-# ComponentBehavior Mandatories
+# `ComponentBehavior` mandatory methods
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
-# ComponentBehavior Optional
-import HexComponentsAPI: update_flowbehav!, render_map_elem!, map_rotation, get_actions, do_action!, get_component_temperature
+# `ComponentBehavior` optional methods
+import HexComponentsAPI: render_map_elem!, map_rotation, get_actions, do_action!, get_component_temperature
 
-# Behavior Fragment Exports
+# Behaviour Fragment Exports
 export HorizontalFlipOnlyBehavFrag, NoRotationBehavFrag
 export PlainSpriteBehavFrag, BasicElemBehavFrag
 export BinaryStateBehavFrag, FloatStateBehavFrag
@@ -29,21 +32,22 @@ export getstate, settrue!, setfalse!, setstate!
 export StallBehavFrag, stall!, unstall!, is_stalled
 export AutoDeactivationBehavFrag, deactivate!, reactivate!, is_inactive
 export DamageStateBehavFrag, damage!, undamage!, is_damaged
-export ComponentTemperatureBehavFrag, get_component_temperature, set_component_temperature!, multiply_colours
+export ComponentTemperatureBehavFrag, get_component_temperature, set_component_temperature!
 export OverheatLimitBehavFrag, get_overheat_limit_temperature, get_overheat_percentage, get_overheat_tint, update_overheat_state!
-# Concrete Component Behavior Exports
+# Helper Function Exports
+export multiply_colours
+# Concrete Component Behaviour Exports
 export BasicCompBehav
 
 # ===============================================================
-# Behavior Fragments
+# Behaviour Fragments
 # ===============================================================
 
 #= ---------- HorizontalFlipOnlyBehavFrag ----------- =#
 
-"Simple behavior fragment that restricts rotation to horizontal (Q_POS or Q_NEG) only"
+"Simple fragment that restricts rotation to horizontal (Q_POS or Q_NEG) only"
 struct HorizontalFlipOnlyBehavFrag end
 
-"Maps all positive rotation directions to Q_POS, and all negative to Q_NEG. Makes the component appear to flip on each rotation change"
 function map_rotation(::HorizontalFlipOnlyBehavFrag, rotation::HexAxis)::HexAxis
     if rotation in (HexFrame.Q_POS, HexFrame.S_POS, HexFrame.R_POS)
         return HexFrame.Q_POS
@@ -54,20 +58,18 @@ end
 
 #= ---------- NoRotationBehavFrag ----------- =#
 
-"Behavior fragment that locks rotation to Q_POS regardless of input"
+"Fragment that locks rotation to Q_POS regardless of input"
 struct NoRotationBehavFrag end
 
-"Map all attempted rotations to Q_POS"
 map_rotation(::NoRotationBehavFrag, rotation::HexAxis)::HexAxis = HexFrame.Q_POS
 
 #= ---------- PlainSpriteBehavFrag ----------- =#
 
-"Simple sprite behavior for a component with a single preselected sprite from the universal spritesheet"
+"Simple sprite fragment for a component with one preselected sprite from the universal spritesheet"
 struct PlainSpriteBehavFrag
     sprite::Symbol
 end
 
-"Renders the pre-selected atlas sprite at the component position"
 function render_base_elem!(queue::Vector{<:RenderCommand}, behav::PlainSpriteBehavFrag; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     base_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
     push!(queue, render_basic_tile(glmap, behav.sprite, rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = base_height, pos_offset = pos_offset))
@@ -77,7 +79,8 @@ end
 #= ---------- BasicElemBehavFrag ----------- =#
 
 """
-A basic component with no behavior beyond that of its circuit elements.
+A basic behaviour fragment with no behaviour beyond that of its circuit
+elements.
 Stores relative elements directly with no additional state.
 Can have a varying number of elements.
 """
@@ -85,17 +88,14 @@ struct BasicElemBehavFrag{N}
     elements::NTuple{N, RelativeElement}
 end
 
-"Varargs constructor for BasicElemBehavFrag"
 function BasicElemBehavFrag(elms::Vararg{RelativeElement, N}) where {N}
-    return BasicElemBehavFrag{N}(elms) # elms is already a NTuple{N,RelativeElement}
+    return BasicElemBehavFrag{N}(elms) # `elms` is already an `NTuple{N, RelativeElement}`
 end
 
-"Returns the stored relative elements for this basic component"
 function produce_rel_elements(comp::BasicElemBehavFrag{N})::NTuple{N, RelativeElement} where {N}
     return ntuple(i -> comp.elements[i], N)
 end
 
-"Returns TunableProps for an Element"
 function get_tunables(elem::T)::TunableProps where {T <: Element}
     return TunableProps(
         get_value(elem),
@@ -104,12 +104,10 @@ function get_tunables(elem::T)::TunableProps where {T <: Element}
     )
 end
 
-"Returns a tuple of TunableProps for all elements in a BasicElemBehavFrag"
 function get_tunables(comp::BasicElemBehavFrag{N})::NTuple{N, TunableProps} where {N}
     return ntuple(i -> get_tunables(comp.elements[i]), N)
 end
 
-"Returns a new component with the tunable values updated"
 function set_tunables(comp::BasicElemBehavFrag{N}, tunables::NTuple{N, T})::BasicElemBehavFrag{N} where {N, T <: Real}
     new_elements = ntuple(
         i -> begin
@@ -122,7 +120,7 @@ end
 
 #= ---------- BinaryStateBehavFrag ----------- =#
 
-"Behavioral fragment to track a single binary state value. Interact with `getstate`, `settrue!` and `setfalse!` functions"
+"Mutable fragment for a single boolean state. Interact with `getstate`, `settrue!`, and `setfalse!`."
 mutable struct BinaryStateBehavFrag
     state::Bool
 end
@@ -133,7 +131,7 @@ setfalse!(frag::BinaryStateBehavFrag) = (frag.state = false)
 
 #= ---------- FloatStateBehavFrag ----------- =#
 
-"Behavioral fragment to track a single floating point state value. Interact with `getstate` and `setstate!` functions"
+"Mutable fragment for a single floating-point state. Interact with `getstate` and `setstate!`."
 mutable struct FloatStateBehavFrag
     state::Float64
 end
@@ -143,7 +141,7 @@ setstate!(frag::FloatStateBehavFrag, new_state::Float64) = (frag.state = new_sta
 
 #= ---------- StallBehavFrag ----------- =#
 
-"Behavioral fragment to track whether a component is stalled. Interact with `stall!`, `unstall!` and `is_stalled` functions"
+"Mutable fragment tracking whether a component is stalled. Interact with `stall!`, `unstall!`, and `is_stalled`."
 mutable struct StallBehavFrag
     stall_state::BinaryStateBehavFrag
 end
@@ -154,7 +152,6 @@ stall!(frag::StallBehavFrag) = settrue!(frag.stall_state)
 unstall!(frag::StallBehavFrag) = setfalse!(frag.stall_state)
 is_stalled(frag::StallBehavFrag)::Bool = getstate(frag.stall_state)
 
-"Renders a stall overlay icon when the component is stalled"
 function render_map_elem!(queue::Vector{<:RenderCommand}, behav::StallBehavFrag; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     if is_stalled(behav)
         overlay_height = Int32(HexFlowRendering.RENDER_HEIGHT_OVERLAY_BASE) + Int32(render_height_offset)
@@ -166,12 +163,14 @@ end
 function get_actions(stall::StallBehavFrag; kwargs...)
     stalled = is_stalled(stall)
     tooltip = stalled ? "Try to reactivate stalled component" : "Component is not currently stalled"
-    return (ActionInfo(
-        id = :unstall,
-        label = "Unstall Component",
-        enabled = stalled,
-        tooltip = tooltip,
-    ),)
+    return (
+        ActionInfo(
+            id = :unstall,
+            label = "Unstall Component",
+            enabled = stalled,
+            tooltip = tooltip,
+        ),
+    )
 end
 
 function do_action!(stall::StallBehavFrag, action_id::Symbol; kwargs...)
@@ -188,7 +187,7 @@ end
 
 #= ---------- AutoDeactivationBehavFrag ----------- =#
 
-"""Behavioral fragment for auto-deactivation state.
+"""Mutable fragment for auto-deactivation state.
 
 Components deactivate automatically on harmful flow conditions and reactivate via the
 speculative probe scheduler. Use `deactivate!`, `reactivate!`, and `is_inactive`.
@@ -205,7 +204,7 @@ is_inactive(frag::AutoDeactivationBehavFrag)::Bool = getstate(frag.inactive_stat
 
 #= ---------- DamageStateBehavFrag ----------- =#
 
-"Behavioral fragment to track persistent component damage. Interact with `damage!`, `undamage!` and `is_damaged` functions"
+"Mutable fragment for persistent component damage. Interact with `damage!`, `undamage!`, and `is_damaged`."
 mutable struct DamageStateBehavFrag
     damage_state::BinaryStateBehavFrag
 end
@@ -216,7 +215,6 @@ damage!(frag::DamageStateBehavFrag) = settrue!(frag.damage_state)
 undamage!(frag::DamageStateBehavFrag) = setfalse!(frag.damage_state)
 is_damaged(frag::DamageStateBehavFrag)::Bool = getstate(frag.damage_state)
 
-"Renders a temporary damage overlay icon when the component is damaged"
 function render_map_elem!(queue::Vector{<:RenderCommand}, behav::DamageStateBehavFrag; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     if is_damaged(behav)
         overlay_height = Int32(HexFlowRendering.RENDER_HEIGHT_OVERLAY_BASE) + Int32(render_height_offset)
@@ -228,12 +226,14 @@ end
 function get_actions(damage::DamageStateBehavFrag; kwargs...)
     damaged = is_damaged(damage)
     tooltip = damaged ? "Temporarily repair this damaged component" : "Component is not currently damaged"
-    return (ActionInfo(
-        id = :repair_component,
-        label = "Repair Component",
-        enabled = damaged,
-        tooltip = tooltip,
-    ),)
+    return (
+        ActionInfo(
+            id = :repair_component,
+            label = "Repair Component",
+            enabled = damaged,
+            tooltip = tooltip,
+        ),
+    )
 end
 
 function do_action!(damage::DamageStateBehavFrag, action_id::Symbol; kwargs...)
@@ -250,7 +250,7 @@ end
 
 #= ---------- ComponentTemperatureBehavFrag ----------- =#
 
-"Behavioral fragment tracking a component-local temperature state in Kelvin"
+"Mutable fragment tracking component-local temperature in Kelvin."
 mutable struct ComponentTemperatureBehavFrag
     temperature_state::FloatStateBehavFrag
 end
@@ -271,11 +271,11 @@ const THERMAL_HEAT_LOSS_SCALE = 1.0
 
 "Reusable overheating fragment with local temperature state, persistent damage, and configurable heat-balance parameters"
 struct OverheatLimitBehavFrag
-    limit_temperature_k::Float64
-    thermal_mass::Float64
-    heat_loss_factor::Float64
-    temperature::ComponentTemperatureBehavFrag
-    damage::DamageStateBehavFrag
+    limit_temperature_k::Float64                  # Damage threshold
+    thermal_mass::Float64                         # Heat capacity scale
+    heat_loss_factor::Float64                     # Passive cooling strength
+    temperature::ComponentTemperatureBehavFrag    # Mutable temperature state
+    damage::DamageStateBehavFrag                  # Persistent damage state
 
     function OverheatLimitBehavFrag(
             limit_temperature_k::Real,
@@ -327,6 +327,7 @@ function set_tunables(frag::OverheatLimitBehavFrag, tunables::NTuple{3, T})::Ove
     )
 end
 
+"Return the current temperature as a fraction of the ambient-to-limit overheat range."
 function get_overheat_percentage(frag::OverheatLimitBehavFrag)::Float64
     current_temperature = get_component_temperature(frag)
     if current_temperature <= THERMAL_AMBIENT_TEMPERATURE_K
@@ -339,12 +340,14 @@ function get_overheat_percentage(frag::OverheatLimitBehavFrag)::Float64
     return (current_temperature - THERMAL_AMBIENT_TEMPERATURE_K) / temperature_span
 end
 
+"Return the display tint for the current overheat percentage."
 function get_overheat_tint(frag::OverheatLimitBehavFrag)::ColourType
     overheat_percentage = get_overheat_percentage(frag)
     green_blue = 1.0 - overheat_percentage
     return ColourType(1.0, green_blue, green_blue, 1.0)
 end
 
+"Advance component temperature toward the fluid and ambient heat balance, damaging the fragment if it overheats"
 function update_overheat_state!(
         frag::OverheatLimitBehavFrag;
         fluid_temperature_k::Real = THERMAL_AMBIENT_TEMPERATURE_K,
@@ -374,7 +377,7 @@ get_actions(frag::OverheatLimitBehavFrag; kwargs...) = get_actions(frag.damage; 
 do_action!(frag::OverheatLimitBehavFrag, action_id::Symbol; kwargs...) = do_action!(frag.damage, action_id; kwargs...)
 
 # ===============================================================
-# Concrete Component Behaviors
+# Concrete Component Behaviours
 # ===============================================================
 
 #= ---------- BasicCompBehav ----------- =#

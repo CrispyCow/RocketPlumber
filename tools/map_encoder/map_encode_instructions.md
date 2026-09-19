@@ -1,411 +1,610 @@
-# Map Encoder Instructions for AI Agents
+# Map Encoding And Code Generation Guide
 
-## Overview
-This document provides instructions for AI agents to convert encoded GameMap structures into Julia code that recreates the maps. There are two workflows depending on map complexity:
+Use this procedure to convert a saved JLD2 `GameMap` into maintainable Julia
+source. It is deliberately detailed: map conversion crosses persistence,
+component constructors, mutable behaviour state, ship ownership, and circuit
+generation, and a structurally plausible generator can still be wrong.
 
-- **Manual authoring** (preferred for simple maps): The agent reads the encoder's human-readable summary, then writes a clean mapgen function by hand using keyword constructors. This produces the most readable, editable output. See `src/demo_maps/mapgen_controllingcoldgas.jl` as the reference style.
-- **Auto-generation with reformatting** (for complex/procgen maps): When a map has too many uniquely-parameterised components to hand-craft, use the encoder's `.jl` output mode, then clean up the generated code with a reformatting pass.
+Read the repository and `tools/` `AGENTS.md` files before starting. When the
+result will live under `src/demo_maps/`, also read `src/AGENTS.md`.
 
-Both workflows use the same comparison tool to validate the result.
+## Scope And Prerequisites
 
-## Workflow Steps
+Run commands from the repository root with the root project:
 
-### Step 1: Encode the Original Map
-Use the encoding tool to convert the JLD2 map file to readable text:
-
-```bash
-# Option 1: Use a map name (looks in maps/ folder)
-julia --project=. tools/map_encoder/encode_map.jl <mapname>
-
-# Option 2: Use a relative or absolute path to the .jld2 file
-julia --project=. tools/map_encoder/encode_map.jl <path/to/map.jld2>
+```shell
+julia --project=. tools/map_encoder/encode_map.jl path/to/source_map.jld2
 ```
 
-Examples:
-```bash
-# Map name (backwards compatible - looks in maps/ folder)
-julia --project=. tools/map_encoder/encode_map.jl autotest1
+The input must be an existing path ending in lowercase `.jld2`. The scripts do
+not resolve bare map names through a `maps/` directory.
 
-# Relative path from project root
-julia --project=. tools/map_encoder/encode_map.jl src/demo_maps/basicplumbing.jld2
+The current package dependency chain initialises GLFW while loading component
+packages. Both scripts therefore need a working display/OpenGL environment;
+they are not currently headless utilities.
 
-# Absolute path
-julia --project=. tools/map_encoder/encode_map.jl C:/path/to/mymap.jld2
+Only run the comparator on a generator file you trust. It uses `include` and
+executes that file as Julia code in `Main`.
+
+## 1. Load And Inspect The Save
+
+Start with the readable encoder output:
+
+```shell
+julia --project=. tools/map_encoder/encode_map.jl path/to/source_map.jld2
 ```
 
-This will output the map structure to stdout in a formatted way.
+To retain the listing, provide a non-`.jl` output path:
 
-### Step 2: Analyze the Encoded Map
-Study the output to understand:
-- Component types and their parameters
-- Tile positions and rotations  
-- Pipe connections and conductances
-- Overall map structure and purpose
+```shell
+julia --project=. tools/map_encoder/encode_map.jl \
+  path/to/source_map.jld2 /tmp/source_map.txt
+```
 
-### Step 3: Choose a Workflow
+The parent directory for a text output must already exist. The encoder always
+prints the readable listing to stdout, even when it also writes a file.
 
-Based on the map complexity:
+The listing contains, per ship:
 
-- **Simple map** (≤15–20 components, 1–2 ships, components match or are close to const definitions in `src/components.jl`): Proceed with **Manual Authoring** (Step 4a)
-- **Complex map** (many unique procgen parameters, multiple ships, 30+ components): Proceed with **Auto-Generation** (Step 4b)
+- placed component coordinates and their stored representations;
+- rotations, mirror flags, and ownership tags;
+- pipe coordinates and stored behaviours;
+- owned surface tiles.
 
-When in doubt, try manual authoring first — it produces much better output.
+It resembles Julia constructors but is a diagnostic listing, not an
+executable `GameMap` expression.
 
-### Step 4a: Manual Authoring (Simple Maps)
-Create a Julia file with a function named `mapgen_<mapname>()` that returns a GameMap.
+### Confirm That Loading Really Succeeded
 
-#### Function Requirements:
-- **Function name**: Must be `mapgen_<mapname>()` where `<mapname>` matches the original file
-- **Return type**: Must return a `GameMap`
-- **Dependencies**: Should use component constructors from the existing codebase
-- **Style**: Should follow existing code patterns in the project
+Both tools use the application's canonical loader in `src/map_loading.jl`, so
+older saves benefit from the current JLD2 conversion hooks. The loader also
+catches load failures, emits a warning, and returns a default `GameMap`.
 
-#### Component Reference Locations:
-To understand how to construct components, examine these files:
-- `src/components.jl` - Contains component constant definitions and constructor patterns
-- `local_packages/components/HexFlowBasicComponents/src/HexFlowBasicComponents.jl` - Basic component behaviours and fragments
-- `local_packages/components/HexFlowTankComponents/src/HexFlowTankComponents.jl` - Tank-related components
-- `local_packages/components/HexFlowPumpComponents/src/HexFlowPumpComponents.jl` - Pump and propulsion components
-- `local_packages/components/HexFlowNozzleComponents/src/HexFlowNozzleComponents.jl` - Nozzle and thrust components
-- `local_packages/components/HexFlowSwitchComponents/src/HexFlowSwitchComponents.jl` - Switch and control components
+Do not continue merely because the command exited normally. Check for messages
+such as `Map load failed; returning empty`, then sanity-check:
 
-#### Key Constructor Patterns:
-Study `src/components.jl` to see how components are typically constructed:
+- the expected ship names;
+- approximate component and pipe counts;
+- the expected surface extent;
+- a few distinctive component types and coordinates.
+
+A conversion of the fallback map can look valid while containing only default
+state.
+
+### Check The Input Basename
+
+The input basename determines the required function name. For:
+
+```text
+path/to/cold_gas_intro.jld2
+```
+
+the generator must define:
 
 ```julia
-# Example patterns from components.jl:
-const TurboPump = TurboPumpCompBehav(
-   max_pump_voltage = 50.0,
-    series_conductance = 1.0,
-   max_turbine_conductance = 0.3,
-   cycle_efficiency = 0.6,
-   max_rpm = 3000.0,
-   rotor_inertia = 1000.0,
-   friction_coefficient = 0.005,
-)
+function mapgen_cold_gas_intro()
+    # ...
+end
+```
 
-const TriGasTank = ThevininTankCompBehav(GasTankBehavFrag, 3;
+The basename is not aggressively sanitised. Rename the save before conversion
+if the suffix after `mapgen_` would not be a valid Julia identifier.
+
+## 2. Understand What Is And Is Not Encoded
+
+The encoder reconstructs the ship construction data:
+
+- ship names;
+- components, pipes, and surface tiles;
+- component rotation and mirroring;
+- component, pipe, and surface ownership.
+
+It does not reconstruct these `GameMap` concerns:
+
+- `ShipState.docking_status`;
+- `space_map`, including velocity, manoeuvre, encounter, and galaxy-escape
+  state;
+- `learning_system`;
+- playthrough `statistics`;
+- time-lapse history stored beside a map.
+
+Generated maps receive the defaults used by `GameMap(blueprint)` and
+`merge_ship!`: connected docking state, an empty space map, no learning system,
+and fresh statistics. Time-lapse history is not part of the generated
+`GameMap` and is simply omitted. Tutorial learning configuration normally
+belongs in `src/tutorials.jl`, not in the map generator.
+
+If any omitted state matters to the intended result, plan and validate that
+integration separately. The comparator does not cover it.
+
+## 3. Choose An Authoring Path
+
+### Manual Authoring
+
+Prefer manual authoring for small tutorial and showcase maps, or whenever the
+saved representation can be expressed cleanly with current public
+constructors. This gives useful names, comments, and constructor intent rather
+than preserving internal fragment layout mechanically.
+
+Good current references include:
+
+- `src/demo_maps/mapgen_basicplumbing.jl` for a small single-ship map;
+- `src/demo_maps/mapgen_controllingcoldgas.jl` for repeated stateful
+  components;
+- `src/demo_maps/mapgen_liquidtransfer.jl` for multiple ships;
+- `src/demo_maps/mapgen_teasership.jl` for a large generated map.
+
+### Direct Generation
+
+For a large proc-generated map or one with many unique runtime values, emit a
+Julia starting point:
+
+```shell
+julia --project=. tools/map_encoder/encode_map.jl \
+  path/to/source_map.jld2 mapgen_source_map.jl
+```
+
+A bare `.jl` filename is written under `src/demo_maps/`. A path such as
+`generated/mapgen_source_map.jl` is used as written and its parent directories
+are created. The function name still comes from the input save, not the output
+filename.
+
+Direct output serialises component and pipe behaviours with `repr`. It favours
+reconstruction over readability and may expose internal fragments. First
+compare the untouched output. Then clean it up in small steps, comparing after
+each semantic edit.
+
+Do not choose between these paths by a rigid component count. Consider how
+many distinct constructors and mutable states need to be reconstructed and
+whether the resulting source will remain understandable.
+
+## 4. Verify Constructors From Current Source
+
+Encoded output shows stored structure; it does not tell you which public
+constructor originally produced that structure. Wrapper and fragment
+constructors may transform their inputs.
+
+For every component type used in a manually authored generator:
+
+1. Find a current application instance or map example in `src/components.jl`
+   and `src/demo_maps/`.
+2. Find the constructor in the relevant package under
+   `local_packages/components/`.
+3. Read the package tests for state and edge-case semantics.
+4. Map the saved fields back to constructor arguments.
+5. Confirm the result with the comparator; do not rely on type and coordinate
+   agreement alone.
+
+Useful implementation packages are:
+
+- `HexFlowBasicComponents` for shared fragments;
+- `HexFlowTankComponents` for gas, liquid, and pressure-fed tanks;
+- `HexFlowNozzleComponents` for nozzles and chambers;
+- `HexFlowPumpComponents` for turbopumps and electric pumps;
+- `HexFlowSwitchComponents` for switches and valves;
+- `HexFlowBasicPipes` for built-in pipe behaviours.
+
+### Current Tank Example
+
+Thevenin tanks take a fragment type, the supported connection count, and
+keyword parameters:
+
+```julia
+gas_tank = ThevininTankCompBehav(
+    GasTankBehavFrag,
+    3;
     fluid = HexFluids.COLD_GAS,
-    max_charge = 200,
-    max_voltage = 50,
-    initial_charge = 150,
-    series_conductance = 5.0
+    max_charge = 200.0,
+    max_voltage = 50.0,
+    initial_charge = 150.0,
+    series_conductance = 5.0,
 )
+```
 
-# Pressure-fed tank (positional constructor with inner fragment):
-const PressureFedLiquidTank = PressureFedTankCompBehav(
+Do not assume application constants have the same stored values as the save.
+For example, `TriGasTank` is a particular configured instance, not a type.
+
+### Switched-Nozzle Connection Trap
+
+For the current switched nozzle constructor, `connected_node` is the external
+node that connects to the ship's pipe network:
+
+```julia
+switched_nozzle = SwitchedNozzleCompBehav(
+    throat_area = 0.2,
+    connected_node = HexFrame.NODE_Q_POS,
+    max_conductance = 2.0,
+    min_conductance = 0.0,
+    growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS),
+    limit_temperature_k = 400.0,
+)
+```
+
+The constructor creates a switch from that external node to
+`HexFrame.NODE_INTERNAL_1` and a nozzle from the internal node to ground. Do
+not pass `NODE_INTERNAL_1` as `connected_node`. A wrong value can produce the
+right component type and tunables while creating the wrong circuit topology.
+
+### Pressure-Fed Tank State
+
+A pressure-fed tank with initial liquid must also identify that liquid:
+
+```julia
+pressure_fed_tank = PressureFedTankCompBehav(
     PressureFedTankBehavFrag(
         initial_liquid_charge = 150.0 / HexFluids.lookup_fluid_density(HexFluids.MONOPROP_LIQUID),
         initial_gas_charge = 0.0,
         max_liquid_charge = 200.0 / HexFluids.lookup_fluid_density(HexFluids.MONOPROP_LIQUID),
         max_gas_pressure = 50.0,
-        gas_node = HexFrame.NODE_Q_POS
+        gas_node = HexFrame.NODE_Q_POS,
+        initial_liquid_fluid = HexFluids.MONOPROP_LIQUID,
     ),
-    (HexFrame.NODE_Q_NEG,),   # liquid_nodes tuple
-    5.0,                       # series_conductance
-    HexFluids.COLD_GAS,       # gas_fluid
-    HexFluids.MONOPROP_LIQUID, # liquid_fluid
-    NoRotationBehavFrag()
+    (HexFrame.NODE_Q_NEG,),
+    5.0,
+    HexFluids.COLD_GAS,
+    NoRotationBehavFrag(),
+)
+```
+
+Omitting `initial_liquid_fluid` while supplying positive liquid charge leaves
+the stored liquid identity unset. This is an example of state that may not be
+obvious from a high-level component name.
+
+### Pipe Examples
+
+Current built-in pipes accept either their default conductance or an explicit
+value:
+
+```julia
+scrap_pipe = ScrapPipeBehav()      # 2.0 S
+big_pipe = BigPipeBehav()          # 10.0 S
+custom_pipe = ScrapPipeBehav(5.0)  # 5.0 S
+```
+
+Verify these defaults against `HexFlowBasicPipes` when future code changes
+them; generated output should preserve the saved value explicitly where
+necessary.
+
+## 5. Build A Single-Ship Map
+
+`ShipBlueprint()` starts with empty component, pipe, and surface collections.
+Populate the blueprint, then construct the primary map with
+`GameMap(blueprint)`.
+
+```julia
+"""Create a small map used to demonstrate gas storage."""
+function mapgen_gas_storage_example()
+    blueprint = ShipBlueprint()
+
+    gas_tank = ThevininTankCompBehav(
+        GasTankBehavFrag,
+        3;
+        fluid = HexFluids.COLD_GAS,
+        max_charge = 200.0,
+        max_voltage = 50.0,
+        initial_charge = 150.0,
+        series_conductance = 5.0,
+    )
+
+    blueprint.components[TileCoord(0, 0)] =
+        PlacedComponent(gas_tank, HexFrame.Q_POS, :_blueprint)
+
+    push!(blueprint.ship_tiles, TileCoord(0, 0))
+
+    gamemap = GameMap(blueprint)
+    return gamemap
+end
+```
+
+Blueprint component ownership is provisional. Use `:_blueprint` in
+`PlacedComponent`; `GameMap(blueprint)` and `merge_ship!` replace it with the
+destination ship name. To preserve mirroring, use the four-argument form:
+
+```julia
+PlacedComponent(component, HexFrame.R_NEG, true, :_blueprint)
+```
+
+Blueprint pipe dictionaries contain raw `PipeBehavior` values, not
+`PlacedPipe` wrappers:
+
+```julia
+pipe_coord = PipeCoord(
+    VertexCoord(TileCoord(0, 0), HexFrame.Q_POS),
+    VertexCoord(TileCoord(0, 0), HexFrame.R_NEG),
+)
+blueprint.pipe_behaviors[pipe_coord] = ScrapPipeBehav()
+```
+
+The `PipeCoord` constructor canonicalises its endpoints and rejects invalid
+geometry. Valid built-in render spans include side, short-diagonal, and
+long-diagonal spans. Copy coordinates exactly from the encoded listing unless
+the map design is intentionally changing.
+
+## 6. Keep Stateful Placements Independent
+
+Many component behaviours are immutable outer structs containing mutable
+state. Reusing one instance can make interacting with one tile change another
+tile.
+
+This is unsafe for a stateful component:
+
+```julia
+nozzle = SwitchedNozzleCompBehav(
+    throat_area = 0.2,
+    connected_node = HexFrame.NODE_Q_POS,
+    max_conductance = 2.0,
+    min_conductance = 0.0,
+    growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS),
 )
 
-# StandardValveCompBehav takes a switch fragment type and valve size type:
-const LargeAdjValve = StandardValveCompBehav(SteppedSwitchBehavFrag, LargeValve;
-    max_conductance = 4.0, min_conductance = 0.0,
-    growth_factor = calculate_growth_factor(4.0, 0.0, 2.0 / BASE_UPS),
-    percentage_step_size = 0.05
+blueprint.components[TileCoord(1, 0)] =
+    PlacedComponent(nozzle, HexFrame.Q_NEG, :_blueprint)
+blueprint.components[TileCoord(1, -1)] =
+    PlacedComponent(nozzle, HexFrame.Q_NEG, :_blueprint)
+```
+
+Use fresh construction for a few instances or a template plus `deepcopy` for
+repetition:
+
+```julia
+nozzle_template = SwitchedNozzleCompBehav(
+    throat_area = 0.2,
+    connected_node = HexFrame.NODE_Q_POS,
+    max_conductance = 2.0,
+    min_conductance = 0.0,
+    growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS),
 )
-const LargeOnOffValve = StandardValveCompBehav(BoolSwitchBehavFrag, LargeValve;
-    max_conductance = 4.0, min_conductance = 0.0,
-    growth_factor = calculate_growth_factor(4.0, 0.0, 2.0 / BASE_UPS)
-)
 
-# DecompChamber has no parameters:
-const BasicDecompChamber = DecompChamberCompBehav()
+blueprint.components[TileCoord(1, 0)] =
+    PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_NEG, :_blueprint)
+blueprint.components[TileCoord(1, -1)] =
+    PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_NEG, :_blueprint)
 ```
 
-#### Code Generation Guidelines:
+Apply the same caution to application constants such as `TriGasTank`,
+`TurboPump`, and `LargeAdjValve`. Treat a constant as a reference
+configuration; use `deepcopy` or a fresh constructor for each stateful
+placement.
 
-1. **Component Identification**: 
-   - Match component types from the encoded structure to constructor patterns in `src/components.jl`
-   - Extract parameter values from the tunable information in the encoded data
-   - Use appropriate constructor syntax (keyword arguments vs positional)
+The comparator's identity check is a backstop, not permission to reuse
+instances until it complains. It skips `isbitstype` values, conservatively
+flags other shared objects, and permits generated sharing when it also detects
+sharing somewhere in the original map. It does not compare the two maps'
+complete aliasing graphs.
 
-2. **Constructor Verification** (CRITICAL):
-   - For EVERY component type you use in the mapgen function, you MUST examine its constructor definition
-   - Location hierarchy for finding constructors:
-     1. First check `src/components.jl` for const definitions and reference patterns
-     2. Then check the component's source file in `local_packages/components/HexFlow*Components/src/*.jl`
-     3. Pay special attention to the constructor's parameter names and their semantic meaning
-   
-   - **Common Constructor Pitfalls:**
-     - `SwitchedNozzleCompBehav`: The `connected_node` parameter specifies the EXTERNAL node that connects to your pipe/tank system, NOT the internal node. The constructor internally creates a switch connecting `connected_node` → `NODE_INTERNAL`, and a nozzle connecting `NODE_INTERNAL` → `GROUND`. Always set `connected_node = HexFrame.NODE_Q_POS` (or appropriate external node based on rotation), never `NODE_INTERNAL`.
-     - Multi-stage components: Parameters in the constructor may differ from internal structure shown in encoded output
-     - Wrapper components: Constructor parameters may be transformed before being stored in internal fragments
-   
-   - **Verification Process:**
-     1. Identify the component type from encoded output (e.g., `SwitchedNozzleCompBehav`)
-     2. Search for its constructor definition: `grep -r "function SwitchedNozzleCompBehav" local_packages/components/`
-     3. Read the constructor signature and parameter documentation carefully
-     4. Map encoded internal structure back to constructor parameters (reverse-engineer the transformation)
-     5. Cross-reference with examples in `src/components.jl` for the same component type
-     6. When in doubt, look at the switch/fragment connections in the encoded output to determine the external node
+## 7. Respect Placement And Ownership Semantics
 
-   - **⚠️ CRITICAL: Handling Stateful Components:**
-     
-     Many components contain mutable state (e.g., switches, tanks, nozzles). **You must create separate instances for each placement** to avoid sharing state between tiles.
-     
-     **❌ WRONG - Shared References (Bug!):**
-     ```julia
-     # This causes both nozzles to share the same state object!
-     switched_nozzle = SwitchedNozzleCompBehav(...)
-map.components[TileCoord(1, 1)] = PlacedComponent(switched_nozzle, HexFrame.S_POS)
-map.components[TileCoord(1, -2)] = PlacedComponent(switched_nozzle, HexFrame.R_POS)
-# Opening one nozzle will open BOTH - they point to the same object!
-```
+The generic component placement rule requires a surface tile, but specialised
+components may override it. Nozzles deliberately sit off the ship surface with
+their external input node touching the owning ship's surface.
 
-**✅ CORRECT - Separate Instances (Preferred for 2 components):**
+Consequently, do not “repair” an encoded off-surface nozzle by adding its tile
+to `ship_tiles`. Preserve the original surface and verify the nozzle's
+`connected_node`, rotation, and mirrored state together.
+
+The six rotations are:
+
 ```julia
-# Create separate instances with descriptive names
-switched_nozzle_1 = SwitchedNozzleCompBehav(...)
-switched_nozzle_2 = SwitchedNozzleCompBehav(...)
-map.components[TileCoord(1, 1)] = PlacedComponent(switched_nozzle_1, HexFrame.S_POS)
-map.components[TileCoord(1, -2)] = PlacedComponent(switched_nozzle_2, HexFrame.R_POS)
+HexFrame.Q_POS
+HexFrame.R_NEG
+HexFrame.S_POS
+HexFrame.Q_NEG
+HexFrame.R_POS
+HexFrame.S_NEG
 ```
 
-**✅ CORRECT - Inline Creation (Best for simple components with few constuctor arguments):**
+Coordinates use these forms:
+
 ```julia
-# Create directly in PlacedComponent - no variables needed
-map.components[TileCoord(1, 1)] = PlacedComponent(
-    SwitchedNozzleCompBehav(...), HexFrame.S_POS)
-map.components[TileCoord(1, -2)] = PlacedComponent(
-    SwitchedNozzleCompBehav(...), HexFrame.R_POS)
+TileCoord(q, r)
+VertexCoord(TileCoord(q, r), HexFrame.Q_POS)
+PipeCoord(vertex_1, vertex_2)
 ```
 
-**✅ CORRECT - Using deepcopy (For 3+ identical components):**
+Within a live `GameMap`, component, pipe, and surface dictionaries are global
+and ownership is carried by tags. Within a `ShipBlueprint`, component tags are
+provisional and pipes are unwrapped. Let `GameMap(blueprint)` and `merge_ship!`
+perform the final retagging.
+
+## 8. Build Multi-Ship Maps Correctly
+
+Construct the primary ship first, then merge additional blueprints:
+
 ```julia
-# Define template and copy for each use
-nozzle_template = SwitchedNozzleCompBehav(...)
-map.components[TileCoord(1, 1)] = PlacedComponent(deepcopy(nozzle_template), HexFrame.S_POS)
-map.components[TileCoord(1, -2)] = PlacedComponent(deepcopy(nozzle_template), HexFrame.R_POS)
-map.components[TileCoord(2, 0)] = PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_POS)
+function mapgen_two_ship_example()
+    primary_blueprint = ShipBlueprint()
+    push!(primary_blueprint.ship_tiles, TileCoord(0, 0))
+
+    secondary_blueprint = ShipBlueprint()
+    push!(secondary_blueprint.ship_tiles, TileCoord(4, 0))
+
+    gamemap = GameMap(primary_blueprint)
+    merge_ship!(gamemap, :secondary, secondary_blueprint)
+    return gamemap
+end
 ```
 
-**Which approach to use:**
-     - **Inline creation**: Best for 1-2 components with simple constructors 
-     - **Separate variables**: Good for 2 components with descriptive names (e.g., `left_tank`, `right_tank`)
-     - **deepcopy**: Best for 3+ identical components to avoid repeating long parameter lists
-     
-     **When in doubt, assume a component has state!** Most components with switches, tanks, energy storage, or changing behavior are stateful.
-     
-     **Note on validation:** The `compare_maps.jl` validation tool includes an identity check that detects shared component references. It uses `isbitstype()` to filter out safe types (like simple pipe behaviors) that contain only primitive data with no references. Any type that isn't `isbitstype` is conservatively flagged if shared, which may produce occasional false positives for truly stateless immutable types - but this is acceptable since the comparison against the original map serves as a validation fallback.
-     
-     **The comparison tool will detect this error** and report "SHARED COMPONENT REFERENCES DETECTED" with details of which tiles share objects.
+Do not start with `GameMap()` and then call
+`merge_ship!(gamemap, :primary, primary_blueprint)`: the default map already
+contains `:primary`, so the merge is rejected.
 
-#### Map Structure (Multi-Ship example):
-   ```julia
-   function mapgen_<mapname>()
-      # Create ShipBlueprint for the first ship
-      ship_primary = ShipBlueprint()
-      ship_primary.components[TileCoord(0, 0)] = PlacedComponent(SomeCompBehav(...), HexFrame.S_POS, false, :_blueprint)
-      ship_primary.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(0, 0), HexFrame.Q_POS), VertexCoord(TileCoord(0, 0), HexFrame.R_NEG))] = ScrapPipeBehav()
-      ship_primary.ship_tiles = Set([TileCoord(0,0), TileCoord(1,0)])
+`merge_ship!` also rejects collisions with existing component, pipe, or
+surface coordinates. Different ships still occupy the same global coordinate
+space.
 
-      # Create another ShipBlueprint for the second ship
-      ship_secondary = ShipBlueprint()
-      ship_secondary.components[TileCoord(2, 0)] = PlacedComponent(AnotherCompBehav(...), HexFrame.Q_POS, false, :_blueprint)
-      ship_secondary.ship_tiles = Set([TileCoord(2,0), TileCoord(2,1)])
+Direct multi-ship generation assumes the source map has a `:primary` ship.
+Ship names are preserved with `Symbol(...)`; local variable names are derived
+from sanitised ship names. Review unusual ship names because distinct names
+such as `A-B` and `A_B` can produce the same local variable suffix.
 
-      # Combine into a GameMap
-       map = GameMap()
-      merge_ship!(map, :primary, ship_primary)
-      merge_ship!(map, :secondary, ship_secondary)
+The direct generator does not preserve docking statuses. If a particular
+status matters, add it deliberately using the current `merge_ship!` interface
+and validate it separately because the comparator does not check it.
 
-       return map
-   end
-   ```
+## 9. Clean Up Directly Generated Code
 
-3. **Parameter Extraction**:
-   - Look for tunable values in the encoded component structures
-   - Use reasonable default values for non-tunable parameters
-   - Pay attention to state values (tank charges, energy levels) that might need adjustment
+First compare the untouched generated file. Once it passes, improve it without
+changing its meaning:
 
-4. **Coordinate Handling**:
-   - `TileCoord(q, r)` for hex tile positions
-   - `PipeCoord(vertex1, vertex2)` for pipe connections
-   - Rotations use `HexFrame.Q_POS`, `HexFrame.Q_NEG`, etc.
+1. Add a short docstring describing the map and, for tutorials, the learning
+   objective.
+2. Add clear sections for each ship.
+3. Group components by role or type, followed by pipes and surface tiles.
+4. Add brief comments for non-obvious topology or constructor choices.
+5. Preserve constructor arguments and saved values exactly during the first
+   cleanup pass.
+6. Do not replace repeated constructor expressions with one shared stateful
+   instance. Use a verified template plus `deepcopy`.
+7. Do not replace an emitted constructor with an application constant unless
+   its type, tunables, internal state, and produced elements are equivalent.
+8. Re-run the comparator after every semantic edit.
 
-5. **Pipe Behaviors**:
-   - Pipes use `PipeBehavior` types like `ScrapPipeBehav()` or `BigPipeBehav()`
-   - Default constructors use standard conductance values (ScrapPipeBehav = 2.0 S, BigPipeBehav = 10.0 S)
-   - Custom conductance: `ScrapPipeBehav(5.0)` or `BigPipeBehav(15.0)`
-   - `PipeCoord`s can represent side spans, short diagonals, and long diagonals
+Reordering independent dictionary assignments is normally safe. Be more
+cautious when consolidating constructors, changing ownership, or altering
+surface coordinates.
 
-6. **Ship Surface**:
-   - The `ship_tiles` field defines where components can be placed
-   - It's a `Set{TileCoord}` containing all valid placement locations
-   - **Important**: `ShipBlueprint()` defaults to `ship_tiles = Set([TileCoord(0,0)])`. Use direct assignment (`ship.ship_tiles = Set{TileCoord}([...])`) rather than `set_surface_tile!` to avoid keeping the default `(0,0)` tile
+## 10. Compare Against The Save
 
-## Save Loading Note
+Run:
 
-The encoder and comparison tools load maps through `src/map_loading.jl` rather than reading raw JLD2 structures directly. That means any reconstruction hooks kept there are part of the supported map-encoding workflow.
-   - Components can only be placed on coordinates in the ship surface
-   - Pipe endpoints must connect to nodes adjacent to ship surface tiles
-
-## Known Limitations
-
-### Space Maps Are Not Encoded
-The `GameMap.space_map` field (which holds encounter systems, manoeuvre data, and velocity state) is **not encoded** into mapgen functions. Generated maps will use the default `SpaceMapEmpty()`. If the original map had a `SpaceMapState` with encounters and manoeuvres, that data is intentionally discarded during encoding.
-
-This is acceptable because these maps are used for tutorials where the space map state is managed separately by the tutorial/learning system.
-
-### Learning System Is Not Encoded
-The `GameMap.learning_system` field (which holds tutorial progress, step states, etc.) is **not encoded** into mapgen functions. Generated maps will use the default `NoLearningSystem()`. Tutorial maps have their learning system configuration applied externally via the learning system definitions in `src/tutorials.jl`, not stored in the map itself.
-
-7. **Documentation**:
-   - Add comments explaining the purpose of complex components
-   - Include a docstring describing what the tutorial teaches
-   - Note any interesting patterns or learning objectives
-
-### Step 4b: Auto-Generate and Reformat (Complex Maps)
-
-For maps that are too complex to hand-craft, use the encoder's `.jl` output mode:
-
-```bash
-julia --project=. tools/map_encoder/encode_map.jl <path/to/map.jld2> src/demo_maps/mapgen_<mapname>.jl
+```shell
+julia --project=. tools/map_encoder/compare_maps.jl \
+  path/to/source_map.jld2 src/demo_maps/mapgen_source_map.jl
 ```
 
-This produces a working but unformatted mapgen function using `repr()` output for all components. The output will pass the comparison tool but is hard to read. Apply a **reformatting pass** to improve readability:
+The generator file must define a top-level, zero-argument
+`mapgen_<source_basename>()` in `Main` and return a `GameMap`. A function hidden
+inside another module is not found.
 
-#### Reformatting Checklist
+The comparator checks:
 
-1. **Add a docstring**: Brief description of the map (2–4 lines)
-2. **Ship section dividers**: Add `#= ---------- Ship :name ----------- =#` between ships
-3. **Blank lines**: Separate components, pipes, and surface tile sections with blank lines
-4. **Group components by type**: Reorder components within each ship so that like types are adjacent. Add brief group headers:
-   ```julia
-   # Gas tanks (10)
-   components[TileCoord(...)] = ...
-   components[TileCoord(...)] = ...
+- component and pipe coordinates and owner tags;
+- component concrete type, rotation, mirroring, and the current values exposed
+  by `get_tunables`;
+- pipe concrete type and values exposed by `get_pipe_tunables`;
+- surface coordinates and ownership;
+- the order-independent multiset of active `AbsoluteElement`s, comparing
+  element type, endpoints, dependant ID, and value;
+- potentially unsafe shared component and pipe instances.
 
-   # Switched nozzles (4)
-   components[TileCoord(...)] = ...
-   ```
-5. **Do NOT modify constructor calls**: The `repr()` output must remain byte-identical. Only add whitespace, blank lines, and comments around the existing lines.
-6. **Verify after reformatting**: Run the comparison tool to confirm nothing was accidentally broken.
+Numeric tunables and element values use a tolerance of `1e-6`. Types,
+coordinates, owner tags, rotations, mirroring, connections, and dependant IDs
+are exact.
 
-### Step 5: Test the Generated Function
-Use the comparison tool to validate your generated code:
+### Comparator Limitations
 
-```bash
-# Use a relative or absolute path to the .jld2 file
-julia --project=. tools/map_encoder/compare_maps.jl <path/to/map.jld2> <path_to_generated_file.jl>
-```
+Passing comparison means the implemented structural and active-electrical
+checks passed. It is not complete `GameMap` equality.
 
-Naming convention:
-- The encoder produces a function named `mapgen_<basename>` where `<basename>` is the map file's name without the `.jld2` extension.
-- No aggressive sanitization is performed — the basename is used as-is. Ensure the map name is suitable for use as a Julia function identifier.
+The comparator does not check:
 
-Examples:
-```bash
-# Relative path
-julia --project=. tools/map_encoder/compare_maps.jl src/demo_maps/basicplumbing.jld2 tutorials/mapgen_basicplumbing.jl
+- docking status, `space_map`, `learning_system`, statistics, or time-lapse;
+- fluid declarations, propagated fluids, temperatures, or solved MNA results;
+- inactive circuit elements;
+- `AbsoluteElement.id` or element ordering;
+- arbitrary component or pipe fields not exposed through tunables or active
+  elements;
+- an exact match between the original and generated object-aliasing graphs.
 
-# Multi-ship example (encoder will generate a `mapgen_<basename>` function - ensure basename is suitable)
-julia --project=. tools/map_encoder/encode_map.jl src/demo_maps/multiship_example.jld2 src/demo_maps/mapgen_multiship_example.jl
-julia --project=. tools/map_encoder/compare_maps.jl src/demo_maps/multiship_example.jld2 src/demo_maps/mapgen_multiship_example.jl
+It reports the ship-name sets, but the current `perfect_match` calculation does
+not independently require `ship_names_match`. Components, pipes, and surfaces
+normally reveal ownership differences, but an extra or missing metadata-only
+empty ship can escape the final status. Inspect the printed ship summary rather
+than relying only on exit status.
 
-Note: The tool no longer attempts aggressive sanitization. Provide a suitable basename for the generated function (e.g., `multiship_example` → `mapgen_multiship_example`).
-```
+The loader fallback described earlier applies here as well. Two fallback maps
+could appear to match after failed loading, so warnings and map counts are part
+of validation.
 
-The comparison tool performs multiple validation checks:
-- **Structural comparison**: Verifies tile positions, rotations, pipe placements, and ship surface match
-- **Tunable comparison**: Checks that component parameters are within tolerance
-- **Identity check**: Detects shared component references (same object used in multiple tiles)
-  - **This catches the critical bug where stateful components are reused**
-  - Reports which tiles share components so you can fix the code
-  - See "Handling Stateful Components" section above for how to fix this
-- **Element comparison**: Validates that the electrical/flow circuit elements are identical
-  - This catches constructor errors where internal structure is wrong despite matching external structure
-  - Example: Using wrong `connected_node` in SwitchedNozzle creates valid structure but broken circuit
-  - If element comparison fails but structural comparison passes, you likely have a constructor parameter error
+Status 0 means all implemented checks passed. Any detected mismatch or caught
+tool error exits 1; the exit code does not distinguish those cases.
 
-The tool will:
-- Load the original map from JLD2
-- Execute your generated function
-- Compare the results and report differences
-- Exit with code 0 if perfect match, 1 if differences found
+## 11. Interpret Failures
 
-### Step 6: Iterate if Needed
-If the comparison tool reports mismatches:
-- Review the specific differences reported
-- Adjust parameter values, component types, or coordinates
-- Re-test until you achieve a perfect match
+### Function Not Found
 
-## Common Component Types
+- Confirm the generator function uses the input save's basename.
+- Confirm the basename forms a valid Julia identifier.
+- Define the function at top level rather than only inside a module.
+- Remember that renaming the output `.jl` file does not rename the expected
+  function.
 
-Based on the project structure, you'll likely encounter:
+### Constructor Or Include Error
 
-**Tile-Based Components (15 in `component_list`):**
-- **ThevininTankCompBehav**: Thevenin-equivalent fluid storage tanks (gas or liquid) with charge, pressure, and conductance. Const instances: `TriGasTank`, `TriLiquidTank`
-- **PressureFedTankCompBehav**: Pressure-fed tanks with separate gas pressurant and liquid storage. Uses `PressureFedTankBehavFrag` inner fragment with positional constructor. Const instance: `PressureFedLiquidTank`
-- **BasicNozzleCompBehav**: Thrust nozzles with throat area parameters. Const instances: `TinyNozzle`, `SmallNozzle`, `MediumNozzle`
-- **SwitchedNozzleCompBehav**: Nozzles with integrated flow control switches. Const instance: `SwitchedTinyNozzle`
-- **DecompChamberCompBehav**: Decomposition chamber nozzle (no constructor parameters). Const instance: `BasicDecompChamber`
-- **TurboPumpCompBehav**: Gas-driven turbopumps with voltage, turbine, and inertia parameters. Const instance: `TurboPump`
-- **ElectricPumpCompBehav**: Electric pumps (turbopump or transfer pump variants) with energy storage. Const instances: `ElecTurboPump`, `ElecTransferPump`
-- **StandardValveCompBehav**: Parameterised valves. Takes a switch fragment type (`SteppedSwitchBehavFrag` for adjustable, `BoolSwitchBehavFrag` for on/off) and a valve size type (`LargeValve` or `TinyValve`). Const instances: `LargeAdjValve`, `TinyAdjValve`, `LargeOnOffValve`, `TinyOnOffValve`
+- Inspect the current constructor definition rather than copying an old guide
+  or reverse-engineering internal fragments blindly.
+- Confirm all component packages needed by the expression are available in
+  the tool's loading context.
+- Check whether a generated `repr` refers to an internal type whose
+  construction has changed.
 
-**Pipes (PipeBehavior):**
-- **ScrapPipeBehav**: Low conductance pipe (2.0 S default)
-- **BigPipeBehav**: High conductance pipe (10.0 S default) with fluid-aware rendering
+### Component Or Pipe Mismatch
 
-Pipes are keyed by `PipeCoord` and can run along tile sides, short diagonals, or long diagonals.
+- Compare the owner, coordinate, concrete type, rotation, and mirror flag.
+- Compare every exposed tunable in the order returned by the current API.
+- For pipes, confirm the complete `PipeCoord`; canonical endpoint order does
+  not make a different span equivalent.
 
-**Note:** `BoolSwitchCompBehav` and `BigAdjustableValveCompBehav` from earlier versions of this document no longer exist. They have been replaced by `StandardValveCompBehav` with appropriate fragment/size type parameters.
+### Shared References
 
-## File Organization
-Save your generated function as:
-- `src/demo_maps/mapgen_<mapname>.jl` (recommended)
-- Or any location that's convenient for testing
+- Create a fresh behaviour per placement or `deepcopy` a verified template.
+- Check nested mutable fragments even when the outer component type is
+  immutable.
+- Treat a pass as a heuristic result because the identity check has the
+  limitations described above.
 
-## Example Usage
-```bash
-# 1. Encode the map (using a map name)
-julia --project=. tools/map_encoder/encode_map.jl simplemap1
+### Circuit Element Mismatch With Matching Structure
 
-# Or encode from a specific path
-julia --project=. tools/map_encoder/encode_map.jl src/demo_maps/basicplumbing.jld2
+This usually indicates a semantically wrong constructor argument or internal
+state. Check:
 
-# 2. Create mapgen_<mapname>.jl based on the output
+- external versus internal node selection;
+- component rotation and mirroring;
+- conductance, source, and dependant-source values;
+- wrapper constructors that transform inputs;
+- whether the relevant elements are active.
 
-# 3. Test the generated function (map name)
-julia --project=. tools/map_encoder/compare_maps.jl simplemap1 src/demo_maps/mapgen_simplemap1.jl
+The switched-nozzle `connected_node` mistake is the canonical example: the
+component type and tunables can look plausible while its circuit endpoints are
+wrong.
 
-# Or test using path
-julia --project=. tools/map_encoder/compare_maps.jl src/demo_maps/basicplumbing.jld2 src/demo_maps/mapgen_basicplumbing.jl
-```
+### Structural Match But Different Gameplay
 
-## Troubleshooting
+Inspect data outside comparator scope: fluid declarations, stored fields not
+exposed as tunables, docking, learning, space-map state, statistics, derived
+fluid state, and solver results. Use the affected package tests and a real
+application smoke test where appropriate.
 
-**Function not found error**: Ensure your function is named exactly `mapgen_<mapname>`
+## 12. Integrate The Generator
 
-**Component constructor errors**: Check `src/components.jl` for the correct constructor syntax
+Maintainable project generators belong under `src/demo_maps/`. When the game
+should expose a new tutorial or showcase map:
 
-**Coordinate mismatches**: Verify that TileCoord and PipeCoord are constructed correctly
+1. include the generator through the current helper near the top of
+   `src/tutorials.jl`;
+2. add or update the corresponding `LearningEntry` or other registration;
+3. keep learning-system configuration in `src/tutorials.jl`;
+4. preserve Australian English in comments, docstrings, and tutorial prose;
+5. run the comparison again after integration;
+6. run relevant package tests and the display-enabled application smoke test
+   when gameplay integration changed.
 
-**Parameter mismatches**: Use the comparison tool output to identify which specific values need adjustment
+Do not commit the source JLD2 save merely as a conversion by-product unless it
+is intended to remain a fixture or project asset.
 
-**Element mismatch errors**: The comparison tool reports different circuit elements despite matching structure
-- This indicates constructor parameters produce different internal circuit topology
-- Review each component constructor carefully - the parameter names may not match internal structure
-- For switched/composite components, trace how constructor parameters transform into internal fragments
-- Check `src/components.jl` for reference implementations of the same component type
-- Look at the specific element details printed (connections, type, value) to identify which component is wrong
-- Example: If you see a resistor connecting `NODE_Q_POS` ↔ `NODE_INTERNAL` when it should connect `NODE_INTERNAL` ↔ `GROUND`, you have a switch connection error
+## Final Checklist
 
-## Success Criteria
-Your generated function should:
-- Compile without errors when included
-- Return a GameMap that exactly matches the original (according to the comparison tool)
-- Follow existing code style and patterns
-- Include helpful comments and documentation
+- The loader produced the expected ships and approximate map size without a
+  fallback warning.
+- The generator name exactly matches the input basename.
+- Every manual constructor was checked against current source.
+- Stateful placements use distinct instances.
+- Component rotation, mirroring, ownership, and pipe coordinates match.
+- Surface ownership is preserved, including intentional off-surface nozzles.
+- Multi-ship coordinates do not collide and `:primary` is constructed first.
+- Omitted runtime state has been reviewed separately.
+- The comparator's printed ship summary and all mismatch sections are clean.
+- The generator has a useful docstring and comments without hiding exact
+  constructor intent.
+- Integration and display-dependent checks were run or explicitly reported as
+  not run.

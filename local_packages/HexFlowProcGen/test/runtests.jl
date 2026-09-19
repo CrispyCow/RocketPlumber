@@ -1,3 +1,8 @@
+#=
+Scope: Test suite for HexFlowProcGen procedural generation and encounter balance.
+Formatter: Runic
+=#
+
 using Test
 using SquirrelNoise
 using GeometryBasics
@@ -273,7 +278,7 @@ end
             (2, 0.25),
             (3, 0.125),
             (4, 0.0625),
-            (5, 0.03125)
+            (5, 0.03125),
         ]
 
         seeds = UInt32[0x12345678, 0x87654321, 0xDEADBEEF]
@@ -530,7 +535,7 @@ end
                 1, HexFlowProcGen.CLUSTERED_PLACE, invalid_scale
             )
         end
-        @test_throws ArgumentError HexFlowProcGen.scale_spawn_count(1, HexFlowProcGen.CLUSTERED_PLACE, 1e300)
+        @test_throws ArgumentError HexFlowProcGen.scale_spawn_count(1, HexFlowProcGen.CLUSTERED_PLACE, 1.0e300)
         @test_throws ArgumentError HexFlowProcGen.scale_spawn_count(
             typemax(Int), HexFlowProcGen.CLUSTERED_PLACE, 2.0
         )
@@ -581,9 +586,11 @@ end
         surface = make_small_surface()
         gm = make_test_gamemap(surface)
 
-        shipset = ShipComponentSet("test_set", [
-            CompSpawnOptions(:MockComp, [(1, 1.0)], HexFlowProcGen.RANDOM_PLACE),
-        ])
+        shipset = ShipComponentSet(
+            "test_set", [
+                CompSpawnOptions(:MockComp, [(1, 1.0)], HexFlowProcGen.RANDOM_PLACE),
+            ]
+        )
 
         success, msg = place_shipset!(gm, shipset, UInt32(0x1234))
         @test success == true
@@ -597,9 +604,11 @@ end
         surface = make_small_surface()
         gm = make_test_gamemap(surface)
 
-        shipset = ShipComponentSet("cluster_test", [
-            CompSpawnOptions(:MockComp, [(2, 1.0)], HexFlowProcGen.CLUSTERED_PLACE),
-        ])
+        shipset = ShipComponentSet(
+            "cluster_test", [
+                CompSpawnOptions(:MockComp, [(2, 1.0)], HexFlowProcGen.CLUSTERED_PLACE),
+            ]
+        )
 
         success, msg = place_shipset!(gm, shipset, UInt32(0x5678))
         @test success == true
@@ -609,12 +618,16 @@ end
     @testset "place_shipset! scales only clustered counts" begin
         surface = Set{TileCoord}()
         stacked_random_tile_walk!(surface, TileCoord(0, 0), 12, 12, UInt32(0xCAFE))
-        clustered_set = ShipComponentSet("scaled_cluster", [
-            CompSpawnOptions(:MockComp, [(2, 1.0)], HexFlowProcGen.CLUSTERED_PLACE),
-        ])
-        random_set = ShipComponentSet("unscaled_random", [
-            CompSpawnOptions(:MockComp, [(2, 1.0)], HexFlowProcGen.RANDOM_PLACE),
-        ])
+        clustered_set = ShipComponentSet(
+            "scaled_cluster", [
+                CompSpawnOptions(:MockComp, [(2, 1.0)], HexFlowProcGen.CLUSTERED_PLACE),
+            ]
+        )
+        random_set = ShipComponentSet(
+            "unscaled_random", [
+                CompSpawnOptions(:MockComp, [(2, 1.0)], HexFlowProcGen.RANDOM_PLACE),
+            ]
+        )
 
         clustered_map = make_test_gamemap(surface)
         success, _ = place_shipset!(
@@ -634,9 +647,11 @@ end
     @testset "separate clustered placements retain the exclusion gap" begin
         surface = Set{TileCoord}()
         stacked_random_tile_walk!(surface, TileCoord(0, 0), 12, 12, UInt32(0xBEEF))
-        shipset = ShipComponentSet("separated_clusters", [
-            CompSpawnOptions(:MockComp, [(2, 1.0)], HexFlowProcGen.CLUSTERED_PLACE),
-        ])
+        shipset = ShipComponentSet(
+            "separated_clusters", [
+                CompSpawnOptions(:MockComp, [(2, 1.0)], HexFlowProcGen.CLUSTERED_PLACE),
+            ]
+        )
         gm = make_test_gamemap(surface)
 
         place_shipset!(gm, shipset, UInt32(0x1000))
@@ -647,7 +662,7 @@ end
         @test !isempty(second_cluster)
         @test all(
             neighbour ∉ first_cluster
-            for coord in second_cluster for neighbour in get_adjacent_tiles_for_tile(coord)
+                for coord in second_cluster for neighbour in get_adjacent_tiles_for_tile(coord)
         )
     end
 end
@@ -672,10 +687,12 @@ end
         pipes = Set(get_pipe_segments(TileCoord(0, 0)))
         filtered = HexFlowProcGen.noise_filter_pipes!(copy(pipes), :MockPipe, seed; pipe_density = 1.0)
 
-        expected = Set(filter(pipes) do pipe
-            effective_density = is_side_span(pipe) ? 1.0 : HexFlowProcGen.NON_SIDE_PIPE_PROBABILITY_FACTOR
-            get_noise_zero_to_one(HexFlowProcGen.hash_pipe(pipe, :MockPipe), seed) <= effective_density
-        end)
+        expected = Set(
+            filter(pipes) do pipe
+                effective_density = is_side_span(pipe) ? 1.0 : HexFlowProcGen.NON_SIDE_PIPE_PROBABILITY_FACTOR
+                get_noise_zero_to_one(HexFlowProcGen.hash_pipe(pipe, :MockPipe), seed) <= effective_density
+            end
+        )
 
         @test filtered == expected
         @test all(pipe -> pipe in filtered, filter(is_side_span, collect(pipes)))
@@ -697,7 +714,7 @@ end
 
         # Verify no two placed pipes share a vertex
         placed_edges = collect(keys(pipes))
-        for i in eachindex(placed_edges), j in (i+1):length(placed_edges)
+        for i in eachindex(placed_edges), j in (i + 1):length(placed_edges)
             a, b = placed_edges[i], placed_edges[j]
             @test a.v1 != b.v1 && a.v1 != b.v2 && a.v2 != b.v1 && a.v2 != b.v2
         end
@@ -714,7 +731,7 @@ end
         # Verify the mutual-connection invariant: no two placed pipes share a vertex
         pipes = gm.pipe_behaviors
         placed_edges = collect(keys(pipes))
-        for i in eachindex(placed_edges), j in (i+1):length(placed_edges)
+        for i in eachindex(placed_edges), j in (i + 1):length(placed_edges)
             a, b = placed_edges[i], placed_edges[j]
             @test a.v1 != b.v1 && a.v1 != b.v2 && a.v2 != b.v1 && a.v2 != b.v2
         end
@@ -773,9 +790,11 @@ const mock_pipe_opts = [PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES,
 
 @testset "Encounter generation" begin
 
-    mock_shipset = ShipComponentSet("mock_set", [
-        CompSpawnOptions(:MockComp, [(1, 1.0)], HexFlowProcGen.RANDOM_PLACE),
-    ])
+    mock_shipset = ShipComponentSet(
+        "mock_set", [
+            CompSpawnOptions(:MockComp, [(1, 1.0)], HexFlowProcGen.RANDOM_PLACE),
+        ]
+    )
 
     # Mock encounter class config for testing
     mock_class_config = EncounterClassConfig(
@@ -785,12 +804,18 @@ const mock_pipe_opts = [PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES,
             LinearScaling(5.0, 0.0),           # Always 5 stacks
         ),
         LinearScaling(2.0, 0.0),               # target_components: always 2
-        FluidTaggedEncounterComponents(Dict{FluidType, FuelTagConfig}(
-            HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0),
-                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
-            HexFluids.MONOPROP_LIQUID => FuelTagConfig(NoScaling(1.0),
-                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
-        )),
+        FluidTaggedEncounterComponents(
+            Dict{FluidType, FuelTagConfig}(
+                HexFluids.COLD_GAS => FuelTagConfig(
+                    NoScaling(1.0),
+                    [WeightedComponentSet(mock_shipset, NoScaling(1.0))]
+                ),
+                HexFluids.MONOPROP_LIQUID => FuelTagConfig(
+                    NoScaling(1.0),
+                    [WeightedComponentSet(mock_shipset, NoScaling(1.0))]
+                ),
+            )
+        ),
         mock_pipe_opts,
         NoScaling(1.0),
     )
@@ -857,17 +882,21 @@ const mock_pipe_opts = [PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES,
 
     @testset "Fuel tag selection" begin
         fuel_configs = Dict{FluidType, FuelTagConfig}(
-            HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0),
-                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
+            HexFluids.COLD_GAS => FuelTagConfig(
+                NoScaling(1.0),
+                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]
+            ),
         )
         @test select_fuel_tag(fuel_configs, 1.0, 1, UInt32(42)) == HexFluids.COLD_GAS
     end
 
     @testset "Encounter component sources" begin
         direct_source = DirectEncounterComponents(WeightedComponentSet[])
-        fluid_source = FluidTaggedEncounterComponents(Dict{FluidType, FuelTagConfig}(
-            HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), WeightedComponentSet[]),
-        ))
+        fluid_source = FluidTaggedEncounterComponents(
+            Dict{FluidType, FuelTagConfig}(
+                HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), WeightedComponentSet[]),
+            )
+        )
 
         @test direct_source.component_pool == WeightedComponentSet[]
         @test fluid_source.fuel_configs[HexFluids.COLD_GAS].component_pool == WeightedComponentSet[]
@@ -876,9 +905,11 @@ const mock_pipe_opts = [PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES,
         @test select_encounter_fuel_tag(direct_source, 1.0, 1, UInt32(42)) === nothing
         @test select_encounter_fuel_tag(fluid_source, 1.0, 1, UInt32(42)) == HexFluids.COLD_GAS
         @test_throws ArgumentError select_encounter_fuel_tag(
-            FluidTaggedEncounterComponents(Dict{FluidType, FuelTagConfig}(
-                HexFluids.COLD_GAS => FuelTagConfig(GatedLinearScaling(0.0, 0.0, 2.0), WeightedComponentSet[]),
-            )),
+            FluidTaggedEncounterComponents(
+                Dict{FluidType, FuelTagConfig}(
+                    HexFluids.COLD_GAS => FuelTagConfig(GatedLinearScaling(0.0, 0.0, 2.0), WeightedComponentSet[]),
+                )
+            ),
             1.0,
             1,
             UInt32(42),
@@ -889,9 +920,11 @@ const mock_pipe_opts = [PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES,
         direct_pool = WeightedComponentSet[]
         direct_source = DirectEncounterComponents(direct_pool)
         fluid_pool = [WeightedComponentSet(mock_shipset, NoScaling(1.0))]
-        fluid_source = FluidTaggedEncounterComponents(Dict{FluidType, FuelTagConfig}(
-            HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), fluid_pool),
-        ))
+        fluid_source = FluidTaggedEncounterComponents(
+            Dict{FluidType, FuelTagConfig}(
+                HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), fluid_pool),
+            )
+        )
 
         @test resolve_encounter_component_pool(direct_source, nothing) === direct_pool
         @test resolve_encounter_component_pool(fluid_source, HexFluids.COLD_GAS) === fluid_pool
@@ -902,14 +935,22 @@ const mock_pipe_opts = [PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES,
 
     @testset "Fuel tag selection honours richness gates" begin
         gated_fuel_configs = Dict{FluidType, FuelTagConfig}(
-            HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0),
-                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
-            HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 2.5),
-                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
-            HexFluids.FUEL_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 4.0),
-                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
-            HexFluids.OXIDISER_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 4.0),
-                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
+            HexFluids.COLD_GAS => FuelTagConfig(
+                NoScaling(1.0),
+                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]
+            ),
+            HexFluids.MONOPROP_LIQUID => FuelTagConfig(
+                GatedLinearScaling(0.25, 0.4, 2.5),
+                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]
+            ),
+            HexFluids.FUEL_LIQUID => FuelTagConfig(
+                GatedLinearScaling(0.25, 0.4, 4.0),
+                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]
+            ),
+            HexFluids.OXIDISER_LIQUID => FuelTagConfig(
+                GatedLinearScaling(0.25, 0.4, 4.0),
+                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]
+            ),
         )
 
         sample_points = 1:4096
@@ -932,8 +973,10 @@ const mock_pipe_opts = [PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES,
     end
 
     @testset "generate_encounter places surface and components" begin
-        blueprint = generate_encounter(ENCOUNTER_SHIP, HexFluids.COLD_GAS, 2.0,
-            UInt32(0x2222), mock_class_config)
+        blueprint = generate_encounter(
+            ENCOUNTER_SHIP, HexFluids.COLD_GAS, 2.0,
+            UInt32(0x2222), mock_class_config
+        )
 
         @test blueprint isa ShipBlueprint
         @test !isempty(blueprint.ship_tiles)
@@ -945,9 +988,11 @@ const mock_pipe_opts = [PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES,
             NoScaling(1.0),
             HullSizeConfig(LinearScaling(3.0, 0.0), LinearScaling(5.0, 0.0)),
             LinearScaling(2.0, 0.0),
-            DirectEncounterComponents([
-                WeightedComponentSet(mock_shipset, NoScaling(1.0)),
-            ]),
+            DirectEncounterComponents(
+                [
+                    WeightedComponentSet(mock_shipset, NoScaling(1.0)),
+                ]
+            ),
             mock_pipe_opts,
             NoScaling(1.0),
         )
@@ -992,21 +1037,27 @@ const mock_pipe_opts = [PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES,
     end
 
     @testset "generation retries based on component-count progress" begin
-        impossible_set = ShipComponentSet("impossible", [
-            CompSpawnOptions(:MockComp, [(100, 1.0)], HexFlowProcGen.CLUSTERED_PLACE),
-        ])
-        possible_set = ShipComponentSet("possible", [
-            CompSpawnOptions(:MockComp, [(1, 1.0)], HexFlowProcGen.RANDOM_PLACE),
-        ])
+        impossible_set = ShipComponentSet(
+            "impossible", [
+                CompSpawnOptions(:MockComp, [(100, 1.0)], HexFlowProcGen.CLUSTERED_PLACE),
+            ]
+        )
+        possible_set = ShipComponentSet(
+            "possible", [
+                CompSpawnOptions(:MockComp, [(1, 1.0)], HexFlowProcGen.RANDOM_PLACE),
+            ]
+        )
         retry_pipe_opts = [PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES, 1.0)]
         retry_config = EncounterClassConfig(
             NoScaling(1.0),
             HullSizeConfig(LinearScaling(3.0, 0.0), LinearScaling(3.0, 0.0)),
             LinearScaling(1.0, 0.0),
-            DirectEncounterComponents([
-                WeightedComponentSet(impossible_set, NoScaling(1.0)),
-                WeightedComponentSet(possible_set, NoScaling(1.0)),
-            ]),
+            DirectEncounterComponents(
+                [
+                    WeightedComponentSet(impossible_set, NoScaling(1.0)),
+                    WeightedComponentSet(possible_set, NoScaling(1.0)),
+                ]
+            ),
             retry_pipe_opts,
             NoScaling(1.0),
         )
@@ -1021,9 +1072,11 @@ const mock_pipe_opts = [PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES,
         )
         @test isempty(fourth_attempt_blueprint.components)
 
-        zero_count_set = ShipComponentSet("zero_count", [
-            CompSpawnOptions(:NeverRolled, [(0, 1.0)], HexFlowProcGen.RANDOM_PLACE),
-        ])
+        zero_count_set = ShipComponentSet(
+            "zero_count", [
+                CompSpawnOptions(:NeverRolled, [(0, 1.0)], HexFlowProcGen.RANDOM_PLACE),
+            ]
+        )
         zero_count_config = EncounterClassConfig(
             NoScaling(1.0),
             retry_config.hull_size,
@@ -1037,18 +1090,22 @@ const mock_pipe_opts = [PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES,
         )
         @test isempty(zero_count_blueprint.components)
 
-        partial_set = ShipComponentSet("partial", [
-            CompSpawnOptions(:MockComp, [(1, 1.0)], HexFlowProcGen.RANDOM_PLACE),
-            CompSpawnOptions(:MockComp, [(100, 1.0)], HexFlowProcGen.CLUSTERED_PLACE),
-        ])
+        partial_set = ShipComponentSet(
+            "partial", [
+                CompSpawnOptions(:MockComp, [(1, 1.0)], HexFlowProcGen.RANDOM_PLACE),
+                CompSpawnOptions(:MockComp, [(100, 1.0)], HexFlowProcGen.CLUSTERED_PLACE),
+            ]
+        )
         partial_config = EncounterClassConfig(
             NoScaling(1.0),
             HullSizeConfig(LinearScaling(12.0, 0.0), LinearScaling(12.0, 0.0)),
             LinearScaling(2.0, 0.0),
-            DirectEncounterComponents([
-                WeightedComponentSet(partial_set, NoScaling(1.0)),
-                WeightedComponentSet(possible_set, NoScaling(1.0)),
-            ]),
+            DirectEncounterComponents(
+                [
+                    WeightedComponentSet(partial_set, NoScaling(1.0)),
+                    WeightedComponentSet(possible_set, NoScaling(1.0)),
+                ]
+            ),
             PipeSpawnOptions[],
             NoScaling(1.0),
         )
@@ -1393,19 +1450,27 @@ end
 
 "Mock class configuration for tests — uses simple ship set with single mock component."
 function make_test_class_config(pipe_opts = mock_pipe_opts)
-    mock_shipset = ShipComponentSet("mock_set", [
-        CompSpawnOptions(:MockComp, [(1, 1.0)], HexFlowProcGen.RANDOM_PLACE),
-    ])
+    mock_shipset = ShipComponentSet(
+        "mock_set", [
+            CompSpawnOptions(:MockComp, [(1, 1.0)], HexFlowProcGen.RANDOM_PLACE),
+        ]
+    )
     return EncounterClassConfig(
         NoScaling(1.0),
         HullSizeConfig(LinearScaling(3.0, 0.0), LinearScaling(5.0, 0.0)),
         LinearScaling(2.0, 0.0),
-        FluidTaggedEncounterComponents(Dict{FluidType, FuelTagConfig}(
-            HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0),
-                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
-            HexFluids.MONOPROP_LIQUID => FuelTagConfig(NoScaling(1.0),
-                [WeightedComponentSet(mock_shipset, NoScaling(1.0))]),
-        )),
+        FluidTaggedEncounterComponents(
+            Dict{FluidType, FuelTagConfig}(
+                HexFluids.COLD_GAS => FuelTagConfig(
+                    NoScaling(1.0),
+                    [WeightedComponentSet(mock_shipset, NoScaling(1.0))]
+                ),
+                HexFluids.MONOPROP_LIQUID => FuelTagConfig(
+                    NoScaling(1.0),
+                    [WeightedComponentSet(mock_shipset, NoScaling(1.0))]
+                ),
+            )
+        ),
         pipe_opts,
         NoScaling(1.0),
     )
@@ -1425,12 +1490,16 @@ function make_mock_encounter_config(; n_points::Int = 10)
 end
 
 "Construct a minimal SpaceMapState with the encounter system fully initialised."
-function make_encounter_sm(; n_points = 10,
-                             player_vel = SVector(0.0, 0.0),
-                             player_pos = SVector(0.0, 0.0))
+function make_encounter_sm(;
+        n_points = 10,
+        player_vel = SVector(0.0, 0.0),
+        player_pos = SVector(0.0, 0.0)
+    )
     config = make_mock_encounter_config(n_points = n_points)
-    sm = SpaceMapState(seed = UInt32(0x1234ABCD), velocity = player_vel, position = player_pos,
-        encounter_config = config)
+    sm = SpaceMapState(
+        seed = UInt32(0x1234ABCD), velocity = player_vel, position = player_pos,
+        encounter_config = config
+    )
     initialise_encounter_system!(sm)
     return sm
 end
@@ -1690,21 +1759,23 @@ end
         sm.target_time_years = 1.0
         sm.last_stop_time = -1.0  # well before start so easing doesn't throttle the step
 
-        advanced = step_space_map_time!(sm, sm.target_time_years; max_step=1.0)
+        advanced = step_space_map_time!(sm, sm.target_time_years; max_step = 1.0)
         @test advanced == true
         @test sm.time_years ≈ 1.0
         @test sm.position[1] ≈ 100.0
 
         # At target — no further advance
         sm.target_time_years = 1.0
-        advanced2 = step_space_map_time!(sm, sm.target_time_years; max_step=1.0)
+        advanced2 = step_space_map_time!(sm, sm.target_time_years; max_step = 1.0)
         @test advanced2 == false
     end
 
     @testset "galaxy escape disables encounter navigation and time progression" begin
-        pre_escape_map = GameMap(space_map = SpaceMapState(
-            encounter_config = make_mock_encounter_config(n_points = 0),
-        ))
+        pre_escape_map = GameMap(
+            space_map = SpaceMapState(
+                encounter_config = make_mock_encounter_config(n_points = 0),
+            )
+        )
         sm = GalaxyEscapeSpaceMap(
             velocity = SVector(40.0, -3.0),
             starting_velocity_x = 25.0,
@@ -1768,7 +1839,7 @@ end
 
         outside_pipe_margin = first(
             tile for pipe_tile in pipe_tiles for tile in get_adjacent_tiles_for_tile(pipe_tile)
-            if tile ∉ pipe_tiles && tile ∉ surface_only
+                if tile ∉ pipe_tiles && tile ∉ surface_only
         )
         @test outside_pipe_margin ∉ exclusion
 
@@ -1887,7 +1958,7 @@ end
         @test dists[HexFrame.R_POS] < dists[HexFrame.S_POS]
         @test dists[HexFrame.Q_POS] < dists[HexFrame.S_NEG]
 
-        encounter_ship_optimal_dir!(gm, newship, "minimum_distance", UInt32(0xA11CE))
+        encounter_ship_optimal_dir!(gm, newship, "minimum_distance", UInt32(0x000A11CE))
         new_name = only(setdiff(keys(gm.ships), [:primary]))
         final_tile = round_to_tile(get_surface_centroid(gm, new_name))
         @test tile_distance(final_tile, centroid_tile) == minimum(values(dists))

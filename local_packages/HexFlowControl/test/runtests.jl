@@ -1,3 +1,8 @@
+#=
+Scope: HexFlowControl state and control helpers
+Formatter: Runic
+=#
+
 using Test
 using HexComponentsAPI
 using HexFlowControl
@@ -370,19 +375,21 @@ end
     @testset "shared component actions" begin
         make_shared_action(; enabled, group_enabled = enabled, tooltip = "Ready", confirmation_message = nothing) =
             ActionInfo(
-                id = :shared,
-                label = "Shared",
-                enabled = enabled,
-                group_enabled = group_enabled,
-                tooltip = tooltip,
-                confirmation_message = confirmation_message,
-            )
+            id = :shared,
+            label = "Shared",
+            enabled = enabled,
+            group_enabled = group_enabled,
+            tooltip = tooltip,
+            confirmation_message = confirmation_message,
+        )
 
         @testset "all components enabled" begin
-            actions = shared_component_actions((
-                (make_shared_action(enabled = true),),
-                (make_shared_action(enabled = true),),
-            ))
+            actions = shared_component_actions(
+                (
+                    (make_shared_action(enabled = true),),
+                    (make_shared_action(enabled = true),),
+                )
+            )
             @test length(actions) == 1
             @test actions[1].enabled
             @test actions[1].group_enabled
@@ -390,20 +397,24 @@ end
         end
 
         @testset "group-disabled component blocks action" begin
-            actions = shared_component_actions((
-                (make_shared_action(enabled = true),),
-                (make_shared_action(enabled = false, group_enabled = false, tooltip = "Blocked"),),
-            ))
+            actions = shared_component_actions(
+                (
+                    (make_shared_action(enabled = true),),
+                    (make_shared_action(enabled = false, group_enabled = false, tooltip = "Blocked"),),
+                )
+            )
             @test !actions[1].enabled
             @test !actions[1].group_enabled
             @test actions[1].tooltip == "Unavailable for 1 of 2 selected components."
         end
 
         @testset "group-enabled disabled component permits action" begin
-            actions = shared_component_actions((
-                (make_shared_action(enabled = true),),
-                (make_shared_action(enabled = false, group_enabled = true, tooltip = "Already empty"),),
-            ))
+            actions = shared_component_actions(
+                (
+                    (make_shared_action(enabled = true),),
+                    (make_shared_action(enabled = false, group_enabled = true, tooltip = "Already empty"),),
+                )
+            )
             @test actions[1].enabled
             @test actions[1].group_enabled
             @test actions[1].tooltip ==
@@ -411,10 +422,12 @@ end
         end
 
         @testset "no selected component currently needs action" begin
-            actions = shared_component_actions((
-                (make_shared_action(enabled = false, group_enabled = true),),
-                (make_shared_action(enabled = false, group_enabled = true),),
-            ))
+            actions = shared_component_actions(
+                (
+                    (make_shared_action(enabled = false, group_enabled = true),),
+                    (make_shared_action(enabled = false, group_enabled = true),),
+                )
+            )
             @test !actions[1].enabled
             @test !actions[1].group_enabled
             @test actions[1].tooltip ==
@@ -422,29 +435,35 @@ end
         end
 
         @testset "only blocking components count as unavailable" begin
-            actions = shared_component_actions((
-                (make_shared_action(enabled = true),),
-                (make_shared_action(enabled = false, group_enabled = true),),
-                (make_shared_action(enabled = false, group_enabled = false),),
-            ))
+            actions = shared_component_actions(
+                (
+                    (make_shared_action(enabled = true),),
+                    (make_shared_action(enabled = false, group_enabled = true),),
+                    (make_shared_action(enabled = false, group_enabled = false),),
+                )
+            )
             @test !actions[1].enabled
             @test actions[1].tooltip == "Unavailable for 1 of 3 selected components."
         end
 
         @testset "missing actions remain absent from intersection" begin
-            actions = shared_component_actions((
-                (make_shared_action(enabled = true),),
-                (ActionInfo(id = :other, label = "Other", enabled = true, tooltip = "Ready"),),
-            ))
+            actions = shared_component_actions(
+                (
+                    (make_shared_action(enabled = true),),
+                    (ActionInfo(id = :other, label = "Other", enabled = true, tooltip = "Ready"),),
+                )
+            )
             @test isempty(actions)
         end
 
         @testset "confirmation is retained when a later component requires it" begin
             actions = @test_logs (:warn, r"Inconsistent metadata for shared component action") begin
-                shared_component_actions((
-                    (make_shared_action(enabled = true),),
-                    (make_shared_action(enabled = true, confirmation_message = "Confirm?"),),
-                ))
+                shared_component_actions(
+                    (
+                        (make_shared_action(enabled = true),),
+                        (make_shared_action(enabled = true, confirmation_message = "Confirm?"),),
+                    )
+                )
             end
             @test actions[1].confirmation_message == "Confirm?"
         end
@@ -518,9 +537,13 @@ end
         @test !(placement_state(is) isa PlacementMoveState)
         @test !(placement_state(is) isa PlacementPipeChainState)
 
-        set_placement_state!(is, PlacementMoveState(move_target = PipeMoveTarget(
-            PipeCoord(VertexCoord(TileCoord(1, 2), HexFrame.Q_POS), VertexCoord(TileCoord(1, 2), HexFrame.Q_NEG)),
-        )))
+        set_placement_state!(
+            is, PlacementMoveState(
+                move_target = PipeMoveTarget(
+                    PipeCoord(VertexCoord(TileCoord(1, 2), HexFrame.Q_POS), VertexCoord(TileCoord(1, 2), HexFrame.Q_NEG)),
+                )
+            )
+        )
         state = placement_state(is)
         @test state isa PlacementMoveState
 
@@ -537,15 +560,19 @@ end
         target = SelectionMoveTarget(sources, Set{PipeCoord}(), TileCoord(1, 0), TileCoord(1, 0))
         empty!(sources)
         @test target.component_coords == Set((TileCoord(0, 0), TileCoord(1, 0)))
-        @test_throws ArgumentError SelectionMoveTarget(target.component_coords, Set{PipeCoord}(),
-            TileCoord(2, 0), TileCoord(2, 0))
+        @test_throws ArgumentError SelectionMoveTarget(
+            target.component_coords, Set{PipeCoord}(),
+            TileCoord(2, 0), TileCoord(2, 0)
+        )
 
         pipe = PipeCoord(VertexCoord(TileCoord(0, 0), HexFrame.Q_POS), VertexCoord(TileCoord(0, 0), HexFrame.Q_NEG))
         pipe_target = SelectionMoveTarget(Set((TileCoord(0, 0),)), Set((pipe,)), pipe, TileCoord(0, 0))
         @test pipe_target.anchor == pipe
-        @test_throws ArgumentError SelectionMoveTarget(Set((TileCoord(0, 0),)), Set((pipe,)),
+        @test_throws ArgumentError SelectionMoveTarget(
+            Set((TileCoord(0, 0),)), Set((pipe,)),
             PipeCoord(VertexCoord(TileCoord(1, 0), HexFrame.Q_POS), VertexCoord(TileCoord(1, 0), HexFrame.Q_NEG)),
-            TileCoord(1, 0))
+            TileCoord(1, 0)
+        )
     end
 
 end

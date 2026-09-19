@@ -1,58 +1,71 @@
 # Component Module Guide
 
-This guide documents the standardized patterns and conventions for creating new component modules in the HexFlow project. Component modules define the behavior, rendering, and interaction logic for game components (tiles) and pipes (edges).
+This guide documents the standardised structure for component implementation
+modules. Component modules define the behaviour, rendering, and interaction
+logic for game components (tiles) and pipes (edges).
 
 ## Overview
 
-Component modules are organized into packages under `local_packages/components/`:
-- **API Package**: `HexComponentsAPI` defines abstract interfaces
-- **Implementation Packages**: Provide concrete component and pipe behaviors
-- **Fragment Pattern**: Compose behaviors from small, reusable fragments
+Component modules are organised into packages under `local_packages/components/`:
+
+- **API package**: `HexComponentsAPI` defines abstract interfaces and shared
+  wrappers. Its source and tests are authoritative for method names and
+  signatures.
+- **Implementation packages**: provide concrete component and pipe behaviours.
+- **Fragment pattern**: composes concrete behaviours from small, reusable
+  fragments.
+
+The examples below describe implementation modules. `HexComponentsAPI` may use
+API-specific documentation and sections where this layout does not fit.
 
 ## Module Structure
 
-### File Organization
+### File Organisation
 
 ```julia
+#=
+Scope: <Concise description of the file's responsibility>
+Formatter: Runic
+=#
+
 """
 <Brief module purpose>
 
-This module provides concrete implementations of <ComponentBehavior/PipeBehavior> for <domain>:
-- <Type1>: <brief description>
-- <Type2>: <brief description>
+Exported concrete `<ComponentBehavior/PipeBehavior>` implementations:
 
-All <components/pipes> follow the <interface> defined in HexComponentsAPI.
+- `<ConcreteType1>`: <brief description>
+- `<ConcreteType2>`: <brief description>
 """
 module ModuleName
 
-# === Imports ===
-using Accessors
-using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowEngine, RenderEngine, HexFlowRendering
-# Additional packages as needed
+using Accessors, StaticArrays
+using FlowEngine, FlowMap, HexElements, HexFluids, HexFrame
+using HexComponentsAPI, HexFlowBasicComponents
+using HexFlowRendering, RenderEngine
 
-# ComponentBehavior Mandatories (or PipeBehavior Mandatories)
+# `ComponentBehavior` mandatory methods
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
-# ComponentBehavior Optional (or PipeBehavior Optional)
-import HexComponentsAPI: produce_rel_fluid_declarations, update_flowbehav!, render_map_elem!, on_click!, placement_valid 
-import HexComponentsAPI: get_component_temperature, get_component_wet_mass, get_actions, do_action!, collect_effect_particles!
-# Dependencies on other component modules
-import HexFlowOtherModule: helper_function
+# `ComponentBehavior` optional methods
+import HexComponentsAPI: produce_rel_fluid_declarations, update_flowbehav!, render_map_elem!, on_click!, placement_valid
+# Behaviour fragment interfaces
+import HexFlowBasicComponents: stall!, unstall!
 
-# === Exports ===
-# Behavior Fragment Exports (if intended for reuse)
+# Behaviour Fragment Exports
 export FragmentType1, FragmentType2
 # Helper Function Exports
 export helper_function1, helper_function2
-# Concrete Behavior Exports
+# Support Type Exports
+export SupportType
+# Concrete Component Behaviour Exports
 export ConcreteType1, ConcreteType2
 
 # ===============================================================
-# Behavior Fragments
+# Behaviour Fragments
 # ===============================================================
 
 #= ---------- FragmentName ----------- =#
 
-"Docstring describing the fragment's purpose and behavior"
+"Describe the fragment's purpose and important behaviour"
 struct FragmentName
     field1::Type1
     field2::Type2  # inline comment explaining field
@@ -61,12 +74,12 @@ end
 # Fragment methods...
 
 # ===============================================================
-# Concrete Component Behaviors
+# Concrete Component Behaviours
 # ===============================================================
 
 #= ---------- ConcreteBehavName ----------- =#
 
-"Docstring describing the concrete component"
+"Describe the concrete component behaviour"
 struct ConcreteBehavName <: ComponentBehavior
     fragment1::FragmentType1
     fragment2::FragmentType2
@@ -80,69 +93,126 @@ end # module
 
 ## Code Conventions
 
+### Runic
+
+The file header declares the formatter policy. Run Runic after editing a file
+marked `Formatter: Runic`; do not run it automatically on an unmarked file or
+change `Formatter: None` without an explicit decision. Adding a Runic marker to
+an existing file is part of a deliberate style migration, not an ordinary
+feature edit.
+
+Choose the semantic layout, comments, and whitespace before formatting, then
+inspect the complete result. In particular, confirm that imports and rendering
+operations still follow the horizontal rules in this guide and that formatting
+has not introduced unrelated churn.
+
 ### Section Dividers
 
-Use consistent dividers to organize code:
+Use consistent dividers to organise code. The normal major sections are
+`Behaviour Fragments` and `Concrete Component Behaviours`, or `Concrete Pipe
+Behaviours` for a pipe module.
 
-**Major sections** (top-level organization):
+**Major sections** provide top-level navigation:
+
 ```julia
 # ===============================================================
 # Section Name
 # ===============================================================
 ```
 
-**Minor sections** (individual types):
+**Minor sections** identify each primary fragment or concrete behaviour:
+
 ```julia
 #= ---------- TypeName ----------- =#
 ```
 
-### Import and Export Organization
+Keep a primary type's closely related state holder, traits, constants, and
+methods in its minor section. Use short ordinary comments such as `# Rendering`
+and `# Reactivation probes` for method subgroups; do not promote every helper
+category to another major section.
 
-**Imports**: Group with title-case comments by category:
+### Import and Export Organisation
+
+Use broad `using` statements for types, constants, and functions that are only
+called. Selectively import foreign functions whose method tables this module
+extends. This makes the extension boundary explicit while keeping interface
+definitions readable and unqualified.
+
+Group `using` statements by dependency role in the order shown by the module
+template: general third-party packages, simulation and data packages, component
+packages, then rendering packages. Omit empty groups and order names
+consistently within each group.
+
+Import only methods actually extended by the module. Do not selectively import
+types, constants, or functions merely because they are used, and do not
+introduce package aliases merely to shorten interface method definitions.
+
+Keep each `using` or `import Package: ...` statement on one physical line. When
+a list benefits from separation, use multiple complete statements divided by
+semantic role rather than a vertically hanging list of names:
+
 ```julia
-# ComponentBehavior Mandatories
+# `ComponentBehavior` mandatory methods
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
-# ComponentBehavior Optional
-import HexComponentsAPI: get_fluidtags, update_flowbehav!, render_map_elem!, placement_valid, get_actions, do_action!
-# Dependencies
-import HexFlowBasicComponents: StallBehavFrag, stall!
+# `ComponentBehavior` optional methods
+import HexComponentsAPI: produce_rel_fluid_declarations, update_flowbehav!, render_map_elem!, placement_valid, get_actions, do_action!
+# Reactivation probe interface
+import HexComponentsAPI: get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe!
+# Behaviour fragment interfaces
+import HexFlowBasicComponents: deactivate!, reactivate!, is_inactive
 ```
 
-**Exports**: Group by type:
+Do not add decorative `# === Imports ===` or `# === Exports ===` headings; the
+dependency and export-category comments provide the useful navigation.
+
+Qualification remains useful for sparse constants and exceptional extensions,
+for example `HexComponentsAPI.PROBE_USEFUL` or `Base.convert`. It is not the
+default for the component API.
+
+Group exports by role and omit empty groups:
+
 ```julia
-# Behavior Fragment Exports
+# Behaviour Fragment Exports
 export MyFragment, MyOtherFragment
 # Helper Function Exports
 export helper_fn1, helper_fn2
-# Concrete Behavior Exports
+# Support Type Exports
+export MyState, MyTypeTag
+# Concrete Component Behaviour Exports
 export MyCompBehav, MyOtherCompBehav
 ```
 
 ### Naming Conventions
 
 Follow consistent naming patterns:
-- **Behavior fragments**: `*BehavFrag` (e.g., `NozzleBehavFrag`, `TankBehavFrag`)
+
+- **Behaviour fragments**: `*BehavFrag` (e.g., `NozzleBehavFrag`, `TankBehavFrag`)
 - **Tile components**: `*CompBehav` (e.g., `BasicNozzleCompBehav`, `TurboPumpCompBehav`)
-- **Pipe behaviors**: `*PipeBehav` (e.g., `ScrapPipeBehav`, `BigPipeBehav`)
+- **Pipe behaviours**: `*PipeBehav` (e.g., `ScrapPipeBehav`, `BigPipeBehav`)
 
 ### Documentation
 
-**Module docstrings**: Brief purpose statement, list of provided types, reference to API
+An implementation module docstring contains a brief purpose statement followed
+by an inventory of exactly the exported concrete `ComponentBehavior` or
+`PipeBehavior` implementations. Do not list behaviour fragments, state types,
+traits, helper functions, or application-level instances.
+
 ```julia
 """
-Tank component implementations for fluid storage.
+Tank component behaviours for fluid storage.
 
-This module provides concrete implementations of ComponentBehavior for tanks:
-- ThevininTankCompBehav: Tank with series resistor (gas or liquid variants)
-- GasTankBehavFrag: Linear charge-voltage relationship
+Exported concrete `ComponentBehavior` implementations:
 
-All components follow the ComponentBehavior interface defined in HexComponentsAPI.
+- `ThevininTankCompBehav`: Tank with a series resistor for gas or liquid storage
+- `PressureFedTankCompBehav`: Coupled liquid-and-pressurant storage
 """
 ```
 
-**Struct docstrings**: Describe the type's purpose and behavior
+Document exported types and internal types whose purpose is not evident. Keep
+the description concise and focus on behaviour or an important constraint:
+
 ```julia
-"Behavior fragment for shared switch functionality. Missing sprite behavior and behavior to set target_conductance."
+"Shared conductance state and transition behaviour for switches"
 struct SwitchBehavFrag
     connection::RelativeElementConnections
     max_conductance::Float64
@@ -152,19 +222,18 @@ struct SwitchBehavFrag
 end
 ```
 
-**Function docstrings**: Implementation packages usually do not need them
-- Do not add function docstrings by default; the interface is already documented in `HexComponentsAPI`
-- Add a function docstring only when it explains a novel behaviour, non-obvious contract, or reusable pattern that would be hard to infer from the signature and body
-- Prefer inline comments inside complex bodies when the explanation is local to one implementation
-- Constructor docstrings are optional and should only be added when validation or usage is not obvious:
-  ```julia
-  "Keyword constructor for TankBehavFrag with validation."
-  function TankBehavFrag(; kwargs...)
-  ```
+`HexComponentsAPI` owns the general contract documentation for its interface.
+Concrete implementation packages therefore do not need docstrings for
+straightforward API implementations, pure delegation, obvious accessors, or
+routine rendering methods. Add a concise docstring when it explains a reusable
+helper, validation or compatibility behaviour, unusual physics, or another
+non-obvious contract. Prefer local comments when the explanation applies to one
+calculation inside the implementation.
 
 ### Field Comments
 
 Use inline comments for field-level documentation:
+
 ```julia
 struct MyFragment
     max_value::Float64  # Maximum allowed value
@@ -188,12 +257,9 @@ get_tunables(behav::MyComp)::NTuple{N, TunableProps}
 # Return new component with updated tunable values
 set_tunables(behav::MyComp, tunables::NTuple{N, Real})::MyComp
 
-# Push RenderCommands to queue for base (static) rendering.
-# Preserve pos_offset so ship render offsets and docking offsets are applied.
-render_base_elem!(queue::AbstractVector, behav::MyComp;
-                  glmap, rotation, position, pos_offset = nothing,
-                  scale = 1.0, transparency = 1.0,
-                  render_height_offset::Integer = 0, kwargs...)::Nothing
+# Push RenderCommands to the queue for base (static) rendering.
+# Preserve pos_offset so ship and docking offsets are applied.
+render_base_elem!(queue::AbstractVector, behav::MyComp; glmap, rotation, position, pos_offset = nothing, scale = 1.0, transparency = 1.0, render_height_offset::Integer = 0, kwargs...)::Nothing
 ```
 
 ### Optional Methods (with defaults)
@@ -202,12 +268,10 @@ Override as needed:
 
 ```julia
 # Dynamic rendering (default: forwards to render_base_elem!)
-render_map_elem!(queue::AbstractVector, behav::MyComp;
-                 glmap, rotation, position, pos_offset = nothing,
-                 kwargs...)::Nothing
+render_map_elem!(queue::AbstractVector, behav::MyComp; glmap, rotation, position, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)::Nothing
 
-# Fluid type constraints (default: NodeFluidTags())
-get_fluidtags(behav)::NodeFluidTags
+# Fluid sources, type rules, and constraint rules (default: empty tuple)
+produce_rel_fluid_declarations(behav)::Tuple
 
 # Per-tick update logic (default: no-op)
 update_flowbehav!(behav; kwargs...)
@@ -225,7 +289,7 @@ get_component_temperature(behav; kwargs...)::Union{Nothing, Float64}
 get_component_dry_mass(behav; kwargs...)::Float64
 
 # Wet mass contribution. Override this for stored fluid mass.
-get_component_wet_mass(behav; fluid::Union{FluidTags, Nothing} = nothing, kwargs...)::Float64
+get_component_wet_mass(behav; fluid::Union{FluidType, Nothing} = nothing, kwargs...)::Float64
 
 # Total mass. Prefer overriding dry and/or wet mass rather than this.
 get_component_mass(behav; kwargs...)::Float64
@@ -256,9 +320,20 @@ collect_effect_particles!(manager, behav; kwargs...)
 ```
 
 Notes:
-- `FlowMap` provides the default `placement_valid(..., gamemap::GameMap, ...)` implementation for normal surface placement. Override it only when the component has additional constraints, such as nozzles needing to hang off an edge.
-- Mass queries in ship physics use `get_component_dry_mass` and `get_component_wet_mass`, so components that store fluid should normally implement the wet-mass hook rather than overriding `get_component_mass` directly.
-- The action popup UI and calculator action command path use `get_actions` and `do_action!`, so interactive components should expose actions through those hooks rather than bespoke UI logic. The calculator logs exceptions for unsupported action IDs as programming failures; they are not player-facing action rejections.
+
+- `FlowMap` provides the default `placement_valid(..., gamemap::GameMap, ...)`
+  implementation for normal surface placement. Override it only when the
+  component has additional constraints, such as nozzles needing to hang off an
+  edge.
+- Mass queries in ship physics use `get_component_dry_mass` and
+  `get_component_wet_mass`, so components that store fluid should normally
+  implement the wet-mass hook rather than overriding `get_component_mass`
+  directly.
+- The action popup UI and calculator action command path use `get_actions` and
+  `do_action!`, so interactive components should expose actions through those
+  hooks rather than bespoke UI logic. The calculator logs exceptions for
+  unsupported action IDs as programming failures; they are not player-facing
+  action rejections.
 
 ## PipeBehavior Interface
 
@@ -277,11 +352,8 @@ get_pipe_tunables(behav::MyPipe)::NTuple{N, TunableProps}
 set_pipe_tunables(behav::MyPipe, tunables::NTuple{N, Real})::MyPipe
 
 # Push RenderCommands for base rendering.
-# Preserve pos_offset so ship render offsets and docking offsets are applied.
-render_pipe_base!(queue::AbstractVector, behav::MyPipe;
-                  glmap, rotation, position, pos_offset = nothing,
-                  scale = 1.0, transparency = 1.0,
-                  render_height_offset::Integer = 0, kwargs...)::Nothing
+# Preserve pos_offset so ship and docking offsets are applied.
+render_pipe_base!(queue::AbstractVector, behav::MyPipe; glmap, rotation, position, pos_offset = nothing, scale = 1.0, transparency = 1.0, render_height_offset::Integer = 0, kwargs...)::Nothing
 
 # Return half the rendered pipe width in map coordinate units
 get_pipe_click_radius(behav::MyPipe)::Float64
@@ -291,12 +363,7 @@ get_pipe_click_radius(behav::MyPipe)::Float64
 
 ```julia
 # Dynamic rendering (default: forwards to render_pipe_base!)
-render_pipe_map!(queue::AbstractVector, behav::MyPipe;
-                 glmap, rotation, position, pos_offset = nothing,
-                 kwargs...)::Nothing
-
-# Fluid constraints (default: FluidTags())
-get_pipe_fluidtags(behav)::FluidTags
+render_pipe_map!(queue::AbstractVector, behav::MyPipe; glmap, rotation, position, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)::Nothing
 
 # Move restrictions (default: `ValidRequest()`)
 can_pipe_be_moved(behav; kwargs...)::RequestStatus
@@ -316,56 +383,59 @@ const nozzle_element_index::Int = 1  # Nozzle input element index
 const pump_element_index::Int = 1    # Pump resistor element index
 ```
 
-Place immediately before the relevant struct definition. Do not export.
+Keep these constants near the behaviour they support and before their first
+use. They need not be immediately adjacent to the struct when a constructor or
+related definitions make another order clearer. Do not export them.
 
 ### Keyword Argument Delegation
 
 **Pure delegation** (forward all kwargs without modification):
+
 ```julia
 get_thrust(comp::MyComp; kwargs...) = get_thrust(comp.nozzle; kwargs...)
 update_flowbehav!(comp::MyComp; kwargs...) = update_flowbehav!(comp.fragment; kwargs...)
 ```
 
 **Extracting parameters** (only when the function needs them directly):
+
 ```julia
-function update_flowbehav!(tank::TankBehavFrag; 
-                           tile::TileCoord, 
-                           mna_state::MNA_State, 
-                           kwargs...)
+function update_flowbehav!(tank::TankBehavFrag; tile::TileCoord, mna_state::MNA_State, kwargs...)
     element_id = ElementID(tile, tank_vsource_element_index)
     # ... use tile and mna_state directly
+    return nothing
 end
 ```
 
-**Never re-specify defaults** in delegation signatures - always use `kwargs...`
+Pure delegation should forward `kwargs...` instead of restating defaults.
+Render delegation may explicitly forward required visual arguments such as
+`glmap`, `rotation`, `pos_offset`, and `render_height_offset` when doing so
+protects the render-offset contract or prevents unrelated keywords from being
+passed further down.
 
 ### Constructors
 
-Use keyword constructors for fragments and concrete behaviors:
+Prefer keyword constructors when callers configure several tunable values or
+when names materially improve the call site. Positional constructors remain
+appropriate for compact value-like types, dispatch, state reconstruction, and
+compatibility with established call sites.
+
+Lay constructor signatures out according to the normal semantic line-layout
+guidance; do not require one parameter per line. Validate real invariants and
+return the constructed value explicitly from long-form constructors:
 
 ```julia
 "Keyword constructor with validation."
-function MyFragment(;
-        param1::Float64,
-        param2::Float64,
-        optional_param::Float64 = 1.0
-    )
-    # Validation logic
+function MyFragment(; param1::Float64, param2::Float64, optional_param::Float64 = 1.0)
     param1 > 0.0 || throw(ArgumentError("param1 must be positive"))
-    
-    # Explicit construction and return
+
     return MyFragment(param1, param2, optional_param)
 end
 ```
 
-- 4-space indentation for parameters
-- Each parameter on its own line
-- Include validation in constructor body
-- Explicit return statement
-
 ### Rendering
 
 **Render heights**: Use constants from `HexFlowRendering` (do not export, qualify with module name):
+
 ```julia
 # Background elements
 HexFlowRendering.RENDER_HEIGHT_BACKGROUND      # -1000
@@ -383,23 +453,31 @@ HexFlowRendering.RENDER_HEIGHT_NODE            # 100000 (circuit nodes)
 HexFlowRendering.RENDER_HEIGHT_OVERLAY_BASE    # 101000 (UI overlays)
 ```
 
-Always add `render_height_offset` to base heights for composability, and preserve `pos_offset` when forwarding to render helpers:
+Every rendering-function signature and every call representing one rendering
+operation stays on one physical line, regardless of length. This includes
+nested operations such as `push!(queue, render_basic_tile(...))`. Keeping each
+visual operation horizontal makes the render sequence easier to follow; setup
+calculations and control flow inside the function still use normal semantic
+layout.
+
+Always add `render_height_offset` to base heights for composability, and
+preserve `pos_offset` when forwarding to render helpers:
+
 ```julia
-function render_base_elem!(queue::AbstractVector, behav;
-        glmap, rotation, position, pos_offset = nothing,
-        render_height_offset::Integer = 0, kwargs...)
-    static_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) +
-                    Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, :MySprite, rotation, position;
-                                   draw_height = static_height,
-                                   pos_offset = pos_offset))
+function render_base_elem!(queue::AbstractVector, behav; glmap, rotation, position, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
+    static_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
+    push!(queue, render_basic_tile(glmap, :MySprite, rotation, position; draw_height = static_height, pos_offset = pos_offset))
+
     return nothing
 end
 ```
 
-The renderer passes `pos_offset` during normal map rendering to account for per-ship render offsets, so custom render methods and delegation wrappers should thread it through rather than dropping it.
+The renderer passes `pos_offset` during normal map rendering to account for
+per-ship render offsets, so custom render methods and delegation wrappers
+should thread it through rather than dropping it.
 
-**Fluid colors**: Use `get_fluid_colour` from `HexFlowRendering`:
+**Fluid colours**: Use `get_fluid_colour` from `HexFlowRendering`:
+
 ```julia
 # Basic usage (defaults to black for unknown fluids)
 colour = get_fluid_colour(fluid)
@@ -412,6 +490,7 @@ black = DEFAULT_EMPTY_FLUID_COLOUR  # exported from HexFlowRendering
 ```
 
 **Rendering helpers** from `HexFlowRendering`:
+
 ```julia
 # Tile rendering
 render_basic_tile(glmap, sprite, rotation, position; colour, scale, transparency, draw_height, pos_offset)
@@ -430,6 +509,7 @@ rotation_mat = animation_rotate(gameticks, speed)
 ### Using Accessors.jl
 
 Use `@set` macro for immutable updates:
+
 ```julia
 set_tunables(comp::MyComp, tunables) = @set comp.fragment = set_tunables(comp.fragment, tunables)
 ```
@@ -437,6 +517,7 @@ set_tunables(comp::MyComp, tunables) = @set comp.fragment = set_tunables(comp.fr
 ### Mutable State
 
 When components need mutable state, use a separate mutable struct:
+
 ```julia
 mutable struct MyState
     value::Float64
@@ -450,6 +531,7 @@ end
 ```
 
 Access state fields directly:
+
 ```julia
 function update_flowbehav!(frag::MyFragment; kwargs...)
     frag.state.counter += 1  # mutate in place
@@ -459,7 +541,7 @@ end
 
 ## Fragment Composition Pattern
 
-Build complex behaviors by composing small fragments:
+Build complex behaviours by composing small fragments:
 
 ```julia
 # Define reusable fragments
@@ -471,7 +553,7 @@ struct ElementFrag
     elements::NTuple{N, RelativeElement}
 end
 
-# Compose into concrete behavior
+# Compose into concrete behaviour
 struct MyCompBehav <: ComponentBehavior
     sprite::SpriteFrag
     elements::ElementFrag
@@ -484,40 +566,58 @@ render_base_elem!(queue, comp::MyCompBehav; kwargs...) = render_base_elem!(queue
 ```
 
 Benefits:
-- Reuse common behaviors across components
+
+- Reuse common behaviours across components
 - Separate concerns (rendering, physics, state management)
 - Easier testing and maintenance
 - Clear composition in type definitions
 
 ## Tips for New Components
 
-1. **Start with fragments**: Identify reusable behaviors (sprite, elements, state)
+1. **Start with fragments**: Identify reusable behaviours (sprite, elements, state)
 2. **Check existing fragments**: Reuse from `HexFlowBasicComponents` when possible
-3. **Implement mandatories first**: Get basic functionality working
-4. **Add optionals as needed**: Override defaults for custom behavior
+3. **Implement mandatory methods first**: Get basic functionality working
+4. **Add optional overrides as needed**: Use a default only when its semantics are correct
 5. **Test with tunables**: Ensure `get_tunables`/`set_tunables` round-trip correctly
 6. **Use delegation**: Forward to fragments, don't reimplement
 7. **Follow naming**: `*BehavFrag`, `*CompBehav`, `*PipeBehav` patterns
-8. **Document types**: Struct docstrings explain purpose and behavior
+8. **Document types**: Struct docstrings explain purpose and behaviour
 9. **Preserve immutability**: Use `@set` for updates, mutable structs only for state
-10. **Preserve render offsets**: If you override `render_base_elem!`, `render_map_elem!`, `render_pipe_base!`, or `render_pipe_map!`, thread `pos_offset` through every helper and delegate call
+10. **Preserve render offsets**: If you override `render_base_elem!`,
+    `render_map_elem!`, `render_pipe_base!`, or `render_pipe_map!`, thread
+    `pos_offset` through every helper and delegate call
 11. **Use the mass hooks deliberately**: Override `get_component_dry_mass` and `get_component_wet_mass` when the component contributes structural or stored-fluid mass
 12. **Use action hooks for interactions**: Expose right-click actions through `get_actions` and `do_action!` instead of inventing ad-hoc UI paths
 
 ## Example: Simple Component
 
 ```julia
+#=
+Scope: Example component behaviour and rendering
+Formatter: Runic
+=#
+
+"""
+Simple component behaviour for a fixed resistor tile.
+
+Exported concrete `ComponentBehavior` implementations:
+
+- `SimpleCompBehav`: Fixed resistor with a configurable sprite
+"""
 module HexFlowExampleComponents
 
 using Accessors
-using HexFrame, HexElements, HexComponentsAPI, RenderEngine, HexFlowRendering
+using HexComponentsAPI, HexElements, HexFrame
+using HexFlowRendering, RenderEngine
 
+# `ComponentBehavior` mandatory methods
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 
+# Concrete Component Behaviour Exports
 export SimpleCompBehav
 
 # ===============================================================
-# Concrete Component Behaviors
+# Concrete Component Behaviours
 # ===============================================================
 
 #= ---------- SimpleCompBehav ----------- =#
@@ -543,16 +643,10 @@ function set_tunables(comp::SimpleCompBehav, tunables::NTuple{1, Real})::SimpleC
     return SimpleCompBehav(comp.sprite, Float64(tunables[1]))
 end
 
-function render_base_elem!(queue::AbstractVector, comp::SimpleCompBehav;
-                          glmap, rotation, position, pos_offset = nothing,
-                          scale = 1.0, transparency = 1.0,
-                          render_height_offset::Integer = 0, kwargs...)
+function render_base_elem!(queue::AbstractVector, comp::SimpleCompBehav; glmap, rotation, position, pos_offset = nothing, scale = 1.0, transparency = 1.0, render_height_offset::Integer = 0, kwargs...)
     height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
-    push!(queue, render_basic_tile(glmap, comp.sprite, rotation, position;
-                                   scale = scale,
-                                   transparency = transparency,
-                                   draw_height = height,
-                                   pos_offset = pos_offset))
+    push!(queue, render_basic_tile(glmap, comp.sprite, rotation, position; scale = scale, transparency = transparency, draw_height = height, pos_offset = pos_offset))
+
     return nothing
 end
 
@@ -562,7 +656,6 @@ end # module
 ## References
 
 - **API Documentation**: See `HexComponentsAPI/src/HexComponentsAPI.jl` for complete interface definitions
-- **Rendering Guide**: See `src/render_height.md` for layer height conventions
+- **Rendering Guide**: See `../../src/render_height.md` for layer height conventions
 - **Example Implementations**: Review existing component packages for patterns
-- **Component Instances**: See `src/components.jl` for usage examples
-
+- **Component Instances**: See `../../src/components.jl` for usage examples

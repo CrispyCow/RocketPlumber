@@ -1,3 +1,8 @@
+#=
+Scope: Shared CImGui helper functions, layout constants, and small UI formatting utilities
+Formatter: Runic
+=#
+
 # ===============================================================
 # UI Common Helpers
 # ===============================================================
@@ -16,7 +21,8 @@ const propertyboxwidth = 350.0
 
 #= ---------- Window Configuration ---------- =#
 
-const DEFAULT_WINDOW_FLAGS = CImGui.ImGuiWindowFlags_NoTitleBar |
+const DEFAULT_WINDOW_FLAGS =
+    CImGui.ImGuiWindowFlags_NoTitleBar |
     CImGui.ImGuiWindowFlags_NoResize |
     CImGui.ImGuiWindowFlags_NoMove
 
@@ -51,7 +57,7 @@ function button_with_disable(label::AbstractString, size::ImVec2, disabled::Bool
     clicked = CImGui.Button(label, size)
     if disabled
         CImGui.EndDisabled()
-        if tooltip !== nothing && CImGui.IsItemHovered(CImGui.ImGuiHoveredFlags_AllowWhenDisabled)
+        if !isnothing(tooltip) && CImGui.IsItemHovered(CImGui.ImGuiHoveredFlags_AllowWhenDisabled)
             CImGui.SetTooltip(tooltip)
         end
     end
@@ -148,6 +154,8 @@ gui_input_double!(inputstate::InputState, key::Symbol, label::String, default::F
 gui_listbox_int!(inputstate::InputState, key::Symbol, label::String, names::Vector{String}, default::Int32) =
     gui_listbox_int!(inputstate.gui_inputs, key, label, names, default)
 
+#= ---------- Value Formatting ---------- =#
+
 "Format a number with 6 significant figures, using scientific notation for extreme values."
 function format_value(val::Float64)::String
     if !isfinite(val)
@@ -174,6 +182,8 @@ function format_value(val::Float64)::String
         end
     end
 end
+
+#= ---------- Display Labels ---------- =#
 
 """
 Return a display-safe string for a ship name symbol.

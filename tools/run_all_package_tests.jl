@@ -96,13 +96,13 @@ function parse_args(args::Vector{String})
             options = updated_options(options; jobs=parse_int_arg(arg, args[index + 1]))
             index += 1
         elseif startswith(arg, "--jobs=")
-            options = updated_options(options; jobs=parse_int_arg("--jobs", split(arg, "=", limit=2)[2]))
+            options = updated_options(options; jobs=parse_int_arg("--jobs", String(split(arg, "=", limit=2)[2])))
         elseif arg == "--julia-threads"
             index == length(args) && error("$(arg) requires a value")
             options = updated_options(options; julia_threads=args[index + 1])
             index += 1
         elseif startswith(arg, "--julia-threads=")
-            options = updated_options(options; julia_threads=split(arg, "=", limit=2)[2])
+            options = updated_options(options; julia_threads=String(split(arg, "=", limit=2)[2]))
         elseif arg == "--instantiate"
             options = updated_options(options; instantiate=true)
         elseif arg == "--list"

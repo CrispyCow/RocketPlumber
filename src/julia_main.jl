@@ -1,4 +1,9 @@
 #=
+Scope: Production and JuliaC application entry point with artifact verification
+Formatter: Runic
+=#
+
+#=
     ╔════════════════════════════════════════════════════════════════════╗
     ║                                                                    ║
     ║   ██████╗  ██████╗  ██████╗██╗  ██╗███████╗████████╗               ║
@@ -36,66 +41,72 @@
 =#
 
 # ===============================================================
-# Artifact Verification for Production Build
+# Production Artifact Verification
 # ===============================================================
 
-# Verify that required artifacts exist before loading HexFlowRendering.
-# This entry point does not rebuild artifacts automatically.
+# This entry point verifies required artifacts before loading HexFlowRendering;
+# it does not rebuild them automatically.
 using Pkg
 using Pkg.Artifacts
 
-"Verify that all required HexFlow artifacts are available"
+"Verify that all required HexFlow rendering artifacts are installed"
 function verify_required_artifacts()
-    # Locate HexFlowRendering package
+    # Locate the artifact registry
     hexflow_rendering_dir = joinpath(dirname(@__FILE__), "..", "local_packages", "HexFlowRendering")
     artifacts_toml = joinpath(hexflow_rendering_dir, "Artifacts.toml")
     
     # Check if Artifacts.toml exists
     if !isfile(artifacts_toml)
-        error("""
+        error(
+            """
             Artifacts.toml not found at: $artifacts_toml
-            
+
             Artifacts must be created before running the application.
             Please run one of the build scripts or the create_artifacts.jl script in the external build repository to generate the required artifacts.
-            """)
+            """
+        )
     end
-    
+
     # Verify each required artifact
     required_artifacts = ["shaders", "texture_atlas"]
-    
+
     for artifact_name in required_artifacts
-        # Check if artifact is defined in Artifacts.toml
         hash = Pkg.Artifacts.artifact_hash(artifact_name, artifacts_toml)
-        if hash === nothing
-            error("""
+        if isnothing(hash)
+            error(
+                """
                 Required artifact '$artifact_name' not found in Artifacts.toml
-                
+
                 The Artifacts.toml file exists but is missing the '$artifact_name' artifact.
                 This likely means the artifact creation process was interrupted or failed.
-                
+
                 Please run one of the build scripts or the create_artifacts.jl script in the external build repository to generate the required artifacts.
-                """)
+                """
+            )
         end
         
         # Check if artifact is actually installed
         if !Pkg.Artifacts.artifact_exists(hash)
-                    error("""
-                        Artifact '$artifact_name' is defined but not installed.
-                        
-                        Hash: $hash
-                        Expected location: $(Pkg.Artifacts.artifact_path(hash))
-                        
-                        The artifact is registered in Artifacts.toml but the files are missing
-                        from the Julia artifact cache. This can happen if the cache was cleared.
-                        
-                        Please run one of the build scripts or the create_artifacts.jl script in the external build repository to regenerate the required artifacts.
-                        """)
-            end
-        
+            error(
+                """
+                Artifact '$artifact_name' is defined but not installed.
+
+                Hash: $hash
+                Expected location: $(Pkg.Artifacts.artifact_path(hash))
+
+                The artifact is registered in Artifacts.toml but the files are missing
+                from the Julia artifact cache. This can happen if the cache was cleared.
+
+                Please run one of the build scripts or the create_artifacts.jl script in the external build repository to regenerate the required artifacts.
+                """
+            )
+        end
+
         @info "Verified artifact: $artifact_name (hash: $hash)"
     end
-    
+
     @info "All required artifacts verified successfully"
+
     return true
 end
 
@@ -113,14 +124,13 @@ using TimerOutputs, Accessors, Printf, CSyntax
 using FilePathsBase, NativeFileDialog, FFMPEG
 import CImGui, CImGui.lib
 using ImPlot
+
 # Custom Packages (working title: HexFlow; project: Rocket Plumber)
 using HexFrame, HexElements, HexFluids, HexFlowTelemetry
 using HexComponentsAPI, FlowEngine, FlowMap, RenderEngine, HexFlowProcGen
 using HexFlowControl, HexFlowCalculator, HexFlowRendering
 using SquirrelNoise
 using HexFlowLearningSystem
-
-
 # ===============================================================
 # Load All Source Files Upfront
 # ===============================================================
@@ -141,19 +151,21 @@ include(joinpath(dirname(@__FILE__), "tutorials.jl"))
 include(joinpath(dirname(@__FILE__), "startmenu.jl"))
 
 # ===============================================================
-# Main Entry Point for JuliaC
+# JuliaC Entry Point
 # ===============================================================
 
-# Main entry point for JuliaC compiled executable.
+"Run the production application for a JuliaC-compiled executable"
 function main(args::Vector{String})::Cint
     try
-        configure_threads() # needs minimum of 2 threads to run properly
+        configure_threads()  # Requires at least two threads
         window = start_window()
         enter_start_menu(window)
-        return 0 # Success
+
+        return 0  # Success
     catch e
-        @error "Application error" exception=(e, catch_backtrace())
-        return 1 # Error
+        @error "Application error" exception = (e, catch_backtrace())
+
+        return 1  # Error
     end
 end
 

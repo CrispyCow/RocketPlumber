@@ -1,3 +1,8 @@
+#=
+Scope: Unit tests for HexFlowCalculator: simulation tick pipeline, command transactions, reactivation probes, snapshots, and manoeuvre dynamics
+Formatter: Runic
+=#
+
 using Test
 using HexFlowCalculator
 using FlowMap
@@ -11,6 +16,7 @@ using HexFlowProcGen
 using HexFluids
 using StaticArrays
 using LinearAlgebra
+import HexComponentsAPI: get_actions, do_action!, placement_valid
 
 include(joinpath(@__DIR__, "..", "..", "..", "src", "timelapse.jl"))
 include(joinpath(@__DIR__, "..", "..", "..", "src", "map_loading.jl"))
@@ -24,9 +30,11 @@ function make_trigger_test_encounter_config()
         NoScaling(1.0),
         HullSizeConfig(LinearScaling(2.0, 0.0), LinearScaling(2.0, 0.0)),
         LinearScaling(0.0, 0.0),
-        FluidTaggedEncounterComponents(Dict{FluidType, FuelTagConfig}(
-            HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), WeightedComponentSet[]),
-        )),
+        FluidTaggedEncounterComponents(
+            Dict{FluidType, FuelTagConfig}(
+                HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), WeightedComponentSet[]),
+            )
+        ),
         PipeSpawnOptions[],
         NoScaling(1.0),
     )
@@ -144,11 +152,13 @@ HexComponentsAPI.get_tunables(::SingularProbeCompBehav) = ()
 HexComponentsAPI.set_tunables(comp::SingularProbeCompBehav, ::NTuple{0, Real}) = comp
 HexComponentsAPI.render_base_elem!(queue, ::SingularProbeCompBehav; kwargs...) = nothing
 function HexComponentsAPI.get_reactivation_probe(::SingularProbeCompBehav; kwargs...)
-    return ReactivationProbe((
-        RelativeElement(RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND), 1.0, HexElements.V_DEP_VOLTAGE; dependent_index = 2),
-        RelativeElement(RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.GROUND), -1.0, HexElements.C_DEP_CURRENT; dependent_index = 1),
-        RelativeElement(RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.NODE_Q_POS), 1.0, HexElements.CONST_RESISTOR),
-    ))
+    return ReactivationProbe(
+        (
+            RelativeElement(RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND), 1.0, HexElements.V_DEP_VOLTAGE; dependent_index = 2),
+            RelativeElement(RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.GROUND), -1.0, HexElements.C_DEP_CURRENT; dependent_index = 1),
+            RelativeElement(RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.NODE_Q_POS), 1.0, HexElements.CONST_RESISTOR),
+        )
+    )
 end
 function HexComponentsAPI.classify_reactivation_probe(comp::SingularProbeCompBehav; kwargs...)
     return PROBE_USEFUL
@@ -179,24 +189,28 @@ HexComponentsAPI.render_base_elem!(queue, ::BootstrapProbeCompBehav; kwargs...) 
 
 function HexComponentsAPI.get_reactivation_probe(comp::BootstrapProbeCompBehav; kwargs...)
     comp.charge > 0.0 && return nothing
-    return ReactivationProbe((
-        RelativeElement(RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND), comp.probe_voltage, HexElements.CONST_VOLTAGE),
-        RelativeElement(RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND), 1.0, HexElements.CONST_RESISTOR),
-    ))
+    return ReactivationProbe(
+        (
+            RelativeElement(RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND), comp.probe_voltage, HexElements.CONST_VOLTAGE),
+            RelativeElement(RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND), 1.0, HexElements.CONST_RESISTOR),
+        )
+    )
 end
 
-function HexComponentsAPI.classify_reactivation_probe(comp::BootstrapProbeCompBehav;
+function HexComponentsAPI.classify_reactivation_probe(
+        comp::BootstrapProbeCompBehav;
         tile::TileCoord,
         rotation::HexAxis = HexFrame.Q_POS,
         derivedmapstate::DerivedMapState,
         mna_state,
-        kwargs...)
+        kwargs...
+    )
     probe = get_reactivation_probe(comp)
     isnothing(probe) && return PROBE_HARMFUL
 
     abs_vsource = map_element(probe.rel_elements[1], tile, 1, rotation)
     current = abs_element_get_current(abs_vsource, derivedmapstate, mna_state)
-    return !isnothing(current) && abs(current) > 1e-9 ? PROBE_USEFUL : PROBE_NEUTRAL
+    return !isnothing(current) && abs(current) > 1.0e-9 ? PROBE_USEFUL : PROBE_NEUTRAL
 end
 
 function HexComponentsAPI.commit_reactivation_probe!(comp::BootstrapProbeCompBehav; kwargs...)
@@ -241,14 +255,16 @@ HexComponentsAPI.render_base_elem!(queue, ::GroupedNeutralProbeCompBehav; kwargs
 
 function HexComponentsAPI.get_reactivation_probe(comp::GroupedNeutralProbeCompBehav; kwargs...)
     comp.active && return nothing
-    return ReactivationProbe((
-        RelativeElement(
-            RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND),
-            1.0,
-            HexElements.CONST_RESISTOR;
-            active = true
-        ),
-    ))
+    return ReactivationProbe(
+        (
+            RelativeElement(
+                RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND),
+                1.0,
+                HexElements.CONST_RESISTOR;
+                active = true
+            ),
+        )
+    )
 end
 
 function HexComponentsAPI.classify_reactivation_probe(comp::GroupedNeutralProbeCompBehav; derivedmapstate::DerivedMapState, kwargs...)
@@ -271,14 +287,16 @@ HexComponentsAPI.get_tunables(::HarmfulGroupedProbeCompBehav) = ()
 HexComponentsAPI.set_tunables(comp::HarmfulGroupedProbeCompBehav, ::NTuple{0, Real}) = comp
 HexComponentsAPI.render_base_elem!(queue, ::HarmfulGroupedProbeCompBehav; kwargs...) = nothing
 function HexComponentsAPI.get_reactivation_probe(::HarmfulGroupedProbeCompBehav; kwargs...)
-    return ReactivationProbe((
-        RelativeElement(
-            RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND),
-            1.0,
-            HexElements.CONST_RESISTOR;
-            active = true
-        ),
-    ))
+    return ReactivationProbe(
+        (
+            RelativeElement(
+                RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.GROUND),
+                1.0,
+                HexElements.CONST_RESISTOR;
+                active = true
+            ),
+        )
+    )
 end
 HexComponentsAPI.classify_reactivation_probe(::HarmfulGroupedProbeCompBehav; kwargs...) = PROBE_HARMFUL
 function HexComponentsAPI.commit_reactivation_probe!(comp::HarmfulGroupedProbeCompBehav; kwargs...)
@@ -296,7 +314,6 @@ HexComponentsAPI.produce_rel_elements(::ActionCompBehav) = ()
 HexComponentsAPI.get_tunables(::ActionCompBehav) = ()
 HexComponentsAPI.set_tunables(::ActionCompBehav, ::NTuple{0, Real}) = ActionCompBehav()
 HexComponentsAPI.render_base_elem!(queue, ::ActionCompBehav; kwargs...) = nothing
-import HexComponentsAPI: get_actions, do_action!, placement_valid
 function get_actions(comp::ActionCompBehav; kwargs...)
     return (ActionInfo(id = :flip, label = "Flip", enabled = true, tooltip = "Flip state"),)
 end
@@ -420,8 +437,10 @@ HexComponentsAPI.get_tunables(::MirroringRequiredCompBehav) = ()
 HexComponentsAPI.set_tunables(::MirroringRequiredCompBehav, ::NTuple{0, Real}) = MirroringRequiredCompBehav()
 HexComponentsAPI.render_base_elem!(queue, ::MirroringRequiredCompBehav; kwargs...) = nothing
 HexComponentsAPI.map_mirroring(::MirroringRequiredCompBehav, mirrored::Bool) = mirrored
-function placement_valid(::MirroringRequiredCompBehav, coord::TileCoord, gamemap::GameMap;
-        mirrored::Bool = false, ship_name::Symbol = :primary, kwargs...)
+function placement_valid(
+        ::MirroringRequiredCompBehav, coord::TileCoord, gamemap::GameMap;
+        mirrored::Bool = false, ship_name::Symbol = :primary, kwargs...
+    )
     is_on_surface_tile(coord, gamemap; ship_name = ship_name) || return InvalidRequest("Not on ship surface")
     mirrored || return InvalidRequest("Mirroring required")
     return ValidRequest()
@@ -454,8 +473,10 @@ HexComponentsAPI.produce_rel_elements(::PlacementRestrictedCompBehav) = ()
 HexComponentsAPI.get_tunables(::PlacementRestrictedCompBehav) = ()
 HexComponentsAPI.set_tunables(comp::PlacementRestrictedCompBehav, ::NTuple{0, Real}) = comp
 HexComponentsAPI.render_base_elem!(queue, ::PlacementRestrictedCompBehav; kwargs...) = nothing
-function placement_valid(comp::PlacementRestrictedCompBehav, coord::TileCoord, gamemap::GameMap;
-        ship_name::Symbol = :primary, kwargs...)
+function placement_valid(
+        comp::PlacementRestrictedCompBehav, coord::TileCoord, gamemap::GameMap;
+        ship_name::Symbol = :primary, kwargs...
+    )
     coord == comp.invalid_coord && return InvalidRequest("Restricted destination")
     return is_on_surface_tile(coord, gamemap; ship_name) ? ValidRequest() : InvalidRequest("Not on ship surface")
 end
@@ -514,7 +535,7 @@ function make_test_encounter_point(
     return EncounterPoint(index = index, base_velocity = base_velocity, position = position, velocity = velocity, spawn_time = spawn_time)
 end
 
-"Return the halfway coast state for a planned intercept." 
+"Return the halfway coast state for a planned intercept."
 function make_midcoast_state(
         player_pos_0::SVector{2, Float64},
         player_vel_0::SVector{2, Float64},
@@ -996,12 +1017,16 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
             component_source = TileCoord(0, 0)
             pipe_source = side_pipe(TileCoord(1, 0))
             pipe_destination = offset_by_tile(pipe_source, translation)
-            set_surface_tile!(gamemap, Set([
-                component_source,
-                component_source + translation,
-                TileCoord(1, 0),
-                TileCoord(1, 1),
-            ]))
+            set_surface_tile!(
+                gamemap, Set(
+                    [
+                        component_source,
+                        component_source + translation,
+                        TileCoord(1, 0),
+                        TileCoord(1, 1),
+                    ]
+                )
+            )
             set_component!(gamemap, component_source, PlacedComponent(MockCompBehav(), Q_POS, :primary))
             pipe_behaviour = MockPipeBehav()
             set_pipe!(gamemap, pipe_source, PlacedPipe(pipe_behaviour, :primary))
@@ -1124,8 +1149,10 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 
             restricted_map = make_gamemap()
             set_surface_tile!(restricted_map, destination)
-            set_component!(restricted_map, source,
-                PlacedComponent(PlacementRestrictedCompBehav(destination), Q_POS, :primary))
+            set_component!(
+                restricted_map, source,
+                PlacedComponent(PlacementRestrictedCompBehav(destination), Q_POS, :primary)
+            )
             original_hash = hash(restricted_map)
             process_and_log!(
                 create_translate_elements_command(cq, Set([source]), TileCoord(0, 1)),
@@ -1167,8 +1194,10 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
             source = TileCoord(0, 0)
             destination = TileCoord(0, 1)
             set_surface_tile!(gamemap, destination)
-            set_component!(gamemap, source,
-                PlacedComponent(DestinationInvalidCompBehav(destination), Q_POS, :primary))
+            set_component!(
+                gamemap, source,
+                PlacedComponent(DestinationInvalidCompBehav(destination), Q_POS, :primary)
+            )
             original_hash = hash(gamemap)
             response = Channel{CommandStatus}(1)
             command = create_translate_elements_command(
@@ -1190,8 +1219,10 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
                 gamemap = make_gamemap()
                 destination = TileCoord(0, 1)
                 set_surface_tile!(gamemap, destination)
-                source_exists && set_component!(gamemap, TileCoord(0, 0),
-                    PlacedComponent(MockCompBehav(), Q_POS, :primary))
+                source_exists && set_component!(
+                    gamemap, TileCoord(0, 0),
+                    PlacedComponent(MockCompBehav(), Q_POS, :primary)
+                )
                 response = Channel{CommandStatus}(1)
                 command = create_translate_elements_command(
                     cq,
@@ -1352,9 +1383,11 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 
         # A changed action state remains an actionable player rejection.
         gamemap3 = make_gamemap()
-        set_component!(gamemap3, coord, PlacedComponent(
-            ResultActionCompBehav(InvalidRequest("Action is no longer available")), Q_POS, :primary,
-        ))
+        set_component!(
+            gamemap3, coord, PlacedComponent(
+                ResultActionCompBehav(InvalidRequest("Action is no longer available")), Q_POS, :primary,
+            )
+        )
         @test process_and_log!(create_do_action_command(cq, coord, :run), gamemap3) == ["Action is no longer available"]
 
         # A component returning a valid request without a String result is a programming failure.
@@ -1959,12 +1992,14 @@ end
 @testset "snapshot! methods" begin
     # DerivedMapState refill
     src_derived = DerivedMapState()
-    push!(src_derived.primaryelements, AbsoluteElement(
-        connections = AbsoluteElementConnections(NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_POS), NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_NEG)),
-        value = 1.0,
-        type = HexElements.CONST_RESISTOR,
-        id = ElementID(TileCoord(0, 0), 1),
-    ))
+    push!(
+        src_derived.primaryelements, AbsoluteElement(
+            connections = AbsoluteElementConnections(NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_POS), NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_NEG)),
+            value = 1.0,
+            type = HexElements.CONST_RESISTOR,
+            id = ElementID(TileCoord(0, 0), 1),
+        )
+    )
     src_derived.nodeactualfluids[NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_POS)] = HexFluids.COLD_GAS
 
     dest_derived = DerivedMapState()
@@ -2386,10 +2421,12 @@ end
             ["Galaxy escape can only begin from normal galactic navigation"]
         @test empty_map.space_map isa SpaceMapEmpty
 
-        active_map = GameMap(space_map = GalaxyEscapeSpaceMap(
-            velocity = SVector(5.0, 0.0), starting_velocity_x = 5.0, departure_time_years = 2.0,
-            pre_escape_map = GameMap(),
-        ))
+        active_map = GameMap(
+            space_map = GalaxyEscapeSpaceMap(
+                velocity = SVector(5.0, 0.0), starting_velocity_x = 5.0, departure_time_years = 2.0,
+                pre_escape_map = GameMap(),
+            )
+        )
         record_peak_estimated_delta_v!(active_map, GALAXY_ESCAPE_UNLOCK_ESTIMATED_DELTA_V)
         @test process_and_log!(create_start_galaxy_escape_command(command_queue), active_map) ==
             ["Galaxy escape can only begin from normal galactic navigation"]
@@ -3090,13 +3127,17 @@ end
 
     @testset "writes INVALID when apply method refuses" begin
         gm = make_gamemap()
-        set_component!(gm, TileCoord(0, 0),
-            PlacedComponent(MockCompBehav(), Q_POS, false, :primary))
+        set_component!(
+            gm, TileCoord(0, 0),
+            PlacedComponent(MockCompBehav(), Q_POS, false, :primary)
+        )
 
         cq = create_command_queue(4)
         ch = Channel{CommandStatus}(1)
-        cmd = create_set_tile_command(cq, TileCoord(0, 0), MockCompBehav(), Q_POS;
-            response_channel = ch)
+        cmd = create_set_tile_command(
+            cq, TileCoord(0, 0), MockCompBehav(), Q_POS;
+            response_channel = ch
+        )
         HexFlowCalculator.process_command!(cmd, gm, silent_console, throw_errors = false)
 
         @test take!(ch) == INVALID
@@ -3104,13 +3145,17 @@ end
 
     @testset "writes REJECTED for unsupported action and logs once" begin
         gm = make_gamemap()
-        set_component!(gm, TileCoord(0, 0),
-            PlacedComponent(ActionCompBehav(), Q_POS, false, :primary))
+        set_component!(
+            gm, TileCoord(0, 0),
+            PlacedComponent(ActionCompBehav(), Q_POS, false, :primary)
+        )
 
         cq = create_command_queue(4)
         ch = Channel{CommandStatus}(1)
-        cmd = create_do_action_command(cq, TileCoord(0, 0), :no_such_action;
-            response_channel = ch)
+        cmd = create_do_action_command(
+            cq, TileCoord(0, 0), :no_such_action;
+            response_channel = ch
+        )
         logs, console = make_log_console()
         logger = Test.TestLogger(min_level = Base.CoreLogging.Warn)
         Base.CoreLogging.with_logger(logger) do
@@ -3356,12 +3401,14 @@ end
     ipc = make_test_ipc()
     initialise_spacemap!(gm, UInt32(1), _test_enc_config)
 
-    push!(get_encounter_points(gm), make_test_encounter_point(
-        1;
-        base_velocity = 80.0,
-        position = SVector(100.0, 0.0),
-        velocity = SVector(80.0, 0.0),
-    ))
+    push!(
+        get_encounter_points(gm), make_test_encounter_point(
+            1;
+            base_velocity = 80.0,
+            position = SVector(100.0, 0.0),
+            velocity = SVector(80.0, 0.0),
+        )
+    )
 
     set_time_years!(gm, 5.0)
     set_target_time!(gm, 5.0)
@@ -3586,25 +3633,33 @@ end
     gamemap = GameMap(space_map = escape_map)
     record_peak_estimated_delta_v!(gamemap, 2100.0)
 
-    reconstructed = rconvert(FlowMap.GalaxyEscapeSpaceMap, (
-        velocity = SVector(130.0, 2.0),
-        starting_velocity_x = 100.0,
-        departure_time_years = 7.0,
-    ))
+    reconstructed = rconvert(
+        FlowMap.GalaxyEscapeSpaceMap, (
+            velocity = SVector(130.0, 2.0),
+            starting_velocity_x = 100.0,
+            departure_time_years = 7.0,
+        )
+    )
     @test reconstructed == GalaxyEscapeSpaceMap(
         velocity = SVector(130.0, 2.0), starting_velocity_x = 100.0, departure_time_years = 7.0,
         pre_escape_map = GameMap(),
     )
     @test !can_abort_galaxy_escape(reconstructed)
-    @test_throws ErrorException rconvert(FlowMap.GalaxyEscapeSpaceMap, (
-        starting_velocity_x = 100.0, departure_time_years = 7.0,
-    ))
-    @test_throws ArgumentError rconvert(FlowMap.GalaxyEscapeSpaceMap, (
-        velocity = SVector(Inf, 0.0), starting_velocity_x = 100.0, departure_time_years = 7.0,
-    ))
-    @test_throws ArgumentError rconvert(FlowMap.GalaxyEscapeSpaceMap, (
-        velocity = SVector(130.0, 0.0), starting_velocity_x = 100.0, departure_time_years = -1.0,
-    ))
+    @test_throws ErrorException rconvert(
+        FlowMap.GalaxyEscapeSpaceMap, (
+            starting_velocity_x = 100.0, departure_time_years = 7.0,
+        )
+    )
+    @test_throws ArgumentError rconvert(
+        FlowMap.GalaxyEscapeSpaceMap, (
+            velocity = SVector(Inf, 0.0), starting_velocity_x = 100.0, departure_time_years = 7.0,
+        )
+    )
+    @test_throws ArgumentError rconvert(
+        FlowMap.GalaxyEscapeSpaceMap, (
+            velocity = SVector(130.0, 0.0), starting_velocity_x = 100.0, departure_time_years = -1.0,
+        )
+    )
 
     mktempdir() do directory
         path = joinpath(directory, "galaxy_escape.jld2")

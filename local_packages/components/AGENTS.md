@@ -1,59 +1,102 @@
-# local_packages/components - Codex Notes
+# Component Package Guide
 
-This directory contains component implementation packages. Also consult the
-root `AGENTS.md`, `local_packages/AGENTS.md`, and
-`local_packages/components/CLAUDE.md`.
+This tree contains the neutral component API and the concrete tile/pipe
+behaviour packages. Concrete behaviours use fragment composition: reusable
+parts end in `BehavFrag`, complete tile behaviours in `CompBehav`, and pipe
+behaviours in `PipeBehav`.
 
-Components use fragment composition. Reusable fragments are named `*BehavFrag`.
-Concrete tile components are named `*CompBehav`; pipe-segment behaviours are named
-`*PipeBehav`.
+## Package Map
 
-## Component Packages
+- `HexComponentsAPI` defines the interfaces, placed wrappers, tunables,
+  actions, request results, mass hooks, and reactivation-probe contract.
+- `HexFlowBasicComponents` provides shared rendering, circuit, state, stall,
+  rotation, and mirroring fragments.
+- `HexFlowSwitchComponents` implements boolean and stepped switches plus valve
+  behaviours.
+- `HexFlowTankComponents` implements gas, liquid, and pressure-fed storage.
+- `HexFlowNozzleComponents` implements nozzles and combustion chambers.
+- `HexFlowPumpComponents` implements turbopumps and electric pumps.
+- `HexFlowBasicPipes` implements the built-in pipe behaviours.
 
-- `HexFlowBasicComponents`: reusable fragments and `BasicCompBehav`
-- `HexFlowTankComponents`: gas, liquid, and pressure-fed tanks
-- `HexFlowNozzleComponents`: nozzles, switched nozzles, decomp chambers
-- `HexFlowPumpComponents`: turbopumps and electric pumps
-- `HexFlowSwitchComponents`: adjustable and on/off valves
-- `HexFlowBasicPipes`: pipe-segment behaviours
+Use `component_module_guide.md` for the established module layout and fragment
+pattern. Treat the current `HexComponentsAPI` source and tests as authoritative
+for method names and signatures; verify guide examples before copying them.
 
-## Tile Component Interface
+## Module Style
 
-Mandatory methods:
+These rules apply to the concrete implementation packages. `HexComponentsAPI`
+may use API-specific documentation and sections where the implementation-module
+layout does not fit.
 
-- `produce_rel_elements(behav)`
-- `get_tunables(behav)`
-- `set_tunables(behav, tunables)`
-- `render_base_elem!(queue, behav; glmap, rotation, position, pos_offset, render_height_offset, kwargs...)`
+- Start each migrated source file with an accurate scope header and its
+  `Formatter` policy. Obey the policy after every edit.
+- Give each implementation module a short module docstring whose inventory
+  contains exactly its exported concrete `ComponentBehavior` or `PipeBehavior`
+  implementations. Do not include fragments, state holders, traits, aliases,
+  or helpers in that inventory.
+- Use broad `using` statements for types, constants, and ordinary helper calls.
+  Use `import Package: method_names` for foreign functions extended by the
+  module. Group `using` statements by dependency role with consistently ordered
+  names. Import only the methods actually extended; keep each statement on one
+  physical line and use another complete statement when a semantic grouping is
+  useful. Do not introduce package aliases merely to shorten interface method
+  definitions.
+- Group exports, omitting empty groups, as behaviour fragments, helper
+  functions, support types, and concrete component or pipe behaviours.
+- Use `Behaviour Fragments` and `Concrete Component Behaviours` (or `Concrete
+  Pipe Behaviours`) as the normal major sections. Give each primary fragment or
+  concrete behaviour a minor banner. Keep its closely related state, traits,
+  constants, and methods together; use short ordinary comments for method
+  subgroups such as rendering or reactivation probes.
+- Document exported types and genuinely non-obvious helpers or contracts. In
+  implementation packages, straightforward API implementations, pure
+  delegation, obvious accessors, and routine rendering methods do not need
+  docstrings; the API package owns their general contract documentation.
+- Keep every rendering-function signature and every call representing one
+  rendering operation on one physical line, regardless of length. This
+  includes nested operations such as `push!(queue, render_basic_tile(...))`.
+  Setup calculations and control flow inside rendering functions still follow
+  the normal semantic-layout guidance.
 
-Optional methods include `render_map_elem!`,
-`produce_rel_fluid_declarations`, `update_flowbehav!`, `on_click!`,
-`get_thrust`, `get_component_temperature`, `collect_effect_particles!`,
-`map_rotation`, `can_be_moved`, `placement_valid`,
-`get_component_dry_mass`, `get_component_wet_mass`, `get_component_mass`,
-`get_actions`, and `do_action!`.
+Use Australian English in project-owned prose and headings (`behaviour`,
+`colour`, `standardised`). Preserve established identifiers and external API
+names such as `ComponentBehavior` exactly.
 
-## Pipe Interface
+## Behaviour Contracts
 
-Mandatory methods:
+- Implement every mandatory method for a new concrete behaviour and rely on an
+  optional default only when its semantics are genuinely correct. Tests should
+  exercise both direct behaviour calls and placed-wrapper delegation.
+- Component circuit elements and fluid declarations use tile-relative
+  coordinates. `FlowEngine` maps them after placement. Pipes normally rely on
+  the default conductance-to-resistor conversion.
+- The simulation currently collects fluid declarations from components. Adding
+  a pipe fluid-declaration feature requires an explicit API and collection-path
+  change, not merely a method on one pipe type.
+- Preserve `pos_offset` and `render_height_offset` through both base and dynamic
+  render methods so docking animation and layer ordering remain correct.
+- Override dry and wet mass hooks separately for stored-fluid components;
+  generic ship mass calculations combine them.
+- `get_actions` describes supported UI actions. `do_action!` returns a request
+  result for expected state rejection and throws for an unsupported action ID.
+- Reactivation classification must be pure. Mutate behaviour state only in
+  `commit_reactivation_probe!` after the calculator accepts a useful probe.
 
-- `get_conductance`
-- `get_pipe_tunables`
-- `set_pipe_tunables`
-- `render_pipe_base!`
-- `get_pipe_click_radius`
+## Adding Or Changing A Component
 
-Optional methods include `render_pipe_map!`,
-`produce_rel_fluid_declarations`, `can_pipe_be_moved`,
-and `produce_abs_elements`.
+1. Update the most appropriate existing package unless the behaviour introduces
+   a genuinely new reusable dependency boundary.
+2. Follow nearby fragment composition, imports, exports, constructors, and test
+   organisation.
+3. Add or update application-level instances in `src/components.jl` when the
+   game should expose the behaviour.
+4. Add `roll_component`/`roll_pipe` registration there when procedural
+   generation needs to create it, and update relevant generation pools.
+5. Add source sprites under `tools/TexturePacker/textures/` and regenerate the
+   tracked atlas when rendering needs new artwork.
+6. Run the package test suite, plus dependent component or application tests
+   when a shared fragment or interface changed.
 
-## Adding Components
-
-1. Create or update a package under `local_packages/components/`.
-2. Follow fragment composition for shared behaviour.
-3. Implement the mandatory interface methods.
-4. Register `roll_component(::Val{:YourKind}, ...)` or pipe equivalents in
-   `src/components.jl` when proc-gen needs to create it.
-5. Add concrete instances to `src/components.jl` where the game should expose
-   them.
-
+Application names such as `TurboPump`, `TriGasTank`, and `LargeAdjValve` are
+instances in `src/components.jl`; they are not implementation types. Search
+both the concrete type and the application instance before changing behaviour.

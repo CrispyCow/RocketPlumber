@@ -1,3 +1,8 @@
+#=
+Scope: Tests for FlowEngine circuit/fluid state derivation, MNA construction and solving, graph filtering, element pruning, ground search, dependent source handling, and multi-internal-node infrastructure
+Formatter: Runic
+=#
+
 using Test
 using LinearAlgebra: SingularException
 using SparseArrays: sparse, nonzeros, rowvals, nnz
@@ -20,7 +25,8 @@ using HexElements: CONST_RESISTOR, CONST_VOLTAGE, CONST_CURRENT, C_DEP_CURRENT, 
 struct TestPipe <: PipeBehavior end
 struct MultiElementPipe <: PipeBehavior end
 struct InactiveElementPipe <: PipeBehavior end
-import HexComponentsAPI: get_conductance, get_pipe_tunables, set_pipe_tunables, render_pipe_base!, get_pipe_click_radius, produce_abs_elements
+import HexComponentsAPI: get_conductance, get_pipe_tunables, set_pipe_tunables, render_pipe_base!, get_pipe_click_radius, produce_abs_elements, update_flowbehav!, produce_rel_fluid_declarations
+
 get_conductance(::TestPipe) = 1.0
 get_pipe_tunables(::TestPipe) = ()
 set_pipe_tunables(::TestPipe, tunables) = TestPipe()
@@ -42,7 +48,6 @@ get_pipe_click_radius(::InactiveElementPipe) = 0.1
 render_pipe_base!(queue::AbstractVector, behav::InactiveElementPipe; kwargs...) = nothing
 
 struct DummyCompUpdate <: ComponentBehavior end
-import HexComponentsAPI: update_flowbehav!
 function update_flowbehav!(::DummyCompUpdate; tile::TileCoord, mna_state::MNA_State, derivedmapstate::DerivedMapState, kwargs...)
     derived_value = get(derivedmapstate.nodeactualfluids, NodeCoord(tile, HexFrame.NODE_INTERNAL_1), nothing)
     mna_state.node_voltages[NodeCoord(tile, HexFrame.NODE_INTERNAL_1)] = derived_value === HexFluids.COLD_GAS ? 3.21 : -1.0
@@ -50,7 +55,6 @@ function update_flowbehav!(::DummyCompUpdate; tile::TileCoord, mna_state::MNA_St
 end
 
 struct DummyFluidComp <: ComponentBehavior end
-import HexComponentsAPI: produce_rel_fluid_declarations
 function produce_rel_fluid_declarations(::DummyFluidComp)
     return (FlowEngine.RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, HexFluids.FluidSource(HexFluids.COLD_GAS, 300.0)),)
 end
@@ -75,14 +79,18 @@ end
 # ===============================================================
 
 "Shorthand to create an AbsoluteElement from node positions on a tile"
-function make_element(tile::TileCoord, index::Integer, v1::NodeCoord, v2::NodeCoord,
-                      value::Float64, type::ElementTypes;
-                      dependent_index::Integer = 0, active::Bool = true)
+function make_element(
+        tile::TileCoord, index::Integer, v1::NodeCoord, v2::NodeCoord,
+        value::Float64, type::ElementTypes;
+        dependent_index::Integer = 0, active::Bool = true
+    )
     conns = AbsoluteElementConnections(v1, v2)
     id = ElementID(tile, UInt8(index))
     dep_id = ElementID(tile, UInt8(dependent_index))
-    return AbsoluteElement(connections=conns, value=value, type=type,
-                           id=id, dependent_id=dep_id, active=active)
+    return AbsoluteElement(
+        connections = conns, value = value, type = type,
+        id = id, dependent_id = dep_id, active = active
+    )
 end
 
 function produce_abs_elements(::MultiElementPipe, coord::PipeCoord)
@@ -172,29 +180,29 @@ end
 @testset "update_components!" begin
     # Per-GameMap: calls update_flowbehav! on all ships
     gm = GameMap()
-    set_component!(gm, TileCoord(0,0), PlacedComponent(DummyCompUpdate(), HexFrame.Q_POS, :primary))
+    set_component!(gm, TileCoord(0, 0), PlacedComponent(DummyCompUpdate(), HexFrame.Q_POS, :primary))
     sec = ShipState()
     add_ship!(gm, :two, sec)
-    set_component!(gm, TileCoord(5,5), PlacedComponent(DummyCompUpdate(), HexFrame.Q_POS, :two))
+    set_component!(gm, TileCoord(5, 5), PlacedComponent(DummyCompUpdate(), HexFrame.Q_POS, :two))
     ms = MNA_State()
     derived = DerivedMapState(
         nodeactualfluids = Dict(
-            NodeCoord(TileCoord(0,0), HexFrame.NODE_INTERNAL_1) => HexFluids.COLD_GAS,
-            NodeCoord(TileCoord(5,5), HexFrame.NODE_INTERNAL_1) => HexFluids.COLD_GAS,
+            NodeCoord(TileCoord(0, 0), HexFrame.NODE_INTERNAL_1) => HexFluids.COLD_GAS,
+            NodeCoord(TileCoord(5, 5), HexFrame.NODE_INTERNAL_1) => HexFluids.COLD_GAS,
         )
     )
     update_components!(gm, ms, derived)
-    @test NodeCoord(TileCoord(0,0), HexFrame.NODE_INTERNAL_1) in keys(ms.node_voltages)
-    @test NodeCoord(TileCoord(5,5), HexFrame.NODE_INTERNAL_1) in keys(ms.node_voltages)
-    @test ms.node_voltages[NodeCoord(TileCoord(0,0), HexFrame.NODE_INTERNAL_1)] ≈ 3.21
-    @test ms.node_voltages[NodeCoord(TileCoord(5,5), HexFrame.NODE_INTERNAL_1)] ≈ 3.21
+    @test NodeCoord(TileCoord(0, 0), HexFrame.NODE_INTERNAL_1) in keys(ms.node_voltages)
+    @test NodeCoord(TileCoord(5, 5), HexFrame.NODE_INTERNAL_1) in keys(ms.node_voltages)
+    @test ms.node_voltages[NodeCoord(TileCoord(0, 0), HexFrame.NODE_INTERNAL_1)] ≈ 3.21
+    @test ms.node_voltages[NodeCoord(TileCoord(5, 5), HexFrame.NODE_INTERNAL_1)] ≈ 3.21
 end
 
 @testset "fluid declarations" begin
     gm = GameMap()
     sec = ShipState()
     add_ship!(gm, :two, sec)
-    set_component!(gm, TileCoord(10,10), PlacedComponent(DummyFluidComp(), HexFrame.Q_POS, :two))
+    set_component!(gm, TileCoord(10, 10), PlacedComponent(DummyFluidComp(), HexFrame.Q_POS, :two))
     derived = DerivedMapState()
     list_fluid_declarations!(derived.primary_fluid_declarations, gm)
     @test length(derived.primary_fluid_declarations) == 1
@@ -395,7 +403,7 @@ end
     gnd = NodeCoord(TileCoord(0, 0), HexFrame.GROUND)
 
     @testset "single element - two nodes" begin
-        elems = [make_element(TileCoord(0,0), 1, n_a, n_b, 1.0, CONST_RESISTOR)]
+        elems = [make_element(TileCoord(0, 0), 1, n_a, n_b, 1.0, CONST_RESISTOR)]
         nodes = list_nodes(elems)
         @test length(nodes) == 2
         @test nodes[n_a] == 1
@@ -404,8 +412,8 @@ end
 
     @testset "shared node count increments" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, n_b, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(1,0), 1, n_b, n_c, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_b, n_c, 1.0, CONST_RESISTOR),
         ]
         nodes = list_nodes(elems)
         @test nodes[n_b] == 2
@@ -414,7 +422,7 @@ end
     end
 
     @testset "grounded node excluded" begin
-        elems = [make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE)]
+        elems = [make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE)]
         nodes = list_nodes(elems)
         @test length(nodes) == 1
         @test haskey(nodes, n_a)
@@ -440,9 +448,9 @@ end
 
     @testset "keeps well-connected triangle" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, n_b, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(1,0), 1, n_b, n_c, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(2,0), 1, n_c, n_a, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_b, n_c, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(2, 0), 1, n_c, n_a, 1.0, CONST_RESISTOR),
         ]
         result = run_prune(elems)
         @test length(result) == 3
@@ -450,8 +458,8 @@ end
 
     @testset "removes dead-end chain" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, n_b, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(1,0), 1, n_b, n_c, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_b, n_c, 1.0, CONST_RESISTOR),
         ]
         result = run_prune(elems)
         @test isempty(result)
@@ -459,9 +467,9 @@ end
 
     @testset "keeps grounded ring" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(1,0), 1, n_b, n_a, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_b, n_a, 2.0, CONST_RESISTOR),
         ]
         result = run_prune(elems)
         @test length(result) == 3
@@ -469,9 +477,9 @@ end
 
     @testset "counts parallel edges during prune" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(1,0), 1, n_a, n_b, 2.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_a, n_b, 2.0, CONST_VOLTAGE),
         ]
 
         result = run_prune(elems)
@@ -479,17 +487,17 @@ end
     end
 
     @testset "single grounded element pruned" begin
-        elems = [make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE)]
+        elems = [make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE)]
         result = run_prune(elems)
         @test isempty(result)
     end
 
     @testset "keeps diamond topology" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, n_b, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(0,0), 2, n_a, n_c, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(1,0), 1, n_b, n_d, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(2,0), 1, n_c, n_d, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 2, n_a, n_c, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_b, n_d, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(2, 0), 1, n_c, n_d, 1.0, CONST_RESISTOR),
         ]
         result = run_prune(elems)
         @test length(result) == 4
@@ -501,9 +509,9 @@ end
 
     @testset "prune! leaves scratch buffer clean after call" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(1,0), 1, n_b, n_a, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_b, n_a, 2.0, CONST_RESISTOR),
         ]
         scratchpad = FlowEngine.CalculatorScratchpad()
         prune!(elems, scratchpad)
@@ -514,9 +522,9 @@ end
     @testset "prune! result matches old prunedelements output" begin
         # In-place prune: call on a copy, assert same survivor count as run_prune
         elems_copy = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(1,0), 1, n_b, n_a, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_b, n_a, 2.0, CONST_RESISTOR),
         ]
         result = run_prune(elems_copy)
         nodes = list_nodes(result)
@@ -542,8 +550,8 @@ end
 
     @testset "simple grounded circuit" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
         ]
         result = run_ground_search(elems)
         @test length(result) == 2
@@ -551,20 +559,20 @@ end
 
     @testset "disconnected island removed" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(2,0), 1, n_c, n_d, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(2, 0), 1, n_c, n_d, 1.0, CONST_RESISTOR),
         ]
         result = run_ground_search(elems)
         @test length(result) == 2
         result_ids = Set(e.id for e in result)
-        @test !(ElementID(TileCoord(2,0), UInt8(1)) in result_ids)
+        @test !(ElementID(TileCoord(2, 0), UInt8(1)) in result_ids)
     end
 
     @testset "zero-conductance resistor treated as disconnected" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_a, n_b, 0.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_a, n_b, 0.0, CONST_RESISTOR),
         ]
         result = run_ground_search(elems)
         @test length(result) == 1
@@ -573,8 +581,8 @@ end
 
     @testset "grounded zero-conductance resistor does not anchor traversal" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 0.0, CONST_RESISTOR),
-            make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 0.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
         ]
         result = run_ground_search(elems)
         @test isempty(result)
@@ -582,9 +590,9 @@ end
 
     @testset "non-ground zero-conductance resistor is kept when its nodes are grounded" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(1,0), 1, n_b, gnd, 3.0, CONST_RESISTOR),
-            make_element(TileCoord(2,0), 1, n_a, n_b, 0.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(1, 0), 1, n_b, gnd, 3.0, CONST_RESISTOR),
+            make_element(TileCoord(2, 0), 1, n_a, n_b, 0.0, CONST_RESISTOR),
         ]
         result = run_ground_search(elems)
         @test length(result) == 3
@@ -593,8 +601,8 @@ end
 
     @testset "grounded zero-conductance resistor is kept when its node is grounded by other paths" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(1,0), 1, n_a, gnd, 0.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(1, 0), 1, n_a, gnd, 0.0, CONST_RESISTOR),
         ]
         result = run_ground_search(elems)
         @test length(result) == 2
@@ -605,8 +613,8 @@ end
         # Current sources are NOT traversable — they don't provide voltage references.
         # Element 2 (current source to n_b) is excluded because n_b is only reachable through it.
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(1,0), 1, n_a, n_b, 0.5, CONST_CURRENT),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(1, 0), 1, n_a, n_b, 0.5, CONST_CURRENT),
         ]
         result = run_ground_search(elems)
         @test length(result) == 1
@@ -616,9 +624,9 @@ end
     @testset "current sources included when nodes reachable via other paths" begin
         # Current source is kept if both its non-ground nodes are reachable from other elements
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(1,0), 1, n_a, n_b, 0.5, CONST_CURRENT),
-            make_element(TileCoord(2,0), 1, n_b, gnd, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(1, 0), 1, n_a, n_b, 0.5, CONST_CURRENT),
+            make_element(TileCoord(2, 0), 1, n_b, gnd, 1.0, CONST_RESISTOR),
         ]
         result = run_ground_search(elems)
         @test length(result) == 3
@@ -626,8 +634,8 @@ end
 
     @testset "voltage source chain provides ground path" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(1,0), 1, n_a, n_b, 3.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(1, 0), 1, n_a, n_b, 3.0, CONST_VOLTAGE),
         ]
         result = run_ground_search(elems)
         @test length(result) == 2
@@ -635,10 +643,10 @@ end
 
     @testset "traversal through mixed resistors and voltage sources" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_a, n_b, 2.0, CONST_RESISTOR),
-            make_element(TileCoord(1,0), 1, n_b, n_c, 3.0, CONST_VOLTAGE),
-            make_element(TileCoord(2,0), 1, n_c, n_d, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_a, n_b, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_b, n_c, 3.0, CONST_VOLTAGE),
+            make_element(TileCoord(2, 0), 1, n_c, n_d, 1.0, CONST_RESISTOR),
         ]
         result = run_ground_search(elems)
         @test length(result) == 4
@@ -646,10 +654,10 @@ end
 
     @testset "multiple grounded anchors" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(2,0), 1, n_c, gnd, 3.0, CONST_VOLTAGE),
-            make_element(TileCoord(2,0), 2, n_c, n_d, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(2, 0), 1, n_c, gnd, 3.0, CONST_VOLTAGE),
+            make_element(TileCoord(2, 0), 2, n_c, n_d, 1.0, CONST_RESISTOR),
         ]
         result = run_ground_search(elems)
         @test length(result) == 4
@@ -661,9 +669,9 @@ end
 
     @testset "ground_search! leaves scratch buffers clean after call" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(1,0), 1, n_b, gnd, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_b, gnd, 2.0, CONST_RESISTOR),
         ]
         scratchpad = FlowEngine.CalculatorScratchpad()
         ground_search!(elems, scratchpad)
@@ -676,9 +684,9 @@ end
 
     @testset "ground_search! preserves the legacy grounded traversal result" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(1,0), 1, n_b, gnd, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_b, gnd, 2.0, CONST_RESISTOR),
         ]
         result = run_ground_search(elems)
         nodes = list_nodes(result)
@@ -708,8 +716,8 @@ end
 
     @testset "independent elements unaffected" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
         ]
         call_clear!(elems)
         @test length(elems) == 2
@@ -717,8 +725,8 @@ end
 
     @testset "dependent with controller present stays" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 1.0, V_DEP_VOLTAGE; dependent_index=2),
-            make_element(TileCoord(0,0), 2, n_c, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 1.0, V_DEP_VOLTAGE; dependent_index = 2),
+            make_element(TileCoord(0, 0), 2, n_c, n_b, 1.0, CONST_RESISTOR),
         ]
         call_clear!(elems)
         @test length(elems) == 2
@@ -726,8 +734,8 @@ end
 
     @testset "dependent with missing controller removed" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 1.0, V_DEP_VOLTAGE; dependent_index=3),
-            make_element(TileCoord(0,0), 2, n_c, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 1.0, V_DEP_VOLTAGE; dependent_index = 3),
+            make_element(TileCoord(0, 0), 2, n_c, n_b, 1.0, CONST_RESISTOR),
         ]
         call_clear!(elems)
         @test length(elems) == 1
@@ -736,8 +744,8 @@ end
 
     @testset "mutual dependants both present stay" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 1.0, V_DEP_VOLTAGE; dependent_index=2),
-            make_element(TileCoord(0,0), 2, n_b, gnd, -2.0, C_DEP_CURRENT; dependent_index=1),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 1.0, V_DEP_VOLTAGE; dependent_index = 2),
+            make_element(TileCoord(0, 0), 2, n_b, gnd, -2.0, C_DEP_CURRENT; dependent_index = 1),
         ]
         call_clear!(elems)
         @test length(elems) == 2
@@ -745,8 +753,8 @@ end
 
     @testset "cascading removal" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_b, gnd, 1.0, C_DEP_CURRENT; dependent_index=3),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_b, gnd, 1.0, C_DEP_CURRENT; dependent_index = 3),
         ]
         call_clear!(elems)
         @test length(elems) == 1
@@ -763,9 +771,9 @@ end
         # Three elements: first and third survive, second is removed.
         # Original index positions of survivors must be maintained.
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_b, gnd, 1.0, C_DEP_CURRENT; dependent_index=9),
-            make_element(TileCoord(0,0), 3, n_c, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_b, gnd, 1.0, C_DEP_CURRENT; dependent_index = 9),
+            make_element(TileCoord(0, 0), 3, n_c, n_b, 1.0, CONST_RESISTOR),
         ]
         ids_before = [elems[1].id, elems[3].id]
         call_clear!(elems)
@@ -776,7 +784,7 @@ end
 
     @testset "scratch set is empty after call" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
         ]
         call_clear!(elems)
         @test isempty(scratch)
@@ -785,16 +793,16 @@ end
     @testset "scratch set reusable across consecutive calls" begin
         # First call: removes a dependant
         elems1 = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 1.0, V_DEP_VOLTAGE; dependent_index=9),
-            make_element(TileCoord(0,0), 2, n_b, n_c, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 1.0, V_DEP_VOLTAGE; dependent_index = 9),
+            make_element(TileCoord(0, 0), 2, n_b, n_c, 1.0, CONST_RESISTOR),
         ]
         call_clear!(elems1)
         @test length(elems1) == 1  # dependant removed
 
         # Second call with different input: stale IDs from call 1 must not affect call 2
         elems2 = [
-            make_element(TileCoord(1,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(1,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(1, 0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
         ]
         call_clear!(elems2)
         @test length(elems2) == 2  # no removals — stale IDs from call 1 must not affect this
@@ -831,10 +839,10 @@ end
 
     @testset "simple grounded circuit survives" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_int, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_int, n_a, 2.0, CONST_RESISTOR),
-            make_element(TileCoord(0,0), 3, n_int, n_b, 2.0, CONST_RESISTOR),
-            make_element(TileCoord(1,0), 1, n_a, n_c, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_int, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_int, n_a, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 3, n_int, n_b, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_a, n_c, 1.0, CONST_RESISTOR),
         ]
         result = run_prune_pipeline(elems)
         # Dead ends cascade: n_c dead→pipe removed, n_a dead→R2 removed, n_b dead→R3 removed
@@ -849,10 +857,10 @@ end
         Nozzle: R(b→GND, 0.5S)
         =#
         elems = [
-            make_element(TileCoord(0,0), 1, n_int, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_int, n_a, 2.0, CONST_RESISTOR),
-            make_element(TileCoord(1,0), 1, n_a, n_b, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(2,0), 1, n_b, gnd, 0.5, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_int, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_int, n_a, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(2, 0), 1, n_b, gnd, 0.5, CONST_RESISTOR),
         ]
         result = run_prune_pipeline(elems)
         @test length(result) == 4
@@ -861,13 +869,13 @@ end
     @testset "two tanks feeding a nozzle" begin
         n_int2 = nc(3, 0, HexFrame.NODE_INTERNAL_1)
         elems = [
-            make_element(TileCoord(0,0), 1, n_int, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_int, n_a, 2.0, CONST_RESISTOR),
-            make_element(TileCoord(3,0), 1, n_int2, gnd, 3.0, CONST_VOLTAGE),
-            make_element(TileCoord(3,0), 2, n_int2, n_b, 2.0, CONST_RESISTOR),
-            make_element(TileCoord(1,0), 1, n_a, n_c, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(2,0), 1, n_b, n_c, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(4,0), 1, n_c, gnd, 0.5, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_int, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_int, n_a, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(3, 0), 1, n_int2, gnd, 3.0, CONST_VOLTAGE),
+            make_element(TileCoord(3, 0), 2, n_int2, n_b, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_a, n_c, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(2, 0), 1, n_b, n_c, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(4, 0), 1, n_c, gnd, 0.5, CONST_RESISTOR),
         ]
         result = run_prune_pipeline(elems)
         @test length(result) == 7
@@ -882,18 +890,18 @@ end
 
         elems = [
             # Turbopump
-            make_element(TileCoord(5,0), 1, n_pump_int, n_qpos, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(5,0), 2, n_pump_int, n_qneg, 2.0, CONST_RESISTOR),
-            make_element(TileCoord(5,0), 3, n_spos, gnd, 0.5, C_DEP_CURRENT; dependent_index=1),
+            make_element(TileCoord(5, 0), 1, n_pump_int, n_qpos, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(5, 0), 2, n_pump_int, n_qneg, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(5, 0), 3, n_spos, gnd, 0.5, C_DEP_CURRENT; dependent_index = 1),
             # Gas tank on Q_POS
-            make_element(TileCoord(4,0), 1, nc(4,0, HexFrame.NODE_INTERNAL_1), gnd, 3.0, CONST_VOLTAGE),
-            make_element(TileCoord(4,0), 2, nc(4,0, HexFrame.NODE_INTERNAL_1), n_qpos, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(4, 0), 1, nc(4, 0, HexFrame.NODE_INTERNAL_1), gnd, 3.0, CONST_VOLTAGE),
+            make_element(TileCoord(4, 0), 2, nc(4, 0, HexFrame.NODE_INTERNAL_1), n_qpos, 2.0, CONST_RESISTOR),
             # Pipe + nozzle
-            make_element(TileCoord(6,0), 1, n_qneg, n_pipe_out, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(7,0), 1, n_pipe_out, gnd, 0.5, CONST_RESISTOR),
+            make_element(TileCoord(6, 0), 1, n_qneg, n_pipe_out, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(7, 0), 1, n_pipe_out, gnd, 0.5, CONST_RESISTOR),
             # Gas tank feeding turbine S_POS
-            make_element(TileCoord(8,0), 1, nc(8,0, HexFrame.NODE_INTERNAL_1), gnd, 2.0, CONST_VOLTAGE),
-            make_element(TileCoord(8,0), 2, nc(8,0, HexFrame.NODE_INTERNAL_1), n_spos, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(8, 0), 1, nc(8, 0, HexFrame.NODE_INTERNAL_1), gnd, 2.0, CONST_VOLTAGE),
+            make_element(TileCoord(8, 0), 2, nc(8, 0, HexFrame.NODE_INTERNAL_1), n_spos, 2.0, CONST_RESISTOR),
         ]
         result = run_prune_pipeline(elems)
         @test length(result) == 9
@@ -905,14 +913,14 @@ end
 
         elems = [
             # Decomp chamber
-            make_element(TileCoord(10,0), 1, n_dq_pos, gnd, 1.0, V_DEP_VOLTAGE; dependent_index=2),
-            make_element(TileCoord(10,0), 2, n_dq_neg, gnd, -2.0, C_DEP_CURRENT; dependent_index=1),
+            make_element(TileCoord(10, 0), 1, n_dq_pos, gnd, 1.0, V_DEP_VOLTAGE; dependent_index = 2),
+            make_element(TileCoord(10, 0), 2, n_dq_neg, gnd, -2.0, C_DEP_CURRENT; dependent_index = 1),
             # Liquid tank
-            make_element(TileCoord(9,0), 1, nc(9,0, HexFrame.NODE_INTERNAL_1), gnd, 8.0, CONST_VOLTAGE),
-            make_element(TileCoord(9,0), 2, nc(9,0, HexFrame.NODE_INTERNAL_1), n_dq_pos, 4.0, CONST_RESISTOR),
+            make_element(TileCoord(9, 0), 1, nc(9, 0, HexFrame.NODE_INTERNAL_1), gnd, 8.0, CONST_VOLTAGE),
+            make_element(TileCoord(9, 0), 2, nc(9, 0, HexFrame.NODE_INTERNAL_1), n_dq_pos, 4.0, CONST_RESISTOR),
             # Gas nozzle
-            make_element(TileCoord(11,0), 1, n_dq_neg, nc(11,0, HexFrame.NODE_Q_POS), 1.0, CONST_RESISTOR),
-            make_element(TileCoord(12,0), 1, nc(11,0, HexFrame.NODE_Q_POS), gnd, 0.5, CONST_RESISTOR),
+            make_element(TileCoord(11, 0), 1, n_dq_neg, nc(11, 0, HexFrame.NODE_Q_POS), 1.0, CONST_RESISTOR),
+            make_element(TileCoord(12, 0), 1, nc(11, 0, HexFrame.NODE_Q_POS), gnd, 0.5, CONST_RESISTOR),
         ]
         result = run_prune_pipeline(elems)
         @test length(result) == 6
@@ -946,8 +954,8 @@ end
 
     @testset "single voltage source with resistor" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_a, gnd, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_a, gnd, 1.0, CONST_RESISTOR),
         ]
         mna, _ = solve_circuit(elems)
         @test mna.node_voltages[n_a] ≈ 5.0
@@ -955,9 +963,9 @@ end
 
     @testset "voltage divider" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 10.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_a, n_b, 2.0, CONST_RESISTOR),
-            make_element(TileCoord(1,0), 1, n_b, gnd, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 10.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_a, n_b, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_b, gnd, 2.0, CONST_RESISTOR),
         ]
         mna, _ = solve_circuit(elems)
         @test mna.node_voltages[n_a] ≈ 10.0
@@ -966,8 +974,8 @@ end
 
     @testset "current source into resistor" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 2.0, CONST_CURRENT),
-            make_element(TileCoord(0,0), 2, n_a, gnd, 0.5, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 2.0, CONST_CURRENT),
+            make_element(TileCoord(0, 0), 2, n_a, gnd, 0.5, CONST_RESISTOR),
         ]
         mna, _ = solve_circuit(elems)
         @test mna.node_voltages[n_a] ≈ 4.0
@@ -975,9 +983,9 @@ end
 
     @testset "two voltage sources in series" begin
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(1,0), 1, n_b, n_a, 3.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_b, gnd, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(1, 0), 1, n_b, n_a, 3.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_b, gnd, 1.0, CONST_RESISTOR),
         ]
         mna, _ = solve_circuit(elems)
         @test mna.node_voltages[n_a] ≈ 5.0
@@ -987,17 +995,17 @@ end
     @testset "tank-pipe-nozzle circuit" begin
         n_int = nc(0, 0, HexFrame.NODE_INTERNAL_1)
         elems = [
-            make_element(TileCoord(0,0), 1, n_int, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_int, n_a, 2.0, CONST_RESISTOR),
-            make_element(TileCoord(1,0), 1, n_a, n_b, 10.0, CONST_RESISTOR),
-            make_element(TileCoord(2,0), 1, n_b, gnd, 0.3, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_int, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_int, n_a, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_a, n_b, 10.0, CONST_RESISTOR),
+            make_element(TileCoord(2, 0), 1, n_b, gnd, 0.3, CONST_RESISTOR),
         ]
         mna, _ = solve_circuit(elems)
         @test mna.node_voltages[n_int] ≈ 5.0
-        R_total = 1/2.0 + 1/10.0 + 1/0.3
+        R_total = 1 / 2.0 + 1 / 10.0 + 1 / 0.3
         I_expected = 5.0 / R_total
-        @test mna.node_voltages[n_a] ≈ 5.0 - I_expected * (1/2.0)
-        @test mna.node_voltages[n_b] ≈ I_expected * (1/0.3)
+        @test mna.node_voltages[n_a] ≈ 5.0 - I_expected * (1 / 2.0)
+        @test mna.node_voltages[n_b] ≈ I_expected * (1 / 0.3)
     end
 end
 
@@ -1034,18 +1042,18 @@ end
 
         elems = [
             # Pump
-            make_element(TileCoord(5,0), 1, n_pump_int, n_qpos, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(5,0), 2, n_pump_int, n_qneg, 2.0, CONST_RESISTOR),
-            make_element(TileCoord(5,0), 3, n_spos, gnd, 0.5, C_DEP_CURRENT; dependent_index=1),
+            make_element(TileCoord(5, 0), 1, n_pump_int, n_qpos, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(5, 0), 2, n_pump_int, n_qneg, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(5, 0), 3, n_spos, gnd, 0.5, C_DEP_CURRENT; dependent_index = 1),
             # Gas tank
-            make_element(TileCoord(4,0), 1, n_tank_int, gnd, 3.0, CONST_VOLTAGE),
-            make_element(TileCoord(4,0), 2, n_tank_int, n_qpos, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(4, 0), 1, n_tank_int, gnd, 3.0, CONST_VOLTAGE),
+            make_element(TileCoord(4, 0), 2, n_tank_int, n_qpos, 2.0, CONST_RESISTOR),
             # Gas tank feeding turbine
-            make_element(TileCoord(8,0), 1, n_gas_int, gnd, 2.0, CONST_VOLTAGE),
-            make_element(TileCoord(8,0), 2, n_gas_int, n_spos, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(8, 0), 1, n_gas_int, gnd, 2.0, CONST_VOLTAGE),
+            make_element(TileCoord(8, 0), 2, n_gas_int, n_spos, 2.0, CONST_RESISTOR),
             # Pipe + nozzle
-            make_element(TileCoord(6,0), 1, n_qneg, n_load, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(7,0), 1, n_load, gnd, 0.5, CONST_RESISTOR),
+            make_element(TileCoord(6, 0), 1, n_qneg, n_load, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(7, 0), 1, n_load, gnd, 0.5, CONST_RESISTOR),
         ]
         mna, _ = solve_circuit(elems)
         @test haskey(mna.node_voltages, n_pump_int)
@@ -1062,14 +1070,14 @@ end
 
         elems = [
             # Decomp chamber
-            make_element(TileCoord(10,0), 1, n_dq_pos, gnd, 1.0, V_DEP_VOLTAGE; dependent_index=2),
-            make_element(TileCoord(10,0), 2, n_dq_neg, gnd, -2.0, C_DEP_CURRENT; dependent_index=1),
+            make_element(TileCoord(10, 0), 1, n_dq_pos, gnd, 1.0, V_DEP_VOLTAGE; dependent_index = 2),
+            make_element(TileCoord(10, 0), 2, n_dq_neg, gnd, -2.0, C_DEP_CURRENT; dependent_index = 1),
             # Liquid tank
-            make_element(TileCoord(9,0), 1, n_liq_int, gnd, 8.0, CONST_VOLTAGE),
-            make_element(TileCoord(9,0), 2, n_liq_int, n_dq_pos, 4.0, CONST_RESISTOR),
+            make_element(TileCoord(9, 0), 1, n_liq_int, gnd, 8.0, CONST_VOLTAGE),
+            make_element(TileCoord(9, 0), 2, n_liq_int, n_dq_pos, 4.0, CONST_RESISTOR),
             # Pipe + nozzle
-            make_element(TileCoord(11,0), 1, n_dq_neg, n_gas_out, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(12,0), 1, n_gas_out, gnd, 0.5, CONST_RESISTOR),
+            make_element(TileCoord(11, 0), 1, n_dq_neg, n_gas_out, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(12, 0), 1, n_gas_out, gnd, 0.5, CONST_RESISTOR),
         ]
         mna, _ = solve_circuit(elems)
         @test haskey(mna.node_voltages, n_dq_pos)
@@ -1089,20 +1097,23 @@ end
     n_c = nc(2, 0, HexFrame.NODE_Q_POS)
 
     "Build an MNA state suitable for in-place A matrix tests"
-    function build_mna(elements::Vector{AbsoluteElement})
+    function build_mna(
+            elements::Vector{AbsoluteElement};
+            filterednodes::Dict{NodeCoord, UInt16} = list_nodes(elements)
+        )
         derived = DerivedMapState()
         mna = MNA_State()
         derived.filteredelements = elements
-        derived.filterednodes = list_nodes(elements)
+        derived.filterednodes = copy(filterednodes)
         MNA_indexnodes!(mna, derived)
         MNA_splitelements!(mna, derived)
         return mna
     end
 
     base_elements = [
-        make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-        make_element(TileCoord(0,0), 2, n_a, n_b, 2.0, CONST_RESISTOR),
-        make_element(TileCoord(1,0), 1, n_b, gnd, 1.0, CONST_CURRENT),
+        make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+        make_element(TileCoord(0, 0), 2, n_a, n_b, 2.0, CONST_RESISTOR),
+        make_element(TileCoord(1, 0), 1, n_b, gnd, 1.0, CONST_CURRENT),
     ]
 
     @testset "MNA_buildA_sparse matches MNA_getA numerically" begin
@@ -1176,8 +1187,9 @@ end
     end
 
     @testset "MNA_buildA_sparse canonicalises equivalent element ordering" begin
-        mna1 = build_mna(base_elements)
-        mna2 = build_mna(reverse(base_elements))
+        canonical_nodes = list_nodes(base_elements)
+        mna1 = build_mna(base_elements; filterednodes = canonical_nodes)
+        mna2 = build_mna(reverse(base_elements); filterednodes = canonical_nodes)
 
         A1 = MNA_buildA_sparse(mna1)
         A2 = MNA_buildA_sparse(mna2)
@@ -1209,7 +1221,7 @@ end
         elems_nonzero = copy(base_elements)
         elems_zero = [
             base_elements[1],
-            make_element(TileCoord(0,0), 2, n_a, n_b, 0.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 2, n_a, n_b, 0.0, CONST_RESISTOR),
             base_elements[3],
         ]
 
@@ -1229,7 +1241,7 @@ end
     @testset "real stamped zero-toggle witness becomes singular on cold rebuild" begin
         elems_zero = [
             base_elements[1],
-            make_element(TileCoord(0,0), 2, n_a, n_b, 0.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 2, n_a, n_b, 0.0, CONST_RESISTOR),
             base_elements[3],
         ]
 
@@ -1245,7 +1257,7 @@ end
         # Add an extra element → topology changes
         extended_elements = [
             base_elements...,
-            make_element(TileCoord(2,0), 1, n_b, n_c, 4.0, CONST_RESISTOR),
+            make_element(TileCoord(2, 0), 1, n_b, n_c, 4.0, CONST_RESISTOR),
         ]
         derived = DerivedMapState()
         derived.filteredelements = extended_elements
@@ -1310,9 +1322,9 @@ end
     n_b = nc(1, 0, HexFrame.NODE_Q_POS)
 
     elements = [
-        make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-        make_element(TileCoord(0,0), 2, n_a, n_b, 2.0, CONST_RESISTOR),
-        make_element(TileCoord(1,0), 1, n_b, gnd, 1.0, CONST_CURRENT),
+        make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+        make_element(TileCoord(0, 0), 2, n_a, n_b, 2.0, CONST_RESISTOR),
+        make_element(TileCoord(1, 0), 1, n_b, gnd, 1.0, CONST_CURRENT),
     ]
 
     derived = DerivedMapState()
@@ -1386,9 +1398,9 @@ end
         n_b = nc(1, 0, HexFrame.NODE_Q_POS)
 
         elems = [
-            make_element(TileCoord(0,0), 1, n_a, n_b, 2.0, CONST_RESISTOR),
-            make_element(TileCoord(0,0), 2, n_a, gnd, 1.0, CONST_CURRENT),
-            make_element(TileCoord(1,0), 1, n_b, gnd, 1.0, CONST_CURRENT),
+            make_element(TileCoord(0, 0), 1, n_a, n_b, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 2, n_a, gnd, 1.0, CONST_CURRENT),
+            make_element(TileCoord(1, 0), 1, n_b, gnd, 1.0, CONST_CURRENT),
         ]
 
         # All non-ground nodes have count ≥2 (prune-proof)
@@ -1413,7 +1425,7 @@ end
         tp_tile = TileCoord(17, -16)
         dc_tile = TileCoord(16, -16)
 
-        n_tp_int  = nc(17, -16, HexFrame.NODE_INTERNAL_1)
+        n_tp_int = nc(17, -16, HexFrame.NODE_INTERNAL_1)
         n_tp_qpos = nc(17, -16, HexFrame.NODE_Q_POS)
         n_tp_qneg = nc(17, -16, HexFrame.NODE_Q_NEG)
         n_tp_spos = nc(17, -16, HexFrame.NODE_S_POS)
@@ -1424,10 +1436,10 @@ end
             # TurboPump (stalled: Vsrc at 0V but still active element)
             make_element(tp_tile, 1, n_tp_int, n_tp_qpos, 0.0, CONST_VOLTAGE),
             make_element(tp_tile, 2, n_tp_int, n_tp_qneg, 2.0, CONST_RESISTOR),
-            make_element(tp_tile, 3, n_tp_spos, gnd, 0.5, C_DEP_CURRENT; dependent_index=1),
+            make_element(tp_tile, 3, n_tp_spos, gnd, 0.5, C_DEP_CURRENT; dependent_index = 1),
             # DecompChamber (mutual VCVS ↔ CCCS dependency)
-            make_element(dc_tile, 1, n_dc_qpos, gnd, 1.0, V_DEP_VOLTAGE; dependent_index=2),
-            make_element(dc_tile, 2, n_dc_qneg, gnd, -2.0, C_DEP_CURRENT; dependent_index=1),
+            make_element(dc_tile, 1, n_dc_qpos, gnd, 1.0, V_DEP_VOLTAGE; dependent_index = 2),
+            make_element(dc_tile, 2, n_dc_qneg, gnd, -2.0, C_DEP_CURRENT; dependent_index = 1),
             # Pipes connecting TurboPump ports to DecompChamber ports
             make_element(TileCoord(18, -16), 1, n_tp_qpos, n_dc_qpos, 1.0, CONST_RESISTOR),
             make_element(TileCoord(19, -16), 1, n_tp_qneg, n_dc_qpos, 1.0, CONST_RESISTOR),
@@ -1455,7 +1467,7 @@ end
         tp_tile = TileCoord(17, -16)
         dc_tile = TileCoord(16, -16)
 
-        n_tp_int  = nc(17, -16, HexFrame.NODE_INTERNAL_1)
+        n_tp_int = nc(17, -16, HexFrame.NODE_INTERNAL_1)
         n_tp_qpos = nc(17, -16, HexFrame.NODE_Q_POS)
         n_tp_qneg = nc(17, -16, HexFrame.NODE_Q_NEG)
         n_tp_spos = nc(17, -16, HexFrame.NODE_S_POS)
@@ -1463,16 +1475,16 @@ end
         n_dc_qneg = nc(15, -16, HexFrame.NODE_Q_POS)
         n_liq_int = nc(14, -16, HexFrame.NODE_INTERNAL_1)
         n_gas_int = nc(18, -16, HexFrame.NODE_INTERNAL_1)
-        n_nozzle  = nc(19, -16, HexFrame.NODE_Q_POS)
+        n_nozzle = nc(19, -16, HexFrame.NODE_Q_POS)
 
         elems = [
             # TurboPump (active: Vsrc at 5V)
             make_element(tp_tile, 1, n_tp_int, n_tp_qpos, 5.0, CONST_VOLTAGE),
             make_element(tp_tile, 2, n_tp_int, n_tp_qneg, 2.0, CONST_RESISTOR),
-            make_element(tp_tile, 3, n_tp_spos, gnd, 0.5, C_DEP_CURRENT; dependent_index=1),
+            make_element(tp_tile, 3, n_tp_spos, gnd, 0.5, C_DEP_CURRENT; dependent_index = 1),
             # DecompChamber
-            make_element(dc_tile, 1, n_dc_qpos, gnd, 1.0, V_DEP_VOLTAGE; dependent_index=2),
-            make_element(dc_tile, 2, n_dc_qneg, gnd, -2.0, C_DEP_CURRENT; dependent_index=1),
+            make_element(dc_tile, 1, n_dc_qpos, gnd, 1.0, V_DEP_VOLTAGE; dependent_index = 2),
+            make_element(dc_tile, 2, n_dc_qneg, gnd, -2.0, C_DEP_CURRENT; dependent_index = 1),
             # Liquid tank (grounded via CONST_VOLTAGE → GND, series R to tp_qpos)
             make_element(TileCoord(14, -16), 1, n_liq_int, gnd, 8.0, CONST_VOLTAGE),
             make_element(TileCoord(14, -16), 2, n_liq_int, n_tp_qpos, 4.0, CONST_RESISTOR),
@@ -1514,8 +1526,8 @@ end
     @testset "basic connections" begin
         nodeconnections = Dict{NodeCoord, FlowEngine.ConnectionVect}()
         elements = [
-            make_element(TileCoord(0,0), 1, n_a, n_b, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(1,0), 1, n_b, n_c, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_b, n_c, 1.0, CONST_RESISTOR),
         ]
         build_node_connection_map!(nodeconnections, elements)
         @test n_b in nodeconnections[n_a]
@@ -1527,7 +1539,7 @@ end
     @testset "grounded elements excluded from connections" begin
         nodeconnections = Dict{NodeCoord, FlowEngine.ConnectionVect}()
         elements = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
         ]
         build_node_connection_map!(nodeconnections, elements)
         @test !haskey(nodeconnections, n_a) || isempty(nodeconnections[n_a])
@@ -1536,7 +1548,7 @@ end
     @testset "default builder keeps zero-conductance links" begin
         nodeconnections = Dict{NodeCoord, FlowEngine.ConnectionVect}()
         elements = [
-            make_element(TileCoord(0,0), 1, n_a, n_b, 0.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, n_b, 0.0, CONST_RESISTOR),
         ]
         build_node_connection_map!(nodeconnections, elements)
         @test n_b in nodeconnections[n_a]
@@ -1546,9 +1558,9 @@ end
     @testset "filtered builder excludes current and zero-conductance edges" begin
         nodeconnections = Dict{NodeCoord, FlowEngine.ConnectionVect}()
         elements = [
-            make_element(TileCoord(0,0), 1, n_a, n_b, 0.0, CONST_RESISTOR),
-            make_element(TileCoord(1,0), 1, n_b, n_c, 1.0, CONST_RESISTOR),
-            make_element(TileCoord(2,0), 1, n_c, gnd, 1.0, CONST_CURRENT),
+            make_element(TileCoord(0, 0), 1, n_a, n_b, 0.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_b, n_c, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(2, 0), 1, n_c, gnd, 1.0, CONST_CURRENT),
         ]
         build_node_connection_map!(
             nodeconnections,
@@ -1563,8 +1575,8 @@ end
     @testset "ground neighbour mode keeps grounded degree without ground key" begin
         nodeconnections = Dict{NodeCoord, FlowEngine.ConnectionVect}()
         elements = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(0,0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
         ]
 
         build_node_connection_map!(
@@ -1588,7 +1600,7 @@ end
     @testset "indexes reversed grounded elements by default" begin
         source_index = Dict{NodeCoord, Int}()
         elements = [
-            make_element(TileCoord(0,0), 1, gnd, n_a, 2.0, CONST_RESISTOR),
+            make_element(TileCoord(0, 0), 1, gnd, n_a, 2.0, CONST_RESISTOR),
         ]
         index_grounded_source_elements!(source_index, elements)
         @test source_index[n_a] == 1
@@ -1597,8 +1609,8 @@ end
     @testset "filter can exclude current sources" begin
         source_index = Dict{NodeCoord, Int}()
         elements = [
-            make_element(TileCoord(0,0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
-            make_element(TileCoord(1,0), 1, n_b, gnd, 1.0, CONST_CURRENT),
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(1, 0), 1, n_b, gnd, 1.0, CONST_CURRENT),
         ]
         index_grounded_source_elements!(
             source_index,
@@ -1643,11 +1655,11 @@ end
             make_element(T, 4, n_int2, gnd, 1.0, CONST_RESISTOR),
         ]
         mna, _ = solve_circuit_mi(elems)
-        
+
         # With three equal resistors in series, voltage divider gives:
         # V_int1 = 10 * (2/3), V_int2 = 10 * (1/3)
-        @test mna.node_voltages[n_int1] ≈ 10.0 * (2.0/3.0)
-        @test mna.node_voltages[n_int2] ≈ 10.0 * (1.0/3.0)
+        @test mna.node_voltages[n_int1] ≈ 10.0 * (2.0 / 3.0)
+        @test mna.node_voltages[n_int2] ≈ 10.0 * (1.0 / 3.0)
         @test length(mna.node_voltages) >= 3  # At least Q_POS, INTERNAL_1, INTERNAL_2
     end
 
@@ -1665,11 +1677,11 @@ end
             make_element(T, 5, n_int3, gnd, 1.0, CONST_RESISTOR),
         ]
         mna, _ = solve_circuit_mi(elems)
-        
+
         # With four equal resistors in series, voltage divider gives:
-        @test mna.node_voltages[n_int1] ≈ 10.0 * (3.0/4.0)
-        @test mna.node_voltages[n_int2] ≈ 10.0 * (2.0/4.0)
-        @test mna.node_voltages[n_int3] ≈ 10.0 * (1.0/4.0)
+        @test mna.node_voltages[n_int1] ≈ 10.0 * (3.0 / 4.0)
+        @test mna.node_voltages[n_int2] ≈ 10.0 * (2.0 / 4.0)
+        @test mna.node_voltages[n_int3] ≈ 10.0 * (1.0 / 4.0)
     end
 
     @testset "Internal nodes on different tiles do not alias" begin
@@ -1694,7 +1706,7 @@ end
             make_element(T2, 3, n_int2_T2, gnd_T1, 1.0, CONST_RESISTOR),
         ]
         mna, _ = solve_circuit_mi(elems)
-        
+
         # Each divider should give half its source voltage
         @test mna.node_voltages[n_int2_T1] ≈ 5.0
         @test mna.node_voltages[n_int2_T2] ≈ 2.0

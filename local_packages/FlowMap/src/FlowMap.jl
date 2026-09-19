@@ -1,3 +1,8 @@
+#=
+Scope: FlowMap's persistent game-map model, ownership helpers, docking, and map-level validation
+Formatter: Runic
+=#
+
 module FlowMap
 
 using HexFrame, HexComponentsAPI, HexFluids
@@ -589,8 +594,10 @@ Errors if:
 - any coordinate in `blueprint.components` is already occupied (collision guard)
 - any coordinate in `blueprint.pipe_behaviors` is already occupied (collision guard)
 """
-function merge_ship!(gamemap::GameMap, ship_name::Symbol, blueprint::ShipBlueprint;
-        docking_status::DockingStatus = ConnectedDockStat())
+function merge_ship!(
+        gamemap::GameMap, ship_name::Symbol, blueprint::ShipBlueprint;
+        docking_status::DockingStatus = ConnectedDockStat()
+    )
     has_ship(gamemap, ship_name) && error("Ship '$ship_name' already exists in gamemap")
 
     # Validate no coordinate collisions before mutation
@@ -813,6 +820,7 @@ function is_on_surface_tile_any_ship(coord::TileCoord, gamemap::GameMap)::Tuple{
 end
 
 #= ---------- Counts and Batch Operations ----------- =#
+"Count components in the map, optionally restricting the total to one ship."
 function count_components(gamemap::GameMap; ship_name::Union{Symbol, Nothing} = nothing)::Int
     if isnothing(ship_name)
         return length(gamemap.components)
@@ -821,6 +829,7 @@ function count_components(gamemap::GameMap; ship_name::Union{Symbol, Nothing} = 
     end
 end
 
+"Count pipes in the map, optionally restricting the total to one ship."
 function count_pipes(gamemap::GameMap; ship_name::Union{Symbol, Nothing} = nothing)::Int
     if isnothing(ship_name)
         return length(gamemap.pipe_behaviors)
@@ -829,6 +838,7 @@ function count_pipes(gamemap::GameMap; ship_name::Union{Symbol, Nothing} = nothi
     end
 end
 
+"Count surface tiles in the map, optionally restricting the total to one ship."
 function count_surface_tiles(gamemap::GameMap; ship_name::Union{Symbol, Nothing} = nothing)::Int
     if isnothing(ship_name)
         return length(gamemap.surface_shiptags)
@@ -838,6 +848,7 @@ function count_surface_tiles(gamemap::GameMap; ship_name::Union{Symbol, Nothing}
     return count(owner -> owner === ship_name, values(gamemap.surface_shiptags))
 end
 
+"Delete all components from the map, optionally restricting removal to one ship."
 function delete_all_components!(gamemap::GameMap; ship_name::Union{Symbol, Nothing} = nothing)
     if isnothing(ship_name)
         empty!(gamemap.components)
@@ -847,6 +858,7 @@ function delete_all_components!(gamemap::GameMap; ship_name::Union{Symbol, Nothi
     return nothing
 end
 
+"Delete all pipes from the map, optionally restricting removal to one ship."
 function delete_all_pipes!(gamemap::GameMap; ship_name::Union{Symbol, Nothing} = nothing)
     if isnothing(ship_name)
         empty!(gamemap.pipe_behaviors)
@@ -856,6 +868,7 @@ function delete_all_pipes!(gamemap::GameMap; ship_name::Union{Symbol, Nothing} =
     return nothing
 end
 
+"Delete every surface tile owned by `ship_name`."
 function delete_all_surface_tiles!(gamemap::GameMap; ship_name::Symbol = :primary)
     _get_ship_state(gamemap, ship_name)
     filter!(((_, owner),) -> owner !== ship_name, gamemap.surface_shiptags)
@@ -866,14 +879,18 @@ end
 "Read the owning ship tag for a surface tile, if present."
 get_surface_shiptag(gamemap::GameMap, coord::TileCoord)::Union{Symbol, Nothing} = get(gamemap.surface_shiptags, coord, nothing)
 
+"Return whether `coord` belongs to `ship_name`'s surface."
 is_on_surface_tile(coord::TileCoord, gamemap::GameMap; ship_name::Symbol = :primary)::Bool =
     get_surface_shiptag(gamemap, coord) === ship_name
 
+"Tag `coord` as a surface tile owned by `ship_name`."
 function set_surface_tile!(gamemap::GameMap, coord::TileCoord; ship_name::Symbol = :primary)
     _get_ship_state(gamemap, ship_name)
     gamemap.surface_shiptags[coord] = ship_name
     return nothing
 end
+
+"Tag every tile in `surface` as owned by `ship_name`."
 function set_surface_tile!(gamemap::GameMap, surface; ship_name::Symbol = :primary)
     _get_ship_state(gamemap, ship_name)
     for coord in surface
@@ -882,8 +899,11 @@ function set_surface_tile!(gamemap::GameMap, surface; ship_name::Symbol = :prima
     return nothing
 end
 
-function delete_surface_tile!(gamemap::GameMap, coord::TileCoord;
-        ship_name::Symbol = :primary)::Bool
+"Delete `coord` from `ship_name`'s surface if present, returning whether a tile was removed."
+function delete_surface_tile!(
+        gamemap::GameMap, coord::TileCoord;
+        ship_name::Symbol = :primary
+    )::Bool
     _get_ship_state(gamemap, ship_name)
     get_surface_shiptag(gamemap, coord) === ship_name || return false
     delete!(gamemap.surface_shiptags, coord)
@@ -893,10 +913,12 @@ end
 "Iterate `(tile, ship_name)` pairs for every surface tile in the map."
 each_surface_owner(gamemap::GameMap) = pairs(gamemap.surface_shiptags)
 
-"Collect surface tiles into `dest`, optionally filtering by owner." 
-function collect_surface_tiles!(dest, gamemap::GameMap;
+"Collect surface tiles into `dest`, optionally filtering by owner."
+function collect_surface_tiles!(
+        dest, gamemap::GameMap;
         ship_name::Union{Symbol, Nothing} = nothing,
-        exclude_ship::Union{Symbol, Nothing} = nothing)
+        exclude_ship::Union{Symbol, Nothing} = nothing
+    )
     if !isnothing(ship_name)
         _get_ship_state(gamemap, ship_name)
     end
@@ -1063,7 +1085,7 @@ end
     return count(adj_tile -> adj_tile in surface_set, adjacent_tiles)
 end
 
-"Collect boundary tiles, optionally restricted to one ship." 
+"Collect boundary tiles, optionally restricted to one ship."
 function collect_surface_edge_tiles!(dest, gamemap::GameMap; ship_name::Union{Symbol, Nothing} = nothing)
     if !isnothing(ship_name)
         _get_ship_state(gamemap, ship_name)
@@ -1385,8 +1407,10 @@ end
 find_ship_containing(gamemap::GameMap, coord::PipeCoord)::Union{Symbol, Nothing} = find_ship_containing(coord, gamemap)
 
 "Find a ship by adjacent surface ownership only. Returns `default` if no adjacent surface is found."
-function find_ship_surface_containing_node(node::NodeCoord, gamemap::GameMap;
-        default::Union{Symbol, Nothing} = nothing)::Union{Symbol, Nothing}
+function find_ship_surface_containing_node(
+        node::NodeCoord, gamemap::GameMap;
+        default::Union{Symbol, Nothing} = nothing
+    )::Union{Symbol, Nothing}
     for (tile, _) in get_adjacent_tiles_for_node(node)
         sn = get_surface_shiptag(gamemap, tile)
         !isnothing(sn) && return sn
@@ -1395,8 +1419,10 @@ function find_ship_surface_containing_node(node::NodeCoord, gamemap::GameMap;
 end
 
 "Find a ship by adjacent pipe ownership only. Non-axis nodes return `default` immediately."
-function find_ship_pipes_containing_node(node::NodeCoord, gamemap::GameMap;
-        default::Union{Symbol, Nothing} = nothing)::Union{Symbol, Nothing}
+function find_ship_pipes_containing_node(
+        node::NodeCoord, gamemap::GameMap;
+        default::Union{Symbol, Nothing} = nothing
+    )::Union{Symbol, Nothing}
     is_axis(node.dir) || return default
 
     vertex = to_vertex(node)
@@ -1408,8 +1434,10 @@ function find_ship_pipes_containing_node(node::NodeCoord, gamemap::GameMap;
 end
 
 "Find a ship for `node` by checking surface ownership first, then pipe ownership. Returns `default` if no ship is found."
-function find_ship_for_node(node::NodeCoord, gamemap::GameMap;
-        default::Union{Symbol, Nothing} = :primary)::Union{Symbol, Nothing}
+function find_ship_for_node(
+        node::NodeCoord, gamemap::GameMap;
+        default::Union{Symbol, Nothing} = :primary
+    )::Union{Symbol, Nothing}
     surface_ship = find_ship_surface_containing_node(node, gamemap; default = nothing)
     isnothing(surface_ship) || return surface_ship
 
@@ -1578,8 +1606,8 @@ function validate_offship_pipe_deletion(coord::PipeCoord, gamemap::GameMap)::Boo
         isempty(reachable) && continue
         has_ship_connection = any(
             is_node_on_any_ship_surface(to_nodecoord(vertex), gamemap)
-            for pipe_coord in reachable
-            for vertex in (pipe_coord.v1, pipe_coord.v2)
+                for pipe_coord in reachable
+                for vertex in (pipe_coord.v1, pipe_coord.v2)
         )
         has_ship_connection || return false
     end

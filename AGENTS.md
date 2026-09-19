@@ -1,129 +1,165 @@
-# Rocket Plumber - Codex Agent Instructions
-
-These instructions are for Codex agents working in this repository. Keep the
-existing GitHub Copilot and Claude guidance files; this file sits alongside
-them and should not replace them.
+# Rocket Plumber Repository Guide
 
 Rocket Plumber, still often named HexFlow in code, is a spaceship-building
 simulation game with fluid mechanics modelled on circuit simulation. Players
 construct ships from pipes and components on a hex grid, then fly them to
 destinations in space with realistic manoeuvre dynamics.
 
-## How To Work In This Repo
+## Working In This Repository
 
-- Read the most local `AGENTS.md` before editing files in a subdirectory.
-- Use the existing `CLAUDE.md` files as supporting context when you need more
-  domain detail; keep this file focused on Codex-specific workflow and high
-  signal repository conventions.
-- Preserve user changes. Do not revert unrelated dirty files.
 - Prefer small, scoped changes that follow nearby Julia style and package
   boundaries.
-- Search before changing public APIs. Packages re-export and import each other
-  extensively, so symbol changes can have broad reach.
-- Use Australian English in comments, docs, UI text, and tests.
+- Preserve user changes. Do not revert unrelated dirty files.
+- Search the whole repository before changing exported names, struct fields,
+  constructors, or public function signatures. Packages re-export and import
+  each other extensively.
+- Treat code, tests, and `Project.toml` files as authoritative when prose has
+  drifted. Update the closest `AGENTS.md` when durable structure, workflow, or
+  local conventions change.
+- Check the nearest nested `AGENTS.md` before editing under `src/`,
+  `local_packages/`, or `tools/`; those files contain the specialised context
+  intentionally omitted here.
 
-## Coding Style
+## Coding Style and Conventions
 
-- Write clear, idiomatic Julia using dispatch and standard library functions
-  where they improve readability.
-- Prefer guard clauses and early returns over deep nesting.
-- Use accessor helpers such as `get_component`, `get_ship`, and related APIs
-  when available instead of reaching into backing dictionaries directly.
-- Extract duplicate code only when it improves maintainability. Avoid helper
-  functions that only add indirection.
-- Keep lines intact when they read comfortably at about 120-140 columns.
-- For medium signatures, break at `;`: positional arguments on the first line
-  and keyword arguments on their own indented lines.
-- For long signatures, place positional arguments on the first continuation
-  line and then use one keyword argument per line.
-- Keep rendering function signatures in component definition files on one line
-  when they follow the repeated local pattern.
+Use **Australian English** for new project-owned names, comments, documentation,
+and other prose. Preserve terminology and spellings imposed by external APIs,
+libraries, and existing interfaces.
 
-## Documentation And Comments
+For Julia code, apply the `rocket-plumber-code-style` skill in
+`.agents/skills/rocket-plumber-code-style/SKILL.md`. The skill contains the
+full style guidance; the rules below are the most important defaults.
 
-- Prefer docstrings for function and type documentation.
-- Single-line docstrings use `"Description here"` and should stay short.
-- Multi-line docstrings use `"""Description here"""`.
-- Docstrings should state purpose, not restate the signature or narrate every
-  implementation step.
-- Always add docstrings for Base extensions such as `Base.convert`,
-  `Base.promote_rule`, and operator overloads.
-- Inline comments should explain intent, invariants, and non-obvious behaviour.
-  Avoid comments that restate the code.
-- Brief inline comments on struct fields are useful and should usually stay.
+### Core Style
 
-Section dividers:
+* **Match nearby code first.** Prefer established local conventions and keep
+  related definitions visually consistent.
+* **No fixed line-length target.** Keep calls and signatures horizontal when
+  their role in the surrounding flow matters more than inspecting individual
+  arguments. Split vertically when the arguments themselves are the important
+  information. Bias function signatures toward staying on one line.
+* **Keep coherent logic together.** Do not extract one-off helper functions
+  merely to name a short block or reduce function length. Long, well-structured
+  sequential functions are fine; use whitespace and terse comments to expose
+  their structure.
+* **Use whitespace and comments for navigation.** Separate logical groups with
+  blank lines. Use short fragment comments above meaningful blocks and brief
+  inline comments for individual surprising lines. Avoid comments that merely
+  narrate obvious code.
+* **Prefer low nesting.** Handle exceptional or irrelevant cases early where
+  practical. Keep neighbouring guard clauses in a consistent style.
+
+### Julia Conventions
+
+* Most `function ... end` definitions should have a short docstring describing
+  their purpose and important quirks. Avoid argument-by-argument or
+  Doxygen-style documentation. Trivial delegation and interface glue need not
+  be documented individually.
+* Annotate arguments with the types the function is actually designed for.
+  Prefer concrete types by default; use abstract or unconstrained types
+  deliberately when broader behaviour is intended.
+* Struct fields should be explicitly typed and concrete by default.
+* Prefer multiple dispatch over explicit type branching when behaviour varies
+  by type, while keeping shared logic shared.
+* Use `!` consistently for functions that mutate an argument, and put the
+  mutated argument first where practical.
+* Use `isnothing(x)` / `!isnothing(x)` for `nothing` checks.
+* Prefer idiomatic comprehensions, `map`, `filter`, broadcasting, and similar
+  constructs while they remain simple; use an explicit loop when the logic
+  becomes substantial.
+* Write explicit returns in long-form functions. Side-effect-only functions
+  commonly end with `return nothing`.
+* Prefer clear code over speculative micro-optimisation. Keep allocations in
+  mind, but reserve `@inbounds`, `@simd`, and similar optimisation for known
+  hot paths or benchmark-informed work.
+
+### Runic
+
+Source files may declare a formatter in their header:
 
 ```julia
-# ===============================================================
-# Section Title
-# ===============================================================
+#=
+Scope: Description of the file's responsibility
+Formatter: Runic
+=#
 ```
 
-```julia
-#= ---------- Section Name ----------- =#
-```
+* `Formatter: Runic` — run Runic on the file after editing it.
+* `Formatter: None` — deliberately do not run an automatic formatter.
+* No formatter declaration — do not run Runic automatically; the file has not
+  yet been migrated.
 
-## Performance
+Do not add `Formatter: Runic` during an ordinary edit. Formatter migration is a
+deliberate style pass.
 
-- Minimise allocations in hot inner loops such as MNA matrix stamping and
-  per-particle physics. Prefer in-place operations, pre-allocated buffers, and
-  `sizehint!`.
-- Outside hot loops, prioritise readable code over speculative optimisation.
-- Type stability matters in hot paths. Make simple interface-preserving
-  improvements when obvious; leave larger optimisation work for benchmarking.
+### Scope of Style Changes
 
-## Architecture Notes
+Apply style improvements to modified code an
 
-- The render thread must not directly mutate `GameMap`. Changes should flow
-  through typed `MapEditCommand` values enqueued with `try_enqueue_command!`.
-- The background thread publishes a deep-copied `FlowCalculatorSnapshot`; render
-  code should read snapshots rather than live simulation state.
-- `GameMap` stores components and pipes in global dictionaries. Ownership is on
-  `PlacedComponent.ship` and `PlacedPipe.ship`.
-- Adding fields to saved structs may require JLD2 reconstruction hooks in
-  `src/map_loading.jl`; defaults alone are not enough for old saves.
-- Preserve FlowEngine graph update ordering unless the task explicitly changes
-  it: prune, ground search, dangling dependant cleanup, convergence loop.
 
-## Package Layout
+## Repository Map
 
-- Foundation: `HexFrame`, `HexFluids`, `HexElements`, `SquirrelNoise`
-- Core: `HexComponentsAPI`, `FlowMap`, `FlowEngine`
-- App state: `HexFlowControl`
-- Simulation: `HexFlowCalculator`
-- Procedural generation: `HexFlowProcGen`
-- Learning/tutorials: `HexFlowLearningSystem`
-- Rendering: `RenderEngine`, `HexFlowRendering`, `HexFlowTelemetry`
-- Component implementations: `local_packages/components/`
+- `src/` is the application and integration layer: launch scripts, game/UI
+  loops, persistence adapters, component registration, and demo maps.
+- `local_packages/` contains the reusable Julia packages. Each package has its
+  own environment; component API and implementations live under
+  `local_packages/components/`.
+- `tools/` contains repository maintenance, diagnostics, asset generation, map
+  conversion, encounter analysis, and time-lapse export utilities.
+- `Project.toml` and `Manifest.toml` are the root game environment. Local
+  packages have their own environments, and some standalone tools do as well.
 
-See `local_packages/AGENTS.md`, `local_packages/components/AGENTS.md`, and
-`src/AGENTS.md` for area-specific context.
+See the nested guides for package responsibilities and area-specific
+invariants. Keep detailed type and function inventories next to the code they
+describe rather than expanding this file.
 
-## Running And Testing
+## Cross-Cutting Invariants
 
-Use PowerShell from the repository root unless a package-specific command says
-otherwise.
+- The main thread owns GLFW, OpenGL, CImGui, rendering, and input. The
+  background calculator thread owns authoritative simulation mutation.
+- UI and input code send `MapEditCommand` values through
+  `try_enqueue_command!`; render code reads `FlowCalculatorSnapshot` values and
+  must not mutate the live `GameMap`.
+- Changes to saved structs require an explicit compatibility review of the JLD2
+  upgrade hooks in `src/map_loading.jl`; field defaults alone do not migrate old
+  saves.
+- Preserve established package dependency direction. Inspect the affected
+  `Project.toml` files before adding a cross-package import.
 
-```powershell
-# First-pass gameplay smoke test
+## Running And Verification
+
+Run commands from the repository root unless a package-local command says otherwise.
+
+```shell
+# Set up the root environment
+julia --project=. -e 'using Pkg; Pkg.instantiate()'
+
+# Test one local package
+julia --project=local_packages/<PackageName> -e 'using Pkg; Pkg.test()'
+
+# Discover or run all local-package test suites
+julia tools/run_all_package_tests.jl --list
+julia tools/run_all_package_tests.jl
+
+# Scripted full-application smoke test
 julia --project=. --threads=2,1 --gcthreads=1,1 src/auto_test_launch.jl
 
 # Interactive development launch
 julia --project=. --threads=2,1 --gcthreads=1,1 src/repl_launch.jl
 
-# Production launch
+# Production entry point; requires pre-built rendering artifacts
 julia --project=. --threads=2,1 --gcthreads=1,1 src/julia_main.jl
-
-# Package tests
-Set-Location local_packages/<PackageName>
-julia --project=. -e "using Pkg; Pkg.test()"
 ```
 
-At least two Julia threads are required. The app needs OpenGL, GLFW, and CImGui
-bindings; headless environments may fail even when code is correct.
+Choose verification proportional to the change: start with the affected
+package suite, then use the application smoke test for integration or gameplay
+changes. The all-package runner covers packages under `local_packages/`, not
+the separate `tools/timelapse_export` suite.
 
-Run `src/auto_test_launch.jl` after most gameplay changes. If the change affects
-behaviour that needs manual inspection, follow with `src/repl_launch.jl`.
-`src/auto_test_launch.jl` can take longer than 3 minutes to boot and complete;
-use a timeout of at least 6 minutes before treating it as hung.
+There is no in-repository CI configuration, so report exactly which local
+checks were run and which display-dependent checks were not run.
+
+All game launch paths need a display/OpenGL context and at least two default
+Julia worker threads. The smoke test opens a real window, is not headless, and
+can take several minutes; allow roughly six minutes before treating it as hung.
+Production artifact creation lives outside this repository.

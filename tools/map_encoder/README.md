@@ -1,164 +1,108 @@
-# Map Encoder Tool Suite
+# Map Encoder Tools
 
-A complete toolkit for converting JLD2 GameMap files into maintainable Julia code using AI assistance.
+The map encoder turns a saved JLD2 `GameMap` into either a readable structural
+listing or a Julia `mapgen_*` function. The comparator checks a generated map
+against the save.
 
-## Tool Overview
+Run both scripts from the repository root with the root project. The current
+dependency chain initialises GLFW while loading component packages, so these
+tools require a working display/OpenGL environment even though they are
+command-line programs.
 
-### 1. `encode_map.jl` - Map Structure Encoder
-Converts JLD2 map files into human-readable text format suitable for AI analysis.
+## Typical Workflow
 
-### 2. `compare_maps.jl` - Map Validation Tool  
-Compares AI-generated map functions against original JLD2 files to validate accuracy.
+1. Inspect the saved map:
 
-### 3. `map_encode_instructions.md` - AI Agent Guide
-Comprehensive instructions for AI agents to convert encoded maps into Julia code.
+   ```shell
+   julia --project=. tools/map_encoder/encode_map.jl path/to/source_map.jld2
+   ```
 
-## Complete AI-Assisted Workflow
+2. Either author a clean generator from that listing or have the encoder emit
+   a starting point:
 
-### Step 1: Encode the Original Map
-```bash
-julia --project=. tools/map_encoder/encode_map.jl <mapname>
+   ```shell
+   julia --project=. tools/map_encoder/encode_map.jl \
+     path/to/source_map.jld2 mapgen_source_map.jl
+   ```
+
+3. Compare the result with the save:
+
+   ```shell
+   julia --project=. tools/map_encoder/compare_maps.jl \
+     path/to/source_map.jld2 src/demo_maps/mapgen_source_map.jl
+   ```
+
+The detailed authoring and validation procedure is in
+`map_encode_instructions.md`.
+
+## Encoder Behaviour
+
+The input must be an existing path ending in lowercase `.jld2`. Bare map names
+are not resolved implicitly.
+
+With no output argument, the encoder prints a readable per-ship listing of
+components, pipes, rotations, mirroring, ownership, stored representations,
+and surface tiles. This listing is diagnostic text, not executable Julia.
+
+An optional output argument selects the output form:
+
+```shell
+# Write the readable listing; the parent directory must already exist
+julia --project=. tools/map_encoder/encode_map.jl \
+  path/to/source_map.jld2 path/to/encoded_map.txt
+
+# Write a Julia generator
+julia --project=. tools/map_encoder/encode_map.jl \
+  path/to/source_map.jld2 mapgen_source_map.jl
 ```
 
-**Example:**
-```bash
-julia --project=. tools/map_encoder/encode_map.jl autotest1
-```
+A bare `.jl` filename is written under `src/demo_maps/`. A path such as
+`generated/mapgen_source_map.jl` is honoured, and its parent directories are
+created. The encoder still prints the readable listing to stdout when it
+writes either kind of output file.
 
-This outputs the complete map structure to stdout with proper formatting, showing:
-- All ships individually with their `components`, `pipe_behaviors`, and `ship_tiles`
-- All components with their types and parameters
-- Tile positions and rotations
-- Pipe connections and conductances
+The generated function name comes from the input save's basename, not the
+output filename. For `source_map.jld2`, the comparator expects a top-level
+zero-argument function named `mapgen_source_map`. Use an input basename that
+can form a valid Julia identifier.
 
-### Step 2: AI Code Generation
-Provide the AI agent with:
-1. The encoded map output from Step 1
-2. The instructions from `map_encode_instructions.md`
-3. Context from the project's component files (referenced in instructions)
+## What Generated Code Preserves
 
-The AI will create a function named `mapgen_<mapname>()` that reconstructs the map.
+Generated code reconstructs:
 
-### Step 3: Validate the Generated Code
-```bash
-julia --project=. tools/map_encoder/compare_maps.jl <mapname> <generated_file.jl>
-```
+- ship names;
+- component coordinates, concrete behaviours, rotations, mirroring, and
+  ownership;
+- pipe coordinates, concrete behaviours, and ownership;
+- surface coordinates and ownership.
 
-**Example:**
-```bash
-julia --project=. tools/map_encoder/compare_maps.jl autotest1 tutorials/mapgen_autotest1.jl
-```
+It does not reconstruct ship docking status, `space_map`, `learning_system`,
+or playthrough `statistics`; those fields receive the defaults established by
+`GameMap(blueprint)` and `merge_ship!` unless the generator is extended
+manually. Time-lapse history is stored separately from the `GameMap` and is
+simply omitted.
 
-This will:
-- Load the original map from JLD2
-- Execute your generated function
-- Compare every component, parameter, and pipe
-- Report any differences found
-- Exit with code 0 for perfect match, 1 for differences
+Both tools load through `src/map_loading.jl`, including its JLD2 upgrade hooks.
+That loader warns and returns a default `GameMap` after a load failure. Always
+read loader warnings and sanity-check the reported ships, components, pipes,
+and surface tiles before trusting output.
 
-## Tool Specifications
+## Comparator Scope
 
-### encode_map.jl
-**Usage:** `julia --project=. tools/map_encoder/encode_map.jl <mapname> [output_file]`
+The comparator includes and executes the supplied generator file, so only run
+it on code you trust. It checks the following within a numeric tolerance:
 
-**Arguments:**
-- `mapname` - Name of map file (without .jld2 extension) in maps/ folder
-- `output_file` - Optional: Write output to file instead of just stdout
+- component and pipe locations and ownership;
+- component type, rotation, mirroring, and exposed tunable values;
+- pipe type and exposed tunable values;
+- ship-surface coordinates and ownership;
+- active circuit elements produced by components and pipes;
+- potentially unsafe shared component or pipe instances.
 
-**Features:**
-- Loads maps using existing project infrastructure
-- Formats output with proper indentation
-- Each component and pipe on separate lines
-- Includes all parameter details for AI analysis
+This is a structural and active-electrical equivalence check, not full
+`GameMap` equality. It does not compare docking, space, learning, statistics,
+time-lapse, fluid declarations, or every unexposed internal field. Exit status
+0 means the implemented checks passed; a mismatch or tool error exits 1.
 
-### compare_maps.jl
-**Usage:** `julia --project=. tools/map_encoder/compare_maps.jl <original_mapname> <generator_file>`
-
-**Arguments:**
-- `original_mapname` - Name of original map file (without .jld2 extension)
-- `generator_file` - Path to .jl file containing mapgen_<name>() function
-
-**Validation Features:**
-- Component type matching
-- Parameter value comparison (with floating-point tolerance)
-- Rotation verification
-- Complete pipe network validation
-- Detailed mismatch reporting
-- Exit codes for scripting (0=perfect, 1=differences)
-
-## AI Agent Instructions
-
-The `map_encode_instructions.md` file provides comprehensive guidance for AI agents including:
-
-- **Reference locations** for component constructors and patterns
-- **Code generation guidelines** following project conventions
-- **Parameter extraction** strategies from encoded structures
-- **Coordinate system** documentation
-- **Common component types** and their constructors
-- **Troubleshooting** for typical issues
-- **Success criteria** for validation
-
-## Example Complete Workflow
-
-```bash
-# 1. Encode a map
-julia --project=. tools/map_encoder/encode_map.jl autotest1
-
-# Multi-ship maps
-For multi-ship JLD2 files the tool will emit per-ship entries. To generate a `mapgen_*.jl` file write to `src/demo_maps/` with a `.jl` extension (example below). The encoder will use the map basename to name the function, so provide a reasonable basename (e.g., `multiship_example` → `mapgen_multiship_example`).
-
-# 2. (AI agent creates mapgen_autotest1.jl from the output and instructions)
-
-# 3. Validate the generated code
-julia --project=. tools/map_encoder/compare_maps.jl autotest1 tutorials/mapgen_autotest1.jl
-```
-
-**Expected Output for Perfect Match:**
-```
-============================================================
-MAP COMPARISON RESULTS
-============================================================
-✅ PERFECT MATCH: Generated map exactly matches original!
-```
-
-## File Organization
-
-```
-tools/map_encoder/
-├── encode_map.jl                    # Map encoding tool
-├── compare_maps.jl                  # Map comparison/validation tool
-├── map_encode_instructions.md       # AI agent instructions
-└── README.md                        # This documentation
-
-tutorials/                           # Generated tutorial functions
-├── mapgen_autotest1.jl             # Example generated map
-└── mapgen_<other_maps>.jl          # Additional tutorials
-```
-
-## Integration with Project
-
-The tools are designed to:
-- Run from project root with `--project=.` to access all dependencies
-- Use existing component constructors and patterns
-- Maintain compatibility with current codebase structure
-- Support the existing JLD2 → Code workflow through the shared loader
-
-## Error Handling
-
-**Common Issues:**
-
-1. **Map file not found** - Verify the `.jld2` path is correct
-2. **Function name mismatch** - Ensure function is named `mapgen_<mapname>`
-3. **Component constructor errors** - Check `src/components.jl` for correct syntax
-4. **Precision mismatches** - Use exact floating-point values from encoded output
-
-**World Age Warnings:** The comparison tool may show Julia 1.12 world age warnings - these are harmless and don't affect functionality.
-
-## Benefits
-
-This toolkit enables:
-- **Version-resilient tutorial storage** as Julia code instead of binary JLD2
-- **AI-assisted map conversion** reducing manual work
-- **Validation and testing** ensuring generated code accuracy
-- **Human-readable tutorials** with documentation and comments
-- **Easy modification** of tutorial parameters and structure
+Generated tutorial maps normally live in `src/demo_maps/` and are included and
+registered through `src/tutorials.jl`.

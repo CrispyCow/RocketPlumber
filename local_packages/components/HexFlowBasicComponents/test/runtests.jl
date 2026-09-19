@@ -1,7 +1,12 @@
+#=
+Scope: Tests for basic component behaviour fragments
+Formatter: Runic
+=#
+
 using Test
 using HexComponentsAPI
 using HexFlowBasicComponents
-using HexFluids: THERMAL_AMBIENT_TEMPERATURE_K
+using HexFluids
 
 @testset "Damage fragment" begin
     damage = DamageStateBehavFrag()

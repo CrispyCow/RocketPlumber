@@ -1,3 +1,8 @@
+#=
+Scope: Test suite for HexFrame coordinate systems, conversions, and spatial operations
+Formatter: Runic
+=#
+
 using Test
 using StaticArrays
 using HexFrame
@@ -242,32 +247,32 @@ using HexFrame
         qneg = VertexCoord(tile, HexFrame.Q_NEG)
 
         expected_qpos = (
-            PipeCoord(qpos, VertexCoord(tile + TileCoord( 2, -1), HexFrame.Q_NEG)),
-            PipeCoord(qpos, VertexCoord(tile + TileCoord( 1, -1), HexFrame.Q_POS)),
-            PipeCoord(qpos, VertexCoord(tile + TileCoord( 2, -2), HexFrame.Q_NEG)),
-            PipeCoord(qpos, VertexCoord(tile + TileCoord( 0, -1), HexFrame.Q_POS)),
-            PipeCoord(qpos, VertexCoord(tile + TileCoord( 1, -1), HexFrame.Q_NEG)),
-            PipeCoord(qpos, VertexCoord(tile + TileCoord(-1,  0), HexFrame.Q_POS)),
-            PipeCoord(qpos, VertexCoord(tile,                     HexFrame.Q_NEG)),
-            PipeCoord(qpos, VertexCoord(tile + TileCoord(-1,  1), HexFrame.Q_POS)),
-            PipeCoord(qpos, VertexCoord(tile + TileCoord( 1,  0), HexFrame.Q_NEG)),
-            PipeCoord(qpos, VertexCoord(tile + TileCoord( 0,  1), HexFrame.Q_POS)),
-            PipeCoord(qpos, VertexCoord(tile + TileCoord( 2,  0), HexFrame.Q_NEG)),
-            PipeCoord(qpos, VertexCoord(tile + TileCoord( 1,  0), HexFrame.Q_POS)),
+            PipeCoord(qpos, VertexCoord(tile + TileCoord(2, -1), HexFrame.Q_NEG)),
+            PipeCoord(qpos, VertexCoord(tile + TileCoord(1, -1), HexFrame.Q_POS)),
+            PipeCoord(qpos, VertexCoord(tile + TileCoord(2, -2), HexFrame.Q_NEG)),
+            PipeCoord(qpos, VertexCoord(tile + TileCoord(0, -1), HexFrame.Q_POS)),
+            PipeCoord(qpos, VertexCoord(tile + TileCoord(1, -1), HexFrame.Q_NEG)),
+            PipeCoord(qpos, VertexCoord(tile + TileCoord(-1, 0), HexFrame.Q_POS)),
+            PipeCoord(qpos, VertexCoord(tile, HexFrame.Q_NEG)),
+            PipeCoord(qpos, VertexCoord(tile + TileCoord(-1, 1), HexFrame.Q_POS)),
+            PipeCoord(qpos, VertexCoord(tile + TileCoord(1, 0), HexFrame.Q_NEG)),
+            PipeCoord(qpos, VertexCoord(tile + TileCoord(0, 1), HexFrame.Q_POS)),
+            PipeCoord(qpos, VertexCoord(tile + TileCoord(2, 0), HexFrame.Q_NEG)),
+            PipeCoord(qpos, VertexCoord(tile + TileCoord(1, 0), HexFrame.Q_POS)),
         )
         expected_qneg = (
-            PipeCoord(qneg, VertexCoord(tile,                     HexFrame.Q_POS)),
-            PipeCoord(qneg, VertexCoord(tile + TileCoord( 1, -1), HexFrame.Q_NEG)),
-            PipeCoord(qneg, VertexCoord(tile + TileCoord(-1,  0), HexFrame.Q_POS)),
-            PipeCoord(qneg, VertexCoord(tile + TileCoord( 0, -1), HexFrame.Q_NEG)),
-            PipeCoord(qneg, VertexCoord(tile + TileCoord(-2,  0), HexFrame.Q_POS)),
-            PipeCoord(qneg, VertexCoord(tile + TileCoord(-1,  0), HexFrame.Q_NEG)),
-            PipeCoord(qneg, VertexCoord(tile + TileCoord(-2,  1), HexFrame.Q_POS)),
-            PipeCoord(qneg, VertexCoord(tile + TileCoord(-1,  1), HexFrame.Q_NEG)),
-            PipeCoord(qneg, VertexCoord(tile + TileCoord(-2,  2), HexFrame.Q_POS)),
-            PipeCoord(qneg, VertexCoord(tile + TileCoord( 0,  1), HexFrame.Q_NEG)),
-            PipeCoord(qneg, VertexCoord(tile + TileCoord(-1,  1), HexFrame.Q_POS)),
-            PipeCoord(qneg, VertexCoord(tile + TileCoord( 1,  0), HexFrame.Q_NEG)),
+            PipeCoord(qneg, VertexCoord(tile, HexFrame.Q_POS)),
+            PipeCoord(qneg, VertexCoord(tile + TileCoord(1, -1), HexFrame.Q_NEG)),
+            PipeCoord(qneg, VertexCoord(tile + TileCoord(-1, 0), HexFrame.Q_POS)),
+            PipeCoord(qneg, VertexCoord(tile + TileCoord(0, -1), HexFrame.Q_NEG)),
+            PipeCoord(qneg, VertexCoord(tile + TileCoord(-2, 0), HexFrame.Q_POS)),
+            PipeCoord(qneg, VertexCoord(tile + TileCoord(-1, 0), HexFrame.Q_NEG)),
+            PipeCoord(qneg, VertexCoord(tile + TileCoord(-2, 1), HexFrame.Q_POS)),
+            PipeCoord(qneg, VertexCoord(tile + TileCoord(-1, 1), HexFrame.Q_NEG)),
+            PipeCoord(qneg, VertexCoord(tile + TileCoord(-2, 2), HexFrame.Q_POS)),
+            PipeCoord(qneg, VertexCoord(tile + TileCoord(0, 1), HexFrame.Q_NEG)),
+            PipeCoord(qneg, VertexCoord(tile + TileCoord(-1, 1), HexFrame.Q_POS)),
+            PipeCoord(qneg, VertexCoord(tile + TileCoord(1, 0), HexFrame.Q_NEG)),
         )
 
         @test get_pipe_segments(qpos) == expected_qpos

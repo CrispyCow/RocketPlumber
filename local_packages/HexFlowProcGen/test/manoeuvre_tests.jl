@@ -1,7 +1,11 @@
+#=
+Scope: Deterministic manoeuvre-planning unit tests
+Formatter: Runic
+=#
+
 using Test
 using StaticArrays
 
-# Simple manoeuvre-planning unit tests (headless, deterministic)
 @testset "Manoeuvre planning (unit)" begin
 
     function simulate_plan(
@@ -48,7 +52,6 @@ using StaticArrays
     end
 
 
-
     @testset "direct intercept helpers" begin
         separation = SVector(100.0, 0.0)
         relative_vel = SVector(10.0, 0.0)
@@ -65,25 +68,25 @@ using StaticArrays
     end
 
     @testset "standard manoeuvre scenarios" begin
-        ep1 = EncounterPoint(index=1, base_velocity=50.0, position=SVector(500.0,100.0), velocity=SVector(130.0,10.0), spawn_time=0.0)
-        sep1, vdiff1 = simulate_plan(SVector(0.0,0.0), SVector(100.0,0.0), ep1, 0.0, 60.0)
-        @test isapprox(sep1, 0.0; atol=1e-6)
-        @test isapprox(vdiff1, 0.0; atol=1e-6)
+        ep1 = EncounterPoint(index = 1, base_velocity = 50.0, position = SVector(500.0, 100.0), velocity = SVector(130.0, 10.0), spawn_time = 0.0)
+        sep1, vdiff1 = simulate_plan(SVector(0.0, 0.0), SVector(100.0, 0.0), ep1, 0.0, 60.0)
+        @test isapprox(sep1, 0.0; atol = 1.0e-6)
+        @test isapprox(vdiff1, 0.0; atol = 1.0e-6)
 
-        ep2 = EncounterPoint(index=2, base_velocity=80.0, position=SVector(1000.0,200.0), velocity=SVector(50.0,-5.0), spawn_time=0.0)
-        sep2, vdiff2 = simulate_plan(SVector(0.0,0.0), SVector(100.0,0.0), ep2, 0.0, 100.0)
-        @test isapprox(sep2, 0.0; atol=1e-6)
-        @test isapprox(vdiff2, 0.0; atol=1e-6)
+        ep2 = EncounterPoint(index = 2, base_velocity = 80.0, position = SVector(1000.0, 200.0), velocity = SVector(50.0, -5.0), spawn_time = 0.0)
+        sep2, vdiff2 = simulate_plan(SVector(0.0, 0.0), SVector(100.0, 0.0), ep2, 0.0, 100.0)
+        @test isapprox(sep2, 0.0; atol = 1.0e-6)
+        @test isapprox(vdiff2, 0.0; atol = 1.0e-6)
 
-        ep3 = EncounterPoint(index=3, base_velocity=200.0, position=SVector(2000.0,0.0), velocity=SVector(-100.0,0.0), spawn_time=0.0)
-        sep3, vdiff3 = simulate_plan(SVector(0.0,0.0), SVector(100.0,0.0), ep3, 0.0, 250.0)
-        @test isapprox(sep3, 0.0; atol=1e-6)
-        @test isapprox(vdiff3, 0.0; atol=1e-6)
+        ep3 = EncounterPoint(index = 3, base_velocity = 200.0, position = SVector(2000.0, 0.0), velocity = SVector(-100.0, 0.0), spawn_time = 0.0)
+        sep3, vdiff3 = simulate_plan(SVector(0.0, 0.0), SVector(100.0, 0.0), ep3, 0.0, 250.0)
+        @test isapprox(sep3, 0.0; atol = 1.0e-6)
+        @test isapprox(vdiff3, 0.0; atol = 1.0e-6)
 
-        ep4 = EncounterPoint(index=4, base_velocity=100.0, position=SVector(200.0,300.0), velocity=SVector(100.0,0.0), spawn_time=0.0)
-        sep4, vdiff4 = simulate_plan(SVector(0.0,0.0), SVector(100.0,0.0), ep4, 0.0, 40.0)
-        @test isapprox(sep4, 0.0; atol=1e-6)
-        @test isapprox(vdiff4, 0.0; atol=1e-6)
+        ep4 = EncounterPoint(index = 4, base_velocity = 100.0, position = SVector(200.0, 300.0), velocity = SVector(100.0, 0.0), spawn_time = 0.0)
+        sep4, vdiff4 = simulate_plan(SVector(0.0, 0.0), SVector(100.0, 0.0), ep4, 0.0, 40.0)
+        @test isapprox(sep4, 0.0; atol = 1.0e-6)
+        @test isapprox(vdiff4, 0.0; atol = 1.0e-6)
     end
 
     @testset "planner initialises immediate burn state" begin

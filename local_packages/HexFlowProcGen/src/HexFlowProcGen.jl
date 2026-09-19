@@ -1,3 +1,8 @@
+#=
+Scope: Procedural ship generation, encounter space-map state, docking, manoeuvre planning, and delta-V estimation
+Formatter: Runic
+=#
+
 module HexFlowProcGen
 
 using Random, LinearAlgebra, StaticArrays, Printf
@@ -35,7 +40,6 @@ export compute_hull_size, compute_target_components, evaluate_component_pool, ca
 export SpaceMapState, get_encounter_config, replace_encounter_config!
 export can_abort_galaxy_escape
 export estimate_min_delta_v
-
 
 # ===============================================================
 # Utilities
@@ -172,25 +176,31 @@ function scale_spawn_count(
     base_count == 0 && return 0
     placement != CLUSTERED_PLACE && return base_count
 
-    isfinite(clustered_count_scale) && clustered_count_scale > 0.0 || throw(ArgumentError(
-        "Clustered spawn-count scale must be finite and positive; " *
-        "got $clustered_count_scale for base count $base_count"
-    ))
+    isfinite(clustered_count_scale) && clustered_count_scale > 0.0 || throw(
+        ArgumentError(
+            "Clustered spawn-count scale must be finite and positive; " *
+                "got $clustered_count_scale for base count $base_count"
+        )
+    )
 
     raw_count = base_count * clustered_count_scale
-    isfinite(raw_count) && typemin(Int) <= raw_count <= typemax(Int) || throw(ArgumentError(
-        "Scaled spawn count is outside the Int range; " *
-        "base count $base_count and scale $clustered_count_scale produced $raw_count"
-    ))
+    isfinite(raw_count) && typemin(Int) <= raw_count <= typemax(Int) || throw(
+        ArgumentError(
+            "Scaled spawn count is outside the Int range; " *
+                "base count $base_count and scale $clustered_count_scale produced $raw_count"
+        )
+    )
 
     rounded_count = try
         round(Int, raw_count, RoundNearestTiesUp)
     catch exception
         (exception isa InexactError || exception isa OverflowError) || rethrow()
-        throw(ArgumentError(
-            "Scaled spawn count is outside the Int range; " *
-            "base count $base_count and scale $clustered_count_scale produced $raw_count"
-        ))
+        throw(
+            ArgumentError(
+                "Scaled spawn count is outside the Int range; " *
+                    "base count $base_count and scale $clustered_count_scale produced $raw_count"
+            )
+        )
     end
     return raw_count > 0.0 ? max(1, rounded_count) : rounded_count
 end
@@ -204,6 +214,7 @@ function place_shipset!(
     )::Tuple{Bool, String}
     existing_components::Set{TileCoord} = Set(keys(get_components(map)))
 
+    # Build the available placement regions
     ship_surface_edge::Set{TileCoord} = Set{TileCoord}()
     collect_surface_edge_tiles!(ship_surface_edge, map)
     all_tiles_adjacent_to_edgetiles::Set{TileCoord} = Set{TileCoord}()
@@ -221,7 +232,7 @@ function place_shipset!(
         clear_tiles_around_component!(available_ship_surface, coord)
     end
 
-    # Preallocated buffers
+    # Reuse selection buffers across component sets
     prng = MersenneTwister(seed)
     component_location_list = Vector{TileCoord}()
     candidate_tiles = Set{TileCoord}()
@@ -232,7 +243,7 @@ function place_shipset!(
         base_count = weighted_roll_rng(prng, spawn_option.spawn_count_weights)
         count = scale_spawn_count(base_count, spawn_option.placement, clustered_count_scale)
 
-        # Build list of positions to place components
+        # Choose component positions
         if spawn_option.placement == CLUSTERED_PLACE
             for index in 1:count
                 if isempty(available_ship_surface)
@@ -295,7 +306,7 @@ function place_shipset!(
             continue
         end
 
-        # Place components from list according to strategy
+        # Place the selected components
         if spawn_option.placement == CLUSTERED_PLACE
             # Clustered: identical components, assumes all rotations can be mapped to a valid one
             comp_behav = roll_component(spawn_option.kind, first(component_location_list), seed)
@@ -580,9 +591,11 @@ struct FluidTaggedEncounterComponents
     fuel_configs::Dict{FluidType, FuelTagConfig}
 
     function FluidTaggedEncounterComponents(fuel_configs::Dict{FluidType, FuelTagConfig})
-        isempty(fuel_configs) && throw(ArgumentError(
-            "FluidTaggedEncounterComponents requires at least one fuel configuration"
-        ))
+        isempty(fuel_configs) && throw(
+            ArgumentError(
+                "FluidTaggedEncounterComponents requires at least one fuel configuration"
+            )
+        )
         return new(fuel_configs)
     end
 end
@@ -634,10 +647,12 @@ function compute_clustered_spawn_count_scale(
         richness::Float64,
     )::Float64
     scale = evaluate_scaling(config.clustered_spawn_count_scale, richness)
-    isfinite(scale) && scale > 0.0 || throw(ArgumentError(
-        "Encounter clustered spawn-count scale must be finite and positive; " *
-        "got $scale at richness $richness"
-    ))
+    isfinite(scale) && scale > 0.0 || throw(
+        ArgumentError(
+            "Encounter clustered spawn-count scale must be finite and positive; " *
+                "got $scale at richness $richness"
+        )
+    )
     return scale
 end
 
@@ -694,9 +709,11 @@ function select_fuel_tag(
         weight = evaluate_scaling(fuel_configs[tag].weight, richness)
         weight > 0.0 && push!(evaluated, (tag, weight))
     end
-    isempty(evaluated) && throw(ArgumentError(
-        "No encounter fuel tags have positive weight at richness $richness"
-    ))
+    isempty(evaluated) && throw(
+        ArgumentError(
+            "No encounter fuel tags have positive weight at richness $richness"
+        )
+    )
     return weighted_roll_noise(evaluated, point, seed)
 end
 
@@ -718,22 +735,30 @@ function resolve_encounter_component_pool(
         fuel_tag::Union{FluidType, Nothing},
     )::Vector{WeightedComponentSet}
     if source isa DirectEncounterComponents
-        isnothing(fuel_tag) || throw(ArgumentError(
-            "Direct encounter components cannot use fuel tag $fuel_tag"
-        ))
+        isnothing(fuel_tag) || throw(
+            ArgumentError(
+                "Direct encounter components cannot use fuel tag $fuel_tag"
+            )
+        )
         return source.component_pool
     end
 
-    isnothing(fuel_tag) && throw(ArgumentError(
-        "Fluid-tagged encounter components require a fuel tag"
-    ))
+    isnothing(fuel_tag) && throw(
+        ArgumentError(
+            "Fluid-tagged encounter components require a fuel tag"
+        )
+    )
     fluid_source = source::FluidTaggedEncounterComponents
     fuel_config = get(fluid_source.fuel_configs, fuel_tag, nothing)
-    isnothing(fuel_config) && throw(ArgumentError(
-        "No encounter component pool configured for fuel tag $fuel_tag"
-    ))
+    isnothing(fuel_config) && throw(
+        ArgumentError(
+            "No encounter component pool configured for fuel tag $fuel_tag"
+        )
+    )
     return fuel_config.component_pool
 end
+
+#= ---------- Encounter Ship Generation ----------- =#
 
 """
 Generate a random encounter name from a seed and encounter class.
@@ -772,21 +797,24 @@ function generate_encounter(
     )::ShipBlueprint
     steps, stacks = compute_hull_size(class_config.hull_size, richness)
 
-    # Build a temporary GameMap to drive place_shipset! / place_pipeset!
+    # Generate the hull in a temporary map
     temp_gm = GameMap()
     temp_tiles = Set{TileCoord}()
     stacked_random_tile_walk!(temp_tiles, TileCoord(0, 0), steps, stacks, seed)
     set_surface_tile!(temp_gm, temp_tiles; ship_name = :primary)
 
+    # Fill the component target from eligible weighted sets
     target_count = compute_target_components(class_config.target_components, richness)
     clustered_count_scale = compute_clustered_spawn_count_scale(class_config, richness)
     raw_pool = resolve_encounter_component_pool(class_config.component_source, fuel_tag)
     pool = evaluate_component_pool(raw_pool, richness)
     if target_count > 0 && isempty(pool)
-        throw(ArgumentError(
-            "Encounter $encounter_class has target $target_count at richness $richness " *
-            "but no eligible component sets"
-        ))
+        throw(
+            ArgumentError(
+                "Encounter $encounter_class has target $target_count at richness $richness " *
+                    "but no eligible component sets"
+            )
+        )
     end
 
     draw_seed = seed
@@ -811,11 +839,15 @@ function generate_encounter(
         consecutive_no_progress_attempts += 1
         consecutive_no_progress_attempts > MAX_NO_PROGRESS_PLACEMENT_REROLLS && break
     end
+
+    # Add pipes and capture the finished ship
     place_pipeset!(temp_gm, class_config.pipe_options, seed)
 
     blueprint = get_ship_blueprint(temp_gm, :primary)
     return blueprint
 end
+
+#= ---------- Encounter Docking ----------- =#
 
 "Return `(q_min, q_max, r_min, r_max)` for `tiles` translated by `offset`."
 function _tile_extrema(tiles::Set{TileCoord}, offset::TileCoord)::NTuple{4, Int}
@@ -950,6 +982,7 @@ function _ensure_offscreen_distance(
             return distance
         end
     end
+    return
 end
 
 "Compute docking animation offsets: `(far_offset, zero_offset, step_size)` for approach/departure."
@@ -980,8 +1013,10 @@ function _place_encounter_ship!(
     end
     start_offset, target_offset, offset_step = _compute_docking_offsets(direction_vec, approach_distance_tiles)
 
-    merge_ship!(gamemap, newship_name, offset_blueprint;
-        docking_status = ApproachingDockStat(start_offset, target_offset, offset_step))
+    merge_ship!(
+        gamemap, newship_name, offset_blueprint;
+        docking_status = ApproachingDockStat(start_offset, target_offset, offset_step)
+    )
     return nothing
 end
 
@@ -1020,6 +1055,8 @@ function encounter_ship_optimal_dir!(
     chosen_dir, final_offset = _find_optimal_docking_offset(existing_exclusion, incoming_footprint, anchor, seed)
     return _place_encounter_ship!(gamemap, blueprint, ship_name_base, chosen_dir, final_offset; max_view_bounds)
 end
+
+#= ---------- Encounter Departure ----------- =#
 
 """
 Check whether a ship can depart by verifying no pipe chain still bridges it to another ship.
@@ -1079,7 +1116,6 @@ function check_departure_pipe_connections(gamemap::GameMap, ship_name::Symbol)::
     return ValidRequest()
 end
 
-
 "Depart a ship by computing a direction away from other ships. Returns `(success, reason)`."
 function depart_ship!(gamemap::GameMap, ship_name::Symbol; max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing)::Tuple{Bool, String}
     if ship_name === :primary
@@ -1125,8 +1161,6 @@ function depart_ship!(gamemap::GameMap, ship_name::Symbol; max_view_bounds::Unio
     return true, "Ship $(ship_name) departing (axis=$(depart_axis))"
 end
 
-
-
 # ===============================================================
 # Encounter Point System — SpaceMapState
 # ===============================================================
@@ -1166,7 +1200,7 @@ get_target_time(sm::SpaceMapState)::Float64 = sm.target_time_years
 "Set the target time. If the new target is at or before the current time, records a stop for easing."
 function set_target_time!(sm::SpaceMapState, t::Float64)
     sm.target_time_years = t
-    if t <= sm.time_years
+    return if t <= sm.time_years
         sm.last_stop_time = sm.time_years
     end
 end
@@ -1206,6 +1240,8 @@ function initialise_spacemap!(
     return nothing
 end
 
+#= ---------- Encounter Point Lifecycle ----------- =#
+
 "Generate base velocities with a logarithmic distribution (equal density per octave)."
 function generate_base_velocities(
         n_points::Int, min_velocity::Float64,
@@ -1228,7 +1264,8 @@ function get_encounter_position(ep::EncounterPoint, time::Float64)::SVector{2, F
 end
 
 "Spawn (or respawn) an encounter point on the perimeter of the spawn box with a new random trajectory."
-function spawn_encounter_point!(ep::EncounterPoint, sm::SpaceMapState, current_time::Float64;
+function spawn_encounter_point!(
+        ep::EncounterPoint, sm::SpaceMapState, current_time::Float64;
         velocity_override::Union{Nothing, SVector{2, Float64}} = nothing
     )
     config = get_encounter_config(sm)
@@ -1324,6 +1361,7 @@ function initialise_encounter_system!(sm::SpaceMapState)
     disappear_x = sm.viewport_half_width + config.disappear_box_offset
     disappear_y = sm.viewport_half_height + config.disappear_box_offset
 
+    # Distribute encounter speeds logarithmically
     base_velocities = generate_base_velocities(
         config.n_points, config.min_base_velocity,
         config.max_base_velocity, sm.seed
@@ -1331,6 +1369,7 @@ function initialise_encounter_system!(sm::SpaceMapState)
 
     sm.encounter_points = Vector{EncounterPoint}(undef, config.n_points)
 
+    # Scatter the initial points throughout the recycling bounds
     for i in 1:config.n_points
         ep = EncounterPoint(index = i, base_velocity = base_velocities[i])
         spawn_encounter_point!(ep, sm, current_time)
@@ -1348,6 +1387,8 @@ function initialise_encounter_system!(sm::SpaceMapState)
 
     return nothing
 end
+
+#= ---------- Space Map Time Progression ----------- =#
 
 "Advance the space map time by one tick. No-op for `SpaceMapEmpty`."
 function step_space_map_time!(::SpaceMapEmpty, target_time::Float64; max_step::Float64 = 2.5 / BASE_UPS, ease_distance::Float64 = 1.0)
@@ -1680,6 +1721,7 @@ The estimate is inventory-based and whole-`GameMap`, and models:
 Returns `0.0` if the map has no usable propellant or no dry mass.
 """
 function estimate_min_delta_v(gamemap::GameMap)::Float64
+    # Inventory dry mass and stored propellants
     inventory = _DeltaVInventoryTotals(dry_mass = length(gamemap.surface_shiptags) * get_tile_mass())
     for (_, comp) in gamemap.components
         _accumulate_delta_v_inventory!(inventory, comp)
@@ -1687,6 +1729,7 @@ function estimate_min_delta_v(gamemap::GameMap)::Float64
 
     inventory.dry_mass <= 0.0 && return 0.0
 
+    # Resolve usable exhaust velocities and bipropellant stages
     cold_gas_ve = something(lookup_fluid_exhaust_velocity(HexFluids.COLD_GAS), 0.0)
     monoprop_ve = something(lookup_fluid_exhaust_velocity(HexFluids.MONOPROP_GAS), 0.0)
 
@@ -1694,6 +1737,7 @@ function estimate_min_delta_v(gamemap::GameMap)::Float64
     biprop_hot_ve = something(lookup_fluid_exhaust_velocity(HexFluids.BIPROP_EXHAUST, _BIPROP_DELTA_V_ESTIMATE_TEMPERATURE_K), 0.0)
     biprop_cold_ve = something(lookup_fluid_exhaust_velocity(HexFluids.BIPROP_EXHAUST, _BIPROP_DELTA_V_ESTIMATE_NONCOMBUSTION_TEMPERATURE_K), 0.0)
 
+    # Collect and order stages from highest to lowest exhaust velocity
     fuels = Tuple{Float64, Float64}[]
     sizehint!(fuels, 4)
     inventory.cold_gas_mass > 0.0 && cold_gas_ve > 0.0 && push!(fuels, (inventory.cold_gas_mass, cold_gas_ve))
@@ -1707,6 +1751,7 @@ function estimate_min_delta_v(gamemap::GameMap)::Float64
     remaining_mass = inventory.dry_mass + inventory.total_wet_mass
     total_dv = 0.0
 
+    # Apply the rocket equation stage by stage
     for (fuel_mass, ve) in fuels
         m_final = remaining_mass - fuel_mass
         m_final <= 0.0 && continue
@@ -1717,6 +1762,5 @@ function estimate_min_delta_v(gamemap::GameMap)::Float64
 
     return total_dv
 end
-
 
 end # module HexFlowProcGen

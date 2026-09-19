@@ -1,7 +1,8 @@
-# ===============================================================
-# In-Game Screen Recording
-# ===============================================================
-#
+#=
+Scope: In-game screenshot capture and asynchronous FFmpeg screen recording
+Formatter: Runic
+=#
+
 # Captures rendered frames via glReadPixels for two purposes:
 # real-time H.264 video encoding through FFmpeg, and one-shot PNG
 # screenshots written through Julia's image stack.
@@ -88,8 +89,10 @@ function capture_framebuffer!(buffer::Vector{UInt8}, width::Integer, height::Int
     expected_size = width * height * 4
     @assert length(buffer) >= expected_size "Pixel buffer too small for $(width)x$(height) framebuffer"
     GC.@preserve buffer begin
-        glReadPixels(GLint(0), GLint(0), GLsizei(width), GLsizei(height),
-                     GL_RGBA, GL_UNSIGNED_BYTE, pointer(buffer))
+        glReadPixels(
+            GLint(0), GLint(0), GLsizei(width), GLsizei(height),
+            GL_RGBA, GL_UNSIGNED_BYTE, pointer(buffer)
+        )
     end
     return nothing
 end
@@ -504,6 +507,7 @@ function try_collect_completed_pbo!(rec::RecordingState, pbo_slot::Integer; wait
             throw(ErrorException("Unexpected recording PBO fence status $(wait_status) for slot $(pbo_slot)"))
         end
     end
+    return false
 end
 
 "Flush any in-flight PBO readbacks before stopping the writer or deleting GL state."
@@ -576,6 +580,7 @@ end
 
 "Begin a new recording session: allocate buffer, open FFmpeg, reset timing."
 function start_recording!(rec::RecordingState, fb_width::Int32, fb_height::Int32, console_push::Function)::Bool
+    # Prepare session state
     output_dir = capture_output_dir()
     mkpath(output_dir)
     rec.output_path = default_capture_path(:recording)
@@ -587,6 +592,7 @@ function start_recording!(rec::RecordingState, fb_width::Int32, fb_height::Int32
     rec.buffer_height = fb_height
     async_readback_started = initialise_recording_pbos!(rec, fb_width, fb_height)
 
+    # Start the encoder pipeline
     try
         rec.ffmpeg_stderr_pipe = Pipe()
         rec.ffmpeg_process = redirect_stderr(rec.ffmpeg_stderr_pipe) do
@@ -615,11 +621,13 @@ function start_recording!(rec::RecordingState, fb_width::Int32, fb_height::Int32
         return false
     end
 
+    # Arm capture timing
     rec.accumulator = 0.0
     rec.last_frame_time = 0.0
     rec.frame_count = 0
     rec.is_recording = true
 
+    # Report the active capture configuration
     console_push("Recording started: $(rec.output_path)")
     encoded_width, encoded_height = recording_encoded_dims(fb_width, fb_height)
     if encoded_width != fb_width || encoded_height != fb_height
@@ -640,6 +648,7 @@ function stop_recording!(
         stop_message::Union{Nothing, String} = nothing,
         failure_message::Union{Nothing, String} = nothing,
     )
+    # Drain queued frames before closing FFmpeg
     output = rec.output_path
     exit_code = nothing
     writer_failure = poll_writer_failure!(rec)
@@ -648,6 +657,7 @@ function stop_recording!(
     shutdown_failure = shutdown_ffmpeg_writer!(rec)
     writer_failure = first_recording_failure(writer_failure, shutdown_failure)
 
+    # Close the encoder and its stderr reader
     if !isnothing(rec.ffmpeg_process)
         try
             isopen(rec.ffmpeg_process.in) && close(rec.ffmpeg_process.in)
@@ -677,6 +687,7 @@ function stop_recording!(
     end
     rec.ffmpeg_stderr_pipe = nothing
 
+    # Reset session state and discard empty output
     rec.is_recording = false
     rec.last_frame_time = 0.0
     rec.accumulator = 0.0
@@ -689,6 +700,7 @@ function stop_recording!(
         output_exists = false
     end
 
+    # Report the most specific outcome available
     if !isnothing(writer_failure)
         console_push("Recording failed; see the terminal log for details")
         captured_log = ffmpeg_log_text(rec)
@@ -741,7 +753,7 @@ Handles screenshot requests, recording start/stop transitions, window resize det
 frame timing, pixel readback, and piping to FFmpeg.
 """
 function recording_tick!(rec::RecordingState, inputstate, viewstate, window, console_push::Function)
-    # Detect start transition
+    # Apply capture mode transitions
     if inputstate.is_recording && !rec.is_recording
         if !start_recording!(rec, viewstate.fb_width, viewstate.fb_height, console_push)
             inputstate.is_recording = false
@@ -755,7 +767,7 @@ function recording_tick!(rec::RecordingState, inputstate, viewstate, window, con
         return nothing
     end
 
-    # One-shot screenshot capture when idle
+    # Handle one-shot screenshots while idle
     if inputstate.screenshot_requested
         inputstate.screenshot_requested = false
         if !rec.is_recording
@@ -764,11 +776,11 @@ function recording_tick!(rec::RecordingState, inputstate, viewstate, window, con
         return nothing
     end
 
-    # Nothing to do if not recording
     if !rec.is_recording
         return nothing
     end
 
+    # Stop on asynchronous or display failures
     writer_failure = poll_writer_failure!(rec)
     if !isnothing(writer_failure)
         @warn "Recording writer failed, stopping recording" exception = (writer_failure.exception, writer_failure.backtrace)
@@ -777,7 +789,7 @@ function recording_tick!(rec::RecordingState, inputstate, viewstate, window, con
         return nothing
     end
 
-    # Detect window resize — stop recording if dimensions changed
+    # Stop recording if dimensions changed
     fb_size = GLFW.GetFramebufferSize(window)
     if fb_size.width != rec.buffer_width || fb_size.height != rec.buffer_height
         inputstate.is_recording = false
@@ -785,7 +797,7 @@ function recording_tick!(rec::RecordingState, inputstate, viewstate, window, con
         return nothing
     end
 
-    # Check if we should capture a frame this iteration
+    # Capture the next due frame
     if !should_capture_frame!(rec)
         return nothing
     end

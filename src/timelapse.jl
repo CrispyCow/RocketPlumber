@@ -1,8 +1,15 @@
+#=
+Scope: Render-thread time-lapse snapshot history and fixed-interval capture scheduling
+Formatter: Runic
+=#
+
 # ===============================================================
 # Render-Thread Time-Lapse Recording
 # ===============================================================
 
 using FlowMap
+
+#= ---------- Recorder State ---------- =#
 
 const TIMELAPSE_FORMAT_VERSION::UInt16 = UInt16(2)
 const TIMELAPSE_CAPTURE_INTERVAL_SECONDS::Float64 = 30.0
@@ -31,7 +38,11 @@ end
 "Return the monotonic wall-clock time used by recorder deadlines."
 _monotonic_time_seconds()::Float64 = Float64(time_ns()) / 1.0e9
 
-function TimelapseRecorder(history::Union{Nothing, TimelapseHistory} = nothing; now::Real = _monotonic_time_seconds())
+"Build recorder state from optionally loaded history and arm the next capture deadline."
+function TimelapseRecorder(
+        history::Union{Nothing, TimelapseHistory} = nothing;
+        now::Real = _monotonic_time_seconds(),
+    )
     if !isnothing(history) && history.format_version != TIMELAPSE_FORMAT_VERSION
         throw(ArgumentError("unsupported time-lapse format version $(history.format_version)"))
     end
@@ -64,8 +75,11 @@ end
 timelapse_frame_count(recorder::TimelapseRecorder)::Int =
     isnothing(recorder.history) ? 0 : length(recorder.history.frames)
 
+#= ---------- Capture ---------- =#
+
 "Append one detached render map when recording is enabled and the frame is new."
-function capture_timelapse_frame!(recorder::TimelapseRecorder, gamemap::GameMap;
+function capture_timelapse_frame!(
+        recorder::TimelapseRecorder, gamemap::GameMap;
         snapshot_timestamp::Union{Nothing, Float64} = nothing,
     )::Bool
     recorder.enabled || return false
@@ -89,7 +103,8 @@ function capture_timelapse_frame!(recorder::TimelapseRecorder, gamemap::GameMap;
 end
 
 "Capture the current published snapshot when its fixed interval is due."
-function maybe_capture_timelapse!(recorder::TimelapseRecorder, snapshot;
+function maybe_capture_timelapse!(
+        recorder::TimelapseRecorder, snapshot;
         capture_suppressed::Bool = false,
         now::Real = _monotonic_time_seconds(),
     )::Bool

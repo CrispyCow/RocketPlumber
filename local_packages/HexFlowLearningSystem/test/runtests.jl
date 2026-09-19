@@ -1,3 +1,8 @@
+#=
+Scope: Test suite for HexFlowLearningSystem tutorial and learning state management
+Formatter: Runic
+=#
+
 using Test
 using FlowMap
 using FlowEngine

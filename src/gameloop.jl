@@ -1,3 +1,8 @@
+#=
+Scope: Main game-session orchestration, rendering, input, calculator IPC, and shutdown
+Formatter: Runic
+=#
+
 # ===============================================================
 # Helper Functions for the Game Main Loop
 # ===============================================================
@@ -6,7 +11,7 @@ using HexFlowTelemetry, FlowMap, FlowEngine, HexFlowProcGen, HexFluids, HexFlowC
 using StaticArrays
 using LinearAlgebra
 
-"Uses RenderEngine to initialise OpenGL objects needed for the game loop"
+"Initialise the OpenGL objects and render queues used by the game loop."
 function init_opengl_objects()
     glmap::GLObjectMap = GLObjectMap()
     renderqueue = Vector{SpriteRenderCommand}()
@@ -23,10 +28,7 @@ function init_opengl_objects()
     return glmap, renderqueue, scratch_renderqueue
 end
 
-"""
-Renders frame by pushing render commands to the renderqueue and executing them.
-Handles both background and foreground particle systems with proper layering.
-"""
+"Render a frame with background particles, queued sprites, and foreground particles."
 function custom_rendering!(
         renderqueue::Vector{SpriteRenderCommand},
         scratch_renderqueue::Vector{SpriteRenderCommand},
@@ -40,21 +42,21 @@ function custom_rendering!(
 
     set_view_ubo(glmap, get_viewtransform(viewstate))
 
-    # Render background particles FIRST (behind everything else)
+    # Background particles behind the ship
     if !isnothing(viewstate.background_particles)
         @timeit render_loop_timer "Particle Systems" begin
             @timeit render_loop_timer "Background Particles" begin
-                if !shared_state.is_paused # skip if paused
+                if !shared_state.is_paused
                     thrust_dust_particle_effect!(viewstate.background_particles, snapshot.gamestate, snapshot.gamemap)
                     update_particle_physics!(viewstate.background_particles, snapshot.gamestate)
                 end
-                # Enable ship surface culling for background particles by passing gamemap
+                # Passing the map enables ship-surface culling
                 render_particles!(glmap, viewstate.background_particles, viewstate, snapshot.timestamp, shared_state.actual_ups, snapshot.gamemap)
             end
         end
     end
 
-    # Render queued elements (tiles, pipes, nodes)
+    # Queued world sprites
     @timeit render_loop_timer "Sprite Rendering" begin
         @timeit render_loop_timer "Populate Render Queue" begin
             @timeit render_loop_timer "Ship Surface" ship_surface_queued_render!(renderqueue, glmap, snapshot.gamemap; selected_ship = highlighted_ship(inputstate))
@@ -68,15 +70,15 @@ function custom_rendering!(
         @timeit render_loop_timer "Execute Render Queue" glrender(glmap, renderqueue, scratch_renderqueue)
     end
 
-    # Render foreground particles LAST (on top of tiles)
+    # Foreground particles above the ship
     if !isnothing(viewstate.foreground_particles)
         @timeit render_loop_timer "Particle Systems" begin
             @timeit render_loop_timer "Foreground Particles" begin
-                if !shared_state.is_paused # skip if paused
+                if !shared_state.is_paused
                     tile_particle_spawn!(viewstate.foreground_particles, glmap, snapshot.gamemap, snapshot.derived, snapshot.mna, snapshot.gamestate)
                     update_particle_physics!(viewstate.foreground_particles, snapshot.gamestate)
                 end
-                # Disable ship surface culling for foreground particles by passing nothing as gamemap
+                # No map disables ship-surface culling
                 render_particles!(glmap, viewstate.foreground_particles, viewstate, snapshot.timestamp, shared_state.actual_ups, nothing)
             end
         end
@@ -85,7 +87,7 @@ function custom_rendering!(
     return nothing
 end
 
-"Sets up the IPC data structures for the FlowCalculator task"
+"Set up the IPC data structures for the FlowCalculator task."
 function setup_flowcalc_ipc(initial_snapshot::FlowCalculatorSnapshot)::FlowCalculatorIPC
     shared_state = FlowCalculatorSharedState()
     command_queue = create_command_queue(32)
@@ -102,7 +104,7 @@ function setup_flowcalc_ipc(initial_snapshot::FlowCalculatorSnapshot)::FlowCalcu
     )
 end
 
-"Creates input and view state structs, populating window and framebuffer sizes"
+"Create input and view state populated with the window and framebuffer sizes."
 function init_input_viewstates(window::GLFW.Window)::Tuple{InputState, ViewState}
     inputstate = InputState()
     viewstate = ViewState()
@@ -118,7 +120,7 @@ function init_input_viewstates(window::GLFW.Window)::Tuple{InputState, ViewState
     return inputstate, viewstate
 end
 
-"Handles user inputs and updates inputstate, viewstate, and enqueues commands to flowcalc_ipc"
+"Handle user input, update render-owned state, and enqueue calculator commands."
 function user_handler!(
         flowcalc_ipc::FlowCalculatorIPC,
         inputstate::InputState,
@@ -126,47 +128,54 @@ function user_handler!(
         snapshot::FlowCalculatorSnapshot,
         window::GLFW.Window
     )
-    # Update ship bounds before input handling so limits are current
+    # Synchronise state used by input handlers
     update_ship_bounds!(viewstate, snapshot.gamemap)
 
-    # Set time progression flag and current spacemap time for input blocking and key handlers
     inputstate.gui_inputs[:time_progressing] = is_time_progressing(snapshot.gamemap)
     inputstate.gui_inputs[:galaxy_escape_active] = is_galaxy_escape_active(snapshot.gamemap)
     current_time_years = get_time_years(snapshot.gamemap)
     inputstate.gui_inputs[:current_spacemap_time] = something(current_time_years, 0.0)
     inputstate.gui_inputs[:consume_right_click] = false
 
-    # Move completion must translate selection before stale source coordinates are pruned.
+    # Reconcile selection and popups with the latest snapshot
+    # Move completion must translate selection before stale source coordinates are pruned
     poll_move_completion!(inputstate, snapshot.gamemap)
 
     # Prune selected elements that no longer exist or have moved onto a render-offset ship.
     prune_selection!(
         coord -> has_component(snapshot.gamemap, coord) && !is_on_offset_ship(coord, snapshot.gamemap),
-        coord -> has_pipe(snapshot.gamemap, coord) && !is_on_offset_ship(coord, snapshot.gamemap), inputstate)
-    # Cancel action popups if their targets are no longer valid (e.g. deleted or deselected)
+        coord -> has_pipe(snapshot.gamemap, coord) && !is_on_offset_ship(coord, snapshot.gamemap), inputstate
+    )
     popup = inputstate.action_popup
-    if popup !== nothing
+    if !isnothing(popup)
         target = popup.target
         stale_component_popup = target isa ComponentPopupTarget &&
-            (selected_element_count(inputstate) != 1 ||
-             !has_selected_component(inputstate, target.coord) ||
-             !has_component(snapshot.gamemap, target.coord) ||
-             is_on_offset_ship(target.coord, snapshot.gamemap))
+            (
+            selected_element_count(inputstate) != 1 ||
+                !has_selected_component(inputstate, target.coord) ||
+                !has_component(snapshot.gamemap, target.coord) ||
+                is_on_offset_ship(target.coord, snapshot.gamemap)
+        )
         stale_group_popup = target isa ElementGroupPopupTarget &&
-            (selected_element_count(inputstate) < 2 ||
-             Set(target.component_coords) != selected_component_coords(inputstate) ||
-             Set(target.pipe_coords) != selected_pipe_coords(inputstate))
+            (
+            selected_element_count(inputstate) < 2 ||
+                Set(target.component_coords) != selected_component_coords(inputstate) ||
+                Set(target.pipe_coords) != selected_pipe_coords(inputstate)
+        )
         stale_ship_popup = target isa ShipPopupTarget &&
-            (!has_ship(snapshot.gamemap, target.ship_name) ||
-             get_ship_render_offset(snapshot.gamemap, target.ship_name) != AxialCoord(0.0, 0.0))
+            (
+            !has_ship(snapshot.gamemap, target.ship_name) ||
+                get_ship_render_offset(snapshot.gamemap, target.ship_name) != AxialCoord(0.0, 0.0)
+        )
         (stale_component_popup || stale_group_popup || stale_ship_popup) && dismiss_action_popup!(inputstate)
     end
 
     GLFW.PollEvents()
     cimgui_io = CImGui.GetIO()
-    handle_inputs!(inputstate, viewstate, flowcalc_ipc.shared_state, window, cimgui_io) # input handling (window sizes, cursor, keys, scroll)
+    handle_inputs!(inputstate, viewstate, flowcalc_ipc.shared_state, window, cimgui_io)
     mouse_captured = unsafe_load(cimgui_io.WantCaptureMouse)
 
+    # Dispatch interaction mode
     state = placement_state(inputstate)
     if is_standard_family_state(state)
         flowcalc_standard_interaction!(
@@ -205,7 +214,7 @@ function ui_rendering!(
         return nothing
     end
 
-    # Calculate bounds for interactions
+    # Update interaction bounds
     max_view_bounds = calc_max_reachable_bounds(viewstate)
     set_max_reachable_bounds!(flowcalc_ipc.shared_state, max_view_bounds)
 
@@ -241,9 +250,8 @@ end
 
 """
 Requests termination of the FlowCalculator task, waits for it to exit, then
-tears down OpenGL resources. Waiting on the task before returning guarantees the
-background thread is fully stopped, so callers can safely destroy the window or
-let the Julia process exit without leaving a stranded `@spawn`ed task running.
+tears down OpenGL resources. Waiting guarantees the background thread has
+stopped before callers destroy the window or exit the Julia process.
 """
 function cleanup!(flowcalc_ipc::FlowCalculatorIPC, flowcalc_task::Task, globjmap::GLObjectMap, window::GLFW.Window)
     @info "Requesting termination of FlowCalculator task"
@@ -263,7 +271,7 @@ end
 # Game Main Loop
 # ===============================================================
 
-"Result returned from `enter_gameloop`, carrying the current map and its optional time-lapse together."
+"Result of `enter_gameloop`, including the map and its optional time-lapse."
 @kwdef struct GameLoopResult
     exit_reason::ExitReason
     tutorial_id::Union{Nothing, Symbol} = nothing
@@ -348,25 +356,26 @@ function save_pre_escape_map(recorder::TimelapseRecorder, gamemap::GameMap, save
 end
 
 """
-Enter the main game loop with a map loaded from a file path (String), a pre-generated GameMap, or an empty map (nothing).
+Enter the main game loop with a loaded, generated, or empty map.
 
 If `test_commands` is supplied, the non-interactive smoke-test harness drives
 the loop by enqueueing at most one scheduled `MapEditCommand` per render frame
 and signalling a normal quit once the schedule is exhausted. See
 `src/test_harness.jl` and `src/auto_test_launch.jl`.
 """
-function enter_gameloop(window::GLFW.Window;
+function enter_gameloop(
+        window::GLFW.Window;
         map_source::Union{Nothing, String, GameMap, ShipState} = nothing,
         initial_bundle::Union{Nothing, GameMapBundle} = nothing,
         initial_active_tutorial_id::Union{Nothing, Symbol} = nothing,
         test_commands = nothing,
     )::GameLoopResult
-    #= Loop Setup =#
+    # Initialise session state
     ui_loadingscreen_render(window, "Instantiating game state")
     attach_glfw_callbacks!(window)
     g_inputstate, g_viewstate = init_input_viewstates(window)
 
-    # Set OpenGL viewport to match current framebuffer size (important if window was resized before entering game loop)
+    # The window may have been resized before entering the game loop
     glViewport(0, 0, g_viewstate.fb_width, g_viewstate.fb_height)
 
     ui_loadingscreen_render(window, "Loading map")
@@ -389,12 +398,12 @@ function enter_gameloop(window::GLFW.Window;
     ui_loadingscreen_render(window, "Initialising OpenGL Objects")
     g_globjmap, g_renderqueue, g_scratch_renderqueue = init_opengl_objects()
 
-    # Initialize particle systems
-    g_viewstate.background_particles = ParticleManager(0.03f0)  # Small size for dust
-    g_viewstate.foreground_particles = ParticleManager(0.06f0)  # Larger size for exhaust
+    # Initialise rendering state
+    g_viewstate.background_particles = ParticleManager(0.03f0)  # Small dust particles
+    g_viewstate.foreground_particles = ParticleManager(0.06f0)  # Larger exhaust particles
 
-    GLFW.SwapInterval(1) # 0=Disable VSync, 1=Enable VSync
-    glClearColor(0.114, 0.161, 0.318, 1.0) # Set background colour to space cadet blue
+    GLFW.SwapInterval(1)  # Enable VSync
+    glClearColor(0.114, 0.161, 0.318, 1.0)  # Space cadet blue
 
     g_recording = RecordingState()
 
@@ -406,7 +415,7 @@ function enter_gameloop(window::GLFW.Window;
         sort!(test_commands, by = step -> step.tick, rev = true)
     end
 
-    #= Main Loop =#
+    # MAIN LOOP
     ui_loadingscreen_render(window, "Entering main loop")
 
     while isnothing(g_inputstate.exit_reason) && !GLFW.WindowShouldClose(window)
@@ -418,7 +427,7 @@ function enter_gameloop(window::GLFW.Window;
             test_system_tick!(test_commands, g_snapshot, g_inputstate, g_flowcalc_ipc.command_queue, g_flowcalc_task)
         end
 
-        # Learning system tick (main game only, not sandbox)
+        # Advance the learning system
         if !isnothing(learning_state) && isnothing(completed_gamemap)
             learning_inputs = LearningInputs(
                 gamemap = g_snapshot.gamemap,
@@ -430,7 +439,7 @@ function enter_gameloop(window::GLFW.Window;
             learning_system_tick!(learning_state, learning_inputs)
         end
 
-        # RENDERING Start
+        # Render the frame
         glClear(GL_COLOR_BUFFER_BIT)
         if isnothing(completed_gamemap)
             custom_rendering!(
@@ -444,6 +453,8 @@ function enter_gameloop(window::GLFW.Window;
             session_timing = session_timing,
             completed_gamemap = completed_gamemap,
         )
+
+        # Resolve escape transitions
         if g_inputstate.exit_reason == EXIT_RESTART
             restart_gamemap = capture_galaxy_escape_restart_gamemap(
                 g_snapshot.gamemap, session_timing, learning_state,
@@ -456,20 +467,22 @@ function enter_gameloop(window::GLFW.Window;
             end
         elseif g_inputstate.galaxy_escape_completion_requested
             g_inputstate.galaxy_escape_completion_requested = false
+
             # The displayed snapshot defines the result; only this detached copy becomes render-owned.
             completed_gamemap = capture_session_gamemap(g_snapshot.gamemap, session_timing, learning_state)
             @atomic :monotonic g_flowcalc_ipc.shared_state.should_exit = true
         end
         recording_tick!(g_recording, g_inputstate, g_viewstate, window, g_flowcalc_ipc.console_push)
         GLFW.SwapBuffers(window)
-        # RENDERING End
 
+        # Process input against the displayed snapshot
         if isnothing(completed_gamemap) && isnothing(restart_gamemap)
             @timeit render_loop_timer "User Input Handling" user_handler!(g_flowcalc_ipc, g_inputstate, g_viewstate, g_snapshot, window)
         else
             GLFW.PollEvents()
         end
 
+        # Capture time-lapse history during ordinary play
         if isnothing(completed_gamemap) && isnothing(restart_gamemap)
             capture_suppressed = is_timelapse_capture_suppressed(
                 g_inputstate, g_snapshot.gamemap;
@@ -483,9 +496,9 @@ function enter_gameloop(window::GLFW.Window;
 
         handle_diagnostics(render_loop_diagnostic_config, g_viewstate.frame_count)
         print_gc_statistics()
-    end # main loop
+    end
 
-    # Build result
+    # Materialise the session result
     result_snapshot = g_flowcalc_ipc.get_snapshot()
     if !isnothing(restart_gamemap)
         saved_bundle = GameMapBundle(restart_gamemap, snapshot_timelapse_history(timelapse_recorder))
@@ -505,7 +518,7 @@ function enter_gameloop(window::GLFW.Window;
         saved_bundle = saved_bundle,
     )
 
-    # Stop recording if still active
+    # Shut down session resources
     if g_recording.is_recording
         stop_recording!(g_recording, g_flowcalc_ipc.console_push)
     end
@@ -513,4 +526,4 @@ function enter_gameloop(window::GLFW.Window;
     cleanup!(g_flowcalc_ipc, g_flowcalc_task, g_globjmap, window)
 
     return result
-end # enter_gameloop
+end

@@ -17,6 +17,15 @@ SquirrelNoise = "2e7baeb9-be7b-428c-bdac-8e70268c90fc"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 StructEquality = "6ec83bb0-ed9f-11e9-3b4c-2b04cb4e219c"
 
+[sources]
+FlowEngine = {path = "../FlowEngine"}
+FlowMap = {path = "../FlowMap"}
+HexComponentsAPI = {path = "../components/HexComponentsAPI"}
+HexElements = {path = "../HexElements"}
+HexFluids = {path = "../HexFluids"}
+HexFrame = {path = "../HexFrame"}
+SquirrelNoise = {path = "../SquirrelNoise"}
+
 [compat]
 GeometryBasics = "0.5.10"
 LinearAlgebra = "1.12.0"

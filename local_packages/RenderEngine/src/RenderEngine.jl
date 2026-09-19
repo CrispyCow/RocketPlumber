@@ -1,3 +1,8 @@
+#=
+Scope: Typed OpenGL resource management and render-command dispatch
+Formatter: Runic
+=#
+
 module RenderEngine
 
 using ModernGL
@@ -963,7 +968,7 @@ a literal `Symbol` name so the `getfield` calls remain type-stable.
     # getfield with a literal Symbol is type-stable — the compiler knows the return type.
     uniform_calls = [
         :(set_gluniform(map, prog, $(QuoteNode(fname)), getfield(uniforms, $(QuoteNode(fname)))))
-        for fname in fieldnames(U)
+            for fname in fieldnames(U)
     ]
 
     return quote

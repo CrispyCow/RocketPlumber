@@ -9,6 +9,10 @@ HexComponentsAPI = "a2289db6-e3a5-4e05-9c21-8734dce2bbd4"
 HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
+[sources]
+HexComponentsAPI = {path = "../components/HexComponentsAPI"}
+HexFrame = {path = "../HexFrame"}
+
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 

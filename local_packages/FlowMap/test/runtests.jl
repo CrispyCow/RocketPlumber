@@ -1,3 +1,8 @@
+#=
+Scope: FlowMap test suite covering map domain model, validation, docking state, and ship operations
+Formatter: Runic
+=#
+
 using Test
 using FlowMap
 using HexFrame
@@ -1471,9 +1476,11 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
         set_position!(sm, SVector(8.0, 9.0))
         set_target_time!(sm, 100.0)
         set_last_stop_time!(sm, 100.0)
-        set_active_manoeuvre!(sm, ManoeuvreData(
-            approach_burn_dv = SVector(1.0, 0.0), capture_burn_dv = SVector(-1.0, 0.0),
-        ))
+        set_active_manoeuvre!(
+            sm, ManoeuvreData(
+                approach_burn_dv = SVector(1.0, 0.0), capture_burn_dv = SVector(-1.0, 0.0),
+            )
+        )
         clear_active_manoeuvre!(sm)
         @test get_time_years(sm) == 12.5
         @test get_position(sm) == SVector(0.0, 0.0)
@@ -1772,7 +1779,7 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
         pipe_coord = side_pipe(TileCoord(10, 0))
         pipe_tiles = Set(
             tile for vertex in (pipe_coord.v1, pipe_coord.v2)
-            for (tile, _) in get_adjacent_tiles_for_node(to_nodecoord(vertex))
+                for (tile, _) in get_adjacent_tiles_for_node(to_nodecoord(vertex))
         )
         blueprint = ShipBlueprint(
             ship_tiles = Set([TileCoord(20, 0)]),

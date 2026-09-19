@@ -1,35 +1,39 @@
+#=
+Scope: Switch and valve component behaviours for flow control
+Formatter: Runic
+=#
+
 """
-Switch and valve component implementations for flow control.
+Switch and valve component behaviours for flow control.
 
-This module provides concrete implementations of ComponentBehavior for switches and valves:
-- StandardValveCompBehav{S, V}: Unified valve parameterised by switch type and size
+Exported concrete `ComponentBehavior` implementations:
 
-Switch types (S): SteppedSwitchBehavFrag (adjustable), BoolSwitchBehavFrag (on/off)
-Valve sizes (V): LargeValve, TinyValve
-
-All components follow the ComponentBehavior interface defined in HexComponentsAPI.
+- `StandardValveCompBehav`: Valve parameterised by switch behaviour and physical size
 """
 module HexFlowSwitchComponents
 
-using Accessors
-using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowEngine, FlowMap, RenderEngine, HexFlowRendering
 using StaticArrays
-using HexFlowBasicComponents
+using FlowEngine, FlowMap, HexElements, HexFluids, HexFrame
+using HexComponentsAPI, HexFlowBasicComponents
+using HexFlowRendering, RenderEngine
 
-# ComponentBehavior Mandatories
+# `ComponentBehavior` mandatory methods
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
-# ComponentBehavior Optional
+# `ComponentBehavior` optional methods
 import HexComponentsAPI: update_flowbehav!, on_click!, render_map_elem!, get_actions, do_action!
 
-# Behavior Fragment Exports
-export SwitchBehavFrag, get_switch_percentage, get_target_percentage, calculate_growth_factor
-export BoolSwitchBehavFrag, set_target_conductance_to_min!, set_target_conductance_to_max!
-export SteppedSwitchBehavFrag, step_conductance_up!, step_conductance_down!
-# Concrete Component Behavior Exports
-export StandardValveCompBehav, AbstractSwitchBehavFrag, ValveSize, LargeValve, TinyValve
+# Behaviour Fragment Exports
+export AbstractSwitchBehavFrag, BoolSwitchBehavFrag, SteppedSwitchBehavFrag, SwitchBehavFrag
+# Helper Function Exports
+export calculate_growth_factor, get_switch_percentage, get_target_percentage
+export set_target_conductance_to_max!, set_target_conductance_to_min!, step_conductance_down!, step_conductance_up!
+# Support Type Exports
+export LargeValve, TinyValve, ValveSize
+# Concrete Component Behaviour Exports
+export StandardValveCompBehav
 
 # ===============================================================
-# Behavior Fragments
+# Behaviour Fragments
 # ===============================================================
 
 #= ---------- SwitchBehavFrag ----------- =#
@@ -218,9 +222,7 @@ function set_target_conductance!(switch::SwitchBehavFrag, target::T) where {T <:
     return switch.state.target_conductance = float_target # Bounds checks passed, assign new target
 end
 
-# ===============================================================
-# Helper Functions for Exponential Space Percentage Mapping
-# ===============================================================
+#= ---------- Exponential Percentage Helpers ----------- =#
 
 "Convert conductance to percentage in exponential space (0.0 = min, 1.0 = max)."
 function conductance_to_exp_percentage(conductance::Float64, min_c::Float64, max_c::Float64, growth_factor::Float64)::Float64
@@ -289,7 +291,9 @@ function get_target_percentage(switch::SwitchBehavFrag)::Float64
     )
 end
 
-"Abstract type for switch behaviour fragments that can be composed into a valve."
+#= ---------- AbstractSwitchBehavFrag ----------- =#
+
+"Abstract parent for switch fragments with shared conductance behaviour."
 abstract type AbstractSwitchBehavFrag end
 
 #= ---------- BoolSwitchBehavFrag ----------- =#
@@ -329,7 +333,6 @@ set_tunables(behav::BoolSwitchBehavFrag, tunables::NTuple{3, Real}) = BoolSwitch
 update_flowbehav!(behav::BoolSwitchBehavFrag; kwargs...) = update_flowbehav!(behav.switch; kwargs...)
 get_switch_percentage(behav::BoolSwitchBehavFrag) = get_switch_percentage(behav.switch)
 get_target_percentage(behav::BoolSwitchBehavFrag) = get_target_percentage(behav.switch)
-
 
 function on_click!(behav::BoolSwitchBehavFrag; kwargs...)
     target = behav.switch.state.target_conductance
@@ -518,15 +521,19 @@ function do_action!(behav::SteppedSwitchBehavFrag, action_id::Symbol; kwargs...)
 end
 
 # ===============================================================
-# Concrete Component Behaviors
+# Concrete Component Behaviours
 # ===============================================================
 
 #= ---------- Valve Size Types ----------- =#
 
 "Abstract type for valve physical size variants."
 abstract type ValveSize end
+
+"Physical size variant for a large valve's sprites and travel."
 struct LargeValve <: ValveSize end
-struct TinyValve  <: ValveSize end
+
+"Physical size variant for a tiny valve's sprites and travel."
+struct TinyValve <: ValveSize end
 
 #= ---------- StandardValveCompBehav{S, V} ----------- =#
 
@@ -540,33 +547,37 @@ struct StandardValveCompBehav{S <: AbstractSwitchBehavFrag, V <: ValveSize} <: C
 end
 
 "Construct a StandardValveCompBehav with adjustable (stepped) switching."
-function StandardValveCompBehav(::Type{SteppedSwitchBehavFrag}, ::Type{V};
+function StandardValveCompBehav(
+        ::Type{SteppedSwitchBehavFrag}, ::Type{V};
         max_conductance::Float64, min_conductance::Float64 = 0.0, growth_factor::Float64,
         percentage_step_size::Float64 = 0.05, target_conductance::Float64 = min_conductance,
-        current_conductance::Float64 = min_conductance) where {V <: ValveSize}
+        current_conductance::Float64 = min_conductance
+    ) where {V <: ValveSize}
     switchfrag = SteppedSwitchBehavFrag(
-        connection           = RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG),
-        max_conductance      = max_conductance,
-        min_conductance      = min_conductance,
-        growth_factor        = growth_factor,
+        connection = RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG),
+        max_conductance = max_conductance,
+        min_conductance = min_conductance,
+        growth_factor = growth_factor,
         percentage_step_size = percentage_step_size,
-        target_conductance   = target_conductance,
-        current_conductance  = current_conductance
+        target_conductance = target_conductance,
+        current_conductance = current_conductance
     )
     return StandardValveCompBehav{SteppedSwitchBehavFrag, V}(switchfrag)
 end
 
 "Construct a StandardValveCompBehav with on/off (boolean) switching."
-function StandardValveCompBehav(::Type{BoolSwitchBehavFrag}, ::Type{V};
+function StandardValveCompBehav(
+        ::Type{BoolSwitchBehavFrag}, ::Type{V};
         max_conductance::Float64, min_conductance::Float64 = 0.0, growth_factor::Float64,
         target_conductance::Float64 = min_conductance,
-        current_conductance::Float64 = min_conductance) where {V <: ValveSize}
+        current_conductance::Float64 = min_conductance
+    ) where {V <: ValveSize}
     switchfrag = BoolSwitchBehavFrag(
-        connection       = RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG),
-        max_conductance  = max_conductance,
-        min_conductance  = min_conductance,
-        growth_factor    = growth_factor,
-        target_conductance  = target_conductance,
+        connection = RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG),
+        max_conductance = max_conductance,
+        min_conductance = min_conductance,
+        growth_factor = growth_factor,
+        target_conductance = target_conductance,
         current_conductance = current_conductance
     )
     return StandardValveCompBehav{BoolSwitchBehavFrag, V}(switchfrag)
@@ -575,32 +586,31 @@ end
 #= ---------- Sprite Trait Functions ----------- =#
 
 # Size-dispatched sprites (shared between adjustable and on/off)
-fluidmask_sprite(::StandardValveCompBehav{S, LargeValve}) where S = :Valves_Large_fluidmask
-fluidmask_sprite(::StandardValveCompBehav{S, TinyValve})  where S = :Valves_Tiny_fluidmask
-valvebody_sprite(::StandardValveCompBehav{S, LargeValve}) where S = :Valves_Large_valvebody
-valvebody_sprite(::StandardValveCompBehav{S, TinyValve})  where S = :Valves_Tiny_valvebody
-static_sprite(::StandardValveCompBehav{S, LargeValve})    where S = :Valves_Large_static
-static_sprite(::StandardValveCompBehav{S, TinyValve})     where S = :Valves_Tiny_static
-valve_travel_px(::StandardValveCompBehav{S, LargeValve})  where S = 100.0f0
-valve_travel_px(::StandardValveCompBehav{S, TinyValve})   where S = 25.0f0
+fluidmask_sprite(::StandardValveCompBehav{S, LargeValve}) where {S} = :Valves_Large_fluidmask
+fluidmask_sprite(::StandardValveCompBehav{S, TinyValve}) where {S} = :Valves_Tiny_fluidmask
+valvebody_sprite(::StandardValveCompBehav{S, LargeValve}) where {S} = :Valves_Large_valvebody
+valvebody_sprite(::StandardValveCompBehav{S, TinyValve}) where {S} = :Valves_Tiny_valvebody
+static_sprite(::StandardValveCompBehav{S, LargeValve}) where {S} = :Valves_Large_static
+static_sprite(::StandardValveCompBehav{S, TinyValve}) where {S} = :Valves_Tiny_static
+valve_travel_px(::StandardValveCompBehav{S, LargeValve}) where {S} = 100.0f0
+valve_travel_px(::StandardValveCompBehav{S, TinyValve}) where {S} = 25.0f0
 
 # Switch-type-dispatched control box sprite
 controlbox_sprite(::StandardValveCompBehav{SteppedSwitchBehavFrag}) = :Valves_Adjustable_controlbox
-controlbox_sprite(::StandardValveCompBehav{BoolSwitchBehavFrag})    = :Valves_OnOff_controlbox
+controlbox_sprite(::StandardValveCompBehav{BoolSwitchBehavFrag}) = :Valves_OnOff_controlbox
 
 #= ---------- Interface Delegation ----------- =#
 
 produce_rel_elements(comp::StandardValveCompBehav) = produce_rel_elements(comp.switch)
 update_flowbehav!(comp::StandardValveCompBehav; kwargs...) = update_flowbehav!(comp.switch; kwargs...)
 
-
 get_tunables(comp::StandardValveCompBehav) = get_tunables(comp.switch)
 
-function set_tunables(comp::StandardValveCompBehav{SteppedSwitchBehavFrag, V}, tunables::NTuple{4, Real}) where V
+function set_tunables(comp::StandardValveCompBehav{SteppedSwitchBehavFrag, V}, tunables::NTuple{4, Real}) where {V}
     return StandardValveCompBehav{SteppedSwitchBehavFrag, V}(set_tunables(comp.switch, tunables))
 end
 
-function set_tunables(comp::StandardValveCompBehav{BoolSwitchBehavFrag, V}, tunables::NTuple{3, Real}) where V
+function set_tunables(comp::StandardValveCompBehav{BoolSwitchBehavFrag, V}, tunables::NTuple{3, Real}) where {V}
     return StandardValveCompBehav{BoolSwitchBehavFrag, V}(set_tunables(comp.switch, tunables))
 end
 
@@ -610,7 +620,7 @@ do_action!(comp::StandardValveCompBehav, action_id::Symbol; kwargs...) = do_acti
 #= ---------- on_click! ----------- =#
 
 function on_click!(comp::StandardValveCompBehav{SteppedSwitchBehavFrag}; relative_clicksite = nothing, kwargs...)
-    if relative_clicksite !== nothing
+    if !isnothing(relative_clicksite)
         eps = 1.0e-6
         y = relative_clicksite.y
         if y > eps          # Click above horizontal -- step open
@@ -623,7 +633,7 @@ function on_click!(comp::StandardValveCompBehav{SteppedSwitchBehavFrag}; relativ
 end
 
 function on_click!(comp::StandardValveCompBehav{BoolSwitchBehavFrag}; relative_clicksite = nothing, kwargs...)
-    if relative_clicksite !== nothing
+    if !isnothing(relative_clicksite)
         eps = 1.0e-6
         y = relative_clicksite.y
         if y > eps          # Click above horizontal -- open

@@ -1,6 +1,14 @@
+#=
+Scope: Input, selection, placement, view, session, and simulation control state
+Formatter: Runic
+=#
+
 module HexFlowControl
 
+# Custom packages
 using HexFrame, HexComponentsAPI
+
+# Packages
 using StaticArrays, GLFW
 
 # Type exports
@@ -143,7 +151,7 @@ abstract type AbstractPlacementState end
 "Marker base type for editor-only placement states."
 abstract type AbstractEditorPlacementState <: AbstractPlacementState end
 
-"Holds tutorial/hint data for displaying in the hint popup window"
+"Tutorial hints displayed in the hint popup window."
 @kwdef mutable struct HintData
     title::String
     hints::Vector{String}
@@ -218,12 +226,12 @@ State for the interactive redock placement state. Entered when the player select
 for ghost colouring only; the calculator owns authoritative placement validation.
 """
 @kwdef mutable struct PlacementRedockState <: AbstractPlacementState
-    ship_name::Symbol                           # ship being redocked
-    ship_tiles::Set{TileCoord}                  # original surface tiles (green/red ghost)
-    exclusion_ring::Set{TileCoord}              # surface and pipe clearance rendered around the ghost
-    ship_footprint::Set{TileCoord}              # preview-only untranslated surface and pipe clearance
-    other_exclusion::Set{TileCoord}             # preview-only docking exclusion of all other ships
-    original_centre::TileCoord                  # centre tile for computing mouse delta
+    ship_name::Symbol                           # Ship being redocked
+    ship_tiles::Set{TileCoord}                  # Original surface tiles (green/red ghost)
+    exclusion_ring::Set{TileCoord}              # Surface and pipe clearance rendered around the ghost
+    ship_footprint::Set{TileCoord}              # Preview-only untranslated surface and pipe clearance
+    other_exclusion::Set{TileCoord}             # Preview-only docking exclusion of all other ships
+    original_centre::TileCoord                  # Centre tile for computing mouse delta
 end
 
 const RedockModeState = PlacementRedockState
@@ -336,18 +344,20 @@ const PlacementState = Union{
 # Selection State
 # ===============================================================
 
-"Input state for placement, selection, and control"
+"Input state for placement, selection, and control."
 @kwdef mutable struct InputState
-    # placement
+    # Interaction state
     cursor_x::Union{Nothing, Float64} = nothing
     cursor_y::Union{Nothing, Float64} = nothing
     placement_state::PlacementState = PlacementReadyState()
     selection_state::SelectionState = SelectionEmptyState()
-    gui_inputs::Dict{Symbol, Any} = Dict{Symbol, Any}()  # for storing ImGui input field states
-    # last key states
+    gui_inputs::Dict{Symbol, Any} = Dict{Symbol, Any}()  # ImGui input field states
+
+    # Previous input states
     last_keystates::Dict{GLFW.Key, Bool} = Dict{GLFW.Key, Bool}()
     last_mousestates::Dict{GLFW.MouseButton, Bool} = Dict{GLFW.MouseButton, Bool}()
-    # control state
+
+    # Game and interface controls
     sim_speed::SimSpeed = SIM_1X
     escape_menu_active::Bool = false
     editor_mode::Bool = false
@@ -356,13 +366,14 @@ const PlacementState = Union{
     is_recording::Bool = false
     screenshot_requested::Bool = false
     action_popup::Union{Nothing, ActionPopupState} = nothing
-    # loop status
+
+    # Loop outcome
     galaxy_escape_completion_requested::Bool = false
     exit_reason::Union{Nothing, ExitReason} = nothing
     pending_sandbox_id::Union{Nothing, Symbol} = nothing
 end
 
-"View state for camera position, zoom, and window dimensions"
+"View state for camera position, zoom, and window dimensions."
 @kwdef mutable struct ViewState
     window_width::Int32 = 640
     window_height::Int32 = 480
@@ -371,12 +382,12 @@ end
     view_x::Float32 = 0.0
     view_y::Float32 = 0.0
     view_zoom::Float32 = 0.5
-    ship_bounds::HexFrame.CartesianBounds = (X_POS=5.0, X_NEG=-5.0, Y_POS=5.0, Y_NEG=-5.0)
+    ship_bounds::HexFrame.CartesianBounds = (X_POS = 5.0, X_NEG = -5.0, Y_POS = 5.0, Y_NEG = -5.0)
     frame_count::Int64 = 0
     last_update_time::Float64 = 0.0
-    pan_drag_anchor::Union{Nothing, SVector{2, Float64}} = nothing # world-space anchor for middle-click pan
-    background_particles::Any = nothing  # ParticleManager - can't type without circular dep
-    foreground_particles::Any = nothing  # ParticleManager - can't type without circular dep
+    pan_drag_anchor::Union{Nothing, SVector{2, Float64}} = nothing  # World-space anchor for middle-click pan
+    background_particles::Any = nothing  # ParticleManager cannot be typed without a circular dependency
+    foreground_particles::Any = nothing  # ParticleManager cannot be typed without a circular dependency
 end
 
 """
@@ -471,6 +482,7 @@ function prune_selection!(component_is_valid::Function, pipe_is_valid::Function,
     return nothing
 end
 
+"Return the number of selected components and pipes."
 function selected_element_count(inputstate::InputState)::Int
     state = selection_state(inputstate)
     return state isa WorldSelectionState ? length(state.component_coords) + length(state.pipe_coords) : 0
@@ -488,12 +500,18 @@ end
 function shared_component_actions(action_sets)::Tuple
     isempty(action_sets) && return ()
     shared = ActionInfo[]
+
     for reference_action in first(action_sets)
+        # Find the corresponding action on every selected component
         matches = [findfirst(action -> action.id === reference_action.id, actions) for actions in action_sets]
         any(isnothing, matches) && continue
         actions = [action_sets[index][match] for (index, match) in enumerate(matches)]
-        if any(action -> action.label != reference_action.label ||
-                action.confirmation_message != reference_action.confirmation_message, actions)
+
+        # Derive the shared availability and presentation
+        if any(
+                action -> action.label != reference_action.label ||
+                    action.confirmation_message != reference_action.confirmation_message, actions
+            )
             @warn "Inconsistent metadata for shared component action" action_id = reference_action.id
         end
         enabled_count = count(action.enabled for action in actions)
@@ -513,15 +531,17 @@ function shared_component_actions(action_sets)::Tuple
         confirmation_messages = String[
             action.confirmation_message for action in actions if !isnothing(action.confirmation_message)
         ]
-        # Keep the confirmation choice independent of selected-component ordering.
+        # Keep the confirmation choice independent of selected-component ordering
         confirmation_message = isempty(confirmation_messages) ? nothing : minimum(confirmation_messages)
-        push!(shared, ActionInfo(
-            id = reference_action.id,
-            label = reference_action.label,
-            enabled = group_action_enabled,
-            tooltip = tooltip,
-            confirmation_message = confirmation_message,
-        ))
+        push!(
+            shared, ActionInfo(
+                id = reference_action.id,
+                label = reference_action.label,
+                enabled = group_action_enabled,
+                tooltip = tooltip,
+                confirmation_message = confirmation_message,
+            )
+        )
     end
     return Tuple(shared)
 end
@@ -594,7 +614,7 @@ end
 "Return the ship highlighted by the open ship popup, or `nothing`."
 function highlighted_ship(inputstate::InputState)::Union{Nothing, Symbol}
     popup = inputstate.action_popup
-    popup === nothing && return nothing
+    isnothing(popup) && return nothing
     target = popup.target
     return target isa ShipPopupTarget ? target.ship_name : nothing
 end
@@ -607,7 +627,7 @@ function clear_world_selection!(inputstate::InputState)
 end
 
 "Attempt to enter the idle ready placement state."
-enter_ready_placement_state!(inputstate::InputState)::Bool = 
+enter_ready_placement_state!(inputstate::InputState)::Bool =
     try_enter_placement_state!(inputstate, PlacementReadyState())
 
 "Attempt to enter an editor-only placement state."
@@ -664,27 +684,27 @@ end
 # View Transformation
 # ===============================================================
 
-"Computes the transformation matrix based on the ViewState"
+"Compute the world-to-NDC transformation matrix for a view state."
 function get_viewtransform(vs::ViewState)::SMatrix{3, 3, Float32}
-    # hex_size_pixels defined in HexFlowRendering - hardcode here to avoid dependency
+    # Defined in HexFlowRendering; duplicated here to avoid the dependency
     hex_size_pixels = 256
 
-    # NOTE: All matrices are transposed as the SMatrix constructor takes row ordered data
-    # 1) translate in hex coords
+    # Translate in hex coordinates
+    # Entries are written row-wise, so transpose after construction
     T = SMatrix{3, 3, Float32}(
         1.0f0, 0.0f0, vs.view_x,
         0.0f0, 1.0f0, vs.view_y,
         0.0f0, 0.0f0, 1.0f0
     )'
 
-    # 2) uniform zoom about panned center
+    # Apply uniform zoom about the panned centre
     Z = SMatrix{3, 3, Float32}(
         vs.view_zoom, 0.0f0, 0.0f0,
         0.0f0, vs.view_zoom, 0.0f0,
         0.0f0, 0.0f0, 1.0f0
     )'
 
-    # 3) world → NDC scale
+    # Scale from world space to normalised device coordinates
     sx = 2.0f0 * hex_size_pixels / vs.fb_width
     sy = 2.0f0 * hex_size_pixels / vs.fb_height
     S = SMatrix{3, 3, Float32}(
@@ -693,7 +713,7 @@ function get_viewtransform(vs::ViewState)::SMatrix{3, 3, Float32}
         0.0f0, 0.0f0, 1.0f0
     )'
 
-    # Compose: world → T → Z → S
+    # Compose the transformations in world-to-NDC order
     return S * Z * T
 end
 

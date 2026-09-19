@@ -13,6 +13,14 @@ HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"
 RenderEngine = "e4d19546-dba0-4e1b-bafa-713bf6e720c9"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
+[sources]
+HexComponentsAPI = {path = "../HexComponentsAPI"}
+HexElements = {path = "../../HexElements"}
+HexFlowRendering = {path = "../../HexFlowRendering"}
+HexFluids = {path = "../../HexFluids"}
+HexFrame = {path = "../../HexFrame"}
+RenderEngine = {path = "../../RenderEngine"}
+
 [compat]
 Accessors = "0.1.42"
 StaticArrays = "1.9.15"

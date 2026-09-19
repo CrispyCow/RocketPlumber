@@ -1,4 +1,12 @@
-# Custom Component Pacakges
+#=
+Scope: Application component instances, procedural-generation registrations, encounter configuration, and starter-ship generation
+Formatter: Runic
+=#
+
+# ===============================================================
+# Component Packages
+# ===============================================================
+
 using HexFlowBasicComponents
 using HexFlowTankComponents
 using HexFlowSwitchComponents
@@ -11,6 +19,8 @@ using HexComponentsAPI
 # Component Instantiations
 # ===============================================================
 
+#= ---------- Electrical Element Aliases ---------- =#
+
 const CONST_RESISTOR = HexElements.CONST_RESISTOR
 const CONST_CURRENT = HexElements.CONST_CURRENT
 const CONST_VOLTAGE = HexElements.CONST_VOLTAGE
@@ -19,6 +29,8 @@ const V_DEP_VOLTAGE = HexElements.V_DEP_VOLTAGE
 
 const horizontal_element = RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG)
 const horizontal_grounded = RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.GROUND)
+
+#= ---------- Propulsion ---------- =#
 
 const BasicDecompChamber = DecompChamberCompBehav()
 
@@ -66,7 +78,7 @@ const ElecTurboPump = ElectricPumpCompBehav(
     pump_voltage = 50.0,
     max_energy = 100000.0,
     initial_energy = 100000.0,
-    max_conductance = 1.0,  # using old series_conductance as max
+    max_conductance = 1.0,
     min_conductance = 0.0,
     growth_factor = calculate_growth_factor(1.0, 0.0, 1.0 / BASE_UPS)
 )
@@ -76,10 +88,12 @@ const ElecTransferPump = ElectricPumpCompBehav(
     pump_voltage = 5.0,
     max_energy = 150000.0,
     initial_energy = 150000.0,
-    max_conductance = 0.5,  # using old series_conductance as max
+    max_conductance = 0.5,
     min_conductance = 0.0,
     growth_factor = calculate_growth_factor(0.5, 0.0, 0.4 / BASE_UPS)
 )
+
+#= ---------- Tanks ---------- =#
 
 const TriGasTank = ThevininTankCompBehav(
     GasTankBehavFrag, 3;
@@ -132,33 +146,40 @@ const PressureFedLiquidTank = PressureFedTankCompBehav(
     NoRotationBehavFrag()
 )
 
-const LargeAdjValve = StandardValveCompBehav(SteppedSwitchBehavFrag, LargeValve;
+#= ---------- Valves ---------- =#
+
+const LargeAdjValve = StandardValveCompBehav(
+    SteppedSwitchBehavFrag, LargeValve;
     max_conductance = 4.0,
     min_conductance = 0.0,
     growth_factor = calculate_growth_factor(4.0, 0.0, 2.0 / BASE_UPS),
     percentage_step_size = 0.05
 )
 
-const TinyAdjValve = StandardValveCompBehav(SteppedSwitchBehavFrag, TinyValve;
+const TinyAdjValve = StandardValveCompBehav(
+    SteppedSwitchBehavFrag, TinyValve;
     max_conductance = 1.0,
     min_conductance = 0.0,
     growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
     percentage_step_size = 0.05
 )
 
-const LargeOnOffValve = StandardValveCompBehav(BoolSwitchBehavFrag, LargeValve;
+const LargeOnOffValve = StandardValveCompBehav(
+    BoolSwitchBehavFrag, LargeValve;
     max_conductance = 4.0,
     min_conductance = 0.0,
     growth_factor = calculate_growth_factor(4.0, 0.0, 2.0 / BASE_UPS)
 )
 
-const TinyOnOffValve = StandardValveCompBehav(BoolSwitchBehavFrag, TinyValve;
+const TinyOnOffValve = StandardValveCompBehav(
+    BoolSwitchBehavFrag, TinyValve;
     max_conductance = 1.0,
     min_conductance = 0.0,
     growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS)
 )
 
-# Pipe-segment behaviours
+#= ---------- Pipes ---------- =#
+
 const ScrapPipe = ScrapPipeBehav()
 
 const BigPipe = BigPipeBehav()
@@ -192,9 +213,10 @@ const component_list::Vector{ComponentBehavior} = ComponentBehavior[
 # Component Procedural Generation Rules
 # ==============================================================
 
-# component roll functions
 import HexFlowProcGen: roll_component
-# Specializations for each component type
+
+#= ---------- Nozzle Rollers ---------- =#
+
 function roll_component(::Val{:TinyNozzle_comp}, point, seed)
     return BasicNozzleCompBehav(
         connected_node = HexFrame.NODE_Q_POS,
@@ -226,10 +248,14 @@ function roll_component(::Val{:SwitchedTinyNozzle_comp}, point, seed)
         connected_node = HexFrame.NODE_Q_POS,
         max_conductance = max_c,
         min_conductance = 0.0,
-        growth_factor = calculate_growth_factor(max_c, 0.0,
-            pick_from_range(6.0, 10.0, point, seed) / BASE_UPS)
+        growth_factor = calculate_growth_factor(
+            max_c, 0.0,
+            pick_from_range(6.0, 10.0, point, seed) / BASE_UPS
+        )
     )
 end
+
+#= ---------- Pump Rollers ---------- =#
 
 function roll_component(::Val{:TurboPump_comp}, point, seed)
     return TurboPumpCompBehav(
@@ -238,7 +264,8 @@ function roll_component(::Val{:TurboPump_comp}, point, seed)
     )
 end
 
-function roll_component(::Val{:ElecTurboPump_comp}, point, seed) # removed from procedural generation, but left in the game for potential future use
+# Retained for possible future procedural generation
+function roll_component(::Val{:ElecTurboPump_comp}, point, seed)
     energy = pick_from_range(200000.0, 500000.0, point, seed)
     max_c = pick_from_range(0.5, 2.0, point, seed)
     return ElectricPumpCompBehav(
@@ -265,6 +292,8 @@ function roll_component(::Val{:ElecTransferPump_comp}, point, seed)
         growth_factor = calculate_growth_factor(max_c, 0.0, 0.4 / BASE_UPS)
     )
 end
+
+#= ---------- Tank Rollers ---------- =#
 
 function roll_component(::Val{:TriGasTank_comp}, point, seed)
     gas_density = HexFluids.lookup_fluid_density(HexFluids.COLD_GAS)::Float64
@@ -384,39 +413,55 @@ function roll_component(::Val{:PressureFedOxidiserTank_full_comp}, point, seed)
     return _roll_pressure_fed_tank(HexFluids.OXIDISER_LIQUID, (0.75, 0.98), point, seed)
 end
 
+#= ---------- Valve Rollers ---------- =#
+
 function roll_component(::Val{:LargeAdjValve_comp}, point, seed)
-    return StandardValveCompBehav(SteppedSwitchBehavFrag, LargeValve;
+    return StandardValveCompBehav(
+        SteppedSwitchBehavFrag, LargeValve;
         max_conductance = 2.0,
-        growth_factor = calculate_growth_factor(2.0, 0.0,
-            pick_from_range(1.0, 1.5, point, seed) / BASE_UPS),
+        growth_factor = calculate_growth_factor(
+            2.0, 0.0,
+            pick_from_range(1.0, 1.5, point, seed) / BASE_UPS
+        ),
         percentage_step_size = 0.05
     )
 end
 
 function roll_component(::Val{:TinyAdjValve_comp}, point, seed)
-    return StandardValveCompBehav(SteppedSwitchBehavFrag, TinyValve;
+    return StandardValveCompBehav(
+        SteppedSwitchBehavFrag, TinyValve;
         max_conductance = 2.0,
-        growth_factor = calculate_growth_factor(2.0, 0.0,
-            pick_from_range(5.0, 7.0, point, seed) / BASE_UPS),
+        growth_factor = calculate_growth_factor(
+            2.0, 0.0,
+            pick_from_range(5.0, 7.0, point, seed) / BASE_UPS
+        ),
         percentage_step_size = 0.05
     )
 end
 
 function roll_component(::Val{:LargeOnOffValve_comp}, point, seed)
-    return StandardValveCompBehav(BoolSwitchBehavFrag, LargeValve;
+    return StandardValveCompBehav(
+        BoolSwitchBehavFrag, LargeValve;
         max_conductance = 2.0,
-        growth_factor = calculate_growth_factor(2.0, 0.0,
-            pick_from_range(1.0, 1.5, point, seed) / BASE_UPS)
+        growth_factor = calculate_growth_factor(
+            2.0, 0.0,
+            pick_from_range(1.0, 1.5, point, seed) / BASE_UPS
+        )
     )
 end
 
 function roll_component(::Val{:TinyOnOffValve_comp}, point, seed)
-    return StandardValveCompBehav(BoolSwitchBehavFrag, TinyValve;
+    return StandardValveCompBehav(
+        BoolSwitchBehavFrag, TinyValve;
         max_conductance = 2.0,
-        growth_factor = calculate_growth_factor(2.0, 0.0,
-            pick_from_range(5.0, 7.0, point, seed) / BASE_UPS)
+        growth_factor = calculate_growth_factor(
+            2.0, 0.0,
+            pick_from_range(5.0, 7.0, point, seed) / BASE_UPS
+        )
     )
 end
+
+#= ---------- Chamber Rollers ---------- =#
 
 function roll_component(::Val{:BasicDecompChamber_comp}, point, seed)
     return DecompChamberCompBehav()
@@ -429,9 +474,10 @@ function roll_component(::Val{:BasicBipropChamber_comp}, point, seed)
     )
 end
 
-# pipe roll functions
+#= ---------- Pipe Rollers ---------- =#
+
 import HexFlowProcGen: roll_pipe
-# Specializations for each pipe type
+
 function roll_pipe(::Val{:ScrapPipe_pipe}, point, seed)
     return ScrapPipeBehav()
 end
@@ -440,7 +486,7 @@ function roll_pipe(::Val{:BigPipe_pipe}, point, seed)
     return BigPipeBehav()
 end
 
-# Ship Component Sets
+#= ---------- Ship Component Sets ---------- =#
 
 const NOZZLE_EDGE_PLACE = HexFlowProcGen.NOZZLE_EDGE_PLACE
 const CLUSTERED_PLACE = HexFlowProcGen.CLUSTERED_PLACE
@@ -505,6 +551,7 @@ standard_pipeoptions::Vector{PipeSpawnOptions} = [
 
 #= ---------- Additional Component Sets ----------- =#
 
+# Cache payloads
 compset_gas_cache = ShipComponentSet(
     "Gas Tank Array",
     [
@@ -536,6 +583,7 @@ compset_oxidiser_cache = ShipComponentSet(
     ]
 )
 
+# Supplemental tanks
 compset_extra_gas_tanks = ShipComponentSet(
     "Extra Gas Tanks",
     [
@@ -564,43 +612,66 @@ compset_extra_oxidiser_tanks = ShipComponentSet(
     ]
 )
 
-compset_scrap_tiny_nozzle = ShipComponentSet("Scrap Tiny Nozzle", [
-    CompSpawnOptions(:TinyNozzle_comp, [(1, 1.0)], NOZZLE_EDGE_PLACE),
-])
-compset_scrap_small_nozzle = ShipComponentSet("Scrap Small Nozzle", [
-    CompSpawnOptions(:SmallNozzle_comp, [(1, 1.0)], NOZZLE_EDGE_PLACE),
-])
-compset_scrap_medium_nozzle = ShipComponentSet("Scrap Medium Nozzle", [
-    CompSpawnOptions(:MediumNozzle_comp, [(1, 1.0)], NOZZLE_EDGE_PLACE),
-])
-compset_scrap_switched_nozzle = ShipComponentSet("Scrap Switched Nozzle", [
-    CompSpawnOptions(:SwitchedTinyNozzle_comp, [(1, 1.0)], NOZZLE_EDGE_PLACE),
-])
-compset_scrap_turbo_pump = ShipComponentSet("Scrap Turbo Pump", [
-    CompSpawnOptions(:TurboPump_comp, [(1, 1.0)], RANDOM_PLACE),
-])
-compset_scrap_large_adj_valve = ShipComponentSet("Scrap Large Adj Valve", [
-    CompSpawnOptions(:LargeAdjValve_comp, [(1, 1.0)], RANDOM_PLACE),
-])
-compset_scrap_tiny_adj_valve = ShipComponentSet("Scrap Tiny Adj Valve", [
-    CompSpawnOptions(:TinyAdjValve_comp, [(1, 1.0)], RANDOM_PLACE),
-])
-compset_scrap_large_onoff_valve = ShipComponentSet("Scrap Large OnOff Valve", [
-    CompSpawnOptions(:LargeOnOffValve_comp, [(1, 1.0)], RANDOM_PLACE),
-])
-compset_scrap_tiny_onoff_valve = ShipComponentSet("Scrap Tiny OnOff Valve", [
-    CompSpawnOptions(:TinyOnOffValve_comp, [(1, 1.0)], RANDOM_PLACE),
-])
-compset_scrap_decomp = ShipComponentSet("Scrap Decomp Chamber", [
-    CompSpawnOptions(:BasicDecompChamber_comp, [(1, 1.0)], RANDOM_PLACE),
-])
-compset_scrap_biprop = ShipComponentSet("Scrap Biprop Chamber", [
-    CompSpawnOptions(:BasicBipropChamber_comp, [(1, 1.0)], RANDOM_PLACE),
-])
+# Individual scrap components
+compset_scrap_tiny_nozzle = ShipComponentSet(
+    "Scrap Tiny Nozzle", [
+        CompSpawnOptions(:TinyNozzle_comp, [(1, 1.0)], NOZZLE_EDGE_PLACE),
+    ]
+)
+compset_scrap_small_nozzle = ShipComponentSet(
+    "Scrap Small Nozzle", [
+        CompSpawnOptions(:SmallNozzle_comp, [(1, 1.0)], NOZZLE_EDGE_PLACE),
+    ]
+)
+compset_scrap_medium_nozzle = ShipComponentSet(
+    "Scrap Medium Nozzle", [
+        CompSpawnOptions(:MediumNozzle_comp, [(1, 1.0)], NOZZLE_EDGE_PLACE),
+    ]
+)
+compset_scrap_switched_nozzle = ShipComponentSet(
+    "Scrap Switched Nozzle", [
+        CompSpawnOptions(:SwitchedTinyNozzle_comp, [(1, 1.0)], NOZZLE_EDGE_PLACE),
+    ]
+)
+compset_scrap_turbo_pump = ShipComponentSet(
+    "Scrap Turbo Pump", [
+        CompSpawnOptions(:TurboPump_comp, [(1, 1.0)], RANDOM_PLACE),
+    ]
+)
+compset_scrap_large_adj_valve = ShipComponentSet(
+    "Scrap Large Adj Valve", [
+        CompSpawnOptions(:LargeAdjValve_comp, [(1, 1.0)], RANDOM_PLACE),
+    ]
+)
+compset_scrap_tiny_adj_valve = ShipComponentSet(
+    "Scrap Tiny Adj Valve", [
+        CompSpawnOptions(:TinyAdjValve_comp, [(1, 1.0)], RANDOM_PLACE),
+    ]
+)
+compset_scrap_large_onoff_valve = ShipComponentSet(
+    "Scrap Large OnOff Valve", [
+        CompSpawnOptions(:LargeOnOffValve_comp, [(1, 1.0)], RANDOM_PLACE),
+    ]
+)
+compset_scrap_tiny_onoff_valve = ShipComponentSet(
+    "Scrap Tiny OnOff Valve", [
+        CompSpawnOptions(:TinyOnOffValve_comp, [(1, 1.0)], RANDOM_PLACE),
+    ]
+)
+compset_scrap_decomp = ShipComponentSet(
+    "Scrap Decomp Chamber", [
+        CompSpawnOptions(:BasicDecompChamber_comp, [(1, 1.0)], RANDOM_PLACE),
+    ]
+)
+compset_scrap_biprop = ShipComponentSet(
+    "Scrap Biprop Chamber", [
+        CompSpawnOptions(:BasicBipropChamber_comp, [(1, 1.0)], RANDOM_PLACE),
+    ]
+)
 
 #= ---------- Encounter Class Configs ----------- =#
 
-# Component pools by fuel type
+# Component pools by encounter and fuel type
 _ship_coldgas_pool = WeightedComponentSet[
     WeightedComponentSet(shipset_simple_cold_gas, NoScaling(1.0)),
     WeightedComponentSet(compset_extra_gas_tanks, GatedLinearScaling(0.5, 0.0, 2.0)),
@@ -647,22 +718,24 @@ _scrap_pool = WeightedComponentSet[
     WeightedComponentSet(compset_scrap_biprop, GatedLinearScaling(0.4, 0.0, 1.0)),
 ]
 
-# Pipe options per class
+# Fuel-cache pipe options
 fuel_cache_pipeoptions = PipeSpawnOptions[
     PipeSpawnOptions(:ScrapPipe_pipe, HexFlowProcGen.RANDOM_PIPES, 0.02),
     PipeSpawnOptions(:ScrapPipe_pipe, HexFlowProcGen.ONE_CONNECT_PIPES, 0.02),
 ]
 
-# Per-class encounter generation configs
+# Encounter class configurations
 ship_class_config = EncounterClassConfig(
     NoScaling(3.0),
     HullSizeConfig(LinearScaling(1.0, 0.6), LinearScaling(2.0, 8.0)),
     LinearScaling(1.0, 2.0),
-    FluidTaggedEncounterComponents(Dict{FluidType, FuelTagConfig}(
-        HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), _ship_coldgas_pool),
-        HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 3.0), _ship_monoprop_pool),
-        HexFluids.FUEL_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.6, 5.0), _ship_biprop_pool),
-    )),
+    FluidTaggedEncounterComponents(
+        Dict{FluidType, FuelTagConfig}(
+            HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), _ship_coldgas_pool),
+            HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 3.0), _ship_monoprop_pool),
+            HexFluids.FUEL_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.6, 5.0), _ship_biprop_pool),
+        )
+    ),
     standard_pipeoptions,
     NoScaling(1.0),
 )
@@ -671,12 +744,14 @@ fuel_cache_class_config = EncounterClassConfig(
     NoScaling(3.0),
     HullSizeConfig(LinearScaling(1.0, 0.8), LinearScaling(8.0, 10.0)),
     LinearScaling(2.0, 3.0),
-    FluidTaggedEncounterComponents(Dict{FluidType, FuelTagConfig}(
-        HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), _cache_coldgas_pool),
-        HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 4.0), _cache_monoprop_pool),
-        HexFluids.FUEL_LIQUID => FuelTagConfig(GatedLinearScaling(0.3, 0.6, 5.5), _cache_fuel_pool),
-        HexFluids.OXIDISER_LIQUID => FuelTagConfig(GatedLinearScaling(0.3, 0.6, 5.5), _cache_oxidiser_pool),
-    )),
+    FluidTaggedEncounterComponents(
+        Dict{FluidType, FuelTagConfig}(
+            HexFluids.COLD_GAS => FuelTagConfig(NoScaling(1.0), _cache_coldgas_pool),
+            HexFluids.MONOPROP_LIQUID => FuelTagConfig(GatedLinearScaling(0.25, 0.4, 4.0), _cache_monoprop_pool),
+            HexFluids.FUEL_LIQUID => FuelTagConfig(GatedLinearScaling(0.3, 0.6, 5.5), _cache_fuel_pool),
+            HexFluids.OXIDISER_LIQUID => FuelTagConfig(GatedLinearScaling(0.3, 0.6, 5.5), _cache_oxidiser_pool),
+        )
+    ),
     fuel_cache_pipeoptions,
     LinearScaling(0.8, 0.35),
 )
@@ -718,14 +793,14 @@ function starter_ship_is_playable(blueprint::ShipBlueprint)::Bool
     for (_, placed_component) in blueprint.components
         component = placed_component.component
 
-        # Check for thruster components (nozzles)
+        # Thruster components
         if component isa BasicNozzleCompBehav || component isa SwitchedNozzleCompBehav || component isa DecompChamberCompBehav
             has_thruster = true
         end
 
-        # Check for tank components with COLD_GAS
+        # Cold-gas tanks
         if (component isa ThevininTankCompBehav || component isa PressureFedTankCompBehav) &&
-           get_component_wet_mass(component; fluid = HexFluids.COLD_GAS) > 0.0
+                get_component_wet_mass(component; fluid = HexFluids.COLD_GAS) > 0.0
             has_tank = true
         end
 
@@ -742,9 +817,11 @@ function generate_starter_ship(seed::UInt32)::ShipBlueprint
     current_seed = seed
 
     while true
+        # Build the hull
         temp_tiles = Set{TileCoord}()
         stacked_random_tile_walk!(temp_tiles, TileCoord(0, 0), 2, 6, current_seed)
 
+        # Place components and pipes
         temp_gm = GameMap()
         set_surface_tile!(temp_gm, temp_tiles; ship_name = :primary)
         success, message = place_shipset!(temp_gm, shipset_starter, current_seed)
@@ -754,6 +831,7 @@ function generate_starter_ship(seed::UInt32)::ShipBlueprint
 
         place_pipeset!(temp_gm, standard_pipeoptions, current_seed)
 
+        # Validate the generated blueprint
         blueprint = get_ship_blueprint(temp_gm, :primary)
 
         if starter_ship_is_playable(blueprint)
@@ -762,9 +840,5 @@ function generate_starter_ship(seed::UInt32)::ShipBlueprint
 
         current_seed = get_noise((STARTER_SHIP_REROLL_SALT,), current_seed)
     end
+    return
 end
-
-
-
-
-

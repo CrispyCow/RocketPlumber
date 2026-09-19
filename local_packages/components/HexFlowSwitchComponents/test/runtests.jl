@@ -1,3 +1,8 @@
+#=
+Scope: Tests for switch and valve component behaviours
+Formatter: Runic
+=#
+
 using Test
 using HexFrame
 using HexElements
@@ -188,7 +193,7 @@ end
         for c in [0.0, 0.3, 1.0, 1.7, 2.0]
             p = HexFlowSwitchComponents.conductance_to_exp_percentage(c, 0.0, 2.0, gf)
             c_back = HexFlowSwitchComponents.exp_percentage_to_conductance(p, 0.0, 2.0, gf)
-            @test c_back ≈ c atol=1e-10
+            @test c_back ≈ c atol = 1.0e-10
         end
     end
 
@@ -358,7 +363,8 @@ end
 # ===============================================================
 
 @testset "StandardValveCompBehav{SteppedSwitchBehavFrag, LargeValve}" begin
-    valve = StandardValveCompBehav(SteppedSwitchBehavFrag, LargeValve;
+    valve = StandardValveCompBehav(
+        SteppedSwitchBehavFrag, LargeValve;
         max_conductance = 2.0,
         growth_factor = calculate_growth_factor(2.0, 0.0, 1.25 / 60.0),
         percentage_step_size = 0.05
@@ -400,7 +406,8 @@ end
     end
 
     @testset "update_flowbehav! convergence" begin
-        v = StandardValveCompBehav(SteppedSwitchBehavFrag, LargeValve;
+        v = StandardValveCompBehav(
+            SteppedSwitchBehavFrag, LargeValve;
             max_conductance = 2.0,
             growth_factor = calculate_growth_factor(2.0, 0.0, 1.25 / 60.0),
             percentage_step_size = 0.05,
@@ -434,7 +441,8 @@ end
 # ===============================================================
 
 @testset "StandardValveCompBehav{SteppedSwitchBehavFrag, TinyValve}" begin
-    valve = StandardValveCompBehav(SteppedSwitchBehavFrag, TinyValve;
+    valve = StandardValveCompBehav(
+        SteppedSwitchBehavFrag, TinyValve;
         max_conductance = 2.0,
         growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / 60.0),
         percentage_step_size = 0.05
@@ -472,7 +480,8 @@ end
 # ===============================================================
 
 @testset "StandardValveCompBehav{BoolSwitchBehavFrag, LargeValve}" begin
-    valve = StandardValveCompBehav(BoolSwitchBehavFrag, LargeValve;
+    valve = StandardValveCompBehav(
+        BoolSwitchBehavFrag, LargeValve;
         max_conductance = 2.0,
         growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / 60.0)
     )
@@ -535,7 +544,8 @@ end
 # ===============================================================
 
 @testset "StandardValveCompBehav{BoolSwitchBehavFrag, TinyValve}" begin
-    valve = StandardValveCompBehav(BoolSwitchBehavFrag, TinyValve;
+    valve = StandardValveCompBehav(
+        BoolSwitchBehavFrag, TinyValve;
         max_conductance = 2.0,
         growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / 60.0)
     )
@@ -580,9 +590,9 @@ end
         update_flowbehav!(sw)
         ticks += 1
     end
-    @test sw.state.current_conductance ≈ 2.0 atol=0.02
+    @test sw.state.current_conductance ≈ 2.0 atol = 0.02
     @test ticks < 500  # Should converge
 
     # Edge: very small change_rate → error
-    @test_throws ErrorException calculate_growth_factor(2.0, 0.0, 1e-10)
+    @test_throws ErrorException calculate_growth_factor(2.0, 0.0, 1.0e-10)
 end

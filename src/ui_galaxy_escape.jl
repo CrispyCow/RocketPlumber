@@ -1,4 +1,13 @@
-#= ---------- Galaxy Escape Victory Screen ----------- =#
+#=
+Scope: Galaxy escape victory-screen helpers and the final flight report UI
+Formatter: Runic
+=#
+
+# ===============================================================
+# Galaxy Escape Victory Screen
+# ===============================================================
+
+#= ---------- Visual Constants ---------- =#
 
 const GALAXY_ESCAPE_VICTORY_BACKGROUND_TOP = ImVec4(0.025, 0.03, 0.075, 1.0)
 const GALAXY_ESCAPE_VICTORY_BACKGROUND_BOTTOM = ImVec4(0.008, 0.01, 0.025, 1.0)
@@ -6,15 +15,17 @@ const GALAXY_ESCAPE_VICTORY_PANEL_BACKGROUND = ImVec4(0.055, 0.06, 0.105, 0.98)
 const GALAXY_ESCAPE_VICTORY_SECTION_BACKGROUND = ImVec4(0.035, 0.04, 0.075, 0.95)
 const GALAXY_ESCAPE_VICTORY_BORDER = ImVec4(0.52, 0.39, 0.12, 0.9)
 const GALAXY_ESCAPE_VICTORY_ACCENT = ImVec4(1.0, 0.76, 0.18, 1.0)
-const GALAXY_ESCAPE_VICTORY_VALUE = ImVec4(0.90, 0.94, 1.0, 1.0)
-const GALAXY_ESCAPE_VICTORY_MUTED = ImVec4(0.67, 0.71, 0.80, 1.0)
+const GALAXY_ESCAPE_VICTORY_VALUE = ImVec4(0.9, 0.94, 1.0, 1.0)
+const GALAXY_ESCAPE_VICTORY_MUTED = ImVec4(0.67, 0.71, 0.8, 1.0)
 const GALAXY_ESCAPE_VICTORY_STAR_EMPTY = ImVec4(0.11, 0.12, 0.17, 1.0)
-const GALAXY_ESCAPE_VICTORY_STAR_EMPTY_OUTLINE = ImVec4(0.48, 0.43, 0.30, 1.0)
-const GALAXY_ESCAPE_VICTORY_STAR_GLOW = ImVec4(1.0, 0.70, 0.08, 0.13)
+const GALAXY_ESCAPE_VICTORY_STAR_EMPTY_OUTLINE = ImVec4(0.48, 0.43, 0.3, 1.0)
+const GALAXY_ESCAPE_VICTORY_STAR_GLOW = ImVec4(1.0, 0.7, 0.08, 0.13)
 
 const GALAXY_ESCAPE_VICTORY_FLAVOUR_TEXT =
     "You have broken free of the galactic plane. With the final burn complete, your ship is now en route to its " *
     "destination beyond the galaxy."
+
+#= ---------- Text Formatting ---------- =#
 
 "Return an integer string grouped with commas for result-screen readability."
 function _group_victory_integer_text(raw::AbstractString)::String
@@ -60,6 +71,8 @@ function _render_victory_centred_text(text::AbstractString, font_size::Real, col
     CImGui.PopFont()
     return nothing
 end
+
+#= ---------- Star Rendering ---------- =#
 
 "Append the ten alternating-radius points of a five-pointed star to a draw-list path."
 function _build_victory_star_path!(drawlist, centre::ImVec2, outer_radius::Float32)
@@ -116,6 +129,8 @@ function _render_victory_star_row!(attained_tier::Int)
     return nothing
 end
 
+#= ---------- Statistics Rendering ---------- =#
+
 "Render one right-aligned label/value row in the active statistics table."
 function _render_victory_statistic_row(label::AbstractString, value::AbstractString; indent::Float32 = 0.0f0)
     CImGui.TableNextRow()
@@ -149,38 +164,47 @@ end
 
 "Render every frozen playthrough statistic included in the final flight report."
 function _render_galaxy_escape_victory_statistics!(gamemap::GameMap)
-    _render_victory_statistics_group("TIME", (
-        ("Galactic time", "$(_format_victory_number(get_time_years(gamemap); decimal_places = 2)) years", 0.0f0),
-        ("Play time", _format_victory_duration(get_recorded_play_time_seconds(gamemap)), 0.0f0),
-        ("Detailed simulation time", _format_victory_duration(get_simulated_seconds(gamemap)), 0.0f0),
-        ("Simulation ticks", _group_victory_integer_text(get_simulated_ticks(gamemap)), 0.0f0),
-    ))
+    _render_victory_statistics_group(
+        "TIME", (
+            ("Galactic time", "$(_format_victory_number(get_time_years(gamemap); decimal_places = 2)) years", 0.0f0),
+            ("Play time", _format_victory_duration(get_recorded_play_time_seconds(gamemap)), 0.0f0),
+            ("Detailed simulation time", _format_victory_duration(get_simulated_seconds(gamemap)), 0.0f0),
+            ("Simulation ticks", _group_victory_integer_text(get_simulated_ticks(gamemap)), 0.0f0),
+        )
+    )
 
     CImGui.Spacing()
-    _render_victory_statistics_group("FLIGHT", (
-        ("Final speed", _format_victory_number(norm(get_velocity(gamemap))), 0.0f0),
-        ("Total delta-V produced", _format_victory_number(get_total_delta_v(gamemap)), 0.0f0),
-        ("Peak combined thrust", _format_victory_number(get_peak_thrust(gamemap)), 0.0f0),
-        ("Peak estimated remaining delta-V", _format_victory_number(get_peak_estimated_delta_v(gamemap)), 0.0f0),
-    ))
+    _render_victory_statistics_group(
+        "FLIGHT", (
+            ("Final speed", _format_victory_number(norm(get_velocity(gamemap))), 0.0f0),
+            ("Total delta-V produced", _format_victory_number(get_total_delta_v(gamemap)), 0.0f0),
+            ("Peak combined thrust", _format_victory_number(get_peak_thrust(gamemap)), 0.0f0),
+            ("Peak estimated remaining delta-V", _format_victory_number(get_peak_estimated_delta_v(gamemap)), 0.0f0),
+        )
+    )
 
     encounter_rows = Tuple{String, String, Float32}[
         ("Completed encounters", _group_victory_integer_text(get_total_encounter_count(gamemap)), 0.0f0),
     ]
     for encounter_class in instances(EncounterClass)
-        push!(encounter_rows, (
-            encounter_class_label(encounter_class),
-            _group_victory_integer_text(get_encounter_count(gamemap, encounter_class)),
-            16.0f0,
-        ))
+        push!(
+            encounter_rows, (
+                encounter_class_label(encounter_class),
+                _group_victory_integer_text(get_encounter_count(gamemap, encounter_class)),
+                16.0f0,
+            )
+        )
     end
     CImGui.Spacing()
     _render_victory_statistics_group("ENCOUNTERS", encounter_rows)
     return nothing
 end
 
+#= ---------- Final Flight Report ---------- =#
+
 "Render the exclusive final flight report shown after a galaxy escape is completed."
 function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputState, timelapse_recorder::TimelapseRecorder, window::GLFW.Window)
+    # Full-screen backdrop
     winsize = to_float(GLFW.GetWindowSize(window))
     CImGui.AddRectFilledMultiColor(
         CImGui.GetBackgroundDrawList(),
@@ -202,6 +226,7 @@ function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputSta
     CImGui.PushStyleColor(CImGui.ImGuiCol_WindowBg, ImVec4(0.0, 0.0, 0.0, 0.0))
     CImGui.Begin("##galaxy_escape_victory", C_NULL, flags)
 
+    # Main report panel
     panel_width = clamp(winsize.width - 32.0, 1.0, 720.0)
     panel_height = clamp(winsize.height - 32.0, 1.0, 900.0)
     action_button_height = 45.0
@@ -267,6 +292,7 @@ function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputSta
     CImGui.PopStyleColor(2)
     CImGui.PopStyleVar(3)
 
+    # Action footer
     footer_pos = ImVec2(panel_pos.x, panel_pos.y + report_height + footer_gap)
     CImGui.SetCursorPos(footer_pos)
     CImGui.PushStyleVar(CImGui.ImGuiStyleVar_WindowPadding, ImVec2(24.0, 8.0))
@@ -295,7 +321,7 @@ function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputSta
         inputstate.exit_reason = EXIT_QUIT
         GLFW.SetWindowShouldClose(window, true)
     end
-    
+
     CImGui.EndChild()
     CImGui.PopStyleColor(2)
     CImGui.PopStyleVar(3)

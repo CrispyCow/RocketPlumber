@@ -1,7 +1,10 @@
-# src/ui_learning.jl
+#=
+Scope: CImGui learning helper, tutorial banner, and detail windows
+Formatter: Runic
+=#
 
 # ===============================================================
-# Learning System UI — Learning Helper and Tutorial Detail
+# Learning System UI: Learning Helper and Tutorial Detail
 # ===============================================================
 
 const LEARNING_HELPER_WIDTH = 250.0
@@ -16,6 +19,7 @@ get_learning_right_gutter(inputstate::InputState)::Float32 = inputstate.spacemap
 "Determine whether the Learning Helper list itself should be shown."
 _should_render_learning_helper(state::LearningSystemState)::Bool = state.learning_helper_visible && !is_sandbox_learning(state)
 
+"Calculate the default Learning Helper position."
 function _get_default_helper_pos(inputstate::InputState, win_float::NamedTuple)::NTuple{2, Float32}
     pos_x = Float32(win_float.width) - get_learning_right_gutter(inputstate) - Float32(LEARNING_HELPER_WIDTH)
     return (pos_x, 0.0f0)
@@ -31,7 +35,7 @@ function _get_entries_for_display(state::LearningSystemState)
 
     groups = [
         (label = get_progress_display_text(target_status), entries = filter(item -> item.status == target_status, entry_items))
-        for target_status in (TUTORIAL_IN_PROGRESS, TUTORIAL_WAITING, TUTORIAL_COMPLETED)
+            for target_status in (TUTORIAL_IN_PROGRESS, TUTORIAL_WAITING, TUTORIAL_COMPLETED)
     ]
     return filter(group -> !isempty(group.entries), groups)
 end
@@ -100,7 +104,7 @@ function ui_learning_system_render!(
         inputstate::InputState,
         winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}}
     )
-    # Force active hint to match sandbox tutorial when in sandbox mode
+    # Keep the sandbox tutorial selected
     if state.map_learning isa SandboxLearningState
         state.active_hint_id = state.map_learning.tutorial_id
     end
@@ -213,6 +217,7 @@ end
 # Tutorial Detail Window
 # ===============================================================
 
+"Clamp the tutorial detail pane position to the visible window."
 function _clamp_learning_hint_pane_pos(pos::NTuple{2, Float32}, win_float::NamedTuple)::NTuple{2, Float32}
     pane_min_height = min(LEARNING_HINT_PANE_MIN_HEIGHT, Float64(win_float.height))
     max_x = Float32(max(0.0, win_float.width - LEARNING_HINT_PANE_WIDTH))
@@ -220,6 +225,7 @@ function _clamp_learning_hint_pane_pos(pos::NTuple{2, Float32}, win_float::Named
     return (clamp(pos[1], 0.0f0, max_x), clamp(pos[2], 0.0f0, max_y))
 end
 
+"Calculate the tutorial detail pane position relative to the Learning Helper."
 function _get_learning_hint_pane_pos(state::LearningSystemState, inputstate::InputState, win_float::NamedTuple)::NTuple{2, Float32}
     preferred_pos = if !_should_render_learning_helper(state)
         pos_x = Float32(win_float.width) - get_learning_right_gutter(inputstate) - Float32(LEARNING_HINT_PANE_WIDTH)
@@ -278,6 +284,7 @@ function _render_learning_hint_pane!(state::LearningSystemState, inputstate::Inp
     return nothing
 end
 
+"Render the preview for a sandbox tutorial before it is launched."
 function _render_sandbox_preview_window!(state::LearningSystemState, inputstate::InputState, entry::LearningEntry)
     definition = entry.definition
     definition isa SandboxTutorialDef || return nothing
@@ -297,7 +304,7 @@ function _render_sandbox_preview_window!(state::LearningSystemState, inputstate:
     if CImGui.IsItemHovered()
         CImGui.SetTooltip("Launch the sandbox tutorial to step through the guided map sequence. Your explorer map will resume afterwards!")
     end
-    
+
     CImGui.SameLine()
 
     if CImGui.Button("Skip", (button_width, 28.0))
@@ -314,7 +321,7 @@ function _render_sandbox_preview_window!(state::LearningSystemState, inputstate:
     return nothing
 end
 
-"Render the shared step-by-step tutorial window contents."
+"Render the shared navigation and content for a tutorial's steps."
 function render_tutorial_steps_window!(
         entry_id::Symbol,
         steps::Vector{TutorialStep},
@@ -420,6 +427,7 @@ function render_tutorial_steps_window!(
     return nothing
 end
 
+"Render the in-game tutorial steps."
 function _render_ingame_tutorial_window!(
         state::LearningSystemState,
         entry::LearningEntry,
@@ -440,6 +448,7 @@ function _render_ingame_tutorial_window!(
     return nothing
 end
 
+"Render the sandbox tutorial steps."
 function _render_sandbox_tutorial_window!(
         state::LearningSystemState,
         inputstate::InputState,

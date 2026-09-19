@@ -1,43 +1,51 @@
+#=
+Scope: Nozzle, chamber, and exhaust-particle behaviours for propulsion components
+Formatter: Runic
+=#
 """
-Nozzle component implementations for thrust generation.
+Nozzle and chamber component behaviours for thrust-generating propulsion systems.
 
-This module provides concrete implementations of ComponentBehavior for nozzles:
-- BasicNozzleCompBehav: Simple nozzle with thrust generation
-- SwitchedNozzleCompBehav: Nozzle with adjustable flow control
-- DecompChamberCompBehav: Decompression chamber converting liquid to gas with animated effects
+Exported concrete `ComponentBehavior` implementations:
 
-All components follow the ComponentBehavior interface defined in HexComponentsAPI.
+- `BasicNozzleCompBehav`: Fixed-sprite nozzle with thermal protection
+- `SwitchedNozzleCompBehav`: Nozzle with an inlet switch for thrust control
+- `DecompChamberCompBehav`: Monopropellant decomposition chamber
+- `BipropChamberCompBehav`: Bipropellant combustion chamber
 """
 module HexFlowNozzleComponents
 
-using Accessors
-using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowEngine, FlowMap, RenderEngine, HexFlowRendering
-using StaticArrays
-using HexFlowBasicComponents
-using HexFlowSwitchComponents
+using Accessors, StaticArrays
+using FlowEngine, FlowMap, HexElements, HexFluids, HexFrame
+using HexComponentsAPI, HexFlowBasicComponents, HexFlowSwitchComponents
+using HexFlowRendering, RenderEngine
 
-
-# ComponentBehavior Mandatories
+# `ComponentBehavior` mandatory methods
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
-# ComponentBehavior Optional
-import HexComponentsAPI: on_click!, get_thrust, get_component_temperature, update_flowbehav!, render_map_elem!, placement_valid, collect_effect_particles!, get_actions, do_action!, produce_rel_fluid_declarations, map_mirroring
-import HexComponentsAPI: ReactivationProbe, ReactivationProbeOutcome, get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe!
-# Behavior Fragment Dependencies
-import HexFlowBasicComponents: deactivate!, reactivate!, is_inactive, damage!, undamage!, is_damaged, get_overheat_percentage, get_overheat_tint, update_overheat_state!
-import HexFlowSwitchComponents: get_switch_percentage
 
-# Behavior Fragment Exports
+# `ComponentBehavior` optional methods
+import HexComponentsAPI: on_click!, get_thrust, get_component_temperature, update_flowbehav!, render_map_elem!
+import HexComponentsAPI: placement_valid, collect_effect_particles!, get_actions, do_action!
+import HexComponentsAPI: produce_rel_fluid_declarations, map_mirroring
+
+# Reactivation probe interface
+import HexComponentsAPI: get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe!
+
+# Behaviour fragment interfaces
+import HexFlowBasicComponents: deactivate!, reactivate!, is_inactive, damage!, undamage!, is_damaged
+import HexFlowBasicComponents: get_overheat_percentage, get_overheat_tint
+
+# Behaviour Fragment Exports
 export NozzleBehavFrag
-# Concrete Component Behavior Exports
+# Concrete Component Behaviour Exports
 export BasicNozzleCompBehav, SwitchedNozzleCompBehav, DecompChamberCompBehav, BipropChamberCompBehav
 
 # ===============================================================
-# Behavior Fragments
+# Behaviour Fragments
 # ===============================================================
 
 #= ---------- NozzleBehavFrag ----------- =#
 
-"Behavior fragment for nozzle components providing thrust generation and fluid exhaust"
+"Nozzle fragment handling thrust, auto-deactivation, and overheat state"
 struct NozzleBehavFrag
     connected_node::NodePos
     throat_area::Float64
@@ -45,8 +53,9 @@ struct NozzleBehavFrag
     overheat::OverheatLimitBehavFrag
 end
 
+# Nozzle thermal and probe tuning
 const nozzle_element_index::Int = 1 # Nozzle resistor is always at index 1
-const probe_tol = 1e-9 # Tolerance for probe current acceptance and deactivation detection
+const probe_tol = 1.0e-9 # Tolerance for probe current acceptance and deactivation detection
 const DEFAULT_NOZZLE_LIMIT_TEMPERATURE_K = 3000.0
 const SWITCHED_NOZZLE_LIMIT_TEMPERATURE_K = 400.0
 
@@ -54,6 +63,10 @@ default_nozzle_relative_scale(throat_area::Real)::Float64 = Float64(throat_area)
 default_nozzle_heat_loss_factor(throat_area::Real)::Float64 = 5.0 * default_nozzle_relative_scale(throat_area)
 default_nozzle_thermal_mass(throat_area::Real)::Float64 = 2.0 * default_nozzle_relative_scale(throat_area)^(3 / 2)
 
+"""
+Build the default nozzle overheat fragment from throat area, with optional
+thermal-model overrides for concrete nozzle behaviours.
+"""
 function default_nozzle_overheat(
         throat_area::Real;
         limit_temperature_k::Real = DEFAULT_NOZZLE_LIMIT_TEMPERATURE_K,
@@ -67,17 +80,14 @@ function default_nozzle_overheat(
     return OverheatLimitBehavFrag(limit_temperature_k, thermal_mass_f, heat_loss_factor_f; temperature = temperature, damage = damage)
 end
 
-"Convenience constructor: node + area + deactivation + overheat (full form used by set_tunables)"
 function NozzleBehavFrag(connected_node::NodePos, throat_area::Real, deactivation::AutoDeactivationBehavFrag, overheat::OverheatLimitBehavFrag)
     return NozzleBehavFrag(connected_node, Float64(throat_area), deactivation, overheat)
 end
 
-"Convenience constructor: node + area + overheat (auto-deactivation state initialised fresh)"
 function NozzleBehavFrag(connected_node::NodePos, throat_area::Real, overheat::OverheatLimitBehavFrag)
     return NozzleBehavFrag(connected_node, Float64(throat_area), AutoDeactivationBehavFrag(), overheat)
 end
 
-"Convenience constructor: node + area only (auto-deactivation + default overheat parameters)"
 function NozzleBehavFrag(connected_node::NodePos, throat_area::Real)
     throat_area_f = Float64(throat_area)
     return NozzleBehavFrag(connected_node, throat_area_f, AutoDeactivationBehavFrag(), default_nozzle_overheat(throat_area_f))
@@ -126,39 +136,41 @@ function set_tunables(nozzle::NozzleBehavFrag, tunables::NTuple{4, T})::NozzleBe
     )
 end
 
+"""
+Resolve nozzle thrust from solved inlet pressure, flow, and fluid properties.
+
+Nozzles always thrust along local `Q_POS`; component rotation maps that local
+direction into world space.
+"""
 function get_thrust(nozzle::NozzleBehavFrag; tile::TileCoord, rotation::HexAxis, mna_state::MNA_State, derivedmapstate::DerivedMapState, kwargs...)
     if is_inactive(nozzle) || is_damaged(nozzle)
         return SVector{2, Float64}(0.0, 0.0)
     end
 
-    # Get nozzle state
+    # Solve the inlet state
     nozzle_throat_area = nozzle.throat_area
     nozzle_input_node = map_element(nozzle.connected_node, tile, rotation)
     nozzle_input_pressure = get(mna_state.node_voltages, nozzle_input_node, 0.0)
     nozzle_conductance = first(produce_rel_elements(nozzle)).value
     nozzle_flow = nozzle_input_pressure * nozzle_conductance
 
-    # Look up the fluid at the nozzle's input node
+    # Look up the inlet fluid and thermal state
     fluid = get(derivedmapstate.nodeactualfluids, nozzle_input_node, nothing)
-    density = fluid !== nothing ? lookup_fluid_density(fluid) : nothing
+    density = !isnothing(fluid) ? lookup_fluid_density(fluid) : nothing
     fluid_temperature_k = get(derivedmapstate.node_temperatures, nozzle_input_node, THERMAL_AMBIENT_TEMPERATURE_K)
-    exhaust_velocity = fluid !== nothing ? lookup_fluid_exhaust_velocity(fluid, fluid_temperature_k) : nothing
+    exhaust_velocity = !isnothing(fluid) ? lookup_fluid_exhaust_velocity(fluid, fluid_temperature_k) : nothing
 
-    # If density or exhaust velocity is unknown, there's either no fluid connected or a new
-    # fluid type was added without defining its physical properties
+    # Reject missing fluid properties
     if isnothing(density) || isnothing(exhaust_velocity)
-        # If there's significant flow but no fluid properties, something is wrong
-        if abs(nozzle_flow) > 1e-6
+        if abs(nozzle_flow) > 1.0e-6
             error("Nozzle at tile $tile has significant flow ($nozzle_flow) but fluid properties could not be found for fluid '$fluid'. Ensure lookup_fluid_density and lookup_fluid_exhaust_velocity are defined for this fluid.")
         end
         return SVector{2, Float64}(0.0, 0.0)
     end
 
-    # Thrust components: momentum thrust = mass flow rate × exhaust velocity
+    # Combine the pressure and momentum contributions
     momentum_component = density * nozzle_flow * exhaust_velocity
-    # Pressure thrust = nozzle throat area × pressure at nozzle input
     pressure_component = nozzle_throat_area * nozzle_input_pressure
-    # Total thrust magnitude is the sum of the momentum and pressure components
     thrust_magnitude = momentum_component + pressure_component
 
     # Calculate thrust direction based on component rotation.
@@ -167,10 +179,10 @@ function get_thrust(nozzle::NozzleBehavFrag; tile::TileCoord, rotation::HexAxis,
     # component definitions where all nozzles have connected_node = NODE_Q_POS (or equivalent)
     # and works correctly for switched nozzles that use NODE_INTERNAL_1.
     rotation_matrix = hex_rotmats[rotation]
-    base_vector = SVector{2, Float64}(1.0, 0.0)  # Unit vector in Q_POS direction (right)
+    base_vector = SVector{2, Float64}(1.0, 0.0)
     direction_vector = rotation_matrix * base_vector
 
-    return thrust_magnitude * direction_vector # Scale by magnitude and return thrust vector
+    return thrust_magnitude * direction_vector
 end
 
 get_actions(nozzle::NozzleBehavFrag; kwargs...) = get_actions(nozzle.overheat; kwargs...)
@@ -216,7 +228,6 @@ function classify_reactivation_probe(nozzle::NozzleBehavFrag; tile::TileCoord, r
     return HexComponentsAPI.PROBE_NEUTRAL
 end
 
-"Reactivate the nozzle after a useful speculative probe result." 
 function commit_reactivation_probe!(nozzle::NozzleBehavFrag; kwargs...)
     reactivate!(nozzle)
     return nothing
@@ -294,7 +305,7 @@ function collect_effect_particles!(
     # Particle lifetime
     particle_lifetime = Int(2 * BASE_UPS)  # ticks (2 seconds at BASE_UPS)
 
-    # Returns a smooth curve for x ≥ 0 that rises toward 1.0 and reaches 90% at x90
+    # Returns a smooth curve for x >= 0 that rises towards 1.0 and reaches 90% at x90.
     exp_sat(x::Real, x90_sat::Real)::Float64 = 1 - exp(-log(10) * x / x90_sat)
 
     # Get nozzle flow state
@@ -367,12 +378,12 @@ function collect_effect_particles!(
 end
 
 # ===============================================================
-# Concrete Component Behaviors
+# Concrete Component Behaviours
 # ===============================================================
 
 #= ---------- BasicNozzleCompBehav ----------- =#
 
-"Basic nozzle component with simple sprite and thrust generation"
+"Basic nozzle component with a fixed sprite and nozzle fragment"
 struct BasicNozzleCompBehav <: ComponentBehavior
     nozzle::NozzleBehavFrag
     sprite::PlainSpriteBehavFrag
@@ -419,7 +430,6 @@ render_base_elem!(queue::Vector{<:RenderCommand}, behav::BasicNozzleCompBehav; k
 collect_effect_particles!(manager, comp::BasicNozzleCompBehav; kwargs...) = collect_effect_particles!(manager, comp.nozzle; kwargs...)
 placement_valid(comp::BasicNozzleCompBehav, coord::TileCoord, gamemap::GameMap; kwargs...) = placement_valid(comp.nozzle, coord, gamemap; kwargs...)
 
-
 function render_map_elem!(queue::Vector{<:RenderCommand}, behav::BasicNozzleCompBehav; kwargs...)
     render_base_elem!(queue, behav.sprite; kwargs...) # Render base sprite
     render_map_elem!(queue, behav.nozzle; kwargs...) # Delegate to nozzle for stall overlay
@@ -428,7 +438,7 @@ end
 
 #= ---------- SwitchedNozzleCompBehav ----------- =#
 
-"Nozzle component with a switch to control flow, allowing precise thrust control"
+"Nozzle component with an inlet switch for fine thrust control"
 struct SwitchedNozzleCompBehav <: ComponentBehavior
     nozzle::NozzleBehavFrag
     switch::BoolSwitchBehavFrag
@@ -610,7 +620,7 @@ end
 
 const decomp_voltage_element_index::Int = 1  # Voltage source element index for current detection
 
-"Decomposition chamber that converts liquid to gas with animated fluid effects. Expansion factor is derived from fluid density ratio."
+"Decomposition chamber that expands monopropellant liquid into gas with animated fluid overlays"
 struct DecompChamberCompBehav <: ComponentBehavior
     output_temperature::Float64
 end
@@ -697,7 +707,7 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::DecompChamberCom
         push!(queue, render_liquid_tile(glmap, liquid_sprite, rotation, position, gameticks; colour = liquid_colour, scale = scale, transparency = transparency, draw_height = liquid_height, pos_offset = pos_offset))
 
         high_gas_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 200) + Int32(render_height_offset)
-        push!(queue, render_gas_tile(glmap, :DecompChamber1_gas_fluidmask, rotation, position, gameticks; colour = gas_colour, scale = scale, transparency = transparency*0.2, draw_height = high_gas_height, pos_offset = pos_offset))
+        push!(queue, render_gas_tile(glmap, :DecompChamber1_gas_fluidmask, rotation, position, gameticks; colour = gas_colour, scale = scale, transparency = transparency * 0.2, draw_height = high_gas_height, pos_offset = pos_offset))
     end
 
     # Always render frame on top
@@ -712,16 +722,16 @@ end
 const biprop_fuel_vcvs_index::Int = 1      # Fuel VCVS element index
 const biprop_oxid_vcvs_index::Int = 2      # Oxidiser VCVS element index
 const backflow_tolerance::Float64 = 0.02   # Tolerance for flow detection and backflow guard
-const biprop_flow_threshold::Float64 = 1e-9  # Total-flow threshold guarding the limiting-reactant divide
+const biprop_flow_threshold::Float64 = 1.0e-9  # Total-flow threshold guarding the limiting-reactant divide
 const BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K::Float64 = 50.0  # Minimum temperature for unmixed propellants
 
-"Mutable state for bipropellant combustion chamber"
+"Mutable state for bipropellant chamber temperature and auto-deactivation"
 mutable struct BipropChamberState
     output_temperature_state::Float64
     auto_deactivation::AutoDeactivationBehavFrag
 end
 
-"Bipropellant combustion chamber with injector orifices, producing exhaust from fuel and oxidiser inputs. Combustion temperature peaks at the configured optimal flow ratio (oxidiser/fuel)."
+"Bipropellant chamber with injector orifices feeding a shared exhaust output"
 struct BipropChamberCompBehav <: ComponentBehavior
     fuel_conductance::Float64
     oxid_conductance::Float64
@@ -730,15 +740,13 @@ struct BipropChamberCompBehav <: ComponentBehavior
 end
 
 """
-    BipropChamberCompBehav(; fuel_conductance, oxid_conductance, r_optimal)
+Build a bipropellant chamber with fuel and oxidiser injector conductances plus
+an optimal oxidiser-to-fuel flow ratio.
 
-Construct a bipropellant combustion chamber with the given injector conductances and optimal
-flow ratio (Q_oxid / Q_fuel at peak combustion).
-
-The conductances define the injector pressure drops: at equal upstream pressures, the volumetric
-flow ratio Q_oxid / Q_fuel = oxid_conductance / fuel_conductance. Default conductances (fuel: 0.4,
-oxidiser: 1.0) produce the default optimal ratio of 2.5 and are deliberately below pipe
-conductances (2.0–10.0) so the orifice dominates the input impedance.
+At equal upstream pressures, the nominal volumetric ratio is
+`oxid_conductance / fuel_conductance`. The default values preserve the existing
+2.5 ratio and keep the injector restriction below ordinary pipe conductance so
+the orifice dominates inlet impedance.
 """
 function BipropChamberCompBehav(; fuel_conductance::Float64 = 0.4, oxid_conductance::Float64 = 1.0, r_optimal::Float64 = 2.5)
     state = BipropChamberState(BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K, AutoDeactivationBehavFrag())
@@ -746,11 +754,11 @@ function BipropChamberCompBehav(; fuel_conductance::Float64 = 0.4, oxid_conducta
 end
 
 """
-Build the chamber's six circuit elements at the supplied `active` setting.
+Build the chamber's six relative elements for either the live stamp or a
+reactivation probe.
 
-Used by `produce_rel_elements` (active = !is_inactive(...)), and by
-`get_reactivation_probe` / `accept_reactivation_probe!` (always active = true).
-Keeping this in one place prevents the trial-solve and the live stamp from drifting.
+Keeping the stamp assembly in one place prevents the speculative trial solve
+and the live component from drifting apart.
 """
 function _build_biprop_elements(comp::BipropChamberCompBehav, active::Bool)::NTuple{6, RelativeElement}
     fuel_density = lookup_fluid_density(HexFluids.FUEL_LIQUID)::Float64
@@ -881,24 +889,20 @@ function get_reactivation_probe(comp::BipropChamberCompBehav; kwargs...)
     return ReactivationProbe(_build_biprop_elements(comp, true))
 end
 
-"Enable map mirroring for BipropChamberCompBehav"
 map_mirroring(::BipropChamberCompBehav, mirrored::Bool) = mirrored
 
 """
-Classify chamber reactivation only when the speculative solve shows both fuel and oxidiser
-flowing acceptably through the chamber's VCVS sources.
+Classify chamber reactivation from speculative VCVS currents on both inlet legs.
 
-The classification gate is the inverse of the live deactivation gate in `update_flowbehav!`:
-deactivation triggers when either leg falls below `-backflow_tolerance`, so reactivation
-requires both legs to be at least `-backflow_tolerance` (i.e. neither is in significant
-backflow). Missing legs classify neutral.
+This mirrors the live backflow guard in `update_flowbehav!`: either leg below
+`-backflow_tolerance` is harmful, and missing speculative currents are neutral.
 """
 function classify_reactivation_probe(comp::BipropChamberCompBehav; tile::TileCoord, rotation::HexAxis, derivedmapstate::DerivedMapState, mna_state, kwargs...)
     fuel_current = get(mna_state.vsource_currents, ElementID(tile, biprop_fuel_vcvs_index), nothing)
     oxid_current = get(mna_state.vsource_currents, ElementID(tile, biprop_oxid_vcvs_index), nothing)
 
     # If either VCVS was pruned out of the trial solve, currents won't be in the dict.
-    # Treat that as neutral — we cannot prove forward flow.
+    # Treat that as neutral - we cannot prove forward flow.
     isnothing(fuel_current) && return HexComponentsAPI.PROBE_NEUTRAL
     isnothing(oxid_current) && return HexComponentsAPI.PROBE_NEUTRAL
 
@@ -907,7 +911,6 @@ function classify_reactivation_probe(comp::BipropChamberCompBehav; tile::TileCoo
     return HexComponentsAPI.PROBE_USEFUL
 end
 
-"Reactivate the chamber after a useful speculative probe result." 
 function commit_reactivation_probe!(comp::BipropChamberCompBehav; kwargs...)
     reactivate!(comp.state.auto_deactivation)
     return nothing
@@ -972,7 +975,7 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::BipropChamberCom
     # Render translucent gas overlay (combustion happening effect) if either liquid is flowing
     if non_trivial_fuel_current || non_trivial_oxid_current
         high_gas_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_BEHIND + 200) + Int32(render_height_offset)
-        push!(queue, render_gas_tile(glmap, :CombustionChamber1_gas_fluidmask, rotation, position, gameticks; mirrored = mirrored, colour = gas_colour, scale = scale, transparency = transparency*0.2, draw_height = high_gas_height, pos_offset = pos_offset))
+        push!(queue, render_gas_tile(glmap, :CombustionChamber1_gas_fluidmask, rotation, position, gameticks; mirrored = mirrored, colour = gas_colour, scale = scale, transparency = transparency * 0.2, draw_height = high_gas_height, pos_offset = pos_offset))
     end
 
     # Always render frame on top

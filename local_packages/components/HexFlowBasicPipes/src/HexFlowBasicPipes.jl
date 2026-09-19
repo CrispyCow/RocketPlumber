@@ -1,36 +1,41 @@
+#=
+Scope: Built-in pipe behaviours and fluid-aware rendering
+Formatter: Runic
+=#
+
+"""
+Basic pipe behaviours for built-in pipe segments.
+
+Exported concrete `PipeBehavior` implementations:
+
+- `ScrapPipeBehav`: low-conductance pipe for simple connections
+- `BigPipeBehav`: high-conductance pipe for main flow lines with fluid-aware rendering
+"""
 module HexFlowBasicPipes
 
-using Accessors
-using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowEngine, FlowMap, RenderEngine, HexFlowRendering
-using StaticArrays
+using FlowEngine
+using HexFluids, HexFrame
+using HexComponentsAPI
+using HexFlowRendering, RenderEngine
 
-# PipeBehavior Mandatories
+# `PipeBehavior` mandatory methods
 import HexComponentsAPI: get_conductance, get_pipe_tunables, set_pipe_tunables, render_pipe_base!, get_pipe_click_radius
-# PipeBehavior Optional
-import HexComponentsAPI: render_pipe_map!, can_pipe_be_moved, produce_abs_elements
+# `PipeBehavior` optional methods
+import HexComponentsAPI: render_pipe_map!
 
-# Concrete Pipe Behavior Exports
+# Concrete Pipe Behaviour Exports
 export ScrapPipeBehav, BigPipeBehav
 
-"""
-Basic pipe behaviour implementations for pipe segments.
-
-This module provides concrete implementations of PipeBehavior for common pipe types:
-- ScrapPipeBehav: Low conductance pipe for basic connections
-- BigPipeBehav: High conductance pipe for main flow lines with fluid-aware rendering
-
-All pipe behaviours follow the PipeBehavior interface defined in HexComponentsAPI.
-"""
-
 # ===============================================================
-# Concrete Pipe Behaviors
+# Concrete Pipe Behaviours
 # ===============================================================
 
 #= ---------- ScrapPipeBehav ----------- =#
 
 """
-ScrapPipeBehav: A basic low-conductance pipe for simple connections.
-Default conductance: 2.0 S
+Low-conductance pipe for simple connections.
+
+Default conductance: `2.0 S`.
 """
 struct ScrapPipeBehav <: PipeBehavior
     conductance::Float64
@@ -43,6 +48,7 @@ get_pipe_tunables(behav::ScrapPipeBehav) = (TunableProps(behav.conductance, "Con
 set_pipe_tunables(behav::ScrapPipeBehav, tunables::NTuple{1, Real}) = ScrapPipeBehav(Float64(tunables[1]))
 get_pipe_click_radius(::ScrapPipeBehav)::Float64 = 0.083984375
 
+"Return the sprite symbol for a scrap pipe span."
 function scrap_pipe_sprite(position::PipeCoord)::Symbol
     span_class = pipe_span_class(position)
     if span_class === SIDE_SPAN
@@ -63,6 +69,7 @@ function pipe_rank_draw_heights(position::PipeCoord, render_height_offset::Integ
     return fluidmask_height, pipe_height
 end
 
+# Rendering
 function render_pipe_base!(queue::AbstractVector, behav::ScrapPipeBehav; glmap::GLObjectMap, rotation::HexAxis, position::PipeCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     sprite = scrap_pipe_sprite(position)
     _, pipe_height = pipe_rank_draw_heights(position, render_height_offset)
@@ -74,8 +81,9 @@ end
 #= ---------- BigPipeBehav ----------- =#
 
 """
-BigPipeBehav: A high-conductance pipe for main flow lines with fluid-aware rendering.
-Default conductance: 10.0 S
+High-conductance pipe for main flow lines with fluid-aware rendering.
+
+Default conductance: `10.0 S`.
 """
 struct BigPipeBehav <: PipeBehavior
     conductance::Float64
@@ -88,6 +96,7 @@ get_pipe_tunables(behav::BigPipeBehav) = (TunableProps(behav.conductance, "Condu
 set_pipe_tunables(behav::BigPipeBehav, tunables::NTuple{1, Real}) = BigPipeBehav(Float64(tunables[1]))
 get_pipe_click_radius(::BigPipeBehav)::Float64 = 0.146484375
 
+"Return the base and fluid-mask sprite symbols for a large pipe span."
 function big_pipe_sprites(position::PipeCoord)::Tuple{Symbol, Symbol}
     span_class = pipe_span_class(position)
     if span_class === SIDE_SPAN
@@ -101,6 +110,7 @@ function big_pipe_sprites(position::PipeCoord)::Tuple{Symbol, Symbol}
     end
 end
 
+# Rendering
 function render_pipe_base!(queue::AbstractVector, behav::BigPipeBehav; glmap::GLObjectMap, rotation::HexAxis, position::PipeCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     base_sprite, fluidmask_sprite = big_pipe_sprites(position)
     fluidmask_height, pipe_height = pipe_rank_draw_heights(position, render_height_offset)
@@ -116,6 +126,7 @@ end
 function render_pipe_map!(queue::AbstractVector, behav::BigPipeBehav; glmap::GLObjectMap, rotation::HexAxis, position::PipeCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0, derivedmapstate::DerivedMapState, gameticks::Int64 = 0, kwargs...)
     base_sprite, fluidmask_sprite = big_pipe_sprites(position)
 
+    # Prefer the first endpoint when both nodes already carry the same propagated fluid.
     v1_node = to_nodecoord(position.v1)
     v2_node = to_nodecoord(position.v2)
     fluid = get(derivedmapstate.nodeactualfluids, v1_node, get(derivedmapstate.nodeactualfluids, v2_node, nothing))

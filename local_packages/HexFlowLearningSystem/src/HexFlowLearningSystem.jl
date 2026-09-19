@@ -1,3 +1,8 @@
+#=
+Scope: Tutorial definitions, progression state, and learning-system evaluation
+Formatter: Runic
+=#
+
 module HexFlowLearningSystem
 
 using FlowMap
@@ -257,7 +262,7 @@ function find_learning_entry(state::LearningSystemState, id::Symbol)::Union{Noth
     return isnothing(index) ? nothing : state.entries[index]
 end
 
-"Get the definition for an entry by ID."
+"Get the tutorial definition for an entry by ID."
 function get_learning_def(state::LearningSystemState, id::Symbol)
     entry = find_learning_entry(state, id)
     return isnothing(entry) ? nothing : entry.definition

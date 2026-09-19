@@ -17,7 +17,7 @@ Arguments:
     generator_function_file - Path to .jl file containing the mapgen_<name>() function
 
 Examples:
-    julia --project=. tools/map_encoder/compare_maps.jl src/demo_maps/basicplumbing.jld2 tutorials/mapgen_basicplumbing.jl
+    julia --project=. tools/map_encoder/compare_maps.jl path/to/basicplumbing.jld2 src/demo_maps/mapgen_basicplumbing.jl
 
 Note: This script must be run from the project root directory with --project=. to access dependencies.
 """
@@ -492,7 +492,7 @@ function print_comparison_results(results::Dict)
     println("=" ^ 60)
     
     if results["perfect_match"]
-        println("✅ PERFECT MATCH: Generated map exactly matches original!")
+        println("✅ MATCH WITHIN CHECKED SCOPE: Generated map passed all implemented checks.")
         return
     end
     
@@ -607,7 +607,7 @@ end
 Main comparison function that loads original map and executes generated code.
 
 # Arguments
-- `original_map_input`: Path to map file (.jld2) or map name (for maps/ folder)
+- `original_map_input`: Path to a map file ending in .jld2
 - `generator_file`: Path to the .jl file containing the mapgen function
 """
 function compare_map_files(original_map_input::String, generator_file::String)

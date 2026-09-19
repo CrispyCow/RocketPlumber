@@ -1,3 +1,9 @@
+#=
+Scope: Test suite for HexFlowRendering render programs, sprites, pipes, particles,
+and render-height conventions
+Formatter: Runic
+=#
+
 using Test
 using HexFrame
 using FlowMap
@@ -23,8 +29,8 @@ add_ship!(gm, :sec, sec)
 set_surface_tile!(gm, TileCoord(5, 0); ship_name = :sec)
 
 combined = collect_surface_tiles!(Set{TileCoord}(), gm)
-@test TileCoord(0,0) in combined
-@test TileCoord(5,0) in combined
+@test TileCoord(0, 0) in combined
+@test TileCoord(5, 0) in combined
 
 # Test that tile_particle_spawn! invokes collect_effect_particles! for components on all ships
 # Define a dummy component that spawns a single particle at its tile when collect_effect_particles! is called
@@ -33,7 +39,7 @@ import HexComponentsAPI: collect_effect_particles!
 
 function collect_effect_particles!(manager::ParticleManager, ::DummyParticleComp; kwargs...)
     # Extract tile and gameticks from kwargs
-    tile = haskey(kwargs, :tile) ? kwargs[:tile] : TileCoord(0,0)
+    tile = haskey(kwargs, :tile) ? kwargs[:tile] : TileCoord(0, 0)
     gameticks = haskey(kwargs, :gameticks) ? kwargs[:gameticks] : 0
 
     pos = glvec(tile)
@@ -43,9 +49,9 @@ end
 
 pm = ParticleManager()
 # Primary
-set_component!(gm, TileCoord(10,0), PlacedComponent(DummyParticleComp(), HexFrame.Q_POS, :primary))
+set_component!(gm, TileCoord(10, 0), PlacedComponent(DummyParticleComp(), HexFrame.Q_POS, :primary))
 # Secondary
-set_component!(gm, TileCoord(20,0), PlacedComponent(DummyParticleComp(), HexFrame.Q_POS, :sec))
+set_component!(gm, TileCoord(20, 0), PlacedComponent(DummyParticleComp(), HexFrame.Q_POS, :sec))
 
 using HexFlowControl
 
@@ -108,7 +114,7 @@ end
 # -----------------------------
 # Primary ship with a fractional render offset
 gm2 = GameMap()
-set_surface_tile!(gm2, TileCoord(0,0))
+set_surface_tile!(gm2, TileCoord(0, 0))
 # Set docking status so the ship has a fractional render offset for rendering tests
 FlowMap.set_docking_status!(gm2, :primary, FlowMap.ApproachingDockStat(HexFrame.AxialCoord(0.3, 0.0), HexFrame.AxialCoord(0.3, 0.0), 1.0))
 
@@ -116,8 +122,8 @@ pm = ParticleManager()
 colour = SVector{4, Float32}(1.0f0, 1.0f0, 1.0f0, 1.0f0)
 
 # Spawn a particle at the world-space position corresponding to the tile + fractional offset.
-pos = glvec(TileCoord(0,0)) .+ glvec(get_ship_render_offset(gm2, :primary))
-spawn_particles!(pm, [pos], [SVector{2, Float64}(0.0,0.0)], 0, 10; colour = colour)
+pos = glvec(TileCoord(0, 0)) .+ glvec(get_ship_render_offset(gm2, :primary))
+spawn_particles!(pm, [pos], [SVector{2, Float64}(0.0, 0.0)], 0, 10; colour = colour)
 group = pm.groups[colour]
 
 bottom_left = SVector(-1000.0f0, -1000.0f0)
@@ -128,30 +134,30 @@ visible = HexFlowRendering.cull_particles_to_buffer!(pm, group, bottom_left, top
 
 # Spawn a particle at a stationary ship tile; it should be culled
 gm3 = GameMap()
-set_surface_tile!(gm3, TileCoord(0,0))
+set_surface_tile!(gm3, TileCoord(0, 0))
 pm_stationary = ParticleManager()
-stationary_pos = glvec(TileCoord(0,0))
-spawn_particles!(pm_stationary, [stationary_pos], [SVector{2, Float64}(0.0,0.0)], 0, 10; colour = colour)
+stationary_pos = glvec(TileCoord(0, 0))
+spawn_particles!(pm_stationary, [stationary_pos], [SVector{2, Float64}(0.0, 0.0)], 0, 10; colour = colour)
 group_stationary = pm_stationary.groups[colour]
 visible_stationary = HexFlowRendering.cull_particles_to_buffer!(pm_stationary, group_stationary, bottom_left, top_right, time(), BASE_UPS, gm3)
 @test visible_stationary == 0
 
 # Spawn a particle at a distant tile; it should NOT be culled
 pm2 = ParticleManager()
-pos2 = glvec(TileCoord(10,10))
-spawn_particles!(pm2, [pos2], [SVector{2, Float64}(0.0,0.0)], 0, 10; colour = colour)
+pos2 = glvec(TileCoord(10, 10))
+spawn_particles!(pm2, [pos2], [SVector{2, Float64}(0.0, 0.0)], 0, 10; colour = colour)
 group2 = pm2.groups[colour]
 visible2 = HexFlowRendering.cull_particles_to_buffer!(pm2, group2, bottom_left, top_right, time(), BASE_UPS, gm2)
 @test visible2 == 1
 
 # Multi-ship: stationary tiles cull, moving tiles do not
 gm4 = GameMap()
-set_surface_tile!(gm4, TileCoord(0,0))
+set_surface_tile!(gm4, TileCoord(0, 0))
 add_ship!(gm4, :moving, ShipState(docking_status = FlowMap.ApproachingDockStat(HexFrame.AxialCoord(0.2, 0.0), HexFrame.AxialCoord(0.2, 0.0), 1.0)))
-set_surface_tile!(gm4, TileCoord(5,0); ship_name = :moving)
+set_surface_tile!(gm4, TileCoord(5, 0); ship_name = :moving)
 
 pm4 = ParticleManager()
-spawn_particles!(pm4, [glvec(TileCoord(0,0)), glvec(TileCoord(5,0))], [SVector{2, Float64}(0.0,0.0), SVector{2, Float64}(0.0,0.0)], 0, 10; colour = colour)
+spawn_particles!(pm4, [glvec(TileCoord(0, 0)), glvec(TileCoord(5, 0))], [SVector{2, Float64}(0.0, 0.0), SVector{2, Float64}(0.0, 0.0)], 0, 10; colour = colour)
 group4 = pm4.groups[colour]
 visible4 = HexFlowRendering.cull_particles_to_buffer!(pm4, group4, bottom_left, top_right, time(), BASE_UPS, gm4)
 @test visible4 == 1
@@ -193,7 +199,7 @@ end
 
 function _test_pipe_sprite_height(position::PipeCoord, render_height_offset::Integer)::Int32
     return Int32(get_stacking_rank(position)) * HexFlowRendering.RENDER_HEIGHT_PIPE_RANK_MULTIPLIER +
-           Int32(1) + Int32(render_height_offset)
+        Int32(1) + Int32(render_height_offset)
 end
 
 function render_pipe_map!(queue::AbstractVector, ::TestPipeRenderBehav; glmap::GLObjectMap, rotation::HexAxis, position, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)

@@ -1,3 +1,8 @@
+#=
+Scope: Hex-grid coordinate types, canonicalisation, transforms, adjacency, and pipe geometry helpers
+Formatter: Runic
+=#
+
 module HexFrame
 
 using StaticArrays, LinearAlgebra, StructEquality
@@ -496,11 +501,13 @@ end
 
 "Return the six side-span pipe segments bordering a tile in clockwise order."
 function get_side_pipes(tile::TileCoord)::NTuple{6, PipeCoord}
-    return ntuple(i -> begin
-        V1 = to_proper(VertexCoord(tile, HexAxis(i - 1)))
-        V2 = to_proper(VertexCoord(tile, HexAxis(i % length(instances(HexAxis)))))
-        PipeCoord(V1, V2)
-    end, 6)
+    return ntuple(
+        i -> begin
+            V1 = to_proper(VertexCoord(tile, HexAxis(i - 1)))
+            V2 = to_proper(VertexCoord(tile, HexAxis(i % length(instances(HexAxis)))))
+            PipeCoord(V1, V2)
+        end, 6
+    )
 end
 
 "Return the three side-span pipe segments incident to a vertex in angular order."
@@ -517,37 +524,37 @@ function get_pipe_segments(vertex::VertexCoord)::NTuple{12, PipeCoord}
 
     if source.dir === Q_POS
         return (
-            PipeCoord(source, VertexCoord(t + TileCoord( 2, -1), Q_NEG)),
-            PipeCoord(source, VertexCoord(t + TileCoord( 1, -1), Q_POS)),
-            PipeCoord(source, VertexCoord(t + TileCoord( 2, -2), Q_NEG)),
-            PipeCoord(source, VertexCoord(t + TileCoord( 0, -1), Q_POS)),
+            PipeCoord(source, VertexCoord(t + TileCoord(2, -1), Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord(1, -1), Q_POS)),
+            PipeCoord(source, VertexCoord(t + TileCoord(2, -2), Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord(0, -1), Q_POS)),
 
-            PipeCoord(source, VertexCoord(t + TileCoord( 1, -1), Q_NEG)),
-            PipeCoord(source, VertexCoord(t + TileCoord(-1,  0), Q_POS)),
-            PipeCoord(source, VertexCoord(t,                     Q_NEG)),
-            PipeCoord(source, VertexCoord(t + TileCoord(-1,  1), Q_POS)),
+            PipeCoord(source, VertexCoord(t + TileCoord(1, -1), Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord(-1, 0), Q_POS)),
+            PipeCoord(source, VertexCoord(t, Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord(-1, 1), Q_POS)),
 
-            PipeCoord(source, VertexCoord(t + TileCoord( 1,  0), Q_NEG)),
-            PipeCoord(source, VertexCoord(t + TileCoord( 0,  1), Q_POS)),
-            PipeCoord(source, VertexCoord(t + TileCoord( 2,  0), Q_NEG)),
-            PipeCoord(source, VertexCoord(t + TileCoord( 1,  0), Q_POS)),
+            PipeCoord(source, VertexCoord(t + TileCoord(1, 0), Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord(0, 1), Q_POS)),
+            PipeCoord(source, VertexCoord(t + TileCoord(2, 0), Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord(1, 0), Q_POS)),
         )
     elseif source.dir === Q_NEG
         return (
-            PipeCoord(source, VertexCoord(t,                     Q_POS)),
-            PipeCoord(source, VertexCoord(t + TileCoord( 1, -1), Q_NEG)),
-            PipeCoord(source, VertexCoord(t + TileCoord(-1,  0), Q_POS)),
-            PipeCoord(source, VertexCoord(t + TileCoord( 0, -1), Q_NEG)),
+            PipeCoord(source, VertexCoord(t, Q_POS)),
+            PipeCoord(source, VertexCoord(t + TileCoord(1, -1), Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord(-1, 0), Q_POS)),
+            PipeCoord(source, VertexCoord(t + TileCoord(0, -1), Q_NEG)),
 
-            PipeCoord(source, VertexCoord(t + TileCoord(-2,  0), Q_POS)),
-            PipeCoord(source, VertexCoord(t + TileCoord(-1,  0), Q_NEG)),
-            PipeCoord(source, VertexCoord(t + TileCoord(-2,  1), Q_POS)),
-            PipeCoord(source, VertexCoord(t + TileCoord(-1,  1), Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord(-2, 0), Q_POS)),
+            PipeCoord(source, VertexCoord(t + TileCoord(-1, 0), Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord(-2, 1), Q_POS)),
+            PipeCoord(source, VertexCoord(t + TileCoord(-1, 1), Q_NEG)),
 
-            PipeCoord(source, VertexCoord(t + TileCoord(-2,  2), Q_POS)),
-            PipeCoord(source, VertexCoord(t + TileCoord( 0,  1), Q_NEG)),
-            PipeCoord(source, VertexCoord(t + TileCoord(-1,  1), Q_POS)),
-            PipeCoord(source, VertexCoord(t + TileCoord( 1,  0), Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord(-2, 2), Q_POS)),
+            PipeCoord(source, VertexCoord(t + TileCoord(0, 1), Q_NEG)),
+            PipeCoord(source, VertexCoord(t + TileCoord(-1, 1), Q_POS)),
+            PipeCoord(source, VertexCoord(t + TileCoord(1, 0), Q_NEG)),
         )
     else
         error("to_proper returned an improper vertex in get_pipe_segments")

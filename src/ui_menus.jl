@@ -1,3 +1,8 @@
+#=
+Scope: Pause-menu, developer-utilities, and action-popup CImGui windows
+Formatter: Runic
+=#
+
 # ===============================================================
 # UI Menus (Pause menu, Developer Utilities, Hint Box)
 # ===============================================================
@@ -9,6 +14,8 @@ using HexFrame, FlowEngine, FlowMap, HexFlowProcGen
 using HexFluids
 using HexFlowCalculator, HexFlowControl
 using HexComponentsAPI
+
+#= ---------- Editor State ---------- =#
 
 # Fluid property editor UI state
 const _density_editor_state = Dict{Symbol, Any}(
@@ -28,10 +35,14 @@ const _component_mass_editor_state = Dict{Symbol, Any}(:input_value => 0.0)
 const _tile_mass_editor_state = Dict{Symbol, Any}(:input_value => 0.0)
 const _particle_accel_editor_state = Dict{Symbol, Any}(:input_value => 0.0)
 
+#= ---------- Pause Menu ---------- =#
+
 "Render the pause menu when active, including escape recovery when a departure checkpoint exists."
-function ui_pause_menu_render!(inputstate::InputState, timelapse_recorder::TimelapseRecorder,
+function ui_pause_menu_render!(
+        inputstate::InputState, timelapse_recorder::TimelapseRecorder,
         snapshot::FlowCalculatorSnapshot, window::GLFW.Window,
-        learning_state::Union{Nothing, LearningSystemState} = nothing; session_timing::PlaySessionTiming)
+        learning_state::Union{Nothing, LearningSystemState} = nothing; session_timing::PlaySessionTiming
+    )
     # Menu must be active
     if !inputstate.escape_menu_active
         return nothing
@@ -122,6 +133,8 @@ function ui_pause_menu_render!(inputstate::InputState, timelapse_recorder::Timel
     return nothing
 end
 
+#= ---------- Menu Helpers ---------- =#
+
 "Enqueue a `MapOverrideCommand` on the flow calculator's command queue."
 function enqueue_map_override!(flowcalc_ipc::FlowCalculatorIPC, gamemap::GameMap)
     cmd = create_map_override_command(flowcalc_ipc.command_queue, deepcopy(gamemap))
@@ -179,12 +192,16 @@ function _encounter_set_options(
     ]
 end
 
+#= ---------- Developer Utilities ---------- =#
+
+"Render the developer-utilities side panel when active."
 function ui_dev_utils_menu_render!(
         inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, timelapse_recorder::TimelapseRecorder,
         snapshot::FlowCalculatorSnapshot,
         viewstate::ViewState, winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}},
         max_view_bounds::Union{HexFrame.CartesianBounds, Nothing} = nothing;
-        session_timing::PlaySessionTiming)
+        session_timing::PlaySessionTiming
+    )
     # Menu must be active
     if !inputstate.dev_utils_menu_active
         return nothing
@@ -286,7 +303,7 @@ function ui_dev_utils_menu_render!(
         !inputstate.editor_mode && CImGui.EndDisabled()
     end
 
-    if (CImGui.CollapsingHeader("Tools"))
+    if CImGui.CollapsingHeader("Tools")
         if CImGui.Button("Clear Map", (button_width, button_height))
             @info "Clearing map..."
             enqueue_map_override!(flowcalc_ipc, GameMap())
@@ -320,7 +337,7 @@ function ui_dev_utils_menu_render!(
 
             has_encounter_system = snapshot.gamemap.space_map isa SpaceMapState
             if button_with_disable(
-                "Apply Loaded Encounter Config", ImVec2(button_width, button_height), !has_encounter_system;
+                    "Apply Loaded Encounter Config", ImVec2(button_width, button_height), !has_encounter_system;
                     tooltip = "Requires an active encounter space map. Existing encounters are preserved.",
                 )
                 modified_map = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
@@ -337,7 +354,6 @@ function ui_dev_utils_menu_render!(
             CImGui.TreePop()
         end
 
-        # Overwrite Space Map
         if CImGui.TreeNode("Overwrite Space Map")
             spacemap_seed = gui_input_u32!(inputstate, :spacemap_init_seed, "Seed", UInt32(42))
             init_vel_x = gui_input_double!(inputstate, :spacemap_init_vel_x, "Initial Velocity X", 10.0)
@@ -364,7 +380,6 @@ function ui_dev_utils_menu_render!(
             CImGui.TreePop()
         end
 
-        # Delete Ship
         if CImGui.TreeNode("Delete Ship")
             selected, current_gamemap = _ship_selector_ui!(inputstate, flowcalc_ipc, :delete_ship_index, "Ship", "No deletable ships (only primary exists)")
             if !isnothing(selected) && CImGui.Button("Delete Ship", (button_width, button_height))
@@ -376,7 +391,6 @@ function ui_dev_utils_menu_render!(
             CImGui.TreePop()
         end
 
-        # Depart Ship
         if CImGui.TreeNode("Depart Ship")
             selected, current_gamemap = _ship_selector_ui!(inputstate, flowcalc_ipc, :depart_ship_index, "Ship", "No departable ships (only primary exists)")
             if !isnothing(selected) && CImGui.Button("Depart Ship", (button_width, button_height))
@@ -392,7 +406,6 @@ function ui_dev_utils_menu_render!(
             CImGui.TreePop()
         end
 
-        # Swap Primary
         if CImGui.TreeNode("Swap Primary")
             selected, current_gamemap = _ship_selector_ui!(inputstate, flowcalc_ipc, :swap_primary_index, "Ship", "No other ships to swap with")
             if !isnothing(selected) && CImGui.Button("Swap Primary", (button_width, button_height))
@@ -408,7 +421,6 @@ function ui_dev_utils_menu_render!(
             CImGui.TreePop()
         end
 
-        # Export Ship
         if CImGui.TreeNode("Export Ship")
             selected, current_gamemap = _ship_selector_ui!(inputstate, flowcalc_ipc, :export_ship_index, "Ship", "No ships available"; exclude_primary = false)
             if !isnothing(selected) && CImGui.Button("Save Ship...", (button_width, button_height))
@@ -526,10 +538,10 @@ function ui_dev_utils_menu_render!(
     end
 
 
-    if (CImGui.CollapsingHeader("Proc Gen"))
+    if CImGui.CollapsingHeader("Proc Gen")
         seed = gui_input_u32!(inputstate, :proc_gen_seed, "Random Seed", UInt32(999))
 
-        if (CImGui.TreeNode("Random Walk Surface Gen"))
+        if CImGui.TreeNode("Random Walk Surface Gen")
 
             steps = gui_input_s64!(inputstate, :surface_walk_steps, "Walk Steps", Int64(3))
             stacks = gui_input_s64!(inputstate, :surface_walk_stacks, "Walk stacks", Int64(20))
@@ -546,7 +558,7 @@ function ui_dev_utils_menu_render!(
             CImGui.TreePop()
         end
 
-        if (CImGui.TreeNode("Place Components"))
+        if CImGui.TreeNode("Place Components")
             all_component_sets = ShipComponentSet[
                 shipset_starter,
                 shipset_simple_cold_gas,
@@ -572,7 +584,7 @@ function ui_dev_utils_menu_render!(
             CImGui.TreePop()
         end
 
-        if (CImGui.TreeNode("Place Big Pipes"))
+        if CImGui.TreeNode("Place Big Pipes")
             big_pipe_density = gui_input_double!(inputstate, :big_pipe_density, "Pipe Density", 0.05; step_small = 0.01, step_fast = 0.1, fmt = "%.3f")
 
             if CImGui.Button("Place Big Pipes", (button_width, button_height))
@@ -585,7 +597,7 @@ function ui_dev_utils_menu_render!(
             CImGui.TreePop()
         end
 
-        if (CImGui.TreeNode("Place Scrap Pipes"))
+        if CImGui.TreeNode("Place Scrap Pipes")
             scrap_pipe_density = gui_input_double!(inputstate, :scrap_pipe_density, "Pipe Density", 0.05; step_small = 0.01, step_fast = 0.1, fmt = "%.3f")
 
             if CImGui.Button("Place Scrap Pipes", (button_width, button_height))
@@ -598,7 +610,7 @@ function ui_dev_utils_menu_render!(
             CImGui.TreePop()
         end
 
-        if (CImGui.TreeNode("Place Standard Pipe Combo"))
+        if CImGui.TreeNode("Place Standard Pipe Combo")
             if CImGui.Button("Place Pipes", (button_width, button_height))
                 standard_pipes = [
                     PipeSpawnOptions(:BigPipe_pipe, HexFlowProcGen.ONE_CONNECT_PIPES, 0.05),
@@ -614,7 +626,7 @@ function ui_dev_utils_menu_render!(
             CImGui.TreePop()
         end
 
-        if (CImGui.TreeNode("Generate Encounter"))
+        if CImGui.TreeNode("Generate Encounter")
             class_names = ["Jumbled Ship", "Fuel Cache", "Scrap Clump"]
             class_enums = [ENCOUNTER_SHIP, ENCOUNTER_FUEL_CACHE, ENCOUNTER_SCRAP]
             class_sel = gui_listbox_int!(inputstate, :enc_class_sel, "Class", class_names, Cint(0))
@@ -853,8 +865,10 @@ end
 
 "Execute a ship action via the ship action dispatch system."
 function _execute_target_action!(inputstate, target::ShipPopupTarget, action::ActionInfo, flowcalc_ipc, viewstate)
-    return execute_ship_action!(ship_name = target.ship_name, action_id = action.id,
-        flowcalc_ipc = flowcalc_ipc, viewstate = viewstate, inputstate = inputstate)
+    return execute_ship_action!(
+        ship_name = target.ship_name, action_id = action.id,
+        flowcalc_ipc = flowcalc_ipc, viewstate = viewstate, inputstate = inputstate
+    )
 end
 
 "Group component popups expose one atomic deletion action."

@@ -20,6 +20,17 @@ StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 StructEquality = "6ec83bb0-ed9f-11e9-3b4c-2b04cb4e219c"
 TimerOutputs = "a759f4b9-e2f1-59dc-863e-4aeb61b1ea8f"
 
+[sources]
+FlowEngine = {path = "../FlowEngine"}
+FlowMap = {path = "../FlowMap"}
+HexComponentsAPI = {path = "../components/HexComponentsAPI"}
+HexElements = {path = "../HexElements"}
+HexFlowControl = {path = "../HexFlowControl"}
+HexFlowProcGen = {path = "../HexFlowProcGen"}
+HexFlowTelemetry = {path = "../HexFlowTelemetry"}
+HexFluids = {path = "../HexFluids"}
+HexFrame = {path = "../HexFrame"}
+
 [compat]
 StaticArrays = "1.9.15"
 StructEquality = "2.1.0"

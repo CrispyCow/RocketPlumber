@@ -1,48 +1,56 @@
+#=
+Scope: Gas, liquid, and pressure-fed tank component behaviours and storage fragments
+Formatter: Runic
+=#
 """
-Tank component implementations for fluid storage.
+Tank component behaviours for gas, liquid, and pressure-fed fluid storage.
 
-This module provides concrete implementations of ComponentBehavior for tanks:
-- ThevininTankCompBehav: Tank with series resistor (gas or liquid variants)
-- GasTankBehavFrag: Linear charge-voltage relationship
-- LiquidTankBehavFrag: Near-constant voltage until near-empty
+Exported concrete `ComponentBehavior` implementations:
 
-All components follow the ComponentBehavior interface defined in HexComponentsAPI.
+- `ThevininTankCompBehav`: Gas or liquid tank with a series resistor
+- `PressureFedTankCompBehav`: Coupled liquid and pressurising-gas tank
 """
 module HexFlowTankComponents
 
 using Accessors, StaticArrays
-using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowEngine, FlowMap, RenderEngine, HexFlowRendering
+using FlowEngine, FlowMap, HexElements, HexFluids, HexFrame
+using HexComponentsAPI
 using HexFlowBasicComponents
+using HexFlowRendering, RenderEngine
 
-# ComponentBehavior Mandatories
+# `ComponentBehavior` mandatory methods
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
-# ComponentBehavior Optional
+# `ComponentBehavior` optional methods
 import HexComponentsAPI: update_flowbehav!, render_map_elem!, map_rotation, can_be_moved, get_component_wet_mass, get_actions, do_action!, produce_rel_fluid_declarations
-import HexComponentsAPI: ReactivationProbe, ReactivationProbeOutcome, get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe!
+# Reactivation probe interface
+import HexComponentsAPI: get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe!
 
-# Concrete Component Behavior Exports
-export ThevininTankCompBehav, GasTankBehavFrag, LiquidTankBehavFrag
-export PressureFedTankBehavFrag, PressureFedTankCompBehav
-export SealStateBehavFrag, seal!, unseal!, is_sealed
-export TankBehavFrag, TankState, tank_is_active, tank_is_auto_empty, tank_is_auto_full
+# Behaviour Fragment Exports
+export SealStateBehavFrag, TankBehavFrag, GasTankBehavFrag, LiquidTankBehavFrag, PressureFedTankBehavFrag
+export FixedFluidBehavFrag, StoredFluidBehavFrag
+# Helper Function Exports
+export seal!, unseal!, is_sealed, tank_is_active, tank_is_auto_empty, tank_is_auto_full
 export force_reactivate!, clear_force_reactivate!, is_force_reactivated
 export force_liquid_reactivate!, clear_force_liquid_reactivate!, liquid_is_force_reactivated
 export force_gas_reactivate!, clear_force_gas_reactivate!, gas_is_force_reactivated
-export StoredFluidState, get_stored_fluid
-export FixedFluidBehavFrag, StoredFluidBehavFrag, set_stored_fluid!, clear_stored_fluid!
+export get_stored_fluid, set_stored_fluid!, clear_stored_fluid!
 export liquid_is_sealed, gas_is_sealed
 export pressurefed_liquid_is_auto_empty, pressurefed_liquid_is_auto_full
 export pressurefed_gas_is_auto_empty, pressurefed_gas_is_auto_full_pressure
 export pressurefed_liquid_source_active, pressurefed_gas_source_active, pressurefed_liquid_path_active
 export pressurefed_probe_current_class
+# Support Type Exports
+export TankState, StoredFluidState
+# Concrete Component Behaviour Exports
+export ThevininTankCompBehav, PressureFedTankCompBehav
 
 # ===============================================================
-# Behavior Fragments
+# Behaviour Fragments
 # ===============================================================
 
 #= ---------- SealStateBehavFrag ----------- =#
 
-"Behavioral fragment to track whether a tank is manually sealed. Interact with `seal!`, `unseal!` and `is_sealed` functions."
+"Behaviour fragment that tracks whether a tank is manually sealed."
 mutable struct SealStateBehavFrag
     seal_state::BinaryStateBehavFrag
 end
@@ -55,15 +63,15 @@ is_sealed(frag::SealStateBehavFrag)::Bool = getstate(frag.seal_state)
 
 #= ---------- TankBehavFrag ----------- =#
 
-"Mutable state for tank charge tracking"
+"Mutable state for a tank's charge."
 mutable struct TankState
     charge::Float64
 end
 
-"Convert Real to TankState by wrapping in Float64"
+"Convert a real value to `TankState` by wrapping it in `Float64`."
 Base.convert(::Type{TankState}, value::Real) = TankState(Float64(value))
 
-"Flow behaviour fragment for shared functionality of a tank. Missing produce_rel_elements as this is concrete tank type dependent"
+"Shared tank state and transitions; concrete tank fragments provide circuit elements."
 struct TankBehavFrag
     connection::RelativeElementConnections
     max_charge::Float64
@@ -87,7 +95,6 @@ tank_is_auto_empty(tank::TankBehavFrag) = !is_sealed(tank.sealstate) && tank.sta
 "True when the tank is automatically disconnected at the full boundary (not sealed)."
 tank_is_auto_full(tank::TankBehavFrag) = !is_sealed(tank.sealstate) && tank.state.charge >= tank.max_charge
 
-"Keyword constructor for tank fragment"
 function TankBehavFrag(;
         connection::RelativeElementConnections,
         max_charge::Real,
@@ -152,7 +159,7 @@ end
 
 function update_flowbehav!(tank::TankBehavFrag; tile::TileCoord, mna_state::MNA_State, kwargs...)
     clear_force_reactivate!(tank)
-    
+
     is_sealed(tank.sealstate) && return  # Manual seal: ignore stale current until source is dropped
 
     tank_vsource_element_id = ElementID(tile, tank_vsource_element_index)
@@ -163,6 +170,7 @@ function update_flowbehav!(tank::TankBehavFrag; tile::TileCoord, mna_state::MNA_
     prospective_charge = tank.state.charge + delta
 
     tank.state.charge = clamp(prospective_charge, 0.0, tank.max_charge)
+    return nothing
 end
 
 function render_map_elem!(queue::Vector{<:RenderCommand}, tank::TankBehavFrag; kwargs...)
@@ -234,10 +242,7 @@ end
 
 #= ---------- AbstractTankBehavFrag ----------- =#
 
-"""
-Method delegation for all AbstractTankBehavFrag fragments.
-All subtypes must include a 'tank::TankBehavFrag' field.
-"""
+"Abstract tank fragment interface; subtypes expose a `tank::TankBehavFrag` field for shared-method delegation."
 abstract type AbstractTankBehavFrag end
 
 get_tunables(behav::T) where {T <: AbstractTankBehavFrag} = get_tunables(behav.tank)
@@ -279,7 +284,7 @@ function classify_reactivation_probe(behav::T; tile::TileCoord, derivedmapstate:
     current = abs_element_get_current(abs_vsource, derivedmapstate, mna_state)
     isnothing(current) && return HexComponentsAPI.PROBE_NEUTRAL  # Pruned from speculative solve
 
-    probe_tol = 1e-9
+    probe_tol = 1.0e-9
     if tank_is_auto_empty(behav.tank)
         current > probe_tol  && return HexComponentsAPI.PROBE_USEFUL   # Empty: positive inflow is useful
         current < -probe_tol && return HexComponentsAPI.PROBE_HARMFUL  # Empty: negative outflow is harmful
@@ -293,7 +298,7 @@ function classify_reactivation_probe(behav::T; tile::TileCoord, derivedmapstate:
     end
 end
 
-"Set the one-shot tank force-reactivation flag after a useful speculative result." 
+"Set the one-shot tank force-reactivation flag after a useful speculative result."
 function commit_reactivation_probe!(behav::T; kwargs...) where {T <: AbstractTankBehavFrag}
     force_reactivate!(behav.tank)
     return nothing
@@ -301,7 +306,7 @@ end
 
 #= ---------- GasTankBehavFrag ----------- =#
 
-"Gas tank with linear charge-voltage relationship"
+"Gas tank fragment with a linear charge-voltage relationship."
 struct GasTankBehavFrag <: AbstractTankBehavFrag
     tank::TankBehavFrag
 end
@@ -314,11 +319,6 @@ function produce_rel_elements(behav::GasTankBehavFrag)::NTuple{1, RelativeElemen
     return (rel_element,)
 end
 
-"""
-Render gas tank fluid visualization.
-Renders a black background fluidmask followed by the fluid-colored mask with transparency
-proportional to fill fraction (more transparent when emptier).
-"""
 function render_fluid!(queue::Vector{<:RenderCommand}, behav::GasTankBehavFrag, fluidmask::Symbol, fluid::FluidType, gameticks::Int; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0)
     # Render fluidmask in black as background
     black = DEFAULT_EMPTY_FLUID_COLOUR
@@ -332,14 +332,16 @@ function render_fluid!(queue::Vector{<:RenderCommand}, behav::GasTankBehavFrag, 
     return nothing
 end
 
-#= ---------- StoredFluidState & Fragments ----------- =#
+#= ---------- StoredFluidBehavFrag & StoredFluidState ----------- =#
 
-"Mutable holder for the runtime liquid identity of a refillable tank. `nothing` when the tank is empty."
+"Mutable holder for a refillable tank's runtime liquid identity."
 mutable struct StoredFluidState
     fluid::Union{FluidType, Nothing}
 end
 
-"Fragment that owns a fixed concrete fluid identity. Used for gas tanks and pressure-fed gas sides."
+#= ---------- FixedFluidBehavFrag ----------- =#
+
+"Fragment that owns a fixed concrete fluid identity."
 struct FixedFluidBehavFrag
     fluid::FluidType
 end
@@ -347,7 +349,9 @@ end
 "Get the stored fluid from a fixed-fluid fragment."
 get_stored_fluid(frag::FixedFluidBehavFrag)::FluidType = frag.fluid
 
-"Fragment that owns runtime liquid identity behaviour for refillable tanks."
+#= ---------- StoredFluidBehavFrag ----------- =#
+
+"Fragment that owns runtime liquid identity for refillable tanks."
 struct StoredFluidBehavFrag
     state::StoredFluidState
 end
@@ -371,18 +375,16 @@ end
 
 #= ---------- LiquidTankBehavFrag ----------- =#
 
-"Liquid tank with a near constant voltage until charge is close to zero where it ramps down quickly"
+"Liquid tank fragment with near-constant voltage until charge is close to zero."
 struct LiquidTankBehavFrag <: AbstractTankBehavFrag
     tank::TankBehavFrag
     rotation_behav::HorizontalFlipOnlyBehavFrag
     stored_fluid::StoredFluidState  # runtime liquid identity; nothing when empty
 end
 
-"Construct a liquid tank fragment with explicit initial fluid identity."
 LiquidTankBehavFrag(tank::TankBehavFrag, initial_fluid::Union{FluidType, Nothing}) =
     LiquidTankBehavFrag(tank, HorizontalFlipOnlyBehavFrag(), StoredFluidState(initial_fluid))
 
-"Backward-compatible constructor — assumes no stored fluid (empty tank semantics)."
 LiquidTankBehavFrag(tank::TankBehavFrag) = LiquidTankBehavFrag(tank, nothing)
 
 function produce_rel_elements(behav::LiquidTankBehavFrag)::NTuple{1, RelativeElement}
@@ -394,12 +396,6 @@ function produce_rel_elements(behav::LiquidTankBehavFrag)::NTuple{1, RelativeEle
     return (rel_element,)
 end
 
-"""
-Render liquid tank fluid visualization.
-Renders the fluid-coloured mask with texture-coordinate clipping based on fill fraction,
-always oriented horizontally (Q_POS) regardless of component rotation.
-Accepts `nothing` for fluid to render as empty (uses the default empty colour).
-"""
 function render_fluid!(queue::Vector{<:RenderCommand}, behav::LiquidTankBehavFrag, fluidmask::Symbol, fluid::Union{FluidType, Nothing}, gameticks::Int; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, render_height_offset::Integer = 0)
     black = DEFAULT_EMPTY_FLUID_COLOUR
     fixed_rotation = HexFrame.Q_POS # Force horizontal for fluid rendering
@@ -421,7 +417,7 @@ end
 
 #= ---------- PressureFedTankBehavFrag ----------- =#
 
-"Pressure-fed tank fragment with coupled liquid and gas charge state"
+"Pressure-fed tank fragment with coupled liquid and gas charge state."
 struct PressureFedTankBehavFrag
     liquid_state::TankState
     gas_state::TankState
@@ -547,7 +543,7 @@ function produce_rel_elements(tank::PressureFedTankBehavFrag)::NTuple{2, Relativ
     # gas_pressure based from gas charge and headspace
     gas_tank_pressure = compute_gas_pressure(tank)
     # liquid pressure is up to 1% of max gas pressure scaling by fill, to provide some driver for tanks to balance
-    liquid_pressure = 0.01*(tank.liquid_state.charge/tank.max_liquid_charge * tank.max_gas_pressure)
+    liquid_pressure = 0.01 * (tank.liquid_state.charge / tank.max_liquid_charge * tank.max_gas_pressure)
     # liquid tank gets the sum of the pressures. Gas usually dominates but liquid provides some pressure if gas is empty, and forces equalisation
     liquid_tank_pressure = liquid_pressure + gas_tank_pressure
 
@@ -633,7 +629,7 @@ function get_actions(tank::PressureFedTankBehavFrag; kwargs...)
     gas_sealed = gas_is_sealed(tank)
     has_liquid = tank.liquid_state.charge > 0.0
     has_gas = tank.gas_state.charge > 0.0
-    
+
     gas_vent_tooltip = if !has_gas
         "Gas chamber is already empty"
     elseif gas_sealed
@@ -723,7 +719,7 @@ function can_be_moved(tank::PressureFedTankBehavFrag; kwargs...)
 end
 
 # ===============================================================
-# Concrete Component Behaviors
+# Concrete Component Behaviours
 # ===============================================================
 
 #= ---------- Stored fluid helpers ----------- =#
@@ -743,7 +739,7 @@ end
 
 #= ---------- ThevininTankCompBehav ----------- =#
 
-"Any tank with series resistor and a plain sprite"
+"Tank component with a series resistor and a plain sprite."
 struct ThevininTankCompBehav{T <: AbstractTankBehavFrag, N} <: ComponentBehavior
     tank::T
     out_nodes::NTuple{N, NodePos}
@@ -751,7 +747,6 @@ struct ThevininTankCompBehav{T <: AbstractTankBehavFrag, N} <: ComponentBehavior
     fluid::FluidType
 end
 
-"Keyword-based constructor for a Thevinin tank that supports N out nodes"
 function ThevininTankCompBehav(
         ::Type{T}, connection_number::Integer;
         fluid::FluidType,
@@ -788,7 +783,7 @@ function ThevininTankCompBehav(
     return ThevininTankCompBehav(tankfrag, out_nodes, float(series_conductance), fluid)
 end
 
-# Method forwarding and adapted element production
+# Delegation and adapted element production
 """
 Accessor for the runtime liquid identity of a component.
 Gas tanks always return `comp.fluid` (their fixed fluid type).
@@ -932,7 +927,7 @@ commit_reactivation_probe!(comp::ThevininTankCompBehav; kwargs...) = commit_reac
 
 # Rendering traits
 const TANK_INDICATOR_GREEN = ColourType(0.2, 0.9, 0.2, 1.0) # Connected and active
-const TANK_INDICATOR_RED   = ColourType(0.9, 0.15, 0.15, 1.0) # Manually sealed
+const TANK_INDICATOR_RED = ColourType(0.9, 0.15, 0.15, 1.0) # Manually sealed
 const RENDER_HEIGHT_TANK_INDICATOR = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + 100)
 
 tanksprite(::ThevininTankCompBehav{GasTankBehavFrag, 3}) = :GasTank1_base
@@ -960,7 +955,6 @@ function render_base_elem!(queue::Vector{<:RenderCommand}, comp::ThevininTankCom
     return nothing
 end
 
-"Liquid tank render: uses stored_fluid (which may be `nothing`) for the fluid colour."
 function render_base_elem!(queue::Vector{<:RenderCommand}, comp::ThevininTankCompBehav{LiquidTankBehavFrag}; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, gameticks::Int64 = 0, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
     render_fluid!(queue, comp.tank, fluidmask(comp), comp.tank.stored_fluid.fluid, gameticks; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, scale = scale, transparency = transparency, render_height_offset = render_height_offset)
 
@@ -983,7 +977,7 @@ end
 
 #= ---------- PressureFedTankCompBehav ----------- =#
 
-"Two-port pressure-fed tank with a liquid output and gas pressurisation input"
+"Two-port pressure-fed tank with liquid output and gas pressurisation input."
 struct PressureFedTankCompBehav{N} <: ComponentBehavior
     tank::PressureFedTankBehavFrag
     liquid_nodes::NTuple{N, NodePos}
@@ -1071,10 +1065,14 @@ Gas side remains a concrete `FluidSource`. Liquid side emits a `FluidSource` whe
 or `FluidConstraintRule(IS_LIQUID)` when empty — allowing any compatible liquid to refill.
 """
 function produce_rel_fluid_declarations(comp::PressureFedTankCompBehav)
-    gas_temp = let t = get_default_temperature(Val(comp.gas_fluid)); !isnothing(t) ? t : 300.0; end
+    gas_temp = let t = get_default_temperature(Val(comp.gas_fluid))
+        !isnothing(t) ? t : 300.0
+    end
     stored = comp.tank.stored_liquid.fluid
     liq_decl = if !isnothing(stored) && comp.tank.liquid_state.charge > 0.0
-        liq_temp = let t = get_default_temperature(Val(stored)); !isnothing(t) ? t : 300.0; end
+        liq_temp = let t = get_default_temperature(Val(stored))
+            !isnothing(t) ? t : 300.0
+        end
         RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, FluidSource(stored, liq_temp))
     else
         RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, FluidConstraintRule(HexFluids.IS_LIQUID))
@@ -1179,7 +1177,7 @@ end
 Classify a measured current relative to the desired flow direction.
 Returns a `ReactivationProbeOutcome`.
 """
-function pressurefed_probe_current_class(current::Float64, desired_direction::Symbol; tol::Float64 = 1e-9)::ReactivationProbeOutcome
+function pressurefed_probe_current_class(current::Float64, desired_direction::Symbol; tol::Float64 = 1.0e-9)::ReactivationProbeOutcome
     if desired_direction === :positive
         current > tol  && return HexComponentsAPI.PROBE_USEFUL
         current < -tol && return HexComponentsAPI.PROBE_HARMFUL
@@ -1239,7 +1237,7 @@ function classify_reactivation_probe(comp::PressureFedTankCompBehav{N}; tile::Ti
     return HexComponentsAPI.PROBE_NEUTRAL
 end
 
-"Set one-shot force-reactivation flags for the useful pressure-fed side or sides." 
+"Set one-shot force-reactivation flags for the useful pressure-fed side or sides."
 function commit_reactivation_probe!(comp::PressureFedTankCompBehav{N}; tile::TileCoord, derivedmapstate::DerivedMapState, mna_state, rotation::HexAxis = HexFrame.Q_POS, kwargs...) where {N}
     tank = comp.tank
     sides = pressurefed_probe_sides(tank)

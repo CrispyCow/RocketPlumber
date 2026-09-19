@@ -1,39 +1,84 @@
-# local_packages - Codex Notes
+# Local Package Guide
 
-This directory contains the repo's Julia packages. Also consult the root
-`AGENTS.md` and `local_packages/CLAUDE.md` when changing package code.
+`local_packages/` contains the Julia packages that implement the game. Prefer
+putting reusable domain behaviour here and leaving `src/` as the application
+integration layer. Every package is a separate Julia environment with its own
+`Project.toml` and `Manifest.toml`.
 
-## Dependency Layers
+## Responsibility Map
 
-- Foundation: `HexFrame`, `HexFluids`, `HexElements`, `SquirrelNoise`
-- Core logic: `HexComponentsAPI`, `FlowMap`, `FlowEngine`
-- Application state: `HexFlowControl`
-- Simulation: `HexFlowCalculator`
-- Procedural generation: `HexFlowProcGen`
-- Learning/tutorials: `HexFlowLearningSystem`
-- Rendering: `RenderEngine`, `HexFlowRendering`, `HexFlowTelemetry`
-- Components: packages under `local_packages/components/`
+- `HexFrame`: hex coordinate types, canonicalisation, transforms, adjacency,
+  pipe spans, and stacking order.
+- `HexFluids`: fluid types, constraints, declarations, physical lookup data,
+  and temperature defaults.
+- `HexElements`: relative and absolute circuit-element representations and
+  coordinate mapping.
+- `SquirrelNoise`: deterministic hash noise and `SquirrelRNG`.
+- `components/HexComponentsAPI`: behaviour interfaces, placed component/pipe
+  wrappers, tunables, actions, validation results, and shared simulation
+  constants.
+- `FlowMap`: persistent/runtime map model, ship ownership, placement, docking,
+  learning persistence, space-map abstractions, and playthrough statistics.
+- `FlowEngine`: derived circuit/fluid state, graph filtering, fluid
+  propagation, region temperatures, sparse MNA construction, and solving.
+- `HexFlowProcGen`: deterministic ship/encounter generation, encounter space
+  maps, and manoeuvre planning.
+- `HexFlowCalculator`: authoritative simulation loop, command transactions,
+  reactivation trials, snapshots, and calculator IPC.
+- `HexFlowLearningSystem`: tutorial definitions, runtime learning state, and
+  trigger/blocker evaluation.
+- `HexFlowControl`: input, selection, placement, view, session, and simulation
+  control state shared by the application.
+- `HexFlowTelemetry`: shared timing and diagnostic output.
+- `RenderEngine`: low-level typed OpenGL resources and render commands.
+- `HexFlowRendering`: game render programs, sprite/tile/pipe helpers,
+  particles, shaders, and render-height constants.
+- `components/HexFlow*Components` and `HexFlowBasicPipes`: concrete behaviour
+  implementations. See `components/AGENTS.md`.
 
-Keep dependencies flowing in the established direction. Avoid introducing
-lower-layer dependencies on gameplay, rendering, or application packages.
+This is a responsibility map, not permission to introduce arbitrary imports.
+Treat each package's `Project.toml` as the current dependency graph and avoid
+making domain/foundation packages depend on application or concrete-component
+packages.
 
-## Editing Rules
+## Package Change Rules
 
-- Search the whole repository before modifying exported names, struct fields,
-  constructors, or function signatures.
-- Update callers in `src/` as well as package tests when public APIs change.
-- Consider save compatibility when modifying types stored in `GameMap`; hooks
-  may belong in `src/map_loading.jl`.
-- Prefer package-local tests when the changed package has a test suite.
+- Search the whole repository before changing an exported name, constructor,
+  struct layout, or method contract. Update downstream packages, `src/` call
+  sites, and tests together.
+- Keep abstract interfaces and neutral wrappers in `HexComponentsAPI`; keep
+  map ownership and validation in `FlowMap`; keep numerical circuit/fluid work
+  in `FlowEngine`; keep tick orchestration and mutation transactions in
+  `HexFlowCalculator`.
+- A type stored beneath `GameMap` is persistence-facing even if its package has
+  no JLD2 dependency. Review `src/map_loading.jl` whenever such a type changes.
+- Adding an `ElementTypes` member requires matching labels/units in
+  `HexElements`, plus `FlowEngine` classification, matrix stamping, solution
+  extraction, and tests.
+- Do not edit generated manifests by hand. When package dependencies change,
+  resolve the affected environments and ensure the root environment still
+  resolves. `julia tools/local_package_updater.jl` refreshes all local package
+  environments; pass `--update` only when dependency upgrades are intended.
 
-Packages with known tests include `FlowMap`, `FlowEngine`, `HexFlowCalculator`,
-`HexFlowProcGen`, `HexFlowRendering`, `HexFrame`, `HexFluids`,
-`HexFlowLearningSystem`, and `SquirrelNoise`.
+More specific invariants live in `FlowMap/AGENTS.md`, `FlowEngine/AGENTS.md`,
+`HexFlowCalculator/AGENTS.md`, and `HexFlowRendering/AGENTS.md`.
 
-## Running Tests
+## Testing
 
-```powershell
-Set-Location local_packages/<PackageName>
-julia --project=. -e "using Pkg; Pkg.test()"
+Run the closest package suite first:
+
+```shell
+julia --project=local_packages/<PackageName> -e 'using Pkg; Pkg.test()'
 ```
 
+For a component package, include the `components/` segment. To discover or run
+every package suite under this tree:
+
+```shell
+julia tools/run_all_package_tests.jl --list
+julia tools/run_all_package_tests.jl
+```
+
+The runner discovers test suites dynamically, runs them in separate Julia
+processes, and writes ignored logs under `logs/package_test_runs/`. Use
+`--help` for parallelism, child-thread, instantiation, and logging options.

@@ -1,7 +1,12 @@
+#=
+Scope: Shared timing instrumentation and diagnostic output
+Formatter: Runic
+=#
+
 module HexFlowTelemetry
 
-using TimerOutputs
 using Printf
+using TimerOutputs
 
 # ===============================================================
 # Exports
@@ -29,16 +34,7 @@ const flowcalc_loop_timer = TimerOutput()
 # Configuration
 # ===============================================================
 
-"""
-Configuration for diagnostic timing output for a single timer.
-Each thread manages its own DiagnosticConfig instance.
-
-Fields:
-- `enabled`: Whether diagnostic printing is enabled
-- `timer`: Reference to the TimerOutput object to monitor
-- `interval`: Print diagnostics every N counts (frames, ticks, updates, etc.)
-- `name`: Display name for the timer (shown in diagnostic output)
-"""
+"Configuration for one diagnostic timer; each loop has its own instance"
 struct DiagnosticConfig
     enabled::Bool
     timer::TimerOutput
@@ -46,44 +42,42 @@ struct DiagnosticConfig
     name::String
 end
 
-# Pre-configured diagnostic instances for each timer
+# Per-loop timer configurations
 const render_loop_diagnostic_config::DiagnosticConfig = DiagnosticConfig(
-    false,                               # enabled
-    render_loop_timer,                   # timer
-    1000,                                # interval (frames)
-    "RENDER LOOP (Main Thread)"         # name
+    false,
+    render_loop_timer,
+    1000,  # Frames
+    "RENDER LOOP (Main Thread)",
 )
 
 const flowcalc_loop_diagnostic_config::DiagnosticConfig = DiagnosticConfig(
-    false,                               # enabled
-    flowcalc_loop_timer,                 # timer
-    500,                                 # interval (ticks)
-    "FLOW CALCULATOR LOOP (Background Thread)"  # name
+    false,
+    flowcalc_loop_timer,
+    500,  # Ticks
+    "FLOW CALCULATOR LOOP (Background Thread)",
 )
 
-const gc_telemetry_enabled::Bool = false  # Global toggle for GC telemetry
+const gc_telemetry_enabled::Bool = false
 
 # ===============================================================
 # Diagnostic Printing
 # ===============================================================
 
-# Module-level counter for GC statistics (only accessed by render loop)
+# Render-loop state
 gc_frame_counter = 0
 const gc_interval = 2000
 
-"Handle diagnostic printing for a single timer. Thread-safe - call from any thread."
+"Print and reset a loop timer at its configured interval without interleaving output"
 function handle_diagnostics(config::DiagnosticConfig, counter::Int64)
-    # Check if diagnostics are enabled
     if !config.enabled
-        return
+        return nothing
     end
 
-    # Check if it's time to print (stateless modulo check)
     if counter % config.interval != 0
-        return
+        return nothing
     end
 
-    # Lock to prevent interleaved output from multiple threads
+    # Print one uninterrupted report
     lock(telemetry_print_lock) do
         println("\n" * "="^100)
         println("$(config.name) - Counter: $counter")
@@ -93,16 +87,16 @@ function handle_diagnostics(config::DiagnosticConfig, counter::Int64)
         println("="^100 * "\n")
     end
 
-    # Reset timer after printing (outside lock to minimize critical section)
+    # Begin the next measurement interval after releasing the output lock
     reset_timer!(config.timer)
 
     return nothing
 end
 
-"Print garbage collector statistics. Thread-safe - call from render loop only."
+"Print periodic garbage-collector statistics from the render loop"
 function print_gc_statistics()
     global gc_frame_counter
-    
+
     if !gc_telemetry_enabled
         return nothing
     end
@@ -112,10 +106,10 @@ function print_gc_statistics()
         return nothing
     end
 
-    # Lock to prevent interleaved output
+    # Print one uninterrupted report
     lock(telemetry_print_lock) do
         println("\n" * "="^100)
-        println("GARBAGE COLLECTOR STATISTICS - Frame: $(gc_frame_counter[])")
+        println("GARBAGE COLLECTOR STATISTICS - Frame: $gc_frame_counter")
         println("="^100)
 
         gc_stats = Base.gc_num()

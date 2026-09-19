@@ -16,6 +16,13 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 StructEquality = "6ec83bb0-ed9f-11e9-3b4c-2b04cb4e219c"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
+[sources]
+FlowMap = {path = "../FlowMap"}
+HexComponentsAPI = {path = "../components/HexComponentsAPI"}
+HexElements = {path = "../HexElements"}
+HexFluids = {path = "../HexFluids"}
+HexFrame = {path = "../HexFrame"}
+
 [compat]
 KLU = "0.6.0"
 SmallCollections = "0.4.1"

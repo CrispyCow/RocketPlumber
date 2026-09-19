@@ -1,3 +1,8 @@
+#=
+Scope: Tests for HexFlowBasicPipes pipe click-radius behaviour
+Formatter: Runic
+=#
+
 using Test
 using HexComponentsAPI
 using HexFlowBasicPipes

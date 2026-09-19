@@ -1,17 +1,30 @@
+#=
+Scope: Shared component and pipe behaviour interfaces, request results, and placed wrappers
+Formatter: Runic
+=#
+"""
+Shared interfaces for component and pipe behaviours.
+
+This module defines behaviour contracts and defaults, request results, placed
+component and pipe wrappers, and reactivation probe hooks for the component
+packages.
+"""
 module HexComponentsAPI
 
-using HexFrame, HexElements, HexFluids
-using StaticArrays, Accessors
+using StaticArrays
+using HexElements, HexFluids, HexFrame
 
-# Simulation Constants
+# Simulation Constant Exports
 export BASE_UPS
 
-# General Exports
+# Shared Type Exports
 export Sprite, Component, PlacedComponent, PlacedPipe, TunableProps, EnumTunableProps, AnyTunableProps, ActionInfo
+
+# Request Result Exports
 export ValidRequest, ValidRequestResult, InvalidRequest, RequestStatus, RequestResult, ExpectedMapValidationError
 export isvalidrequest, unwrap, reason
 
-# Tile Component Behavior Exports
+# Component Behaviour Exports
 export ComponentBehavior
 export produce_rel_elements, produce_abs_elements, produce_rel_fluid_declarations
 export get_tunables, set_tunables, render_base_elem!, render_map_elem!
@@ -20,10 +33,12 @@ export get_component_dry_mass, get_component_wet_mass
 export collect_effect_particles!
 export get_actions, do_action!
 export get_default_component_mass, set_default_component_mass!
+
+# Reactivation Probe Exports
 export ReactivationProbe, ReactivationProbeOutcome, PROBE_HARMFUL, PROBE_NEUTRAL, PROBE_USEFUL
 export get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe!
 
-# Pipe Behavior Exports
+# Pipe Behaviour Exports
 export PipeBehavior
 export get_conductance, get_pipe_tunables, set_pipe_tunables, render_pipe_base!, render_pipe_map!
 export get_pipe_click_radius, can_pipe_be_moved
@@ -37,14 +52,15 @@ export get_pipe_click_radius, can_pipe_be_moved
 const BASE_UPS::Float64 = 60.0
 
 # ===============================================================
-# Request Results
+# Request Result Types
 # ===============================================================
 
 """
 Base type for expected domain validation failures caused by supported player map edits.
 
-Concrete subtypes must provide player-suitable `showerror` output. When one escapes candidate map validation, the edit
-is rejected and rolled back without warning-level diagnostics.
+Concrete subtypes must provide player-suitable `showerror` output. When one
+escapes candidate map validation, the edit is rejected and rolled back without
+warning-level diagnostics.
 """
 abstract type ExpectedMapValidationError <: Exception end
 
@@ -85,7 +101,7 @@ reason(::ValidRequest) = throw(ArgumentError("a valid request has no failure rea
 reason(::ValidRequestResult) = throw(ArgumentError("a valid request has no failure reason"))
 
 # ===============================================================
-# Component Behaviors
+# Component Behaviour Interface
 # ===============================================================
 """
 A ComponentBehavior encapsulates all of a component's behaviour.
@@ -98,50 +114,52 @@ These types have the suffix 'Behav'
 A ComponentBehavior can also be built as a composite of other ComponentBehaviors,
 with suitable method delegation or output combination applied.
 
-If there is a common subset of functionality, a Behavior Fragment can be created.
+If there is a common subset of functionality, a Behaviour Fragment can be created.
 This can have some of the required methods included which are relevant and not all.
 These should be suffixed with 'BehavFrag', and should not subtype ComponentBehavior.
 They can then be composed into a feature complete behaviour.
 
-All concrete ComponentBehavior types T must implement the following 
+All concrete ComponentBehavior types T must implement the following
 MANDATORY METHODS:
 
     produce_rel_elements(behav::T)::NTuple{N, RelativeElement}
     get_tunables(behav::T)::NTuple{N, TunableProps}
     set_tunables(behav::T, tunables::NTuple{N, Real})::T
-    render_base_elem!(queue::AbstractVector, behav::T; glmap, rotation, position, scale=1.0, transparency=1.0, render_height_offset::Integer=0, kwargs...)::Nothing
+    render_base_elem!(queue::AbstractVector, behav::T; glmap, rotation, position, pos_offset = nothing, scale = 1.0, transparency = 1.0, render_height_offset::Integer = 0, kwargs...)::Nothing
 
-There are suitable defaults, but concrete ComponentBehavior types T can also implement the following 
+There are suitable defaults, but concrete ComponentBehavior types T can also implement the following
 OPTIONAL METHODS:
 
-    render_map_elem!(queue::AbstractVector, behav::T; glmap, rotation, position, kwargs...)::Nothing
+    render_map_elem!(queue::AbstractVector, behav::T; glmap, rotation, position, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)::Nothing
     produce_rel_fluid_declarations(behav::T)::Tuple
     update_flowbehav!(behav::T; kwargs...)::Nothing
     on_click!(behav::T; kwargs...)::Nothing
     get_thrust(behav::T; kwargs...)::SVector{2, Float64}
     get_component_temperature(behav::T; kwargs...)::Union{Nothing, Float64}
+    get_component_dry_mass(behav::T; kwargs...)::Float64
+    get_component_wet_mass(behav::T; fluid::Union{FluidType, Nothing} = nothing, kwargs...)::Float64
     get_component_mass(behav::T; kwargs...)::Float64
+    get_actions(behav::T; kwargs...)
     collect_effect_particles!(manager, behav::T; kwargs...)::Nothing
     map_rotation(behav::T, rotation::HexAxis)::HexAxis
+    map_mirroring(behav::T, mirrored::Bool)::Bool
     can_be_moved(behav::T; kwargs...)::RequestStatus
     placement_valid(behav::T, coord::TileCoord, surface; rotation::HexAxis, kwargs...)::RequestStatus
     do_action!(behav::T, action_id::Symbol; kwargs...)::RequestResult{String}
-    
+    get_reactivation_probe(behav::T; kwargs...)::Union{Nothing, ReactivationProbe}
+    classify_reactivation_probe(behav::T; kwargs...)::ReactivationProbeOutcome
+    commit_reactivation_probe!(behav::T; kwargs...)::Nothing
+
 """
 abstract type ComponentBehavior end
 
-# Mandatory Methods Errors
-
-"Error for concrete ComponentBehavior without required method produce_rel_elements"
-function produce_rel_elements(behav::T) where {T <: ComponentBehavior}
-    error("Required method produce_rel_elements not implemented for $(nameof(T))")
-end
+#= ---------- Actions and tunables ----------- =#
 
 """
 Describes a component action.
 
-`enabled` and `group_enabled` control if an action is possible and are optionally settable separately,
-to allow you to have a behavior disabled individually but have it not block group actions.
+`enabled` and `group_enabled` control whether an action is possible and are optionally settable separately,
+to allow you to have a behaviour disabled individually without blocking group actions.
 A non-nothing `confirmation_message` is shown in a confirmation window before the action executes.
 """
 @kwdef struct ActionInfo
@@ -162,6 +180,7 @@ end
 
 """
 Tunable descriptor for an enum-backed component parameter.
+
 The UI presents the options as a combo/listbox and returns the selected `T` value via `set_tunables`.
 """
 struct EnumTunableProps{T}
@@ -174,6 +193,13 @@ end
 "Union of all tunable property descriptor types. Used for heterogeneous tunable tuples."
 const AnyTunableProps = Union{TunableProps, EnumTunableProps}
 
+#= ---------- Mandatory interface stubs ----------- =#
+
+"Error for concrete ComponentBehavior without required method produce_rel_elements"
+function produce_rel_elements(behav::T) where {T <: ComponentBehavior}
+    error("Required method produce_rel_elements not implemented for $(nameof(T))")
+end
+
 "Error for concrete ComponentBehavior without required method get_tunables"
 function get_tunables(behav::T) where {T <: ComponentBehavior}
     error("Required method get_tunables not implemented for $(nameof(T))")
@@ -185,33 +211,34 @@ function set_tunables(behav::T, tunables::Tuple) where {T <: ComponentBehavior}
 end
 
 "Error for concrete ComponentBehavior without required method render_base_elem! The kwarg `pos_offset` may be any coordinate acceptable to `glvec()` or `nothing` to indicate no offset."
-function render_base_elem!(queue::AbstractVector, behav::T; glmap, rotation, position, pos_offset = nothing, scale=1.0, transparency=1.0, render_height_offset::Integer=0, kwargs...) where {T <: ComponentBehavior}
+function render_base_elem!(queue::AbstractVector, behav::T; glmap, rotation, position, pos_offset = nothing, scale = 1.0, transparency = 1.0, render_height_offset::Integer = 0, kwargs...) where {T <: ComponentBehavior}
     error("Required method render_base_elem! not implemented for $(nameof(T))")
 end
 
-
-# Optional Method Defaults
+#= ---------- Optional defaults ----------- =#
 
 "Default optional method: render_map_elem! forwards to render_base_elem! The kwarg `pos_offset` may be any coordinate acceptable to `glvec()` or `nothing` to indicate no offset."
 function render_map_elem!(queue::AbstractVector, behav::T; glmap, rotation, position, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...) where {T}
-    # Default map-level forwards visual offset and height to base render (avoid leaking unrelated kwargs)
+    # Forward visual offset and height without leaking unrelated keywords
     return render_base_elem!(queue, behav; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, render_height_offset = render_height_offset)
 end
 
-"Default produce_rel_fluid_declarations returns empty tuple (no fluid declarations)"
+"Default `produce_rel_fluid_declarations` returns an empty tuple (no fluid declarations)."
 produce_rel_fluid_declarations(behav::T) where {T <: ComponentBehavior} = ()
 
-"Default update does nothing"
+"Default `update_flowbehav!` does nothing."
 update_flowbehav!(behav::T; kwargs...) where {T <: ComponentBehavior} = nothing
 
-"Default on_click does nothing"
+"Default `on_click!` does nothing."
 on_click!(behav::T; kwargs...) where {T <: ComponentBehavior} = nothing
 
-"Default thrust is zero vector for non-nozzles"
+"Default thrust is a zero vector for non-nozzles."
 get_thrust(behav::T; kwargs...) where {T <: ComponentBehavior} = SVector{2, Float64}(0.0, 0.0)
 
 "Default component temperature is `nothing`, meaning the component does not expose a component-local temperature."
 get_component_temperature(behav::T; kwargs...) where {T <: ComponentBehavior} = nothing
+
+#= ---------- Mass hooks ----------- =#
 
 const _default_component_mass = Threads.Atomic{Float64}(20.0)
 "Get the default mass assigned to components that don't override `get_component_mass`."
@@ -231,7 +258,7 @@ get_component_wet_mass(behav::T; fluid::Union{FluidType, Nothing} = nothing, kwa
 "Total mass of a component (dry + wet). Override `get_component_dry_mass` and/or `get_component_wet_mass` rather than this."
 get_component_mass(behav::T; kwargs...) where {T <: ComponentBehavior} = get_component_dry_mass(behav) + get_component_wet_mass(behav)
 
-"Default get_actions returns an empty tuple, component has no actions."
+"Default `get_actions` returns an empty tuple; the component has no actions."
 get_actions(behav::T; kwargs...) where {T <: ComponentBehavior} = ()
 
 "Default do_action! rejects unsupported action IDs as programming errors."
@@ -239,10 +266,10 @@ function do_action!(behav::T, action_id::Symbol; kwargs...) where {T <: Componen
     throw(ArgumentError("Action :$(action_id) not implemented for $(nameof(T))"))
 end
 
-"Default collect_effect_particles! does nothing (component produces no particles)"
+"Default `collect_effect_particles!` does nothing (the component produces no particles)."
 collect_effect_particles!(manager, behav::T; kwargs...) where {T <: ComponentBehavior} = nothing
 
-"Default map_rotation does not modify rotation"
+"Default `map_rotation` does not modify rotation."
 map_rotation(behav::T, rotation::HexAxis) where {T <: ComponentBehavior} = rotation
 
 "Default map_mirroring opts components out of functional mirroring."
@@ -252,12 +279,15 @@ map_mirroring(behav::T, mirrored::Bool) where {T <: ComponentBehavior} = false
 can_be_moved(behav::T; kwargs...) where {T <: ComponentBehavior} = ValidRequest()
 
 """
-Default implementation of placement_valid just errors.
+Default implementation of `placement_valid` raises an error.
+
 Default behaviour should be provided by FlowMap with a concrete surface type GameMap.
 """
 function placement_valid(behav::T, coord::TileCoord, surface; kwargs...) where {T <: ComponentBehavior}
     error("placement_valid should be called with GameMap as the surface argument; the method for that is implemented in FlowMap")
 end
+
+#= ---------- Reactivation probes ----------- =#
 
 "A lightweight probe used by the speculative reactivation scheduler"
 struct ReactivationProbe{E <: Tuple, D <: Tuple}
@@ -316,10 +346,11 @@ commit_reactivation_probe!(behav::T; kwargs...) where {T <: ComponentBehavior} =
 # PlacedComponent Wrapper
 # ===============================================================
 """
-A wrapper struct for a component that has been placed on the map.
-Includes shared placement information: the placed rotation, mirror state, and the owning `ship` tag.
-`ship` records which ship in a unified `GameMap` owns the component.
-All behavioural methods are delegated to the component.
+A wrapper for a component placed on the map.
+
+Includes shared placement information: the placed rotation, mirror state, and
+owning `ship` tag. `ship` records which ship in a unified `GameMap` owns the
+component. All behavioural methods delegate to the component.
 """
 struct PlacedComponent{T <: ComponentBehavior}
     component::T
@@ -328,19 +359,25 @@ struct PlacedComponent{T <: ComponentBehavior}
     ship::Symbol
 end
 
+"Convenience constructor for an unmirrored placed component."
 PlacedComponent(component::T, rotation::HexAxis, ship::Symbol) where {T <: ComponentBehavior} = PlacedComponent(component, rotation, false, ship)
 
-# ComponentBehavior Method Delegation
+# Delegated ComponentBehavior methods
+# Elements, fluids, and tunables
 produce_rel_elements(comp::PlacedComponent) = produce_rel_elements(comp.component)
 produce_rel_fluid_declarations(comp::PlacedComponent) = produce_rel_fluid_declarations(comp.component)
 get_tunables(comp::PlacedComponent) = get_tunables(comp.component)
 set_tunables(comp::PlacedComponent, tunables::NTuple{N, Real}) where {N} = set_tunables(comp.component, tunables)
+
+# Rendering and effects
 render_map_elem!(queue::AbstractVector, comp::PlacedComponent; kwargs...) = render_map_elem!(queue, comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
 render_base_elem!(queue::AbstractVector, comp::PlacedComponent; kwargs...) = render_base_elem!(queue, comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
 collect_effect_particles!(manager, comp::PlacedComponent; kwargs...) = collect_effect_particles!(manager, comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
+
+# Flow and interaction
 update_flowbehav!(comp::PlacedComponent; kwargs...) = update_flowbehav!(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
 function on_click!(comp::PlacedComponent; unrotated_clicksite = nothing, kwargs...)
-    if unrotated_clicksite !== nothing
+    if !isnothing(unrotated_clicksite)
         relative_clicksite = tile_orientation_matrix(comp.rotation, comp.mirrored) * unrotated_clicksite
         on_click!(comp.component; relative_clicksite = relative_clicksite, kwargs...) # Forward with the rotated click site
     else
@@ -359,20 +396,21 @@ can_be_moved(comp::PlacedComponent; kwargs...) = can_be_moved(comp.component; kw
 placement_valid(comp::PlacedComponent, coord, surface; kwargs...) = placement_valid(comp.component, coord, surface; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
 get_actions(comp::PlacedComponent; kwargs...) = get_actions(comp.component; kwargs...)
 do_action!(comp::PlacedComponent, action_id::Symbol; kwargs...) = do_action!(comp.component, action_id; kwargs...)
+
+# Reactivation probes
 get_reactivation_probe(comp::PlacedComponent; kwargs...) = get_reactivation_probe(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
 classify_reactivation_probe(comp::PlacedComponent; kwargs...) = classify_reactivation_probe(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
 commit_reactivation_probe!(comp::PlacedComponent; kwargs...) = commit_reactivation_probe!(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
 
-"General implementation which leverages the existing ComponentBehavior produce_rel_elements function"
+"Map relative component elements to absolute elements."
 function produce_abs_elements(tilecomp::PlacedComponent, tile::TileCoord)
     rel_elements = produce_rel_elements(tilecomp.component)
-    # Maps AbsoluteElement from each RelativeElement in the Component
-    # Returns an NTuple to preserve previous API: handles variable-length tuples including zero-length
+    # Preserve the tuple shape, including zero-length tuples
     return ntuple(i -> map_element(rel_elements[i], tile, i, tilecomp.rotation, tilecomp.mirrored), length(rel_elements))
 end
 
 # ===============================================================
-# Pipe Behaviors
+# Pipe Behaviour Interface
 # ===============================================================
 """
 A PipeBehavior encapsulates all of a pipe's behaviour on pipe coordinates.
@@ -385,25 +423,23 @@ These types have the suffix 'PipeBehav'
 A PipeBehavior can also be built as a composite of other PipeBehaviors,
 with suitable method delegation or output combination applied.
 
-If there is a common subset of functionality, a Pipe Behavior Fragment can be created.
+If there is a common subset of functionality, a Pipe Behaviour Fragment can be created.
 This can have some of the required methods included which are relevant and not all.
 These should be suffixed with 'PipeBehavFrag', and should not subtype PipeBehavior.
 They can then be composed into a feature complete behaviour.
 
-All concrete PipeBehavior types T must implement the following 
+All concrete PipeBehavior types T must implement the following
 MANDATORY METHODS:
 
     get_conductance(behav::T)::Float64
     get_pipe_tunables(behav::T)::NTuple{N, TunableProps}
     set_pipe_tunables(behav::T, tunables::NTuple{N, Real})::T
-    render_pipe_base!(queue::AbstractVector, behav::T; glmap, rotation, position::PipeCoord, scale=1.0, transparency=1.0, render_height_offset::Integer=0, kwargs...)::Nothing
+    render_pipe_base!(queue::AbstractVector, behav::T; glmap, rotation, position::PipeCoord, pos_offset = nothing, scale = 1.0, transparency = 1.0, render_height_offset::Integer = 0, kwargs...)::Nothing
     get_pipe_click_radius(behav::T)::Float64
-    
-
-There are suitable defaults, but concrete PipeBehavior types T can also implement the following 
+There are suitable defaults, but concrete PipeBehavior types T can also implement the following
 OPTIONAL METHODS:
 
-    render_pipe_map!(queue::AbstractVector, behav::T; glmap, rotation, position::PipeCoord, kwargs...)::Nothing
+    render_pipe_map!(queue::AbstractVector, behav::T; glmap, rotation, position::PipeCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)::Nothing
     can_pipe_be_moved(behav::T; kwargs...)::RequestStatus
     produce_abs_elements(behav::T, coord::PipeCoord)::NTuple{N, AbsoluteElement}
 
@@ -428,14 +464,19 @@ get_pipe_tunables(p::PlacedPipe) = get_pipe_tunables(p.pipe)
 "Return a new `PlacedPipe` with updated tunables; preserves the ship tag."
 set_pipe_tunables(p::PlacedPipe, tunables::NTuple{N, Real}) where {N} =
     PlacedPipe(set_pipe_tunables(p.pipe, tunables), p.ship)
+
+# Delegated PipeBehavior methods
+# Rendering and movement
 render_pipe_base!(queue, p::PlacedPipe; kwargs...) = render_pipe_base!(queue, p.pipe; kwargs...)
 render_pipe_map!(queue, p::PlacedPipe; kwargs...) = render_pipe_map!(queue, p.pipe; kwargs...)
 get_pipe_click_radius(p::PlacedPipe) = get_pipe_click_radius(p.pipe)
 can_pipe_be_moved(p::PlacedPipe; kwargs...) = can_pipe_be_moved(p.pipe; kwargs...)
+
+# Elements and fluid declarations
 produce_abs_elements(p::PlacedPipe, coord::PipeCoord) = produce_abs_elements(p.pipe, coord)
 produce_rel_fluid_declarations(p::PlacedPipe) = produce_rel_fluid_declarations(p.pipe)
 
-# Mandatory Methods Errors
+#= ---------- Mandatory interface stubs ----------- =#
 
 "Error for concrete PipeBehavior without required method get_conductance"
 function get_conductance(behav::T) where {T <: PipeBehavior}
@@ -462,18 +503,18 @@ function get_pipe_click_radius(behav::T) where {T <: PipeBehavior}
     error("Required method get_pipe_click_radius not implemented for $(nameof(T))")
 end
 
-# Optional Method Defaults
+#= ---------- Optional defaults ----------- =#
 
-"Default optional method: render_pipe_map! forwards to render_pipe_base! The kwarg `pos_offset` may be any coordinate acceptable to `glvec()` or `nothing` to indicate no offset."
+"Default optional method: `render_pipe_map!` forwards to `render_pipe_base!`. The kwarg `pos_offset` may be any coordinate acceptable to `glvec()` or `nothing` to indicate no offset."
 function render_pipe_map!(queue::AbstractVector, behav::T; glmap, rotation, position, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...) where {T <: PipeBehavior}
-    # Default map-level forwards visual offset and height to base render (avoid leaking unrelated kwargs)
+    # Forward visual offset and height without leaking unrelated keywords
     return render_pipe_base!(queue, behav; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, render_height_offset = render_height_offset)
 end
 
 "Default can_pipe_be_moved returns a valid request, indicating the pipe can be moved."
 can_pipe_be_moved(behav::T; kwargs...) where {T <: PipeBehavior} = ValidRequest()
 
-"Default produce_abs_elements creates a resistor element from conductance"
+"Default `produce_abs_elements` creates a resistor element from conductance."
 function produce_abs_elements(behav::T, coord::PipeCoord) where {T <: PipeBehavior}
     connections = AbsoluteElementConnections(to_nodecoord(coord.v1), to_nodecoord(coord.v2))
     conductance = get_conductance(behav)

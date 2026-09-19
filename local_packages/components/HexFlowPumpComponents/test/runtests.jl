@@ -1,3 +1,8 @@
+#=
+Scope: Pump component behaviour and regression tests
+Formatter: Runic
+=#
+
 using Test
 using HexFrame
 using HexElements
@@ -11,14 +16,13 @@ using HexFlowRendering
 using RenderEngine
 using StaticArrays
 
-using HexElements: CONST_RESISTOR, CONST_VOLTAGE
-using HexFlowPumpComponents: EnergyStoreBehavFrag, RotorStateBehavFrag, DelayedDriveBehavFrag,
-    get_current_energy, get_max_energy, update_energy!,
-    get_current_rpm, get_rpm_fraction, update_rpm!,
-    effective_turbine_conductance, turbopump_vibe_magnitude,
-    get_delayed_drive_power, get_stored_drive_energy, update_delayed_drive!,
-    get_rated_rpm, get_failure_rpm, get_turbine_runaway_rpm,
-    get_overspeed_fraction, get_animation_rpm_fraction
+using HexFlowPumpComponents: EnergyStoreBehavFrag
+using HexFlowPumpComponents: get_current_energy, get_max_energy, update_energy!
+using HexFlowPumpComponents: get_current_rpm, get_rpm_fraction, update_rpm!
+using HexFlowPumpComponents: effective_turbine_conductance, turbopump_vibe_magnitude
+using HexFlowPumpComponents: get_delayed_drive_power, get_stored_drive_energy, update_delayed_drive!
+using HexFlowPumpComponents: get_rated_rpm, get_failure_rpm, get_turbine_runaway_rpm
+using HexFlowPumpComponents: get_overspeed_fraction, get_animation_rpm_fraction
 
 const TEST_TILE = TileCoord(3, -2)
 const TEST_ROTATION = HexFrame.Q_POS
@@ -29,7 +33,7 @@ function make_vsource(tile::TileCoord, index::Integer)
         NodeCoord(tile, HexFrame.NODE_Q_POS),
         NodeCoord(tile, HexFrame.GROUND)
     )
-    return AbsoluteElement(connections, 0.0, CONST_VOLTAGE, ElementID(tile, index))
+    return AbsoluteElement(connections, 0.0, HexElements.CONST_VOLTAGE, ElementID(tile, index))
 end
 
 "Register one or more voltage source ids in the MNA state."
@@ -42,8 +46,10 @@ function register_vsources!(mna_state::MNA_State, tile::TileCoord, indices::Vara
 end
 
 "Write a node voltage into the mock MNA state."
-function set_node_voltage!(mna_state::MNA_State, tile::TileCoord, node, voltage::Float64;
-        rotation::HexAxis = TEST_ROTATION, mirrored::Bool = false)
+function set_node_voltage!(
+        mna_state::MNA_State, tile::TileCoord, node, voltage::Float64;
+        rotation::HexAxis = TEST_ROTATION, mirrored::Bool = false
+    )
     mna_state.node_voltages[map_element(node, tile, rotation, mirrored)] = voltage
     return mna_state
 end
@@ -114,7 +120,8 @@ function make_hot_turbopump(; kwargs...)
 end
 
 "Advance a turbopump under a fixed turbine-side condition until damage triggers or the limit expires."
-function run_until_damage!(comp::TurboPumpCompBehav;
+function run_until_damage!(
+        comp::TurboPumpCompBehav;
         tile::TileCoord = TEST_TILE,
         rotation::HexAxis = TEST_ROTATION,
         voltage::Float64 = 40.0,
@@ -160,7 +167,7 @@ end
     powered = produce_rel_elements(pump, true)
     unpowered = produce_rel_elements(pump, false)
 
-    @test powered[1].type === CONST_VOLTAGE
+    @test powered[1].type === HexElements.CONST_VOLTAGE
     @test powered[1].connections == RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.NODE_Q_POS)
     @test powered[1].value ≈ 50.0
     @test unpowered[1].value == 0.0
@@ -262,13 +269,13 @@ end
 
     # At 1500/3000 RPM: pump voltage = 50 × 0.5 = 25, turbine G follows the non-linear rpm_frac^0.7 curve.
     @test length(elements) == 3
-    @test elements[1].type === CONST_VOLTAGE
+    @test elements[1].type === HexElements.CONST_VOLTAGE
     @test elements[1].connections == RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.NODE_Q_POS)
     @test elements[1].value ≈ 25.0
-    @test elements[2].type === CONST_RESISTOR
+    @test elements[2].type === HexElements.CONST_RESISTOR
     @test elements[2].connections == RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.NODE_Q_NEG)
     @test elements[2].value ≈ 1.0
-    @test elements[3].type === CONST_RESISTOR
+    @test elements[3].type === HexElements.CONST_RESISTOR
     @test elements[3].connections == RelativeElementConnections(HexFrame.NODE_S_POS, HexFrame.GROUND)
     @test elements[3].value ≈ effective_turbine_conductance(comp)
     @test all(elem.active for elem in elements)
@@ -285,7 +292,7 @@ end
     original_drive_state = comp.delayed_drive.power
     original_temperature_state = comp.overheat.temperature
     original_damage_state = comp.overheat.damage
-    tuned = set_tunables(comp, (60.0, 2.0, 0.6, 3500.0, 3500.0, 400.0, 0.5, 0.90, 25.0, 2.0, 1600.0, 12.0, 7.0))
+    tuned = set_tunables(comp, (60.0, 2.0, 0.6, 3500.0, 3500.0, 400.0, 0.5, 0.9, 25.0, 2.0, 1600.0, 12.0, 7.0))
     @test tuned.rotor.rpm === original_rpm_state
     @test tuned.delayed_drive.power === original_drive_state
     @test tuned.overheat.temperature === original_temperature_state
@@ -297,7 +304,7 @@ end
     @test tuned.rotor.max_rpm ≈ 3500.0
     @test tuned.rotor.rotor_inertia ≈ 400.0
     @test tuned.rotor.friction_coefficient ≈ 0.5
-    @test tuned.cycle_efficiency ≈ 0.90
+    @test tuned.cycle_efficiency ≈ 0.9
     @test get_delayed_drive_power(tuned.delayed_drive) ≈ 25.0
     @test tuned.delayed_drive.time_constant ≈ 2.0
     @test tuned.overheat.limit_temperature_k ≈ 1600.0
@@ -376,7 +383,8 @@ end
 @testset "Turbopump speed-mask render command" begin
     queue = HexFlowRendering.SpriteRenderCommand[]
     comp = make_turbopump_at_rpm(1500.0)
-    render_base_elem!(queue, comp;
+    render_base_elem!(
+        queue, comp;
         glmap = _mock_turbopump_glmap(),
         rotation = TEST_ROTATION,
         position = TEST_TILE,
@@ -749,9 +757,9 @@ end
     probe = get_reactivation_probe(inactive_comp; tile = tile, rotation = rotation)
     @test probe isa ReactivationProbe
     @test length(probe.rel_elements) == 3
-    @test probe.rel_elements[1].type === CONST_VOLTAGE    # pump source at index 1
-    @test probe.rel_elements[2].type === CONST_RESISTOR   # series resistor at index 2
-    @test probe.rel_elements[3].type === CONST_RESISTOR   # turbine shunt at index 3
+    @test probe.rel_elements[1].type === HexElements.CONST_VOLTAGE    # pump source at index 1
+    @test probe.rel_elements[2].type === HexElements.CONST_RESISTOR   # series resistor at index 2
+    @test probe.rel_elements[3].type === HexElements.CONST_RESISTOR   # turbine shunt at index 3
     @test all(elem.active for elem in probe.rel_elements)
     # Probe voltage reflects current RPM.
     @test probe.rel_elements[1].value ≈ inactive_comp.max_pump_voltage * get_rpm_fraction(inactive_comp.rotor)
@@ -903,8 +911,8 @@ end
 
     turbo_elements = produce_rel_elements(turbo_electric)
     @test length(turbo_elements) == 2
-    @test turbo_elements[1].type === CONST_VOLTAGE
-    @test turbo_elements[2].type === CONST_RESISTOR
+    @test turbo_elements[1].type === HexElements.CONST_VOLTAGE
+    @test turbo_elements[2].type === HexElements.CONST_RESISTOR
     turbo_decls = produce_rel_fluid_declarations(turbo_electric)
     @test length(turbo_decls) == 2
     @test turbo_decls[1] === RelativeFluidDeclaration(HexFrame.NODE_Q_POS, FluidConstraintRule(HexFluids.IS_LIQUID))

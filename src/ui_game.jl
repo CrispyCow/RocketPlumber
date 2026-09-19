@@ -1,3 +1,8 @@
+#=
+Scope: In-game CImGui windows for inspection, editing, flight status, and space-map planning
+Formatter: Runic
+=#
+
 # ===============================================================
 # UI Game Windows (Inspector, Timer, Toolbar, Properties)
 # ===============================================================
@@ -29,6 +34,7 @@ function placement_state_description(state::AbstractPlacementState)::Union{Nothi
     state isa PlacementDeleteState && return "Delete active. Left-click deletes."
     state isa PlacementSurfaceEditState && return "Surface edit active. Left-click toggles surface."
     state isa PlacementRedockState && return "Redock active. Left-click to place ship."
+
     return nothing
 end
 
@@ -102,13 +108,14 @@ function display_component_values!(tunables_tuple)
             CImGui.Text("$(format_value(props.current_val)) $(props.unit_desc)")
         elseif props isa EnumTunableProps
             idx = findfirst(==(props.current_val), props.options)
-            val_label = idx !== nothing ? props.option_labels[idx] : string(props.current_val)
+            val_label = !isnothing(idx) ? props.option_labels[idx] : string(props.current_val)
             CImGui.Text("$(props.type_desc): $(val_label)")
         end
         CImGui.Separator()
 
         CImGui.PopID()
     end
+
     return nothing
 end
 
@@ -137,6 +144,7 @@ function display_element_details!(elements::Vector{AbsoluteElement}, derivedmaps
         CImGui.Separator()
         CImGui.PopID()
     end
+
     return nothing
 end
 
@@ -409,8 +417,8 @@ const SPACEMAP_CLICK_RADIUS_SQ = 400.0   # Squared distance in plot units for cl
 
 const GALAXY_ESCAPE_BUTTON_COLOUR = ImVec4(0.95, 0.72, 0.14, 1.0)
 const GALAXY_ESCAPE_BUTTON_HOVERED_COLOUR = ImVec4(1.0, 0.82, 0.22, 1.0)
-const GALAXY_ESCAPE_BUTTON_ACTIVE_COLOUR = ImVec4(0.85, 0.60, 0.08, 1.0)
-const GALAXY_ESCAPE_BUTTON_TEXT_COLOUR = ImVec4(0.12, 0.10, 0.04, 1.0)
+const GALAXY_ESCAPE_BUTTON_ACTIVE_COLOUR = ImVec4(0.85, 0.6, 0.08, 1.0)
+const GALAXY_ESCAPE_BUTTON_TEXT_COLOUR = ImVec4(0.12, 0.1, 0.04, 1.0)
 const GALAXY_ESCAPE_WARNING_BUTTON_COLOUR = ImVec4(0.65, 0.16, 0.12, 1.0)
 const GALAXY_ESCAPE_WARNING_BUTTON_HOVERED_COLOUR = ImVec4(0.78, 0.22, 0.16, 1.0)
 
@@ -465,6 +473,7 @@ function render_simulation_controls!(inputstate::InputState, flowcalc_ipc::FlowC
     if CImGui.Button(pause_label, ImVec2(CImGui.GetContentRegionAvail().x, 0.0))
         @atomic :monotonic flowcalc_ipc.shared_state.is_paused = !is_paused
     end
+
     return nothing
 end
 
@@ -568,27 +577,31 @@ function ui_velocity_tracker_render!(
         x_axis = rotate_vec2(SVector(compass_len, 0.0), compass_angle)
         y_axis = rotate_vec2(SVector(0.0, compass_len), compass_angle)
 
-        ImPlot.SetNextLineStyle(COMPASS_X_COLOUR, 1.0)
         ImPlot.PlotLine(
             "##compass_x",
             Float64[-x_axis[1], x_axis[1]],
-            Float64[-x_axis[2], x_axis[2]]
+            Float64[-x_axis[2], x_axis[2]];
+            spec = ImPlot.ImPlotSpec(LineColor = COMPASS_X_COLOUR, LineWeight = 1.0),
         )
-        ImPlot.SetNextLineStyle(COMPASS_Y_COLOUR, 1.0)
         ImPlot.PlotLine(
             "##compass_y",
             Float64[-y_axis[1], y_axis[1]],
-            Float64[-y_axis[2], y_axis[2]]
+            Float64[-y_axis[2], y_axis[2]];
+            spec = ImPlot.ImPlotSpec(LineColor = COMPASS_Y_COLOUR, LineWeight = 1.0),
         )
 
         # Remaining ΔV arrow (amber, only during burn phases)
         if show_dv_mode
             rem_dv = manoeuvre.burn_remaining_dv
             if norm(rem_dv) > 1.0e-10
-                ImPlot.SetNextLineStyle(DV_COLOUR, 2.5)
-                ImPlot.PlotLine("Remaining ΔV", Float64[0.0, rem_dv[1]], Float64[0.0, rem_dv[2]])
-                ImPlot.SetNextMarkerStyle(ImPlot.ImPlotMarker_Circle, 4.0, DV_COLOUR)
-                ImPlot.PlotScatter("##dv_tip", Float64[rem_dv[1]], Float64[rem_dv[2]])
+                ImPlot.PlotLine(
+                    "Remaining ΔV", Float64[0.0, rem_dv[1]], Float64[0.0, rem_dv[2]];
+                    spec = ImPlot.ImPlotSpec(LineColor = DV_COLOUR, LineWeight = 2.5),
+                )
+                ImPlot.PlotScatter(
+                    "##dv_tip", Float64[rem_dv[1]], Float64[rem_dv[2]];
+                    spec = ImPlot.ImPlotSpec(Marker = ImPlot.ImPlotMarker_Circle, MarkerSize = 4.0, MarkerFillColor = DV_COLOUR),
+                )
             end
         end
 
@@ -598,19 +611,27 @@ function ui_velocity_tracker_render!(
             if show_dv_mode
                 accel_dir = accel_plot / max(norm(accel_plot), 1.0e-10)
                 accel_display = accel_dir * (axis_range * 0.3)
-                ImPlot.SetNextLineStyle(ImVec4(0.4, 1.0, 0.4, 0.5), 4.0)
-                ImPlot.PlotLine("##accel_dir", Float64[0.0, accel_display[1]], Float64[0.0, accel_display[2]])
+                ImPlot.PlotLine(
+                    "##accel_dir", Float64[0.0, accel_display[1]], Float64[0.0, accel_display[2]];
+                    spec = ImPlot.ImPlotSpec(LineColor = ImVec4(0.4, 1.0, 0.4, 0.5), LineWeight = 4.0),
+                )
             else
-                ImPlot.SetNextLineStyle(ACCEL_COLOUR, 2.5)
-                ImPlot.PlotLine("Acceleration", Float64[0.0, accel_plot[1]], Float64[0.0, accel_plot[2]])
-                ImPlot.SetNextMarkerStyle(ImPlot.ImPlotMarker_Circle, 5.0, ACCEL_COLOUR)
-                ImPlot.PlotScatter("##accel_tip", Float64[accel_plot[1]], Float64[accel_plot[2]])
+                ImPlot.PlotLine(
+                    "Acceleration", Float64[0.0, accel_plot[1]], Float64[0.0, accel_plot[2]];
+                    spec = ImPlot.ImPlotSpec(LineColor = ACCEL_COLOUR, LineWeight = 2.5),
+                )
+                ImPlot.PlotScatter(
+                    "##accel_tip", Float64[accel_plot[1]], Float64[accel_plot[2]];
+                    spec = ImPlot.ImPlotSpec(Marker = ImPlot.ImPlotMarker_Circle, MarkerSize = 5.0, MarkerFillColor = ACCEL_COLOUR),
+                )
             end
         end
 
         # Origin marker (white plus sign)
-        ImPlot.SetNextMarkerStyle(ImPlot.ImPlotMarker_Plus, 6.0, ImVec4(1.0, 1.0, 1.0, 0.8))
-        ImPlot.PlotScatter("##origin", Float64[0.0], Float64[0.0])
+        ImPlot.PlotScatter(
+            "##origin", Float64[0.0], Float64[0.0];
+            spec = ImPlot.ImPlotSpec(Marker = ImPlot.ImPlotMarker_Plus, MarkerSize = 6.0, MarkerFillColor = ImVec4(1.0, 1.0, 1.0, 0.8)),
+        )
 
         ImPlot.EndPlot()
     end
@@ -650,9 +671,9 @@ function ui_velocity_tracker_render!(
             CImGui.PushStyleColor(CImGui.ImGuiCol_ButtonHovered, GALAXY_ESCAPE_BUTTON_HOVERED_COLOUR)
         end
         complete_clicked = button_with_disable(
-                "Complete Escape", ImVec2(-1.0, 35.0), !eligible;
-                tooltip = "Achieve a 1-Star escape before completing the attempt.",
-            )
+            "Complete Escape", ImVec2(-1.0, 35.0), !eligible;
+            tooltip = "Achieve a 1-Star escape before completing the attempt.",
+        )
         eligible && CImGui.PopStyleColor(3)
         if complete_clicked
             inputstate.galaxy_escape_completion_requested = true
@@ -732,7 +753,7 @@ function ui_propertybox_render!(
     CImGui.Separator()
     CImGui.NewLine()
 
-    # Tile placement: edit component tunables
+    # Tile placement controls
     if state isa PlacementTileState
         CImGui.Text("Tile Tunable Values:")
         CImGui.Separator()
@@ -742,19 +763,19 @@ function ui_propertybox_render!(
         CImGui.Unindent()
     end
 
-    # Pipe chain state: edit pipe behaviour settings while actively placing pipes in editor mode
+    # Pipe placement controls
     if state isa PlacementPipeChainState && editor_capabilities_enabled(inputstate)
-            CImGui.Text("Select Pipe Type:")
-            for (label, pipe_type) in PIPE_TYPES
-                if CImGui.Button(label)
-                    state.pipe_behavior = pipe_type()
-                end
-                CImGui.SameLine()
+        CImGui.Text("Select Pipe Type:")
+        for (label, pipe_type) in PIPE_TYPES
+            if CImGui.Button(label)
+                state.pipe_behavior = pipe_type()
             end
-            CImGui.NewLine()
-            CImGui.NewLine()
+            CImGui.SameLine()
+        end
+        CImGui.NewLine()
+        CImGui.NewLine()
 
-        # Show tunables for the selected pipe behaviour
+        # Selected pipe properties
         CImGui.Text("Pipe Properties:")
         CImGui.Separator()
 
@@ -764,7 +785,7 @@ function ui_propertybox_render!(
         CImGui.Unindent()
     end
 
-    # Ready state: display info about right-click selected or hovered element
+    # Selection inspector
     if state isa PlacementReadyState
         selected_count = selected_element_count(inputstate)
 
@@ -840,6 +861,7 @@ function render_spacemap_no_map_message!(win_float)
     text_size = CImGui.CalcTextSize(text)
     CImGui.SetCursorPos(ImVec2((win_float.width - text_size.x) / 2.0, centre_y))
     CImGui.Text(text)
+
     return nothing
 end
 
@@ -916,6 +938,7 @@ function render_spacemap_target_info!(gamemap::GameMap, selected_idx::Int)
     CImGui.Text(@sprintf("Richness: %.1f", ep.richness))
     CImGui.Text(@sprintf("Distance: %.0f", distance))
     CImGui.Text(@sprintf("Relative Vel: %.1f", norm(ep.velocity - player_vel)))
+
     return nothing
 end
 
@@ -1004,6 +1027,7 @@ function render_galaxy_escape_discovery!(inputstate::InputState)
     if clicked
         inputstate.gui_inputs[:galaxy_escape_confirmation] = true
     end
+
     return nothing
 end
 
@@ -1032,9 +1056,11 @@ function render_galaxy_escape_confirmation!(
     CImGui.TextWrapped("Proceeding will plot an escape trajectory out of the galactic plane. If you succeed in this manoeuvre, you win the game!")
     CImGui.Spacing()
     CImGui.TextWrapped(
-        "This requires a minimum delta-V of $minimum_delta_v to reach escape velocity. " *
-        "There are no other ships outside the galactic plane to refuel from so ensure you are confident your ship has enough delta-V before departure. " *
-        "Remember that the in-game delta-V estimate is just based on fuel inventory and may not be accurate!",
+        string(
+            "This requires a minimum delta-V of $minimum_delta_v to reach escape velocity. ",
+            "There are no other ships outside the galactic plane to refuel from so ensure you are confident your ship has enough delta-V before departure. ",
+            "Remember that the in-game delta-V estimate is just based on fuel inventory and may not be accurate!",
+        ),
     )
     CImGui.Spacing()
     CImGui.TextWrapped(
@@ -1046,9 +1072,11 @@ function render_galaxy_escape_confirmation!(
         CImGui.Spacing()
         CImGui.PushStyleColor(CImGui.ImGuiCol_Text, ImVec4(1.0, 0.35, 0.2, 1.0))
         CImGui.TextWrapped(
-            "WARNING: Your delta-V estimate is below the minimum escape target. " *
-            "This attempt is unlikely to succeed and may consume most of your fuel. " *
-            "Are you sure you want to proceed?",
+            string(
+                "WARNING: Your delta-V estimate is below the minimum escape target. ",
+                "This attempt is unlikely to succeed and may consume most of your fuel. ",
+                "Are you sure you want to proceed?",
+            ),
         )
         CImGui.PopStyleColor()
     end
@@ -1083,6 +1111,7 @@ function render_galaxy_escape_confirmation!(
     return nothing
 end
 
+"Render the left control panel for the space-map overlay."
 function render_spacemap_left_panel!(
         inputstate::InputState,
         flowcalc_ipc::FlowCalculatorIPC,
@@ -1177,6 +1206,7 @@ function render_spacemap_left_panel!(
     return nothing
 end
 
+"Render committed or previewed intercept trajectories on the space map."
 function render_spacemap_trajectory_previews!(
         inputstate::InputState,
         gamemap::GameMap,
@@ -1230,33 +1260,34 @@ function render_spacemap_trajectory_previews!(
     end
 
     # Remaining player trajectory from the current state to the predicted intercept point.
-    ImPlot.SetNextLineStyle(player_path_colour, line_width)
     ImPlot.PlotLine(
         "##leg_player_path",
         Float64[player_pos[1], predicted_intercept_position[1]],
-        Float64[player_pos[2], predicted_intercept_position[2]]
+        Float64[player_pos[2], predicted_intercept_position[2]];
+        spec = ImPlot.ImPlotSpec(LineColor = player_path_colour, LineWeight = line_width),
     )
 
     # Target trajectory from its current position to the same intercept point.
-    ImPlot.SetNextLineStyle(target_colour, line_width)
     ImPlot.PlotLine(
         "##leg_target",
         Float64[target_pos[1], predicted_intercept_position[1]],
-        Float64[target_pos[2], predicted_intercept_position[2]]
+        Float64[target_pos[2], predicted_intercept_position[2]];
+        spec = ImPlot.ImPlotSpec(LineColor = target_colour, LineWeight = line_width),
     )
 
     # Mark the shared intercept point.
     burn_marker_colour = has_manoeuvre ? ImVec4(1.0, 0.9, 0.3, 0.9) : ImVec4(1.0, 0.9, 0.3, 0.5)
-    ImPlot.SetNextMarkerStyle(ImPlot.ImPlotMarker_Asterisk, 7.0, burn_marker_colour)
     ImPlot.PlotScatter(
         "##intercept_marker",
         Float64[predicted_intercept_position[1]],
-        Float64[predicted_intercept_position[2]]
+        Float64[predicted_intercept_position[2]];
+        spec = ImPlot.ImPlotSpec(Marker = ImPlot.ImPlotMarker_Asterisk, MarkerSize = 7.0, MarkerFillColor = burn_marker_colour),
     )
 
     return nothing
 end
 
+"Render the encounter plot area for the space-map overlay."
 function render_spacemap_plot_area!(
         inputstate::InputState,
         gamemap::GameMap,
@@ -1289,8 +1320,10 @@ function render_spacemap_plot_area!(
         ImPlot.SetupAxes("X", "Y", axis_flags, axis_flags)
 
         # Player marker: yellow diamond
-        ImPlot.SetNextMarkerStyle(ImPlot.ImPlotMarker_Diamond, 8.0, ImVec4(0.8, 0.8, 0.0, 1.0))
-        ImPlot.PlotScatter("##player", Float64[player_pos[1]], Float64[player_pos[2]])
+        ImPlot.PlotScatter(
+            "##player", Float64[player_pos[1]], Float64[player_pos[2]];
+            spec = ImPlot.ImPlotSpec(Marker = ImPlot.ImPlotMarker_Diamond, MarkerSize = 8.0, MarkerFillColor = ImVec4(0.8, 0.8, 0.0, 1.0)),
+        )
 
         n_enc = length(encounter_points)
         selected_idx = validate_spacemap_selection!(inputstate, encounter_points)
@@ -1323,19 +1356,19 @@ function render_spacemap_plot_area!(
                 line_colour = i == selected_idx ? ImVec4(1.0, 0.45, 0.35, 0.85) : ImVec4(1.0, 0.4, 0.3, 0.25)
                 line_width = i == selected_idx ? 2.0 : 1.0
 
-                ImPlot.SetNextLineStyle(line_colour, line_width)
                 ImPlot.PlotLine(
                     @sprintf("##enc_vel_%d", i),
                     Float64[enc_xs[i], vel_tip[1]],
-                    Float64[enc_ys[i], vel_tip[2]]
+                    Float64[enc_ys[i], vel_tip[2]];
+                    spec = ImPlot.ImPlotSpec(LineColor = line_colour, LineWeight = line_width),
                 )
 
                 # Arrow tip: small solid circle at the velocity vector endpoint
-                ImPlot.SetNextMarkerStyle(ImPlot.ImPlotMarker_Circle, 3.0, line_colour, 0.0, line_colour)
                 ImPlot.PlotScatter(
                     @sprintf("##enc_tip_%d", i),
                     Float64[vel_tip[1]],
-                    Float64[vel_tip[2]]
+                    Float64[vel_tip[2]];
+                    spec = ImPlot.ImPlotSpec(Marker = ImPlot.ImPlotMarker_Circle, MarkerSize = 3.0, MarkerLineColor = line_colour, MarkerFillColor = line_colour, LineWeight = 0.0),
                 )
             end
 
@@ -1362,21 +1395,20 @@ function render_spacemap_plot_area!(
                     (ImPlot.ImPlotMarker_Cross, 7.0)
                 end
                 colour = fluid_tag_to_imvec4(tag)
-                ImPlot.SetNextMarkerStyle(marker, size, colour)
                 fuel_label = fluid_type_label(tag)
                 label = isnothing(fuel_label) ? encounter_class_label(class) : "$(encounter_class_label(class)) ($fuel_label)"
-                ImPlot.PlotScatter(label, xs, ys, length(xs))
+                ImPlot.PlotScatter(
+                    label, xs, ys;
+                    spec = ImPlot.ImPlotSpec(Marker = marker, MarkerSize = size, MarkerFillColor = colour),
+                )
             end
 
             # Render selected encounter highlight
             if selected_idx >= 1 && selected_idx <= n_enc
-                ImPlot.SetNextMarkerStyle(
-                    ImPlot.ImPlotMarker_Diamond, 9.0,
-                    ImVec4(1.0, 0.9, 0.3, 1.0)
-                )
                 ImPlot.PlotScatter(
                     "##selected",
-                    Float64[enc_xs[selected_idx]], Float64[enc_ys[selected_idx]]
+                    Float64[enc_xs[selected_idx]], Float64[enc_ys[selected_idx]];
+                    spec = ImPlot.ImPlotSpec(Marker = ImPlot.ImPlotMarker_Diamond, MarkerSize = 9.0, MarkerFillColor = ImVec4(1.0, 0.9, 0.3, 1.0)),
                 )
             end
 
@@ -1412,6 +1444,7 @@ function render_spacemap_plot_area!(
 
     ImPlot.PopStyleColor(1)
     CImGui.EndChild()
+
     return nothing
 end
 

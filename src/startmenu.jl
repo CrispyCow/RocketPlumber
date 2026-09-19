@@ -1,3 +1,8 @@
+#=
+Scope: Start-menu pages, actions, and session transitions into the game loop
+Formatter: Runic
+=#
+
 # ===============================================================
 # Start Menu — State Machine, Page Renderers, Action Handling
 # ===============================================================
@@ -81,7 +86,7 @@ const MENU_BACK_BUTTON_H = 30.0
 # Page Renderers
 # ===============================================================
 
-"Render the initial landing page: New Game, Load Game, Tutorials, Quit."
+"Render the initial start-menu page."
 function render_page_initial!(state::StartMenuState, box_w::Float64, button_width::Float64, button_height::Float64)
     CImGui.Dummy((0.0, 20.0))
 
@@ -136,9 +141,8 @@ function render_page_initial!(state::StartMenuState, box_w::Float64, button_widt
     return nothing
 end
 
-"Render the new game page: Explorer Mode, Blank Ship, Back"
+"Render the new-game mode selection page."
 function render_page_new_game!(state::StartMenuState, box_w::Float64, button_width::Float64, button_height::Float64, escape_rising::Bool)
-    # Small, left-aligned back button
     if CImGui.Button("< Back", (MENU_BACK_BUTTON_W, MENU_BACK_BUTTON_H)) || escape_rising
         state.page = PAGE_INITIAL
         return nothing
@@ -167,16 +171,15 @@ function render_page_new_game!(state::StartMenuState, box_w::Float64, button_wid
     return nothing
 end
 
-"Render the explorer mode settings page: seed input, randomise, start"
+"Render the explorer-mode settings page."
 function render_page_explorer_settings!(state::StartMenuState, box_w::Float64, button_width::Float64, button_height::Float64, escape_rising::Bool)
-    # Small, left-aligned back button
     if CImGui.Button("< Back", (MENU_BACK_BUTTON_W, MENU_BACK_BUTTON_H)) || escape_rising
         state.page = PAGE_NEW_GAME
         return nothing
     end
     CImGui.Dummy((0.0, 10.0))
 
-    # Seed input
+    # Explorer parameters
     seed_input_width = button_width - 110.0
     CImGui.SetCursorPosX((box_w - button_width) / 2)
     CImGui.SetNextItemWidth(seed_input_width)
@@ -190,10 +193,8 @@ function render_page_explorer_settings!(state::StartMenuState, box_w::Float64, b
     @cref CImGui.Checkbox("Learning Helper Active", &learning_enabled)
     state.menu_inputs[:explorer_learning_enabled] = learning_enabled
 
-    # Spacer for future settings
     CImGui.Dummy((0.0, 60.0))
 
-    # Start button
     CImGui.SetCursorPosX((box_w - button_width) / 2)
     if CImGui.Button("Start Explorer Mode", (button_width, button_height))
         @info "Starting Explorer Mode"
@@ -203,7 +204,7 @@ function render_page_explorer_settings!(state::StartMenuState, box_w::Float64, b
     return nothing
 end
 
-"Render the tutorial selector page."
+"Render the standalone tutorial and demo selector."
 function render_page_tutorial_select!(state::StartMenuState, box_w::Float64, button_width::Float64, button_height::Float64, escape_rising::Bool)
     if CImGui.Button("< Back", (MENU_BACK_BUTTON_W, MENU_BACK_BUTTON_H)) || escape_rising
         state.page = PAGE_INITIAL
@@ -238,11 +239,9 @@ end
 # Main UI Dispatch
 # ===============================================================
 
-"""
-Renders the start menu window, dispatching to the correct page renderer
-based on the current state. Must be called within `ui_renderwrap`.
-"""
+"Render the current start-menu page within an active `ui_renderwrap`."
 function ui_start_menu_render!(state::StartMenuState, window::GLFW.Window)
+    # Centre the menu window
     winsize = GLFW.GetWindowSize(window)
     win_w, win_h = Float64(winsize.width), Float64(winsize.height)
     box_h = state.page == PAGE_TUTORIAL_SELECT ? MENU_TUTORIAL_BOX_H : MENU_BOX_H
@@ -255,7 +254,7 @@ function ui_start_menu_render!(state::StartMenuState, window::GLFW.Window)
         CImGui.ImGuiWindowFlags_NoMove |
         CImGui.ImGuiWindowFlags_NoCollapse
 
-    # Window title varies by page
+    # Select the page title
     title = if state.page == PAGE_INITIAL
         "Rocket Plumber"
     elseif state.page == PAGE_NEW_GAME
@@ -273,6 +272,7 @@ function ui_start_menu_render!(state::StartMenuState, window::GLFW.Window)
     button_width = MENU_BOX_W - MENU_BUTTON_PADDING
     escape_rising = get_inrising!(state.last_keystates, GLFW.KEY_ESCAPE, window)
 
+    # Render the selected page
     if state.page == PAGE_INITIAL
         render_page_initial!(state, MENU_BOX_W, button_width, MENU_BUTTON_HEIGHT)
     elseif state.page == PAGE_NEW_GAME
@@ -338,10 +338,12 @@ end
 "Determine the next session after a sandbox session exits."
 function next_session(session::SandboxSession, result::GameLoopResult)::Union{Nothing, GameSession}
     if result.exit_reason == EXIT_SANDBOX_COMPLETED
+        # Advance through multi-level tutorials
         if session.current_level < length(session.definition.levels)
             return SandboxSession(session.definition, session.tutorial_id, session.current_level + 1, session.parent_bundle)
         end
 
+        # Record completion before returning to the parent map
         if !isnothing(session.parent_bundle)
             parent_map = session.parent_bundle.gamemap
             learning_system = get_learning_system(parent_map)
@@ -416,11 +418,10 @@ end
 # ===============================================================
 
 """
-Handle the latched action from the start menu. Called outside `ui_renderwrap`
-to avoid nested ImGui frames when entering the game loop or file dialogs.
+Handle a latched start-menu action outside `ui_renderwrap`.
 
-Creates an initial session for the action, then runs the session state machine
-until it returns `nothing` or the GLFW window-close flag is set.
+This avoids nested ImGui frames when entering the game loop or file dialogs.
+Runs the resulting session state machine until it ends or the window closes.
 """
 function handle_start_menu_action!(state::StartMenuState, window::GLFW.Window)
     action = state.action
@@ -443,22 +444,18 @@ end
 # Start Menu Loop
 # ===============================================================
 
-"""
-Enters the start menu loop, rendering the state-machine-driven menu in a 
-vsynced loop until window close is requested.
-"""
+"Run the vsynced start menu until the window closes."
 function enter_start_menu(window::GLFW.Window)
     state = StartMenuState()
     GLFW.SetWindowTitle(window, "Rocket Plumber")
-    GLFW.SwapInterval(1) # Enable VSync
-    glClearColor(0.2, 0.2, 0.2, 1.0) # Set background color to dark gray
+    GLFW.SwapInterval(1)
+    glClearColor(0.2, 0.2, 0.2, 1.0)
 
-    # Main menu loop
     while !GLFW.WindowShouldClose(window)
         GLFW.PollEvents()
         glClear(GL_COLOR_BUFFER_BIT)
 
-        # Render UI and capture action
+        # Render the frame
         state.action = ACTION_NONE
         ui_renderwrap() do
             ui_start_menu_render!(state, window)
@@ -466,10 +463,10 @@ function enter_start_menu(window::GLFW.Window)
 
         GLFW.SwapBuffers(window)
 
-        # Snapshot post-current-poll state as "last" for next frame's rising-edge checks
+        # Snapshot post-poll state for the next frame's rising-edge checks
         update_lastinstate!(state.last_keystates, window)
 
-        # Handle actions outside ui_renderwrap
+        # Handle deferred actions outside the CImGui frame
         handle_start_menu_action!(state, window)
     end
 

@@ -47,8 +47,32 @@ StructArrays = "09ab397b-f2b6-538f-b94a-2f83cf4a842a"
 StructEquality = "6ec83bb0-ed9f-11e9-3b4c-2b04cb4e219c"
 TimerOutputs = "a759f4b9-e2f1-59dc-863e-4aeb61b1ea8f"
 
+[sources]
+FlowEngine = {path = "local_packages/FlowEngine"}
+FlowMap = {path = "local_packages/FlowMap"}
+HexComponentsAPI = {path = "local_packages/components/HexComponentsAPI"}
+HexElements = {path = "local_packages/HexElements"}
+HexFlowBasicComponents = {path = "local_packages/components/HexFlowBasicComponents"}
+HexFlowBasicPipes = {path = "local_packages/components/HexFlowBasicPipes"}
+HexFlowCalculator = {path = "local_packages/HexFlowCalculator"}
+HexFlowControl = {path = "local_packages/HexFlowControl"}
+HexFlowLearningSystem = {path = "local_packages/HexFlowLearningSystem"}
+HexFlowNozzleComponents = {path = "local_packages/components/HexFlowNozzleComponents"}
+HexFlowProcGen = {path = "local_packages/HexFlowProcGen"}
+HexFlowPumpComponents = {path = "local_packages/components/HexFlowPumpComponents"}
+HexFlowRendering = {path = "local_packages/HexFlowRendering"}
+HexFlowSwitchComponents = {path = "local_packages/components/HexFlowSwitchComponents"}
+HexFlowTankComponents = {path = "local_packages/components/HexFlowTankComponents"}
+HexFlowTelemetry = {path = "local_packages/HexFlowTelemetry"}
+HexFluids = {path = "local_packages/HexFluids"}
+HexFrame = {path = "local_packages/HexFrame"}
+RenderEngine = {path = "local_packages/RenderEngine"}
+SquirrelNoise = {path = "local_packages/SquirrelNoise"}
+
 [compat]
 Artifacts = "1.11.0"
+CImGui = "9"
+ImPlot = "0.8"
 LinearAlgebra = "1.12.0"
 Pkg = "1.12.0"
 Printf = "1.11.0"

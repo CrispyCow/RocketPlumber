@@ -1,3 +1,8 @@
+#=
+Scope: Derived circuit and fluid state construction, sparse MNA solving, and region temperatures
+Formatter: Runic
+=#
+
 module FlowEngine
 
 using HexFrame, HexElements, HexFluids, HexComponentsAPI
@@ -90,7 +95,7 @@ end
     primaryelements::Vector{AbsoluteElement} = Vector{AbsoluteElement}()   # base collected elements before filtering
     primarynodes::Dict{NodeCoord, UInt16} = Dict{NodeCoord, UInt16}()      # diagnostic node count from primary elements
     # Survivors filtered by pruning/grounding/dangling checks
-    filteredelements::Vector{AbsoluteElement} = Vector{AbsoluteElement}() 
+    filteredelements::Vector{AbsoluteElement} = Vector{AbsoluteElement}()
     filterednodes::Dict{NodeCoord, UInt16} = Dict{NodeCoord, UInt16}()
     # Fluid declarations (collected from components)
     primary_fluid_declarations::Vector{AbsFluidDecl} = Vector{AbsFluidDecl}()
@@ -165,7 +170,7 @@ The authoritative cache hashes are computed from the constructed CSC matrix, not
     # The sparse A matrix (wraps the csc* vectors above — NOT independently allocated)
     mat_A_sparse::SparseMatrixCSC{Float64, Int64} = spzeros(1, 1)
     # KLU factorisation — circuit-simulation specialist from SuiteSparse.
-    # WARNING: deepcopy of KLUFactorization shares C pointers (_symbolic, _numeric) and will double-free on GC, Do not copy!
+    # WARNING: deepcopy of KLUFactorization shares C pointers (_symbolic, _numeric) and will double-free on GC. Do not copy!
     mat_A_lu::KLU.KLUFactorization{Float64, Int64} = klu(sparse([1], [1], [1.0]))
     # CSC-based cache hashes
     structure_hash::UInt64 = UInt64(0)  # hash of CSC colptr/rowval — stored structure
@@ -209,6 +214,10 @@ end
     vsource_currents::Dict{ElementID, Float64} = Dict{ElementID, Float64}()
     node_voltages_scaled::Dict{NodeCoord, Float64} = Dict{NodeCoord, Float64}()
 end
+
+# ===============================================================
+# Element Collection and Graph Filtering
+# ===============================================================
 
 # DerivedMapState ship surface edge access
 "Get all ship surface edge tile coordinates (tiles on the boundary of the ship)"
@@ -264,6 +273,7 @@ function grounded_element_node(element::AbsoluteElement)::Union{NodeCoord, Nothi
     return is_grounded(v2) ? v1 : nothing
 end
 
+"Append the absolute resistor representation of a pipe span to `abs_vector`."
 function add_pipes_abs_element!(abs_vector::Vector{AbsoluteElement}, coord::PipeCoord, conductance::Float64)
     connections = AbsoluteElementConnections(to_nodecoord(coord.v1), to_nodecoord(coord.v2))
     absolute_element = AbsoluteElement(connections, conductance, CONST_RESISTOR, ElementID(coord))
@@ -300,8 +310,10 @@ end
 Collect electrical elements in the GameMap into `out` (empties first, then fills).
 If `ship_name` is provided, only elements belonging to that ship are included.
 """
-function list_elements!(out::Vector{AbsoluteElement}, gamemap::GameMap;
-        ship_name::Union{Symbol, Nothing} = nothing)
+function list_elements!(
+        out::Vector{AbsoluteElement}, gamemap::GameMap;
+        ship_name::Union{Symbol, Nothing} = nothing
+    )
     empty!(out)
     sizehint!(out, length(gamemap.components) * 2 + length(gamemap.pipe_behaviors))
     for (coord, comp) in gamemap.components
@@ -354,6 +366,7 @@ end
 "Return `true` for all elements. Used as the default filter hook for graph builders."
 _include_all_elements(::AbsoluteElement)::Bool = true
 
+"Return `true` when every non-ground endpoint of `element` remains present in `present_nodes`."
 function _all_non_ground_nodes_present(element::AbsoluteElement, present_nodes::AbstractSet)::Bool
     for i in 1:2
         node = getfield(element.connections, i)
@@ -364,6 +377,7 @@ function _all_non_ground_nodes_present(element::AbsoluteElement, present_nodes::
     return true
 end
 
+"Recursively remove a leaf node and any newly exposed leaf from `nodeconnections`."
 function _prune_leaf_cascade!(nodeconnections::Dict{NodeCoord, ConnectionVect}, node::NodeCoord)
     haskey(nodeconnections, node) || return nothing
     connected_nodes = nodeconnections[node]
@@ -475,6 +489,7 @@ function build_node_connection_map!(
     return nothing
 end
 
+"Return `true` for elements that can propagate a ground reference through the graph search."
 _include_ground_search_connection_element(element::AbsoluteElement)::Bool =
     element.type != CONST_CURRENT &&
     element.type != C_DEP_CURRENT &&
@@ -482,6 +497,7 @@ _include_ground_search_connection_element(element::AbsoluteElement)::Bool =
     !is_grounded(element.connections.v1) &&
     !is_grounded(element.connections.v2)
 
+"Return `true` for grounded elements that can seed the ground reachability search."
 _include_ground_search_root_element(element::AbsoluteElement)::Bool =
     !isnothing(grounded_element_node(element)) &&
     element.type != CONST_CURRENT &&
@@ -511,10 +527,12 @@ function ground_search!(elements::Vector{AbsoluteElement}, scratchpad::Calculato
     groundsearch_grounded_nodes = scratchpad.groundsearch_grounded_nodes
     pending_nodes = scratchpad.groundsearch_pending_nodes
 
-    build_node_connection_map!(groundsearch_nodeconnections, elements;
+    build_node_connection_map!(
+        groundsearch_nodeconnections, elements;
         element_filter_function = _include_ground_search_connection_element,
     )
-    index_grounded_source_elements!(root_index, elements;
+    index_grounded_source_elements!(
+        root_index, elements;
         element_filter_function = _include_ground_search_root_element,
     )
 
@@ -719,6 +737,7 @@ function index_fluid_declarations!(derivedmapstate::DerivedMapState, declaration
             push!(source_nodes, node)
         end
     end
+    return nothing
 end
 
 "Check that a declaration at a traversed node is compatible with the region's fluid type"
@@ -748,7 +767,7 @@ end
 function index_grounded_source_elements!(
         source_index::Dict{NodeCoord, Int},
         elements::Vector{AbsoluteElement};
-    element_filter_function::Function = _include_all_elements,
+        element_filter_function::Function = _include_all_elements,
     )
 
     empty!(source_index)
@@ -766,12 +785,12 @@ end
 "Traverse from source nodes to assign fluid types and build regions. No MNA needed."
 function propagate_fluid_types!(derivedmapstate::DerivedMapState, scratchpad::CalculatorScratchpad)
     nodeconnections = scratchpad.final_nodeconnections
-    actualfluids    = derivedmapstate.nodeactualfluids
-    node_to_region  = derivedmapstate.node_to_region
-    node_decls      = derivedmapstate.node_declarations
-    source_nodes    = derivedmapstate.source_nodes
-    visited         = scratchpad.fluid_propagation_visited
-    pending_nodes   = scratchpad.fluid_propagation_pending
+    actualfluids = derivedmapstate.nodeactualfluids
+    node_to_region = derivedmapstate.node_to_region
+    node_decls = derivedmapstate.node_declarations
+    source_nodes = derivedmapstate.source_nodes
+    visited = scratchpad.fluid_propagation_visited
+    pending_nodes = scratchpad.fluid_propagation_pending
 
     empty!(actualfluids)
     empty!(node_to_region)
@@ -824,7 +843,7 @@ end
 "Compute per-region temperatures using flow-weighted averages. Requires solved MNA state."
 function compute_region_temperatures!(derivedmapstate::DerivedMapState, scratchpad::CalculatorScratchpad, mna_state)
     region_temps = derivedmapstate.region_temperatures
-    node_temps   = derivedmapstate.node_temperatures
+    node_temps = derivedmapstate.node_temperatures
     node_to_region = derivedmapstate.node_to_region
 
     empty!(region_temps)
@@ -832,8 +851,8 @@ function compute_region_temperatures!(derivedmapstate::DerivedMapState, scratchp
 
     # Collect per-region flow-weighted temperature sums
     region_weighted_temp = Dict{Int, Float64}()
-    region_total_flow    = Dict{Int, Float64}()
-    region_fluid_type    = Dict{Int, FluidType}()
+    region_total_flow = Dict{Int, Float64}()
+    region_fluid_type = Dict{Int, FluidType}()
 
     for abs_decl in derivedmapstate.primary_fluid_declarations
         abs_decl.declaration isa FluidSource || continue
@@ -845,9 +864,9 @@ function compute_region_temperatures!(derivedmapstate::DerivedMapState, scratchp
         region_fluid_type[rid] = source.fluid_type
 
         flow = _get_source_flow_rate(node, derivedmapstate, scratchpad, mna_state)
-        if abs(flow) > 1.0E-9
+        if abs(flow) > 1.0e-9
             region_weighted_temp[rid] = get(region_weighted_temp, rid, 0.0) + flow * source.temperature
-            region_total_flow[rid]    = get(region_total_flow, rid, 0.0) + flow
+            region_total_flow[rid] = get(region_total_flow, rid, 0.0) + flow
         end
     end
 
@@ -866,6 +885,10 @@ function compute_region_temperatures!(derivedmapstate::DerivedMapState, scratchp
     end
     return nothing
 end
+
+# ===============================================================
+# MNA State Preparation and Solve
+# ===============================================================
 
 "Populate `mna_state` node index lookups from filtered nodes (empties and refills existing dicts)."
 function MNA_indexnodes!(mna_state::MNA_State, derivedmapstate::DerivedMapState)
@@ -1221,8 +1244,7 @@ function MNA_updateA!(mna_state::MNA_State)
     cache = mna_state.a_cache
     new_structure_hash, new_value_hash, new_zero_state_hash = compute_A_hashes(cache)
 
-    if new_structure_hash != cache.structure_hash ||
-       new_zero_state_hash != cache.zero_state_hash
+    if (new_structure_hash != cache.structure_hash) || (new_zero_state_hash != cache.zero_state_hash)
         # Cold path: topology or zero-state changed so do full sparse rebuild + new KLU factorisation
         cache.mat_A_lu = klu(cache.mat_A_sparse)
     elseif new_value_hash != cache.value_hash
@@ -1238,6 +1260,7 @@ function MNA_updateA!(mna_state::MNA_State)
 end
 
 
+"Construct the dense right-hand-side MNA vector `[I; E]` for the current circuit state."
 function MNA_getZ(mna_state::MNA_State)
     vsources = mna_state.vsources
     vsource_lookup = mna_state.vsource_lookup

@@ -1,3 +1,8 @@
+#=
+Scope: Game-specific rendering helpers, programs, particles, and animation
+Formatter: Runic
+=#
+
 module HexFlowRendering
 
 #= Dependencies =#
@@ -7,7 +12,7 @@ using StaticArrays, StructArrays, CSyntax.CRef, Accessors
 using ColorSchemes, ColorTypes
 using PNGFiles
 # Custom Packages
-using RenderEngine, HexFlowTelemetry 
+using RenderEngine, HexFlowTelemetry
 using HexFrame, HexFluids, HexComponentsAPI, FlowEngine, FlowMap, HexFlowControl
 import RenderEngine.uniforms_type
 import RenderEngine.get_vao_symbol
@@ -88,12 +93,12 @@ const RENDER_HEIGHT_TRACTOR_BEAM::Int32 = RENDER_HEIGHT_BACKGROUND - 100  # trac
 const FLUID_COLD_FLOOR_RGB::SVector{3, Float32} = SVector{3, Float32}(0.08, 0.08, 0.08)
 
 const fluid_colour_lookup = Dict{FluidType, ColourType}(
-    HexFluids.MONOPROP_LIQUID => ColourType(0.608, 0.169, 0.69,  1.0), # purple
-    HexFluids.MONOPROP_GAS    => ColourType(0.737, 0.569, 0.769, 1.0), # light purple
-    HexFluids.COLD_GAS        => ColourType(0.71,  0.918, 0.929, 1.0), # light blue
-    HexFluids.FUEL_LIQUID     => ColourType(0.95,  0.65,  0.1,   1.0), # orange-yellow
-    HexFluids.OXIDISER_LIQUID => ColourType(0.15,  0.55,  0.95,  1.0), # vivid medium blue
-    HexFluids.BIPROP_EXHAUST  => ColourType(1.0,   0.6,   0.1,   1.0), # orange-white flame
+    HexFluids.MONOPROP_LIQUID => ColourType(0.608, 0.169, 0.69, 1.0), # purple
+    HexFluids.MONOPROP_GAS => ColourType(0.737, 0.569, 0.769, 1.0), # light purple
+    HexFluids.COLD_GAS => ColourType(0.71, 0.918, 0.929, 1.0), # light blue
+    HexFluids.FUEL_LIQUID => ColourType(0.95, 0.65, 0.1, 1.0), # orange-yellow
+    HexFluids.OXIDISER_LIQUID => ColourType(0.15, 0.55, 0.95, 1.0), # vivid medium blue
+    HexFluids.BIPROP_EXHAUST => ColourType(1.0, 0.6, 0.1, 1.0), # orange-white flame
 )
 
 "Returns GLfloat RGBA colour from a FluidType, or default if fluid is nothing or not found."
@@ -103,8 +108,10 @@ function get_fluid_colour(fluid::Union{FluidType, Nothing}; default::ColourType 
 end
 
 "Temperature-aware variant: lerps between FLUID_COLD_FLOOR_RGB at ambient and the reference colour at the fluid's reference temperature. Fluids without a defined reference temperature (or whose reference equals ambient) return the unscaled colour, so callers can pass temperature unconditionally."
-function get_fluid_colour(fluid::Union{FluidType, Nothing}, temperature::Float64;
-                          default::ColourType = DEFAULT_EMPTY_FLUID_COLOUR)::ColourType
+function get_fluid_colour(
+        fluid::Union{FluidType, Nothing}, temperature::Float64;
+        default::ColourType = DEFAULT_EMPTY_FLUID_COLOUR
+    )::ColourType
     isnothing(fluid) && return default
     base = get(fluid_colour_lookup, fluid, default)
     t_ref = HexFluids.lookup_fluid_reference_temperature(fluid)
@@ -136,9 +143,9 @@ end
 function set_view_ubo(map::GLObjectMap, viewT::SMatrix{3, 3, Float32})
     # std140 pads each column of a mat3 to vec4 (4 floats with trailing zero)
     packed_view = SVector{12, Float32}(
-        viewT[1,1], viewT[2,1], viewT[3,1], 0f0,
-        viewT[1,2], viewT[2,2], viewT[3,2], 0f0,
-        viewT[1,3], viewT[2,3], viewT[3,3], 0f0,
+        viewT[1, 1], viewT[2, 1], viewT[3, 1], 0.0f0,
+        viewT[1, 2], viewT[2, 2], viewT[3, 2], 0.0f0,
+        viewT[1, 3], viewT[2, 3], viewT[3, 3], 0.0f0,
     )
     return set_ubo(map, :ViewTransform_UBO, packed_view)
 end
@@ -298,21 +305,21 @@ function get_ship_surface_colour(ship_name::Symbol)::SVector{4, Float32}
     if ship_name == :primary
         return SVector{4, Float32}(1.0f0, 1.0f0, 1.0f0, 1.0f0)
     end
-    
+
     # Hash the ship name to get deterministic pseudo-random values
     h = hash(ship_name)
-    
+
     # Extract components from hash for noticeable grey/brown variation
     # Range: 0.50 to 0.75 for clearly distinct non-primary appearance
-    r_base = 0.50f0 + 0.25f0 * Float32((h & 0xFF) / 255)
-    g_base = 0.50f0 + 0.25f0 * Float32(((h >> 8) & 0xFF) / 255)
-    b_base = 0.50f0 + 0.25f0 * Float32(((h >> 16) & 0xFF) / 255)
-    
+    r_base = 0.5f0 + 0.25f0 * Float32((h & 0xFF) / 255)
+    g_base = 0.5f0 + 0.25f0 * Float32(((h >> 8) & 0xFF) / 255)
+    b_base = 0.5f0 + 0.25f0 * Float32(((h >> 16) & 0xFF) / 255)
+
     # Bias towards grey/brown by reducing blue slightly and keeping r >= g
     r = clamp(r_base, 0.53f0, 0.75f0)
-    g = clamp(g_base * 0.98f0, 0.50f0, 0.72f0)
-    b = clamp(b_base * 0.90f0, 0.45f0, 0.68f0)
-    
+    g = clamp(g_base * 0.98f0, 0.5f0, 0.72f0)
+    b = clamp(b_base * 0.9f0, 0.45f0, 0.68f0)
+
     return SVector{4, Float32}(r, g, b, 1.0f0)
 end
 
@@ -416,8 +423,6 @@ function render_basic_pipe(
     )::RenderCommand
     return render_basic_pipe(glmap, sprite, position; pos_offset = pos_offset, kwargs...)
 end
-
-
 
 
 "Returns a RenderCommand for a sprite with animated liquid effect."
@@ -574,9 +579,11 @@ function _ship_draw_height(gamemap::GameMap, ship_name::Union{Nothing, Symbol}, 
 end
 
 "Renders all tile components in the gamemap by iterating the global components dict with per-ship offset/height lookup."
-function tile_queued_render!(queue::Vector{<:RenderCommand}, map::GLObjectMap,
+function tile_queued_render!(
+        queue::Vector{<:RenderCommand}, map::GLObjectMap,
         gamemap::GameMap, derivedmapstate::DerivedMapState,
-        mna_state::MNA_StateSnapshot, gamestate::GameState)
+        mna_state::MNA_StateSnapshot, gamestate::GameState
+    )
     isempty(gamemap.ships) && return nothing
 
     for (coord, tilecomp) in gamemap.components
@@ -620,7 +627,7 @@ function node_queued_render!(queue::Vector{<:RenderCommand}, map::GLObjectMap, g
         ship_name = find_ship_for_node(node, gamemap)
         ship_offset = get_ship_render_offset(gamemap, ship_name)
         node_height = _ship_draw_height(gamemap, ship_name, RENDER_HEIGHT_NODE)
-        
+
         position = glvec(node)
         # Apply position offset
         if ship_offset != AxialCoord(0.0, 0.0)
@@ -630,23 +637,29 @@ function node_queued_render!(queue::Vector{<:RenderCommand}, map::GLObjectMap, g
         rotation_matrix = hex_rotmats[HexFrame.Q_POS]
 
         # Render pressure mask with voltage colour
-        push!(queue, render_basic_sprite(
-            map, :Node_pressuremask, rotation_matrix, position;
-            colour = colour, transparency = 1.0, draw_height = node_height
-        ))
+        push!(
+            queue, render_basic_sprite(
+                map, :Node_pressuremask, rotation_matrix, position;
+                colour = colour, transparency = 1.0, draw_height = node_height
+            )
+        )
 
         # Render frame on top
-        push!(queue, render_basic_sprite(
-            map, :Node_frame, rotation_matrix, position;
-            draw_height = node_height + Int32(10)
-        ))
+        push!(
+            queue, render_basic_sprite(
+                map, :Node_frame, rotation_matrix, position;
+                draw_height = node_height + Int32(10)
+            )
+        )
     end
     return nothing
 end
 
 "Renders all pipe behaviors in the gamemap by iterating the global pipes dict with per-ship offset/height lookup."
-function pipe_queued_render!(queue::Vector{<:RenderCommand}, map::GLObjectMap,
-        gamemap::GameMap, derivedmapstate::DerivedMapState, gamestate::GameState)
+function pipe_queued_render!(
+        queue::Vector{<:RenderCommand}, map::GLObjectMap,
+        gamemap::GameMap, derivedmapstate::DerivedMapState, gamestate::GameState
+    )
     isempty(gamemap.ships) && return nothing
 
     for (coord, pipe) in gamemap.pipe_behaviors
@@ -842,8 +855,8 @@ function update_particle_physics!(group::ParticleGroup, gamestate; base_ups::Flo
             # Type assertions needed: particles is StructArray{Particle} (abstract C,I params)
             pos_col = particles.position::Vector{SVector{2, Float32}}
             vel_col = particles.velocity::Vector{SVector{2, Float64}}
-            ct_col  = particles.creation_time::Vector{Int64}
-            vt_col  = particles.vanishing_time::Vector{Int64}
+            ct_col = particles.creation_time::Vector{Int64}
+            vt_col = particles.vanishing_time::Vector{Int64}
 
             write_idx = 0
             for i in eachindex(vt_col)
@@ -852,8 +865,8 @@ function update_particle_physics!(group::ParticleGroup, gamestate; base_ups::Flo
                     if write_idx != i
                         @inbounds pos_col[write_idx] = pos_col[i]
                         @inbounds vel_col[write_idx] = vel_col[i]
-                        @inbounds ct_col[write_idx]  = ct_col[i]
-                        @inbounds vt_col[write_idx]  = vt_col[i]
+                        @inbounds ct_col[write_idx] = ct_col[i]
+                        @inbounds vt_col[write_idx] = vt_col[i]
                     end
                 end
             end
@@ -995,7 +1008,7 @@ function cull_particles_to_buffer!(
         end
 
         # Surface filter (manual write-pointer + inlined rounding avoids all closure and FieldVector allocations)
-        if gamemap !== nothing
+        if !isnothing(gamemap)
             @timeit render_loop_timer "filter_surface" begin
                 write_idx = 0
                 for i in eachindex(manager.cull_buffer)
@@ -1087,7 +1100,8 @@ function thrust_dust_particle_effect!(
                         positions[idx] = tile_pos
                         velocities[idx] = SVector{2, Float64}(
                             (rand() - 0.5) * PARTICLE_VELOCITY_RANGE,
-                            (rand() - 0.5) * PARTICLE_VELOCITY_RANGE)
+                            (rand() - 0.5) * PARTICLE_VELOCITY_RANGE
+                        )
                         idx += 1
                     end
                 end
@@ -1100,8 +1114,10 @@ function thrust_dust_particle_effect!(
                 resize!(velocities, actual_count)
 
                 prev_len = length(group.particles)
-                spawn_particles!(manager, positions, velocities,
-                    spawn_tick, spawn_tick + PARTICLE_LIFETIME_TICKS; colour = colour)
+                spawn_particles!(
+                    manager, positions, velocities,
+                    spawn_tick, spawn_tick + PARTICLE_LIFETIME_TICKS; colour = colour
+                )
 
                 # Pre-advance catch-up particles to correct trail position (skip current tick)
                 if tick_offset > 0
@@ -1341,8 +1357,10 @@ function __init__()
     if isdefined(Main, :Revise)
         # Development mode: use source files directly for instant updates
         SHADER_DIR[] = joinpath(pkgdir(@__MODULE__), "src", "shaders")
-        TEXTURE_ATLAS_DIR[] = joinpath(dirname(dirname(pkgdir(@__MODULE__))), 
-                                        "tools", "TexturePacker", "outputs")
+        TEXTURE_ATLAS_DIR[] = joinpath(
+            dirname(dirname(pkgdir(@__MODULE__))),
+            "tools", "TexturePacker", "outputs"
+        )
         @info "HexFlowRendering: Development mode (using source files for instant updates)"
     else
         # Production mode: use artifacts (bundled by JuliaC automatically)
@@ -1351,6 +1369,8 @@ function __init__()
         TEXTURE_ATLAS_DIR[] = artifact_path(artifact_hash("texture_atlas", artifacts_toml))
         @info "HexFlowRendering: Production mode (using bundled artifacts)"
     end
+
+    return nothing
 end
 
 end # module HexFlowRendering

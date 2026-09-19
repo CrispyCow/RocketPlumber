@@ -1,3 +1,8 @@
+#=
+Scope: Nozzle and combustion-chamber component behaviour tests
+Formatter: Runic
+=#
+
 using Test
 using HexFrame
 using HexElements
@@ -13,8 +18,10 @@ const TEST_TILE = TileCoord(3, -2)
 const TEST_ROTATION = HexFrame.Q_POS
 
 "Set a node voltage in the mock MNA state."
-function set_node_voltage!(mna_state::MNA_State, tile::TileCoord, node, voltage::Float64;
-        rotation::HexAxis = TEST_ROTATION, mirrored::Bool = false)
+function set_node_voltage!(
+        mna_state::MNA_State, tile::TileCoord, node, voltage::Float64;
+        rotation::HexAxis = TEST_ROTATION, mirrored::Bool = false
+    )
     mna_state.node_voltages[map_element(node, tile, rotation, mirrored)] = voltage
     return mna_state
 end
@@ -347,15 +354,15 @@ end
     comp = BipropChamberCompBehav()
     elements = produce_rel_elements(comp)
     @test length(elements) == 6
-    
+
     # Element 1 & 2: VCVS sources (one per propellant)
     @test elements[1].value == 1.0 && elements[1].type == HexElements.V_DEP_VOLTAGE
     @test elements[2].value == 1.0 && elements[2].type == HexElements.V_DEP_VOLTAGE
-    
+
     # Element 3 & 4: CCCS sinks (one per propellant)
     @test elements[3].type == HexElements.C_DEP_CURRENT
     @test elements[4].type == HexElements.C_DEP_CURRENT
-    
+
     # Element 5 & 6: Orifice resistors (one per propellant)
     @test elements[5].value == 0.4 && elements[5].type == HexElements.CONST_RESISTOR
     @test elements[6].value == 1.0 && elements[6].type == HexElements.CONST_RESISTOR
@@ -364,7 +371,7 @@ end
 @testset "Bipropellant combustion chamber fluid declarations" begin
     comp = BipropChamberCompBehav()
     decls = produce_rel_fluid_declarations(comp)
-    
+
     @test length(decls) == 3
     @test decls[1] === RelativeFluidDeclaration(HexFrame.NODE_R_NEG, FluidTypeRule(HexFluids.FUEL_LIQUID))
     @test decls[2] === RelativeFluidDeclaration(HexFrame.NODE_S_NEG, FluidTypeRule(HexFluids.OXIDISER_LIQUID))
@@ -389,11 +396,11 @@ end
 @testset "Bipropellant combustion chamber flow ratio at equal pressures" begin
     # This is the critical correctness test: at equal input pressures, verify Q_o/Q_f ≈ 2.5
     comp = BipropChamberCompBehav(fuel_conductance = 0.4, oxid_conductance = 1.0)
-    
+
     # Build a mock circuit state with equal pressures on both input nodes
     tile = TEST_TILE
     rotation = TEST_ROTATION
-    
+
     # Set equal pressures on fuel and oxidiser input nodes (both at 100V)
     mna_state = MNA_State()
     set_node_voltage!(mna_state, tile, HexFrame.NODE_R_NEG, 100.0; rotation = rotation)   # fuel input
@@ -406,49 +413,49 @@ end
     # At equal internal pressures (50V), volumetric flow through orifice is proportional to conductance times pressure diff
     fuel_current = 0.4 * (100.0 - 50.0)  # G_f * ΔP_f = 0.4 * 50 = 20.0
     oxid_current = 1.0 * (100.0 - 50.0)  # G_o * ΔP_o = 1.0 * 50 = 50.0
-    
+
     # Record in vsource_currents (indexed by element ID at indices 1 and 2)
     mna_state.vsource_currents[ElementID(tile, 1)] = fuel_current
     mna_state.vsource_currents[ElementID(tile, 2)] = oxid_current
-    
+
     # Mock derivedmapstate with fluid assignments
     derivedmapstate = DerivedMapState()
     fuel_node = map_element(HexFrame.NODE_R_NEG, tile, rotation)
     oxid_node = map_element(HexFrame.NODE_S_NEG, tile, rotation)
     output_node = map_element(HexFrame.NODE_Q_NEG, tile, rotation)
-    
+
     derivedmapstate.nodeactualfluids[fuel_node] = HexFluids.FUEL_LIQUID
     derivedmapstate.nodeactualfluids[oxid_node] = HexFluids.OXIDISER_LIQUID
     derivedmapstate.nodeactualfluids[output_node] = HexFluids.BIPROP_EXHAUST
-    
+
     # Update flow behaviour and check temperature curve peak
     update_flowbehav!(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
-    
+
     # At 2.5:1 flow ratio, the temperature should be at peak (2300K)
-    @test comp.state.output_temperature_state ≈ 2300.0 atol=1e-6
+    @test comp.state.output_temperature_state ≈ 2300.0 atol = 1.0e-6
 end
 
 @testset "Bipropellant combustion chamber backflow deactivation" begin
     comp = BipropChamberCompBehav()
     tile = TEST_TILE
     rotation = TEST_ROTATION
-    
+
     mna_state = MNA_State()
     derivedmapstate = DerivedMapState()
-    
+
     # Test fuel backflow
     mna_state.vsource_currents[ElementID(tile, 1)] = -0.05  # Negative fuel current
     mna_state.vsource_currents[ElementID(tile, 2)] = 0.0
-    
+
     update_flowbehav!(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
     @test is_inactive(comp.state.auto_deactivation)
     @test comp.state.output_temperature_state == HexFlowNozzleComponents.BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K
-    
+
     # Reset and test oxidiser backflow
     comp = BipropChamberCompBehav()
     mna_state.vsource_currents[ElementID(tile, 1)] = 0.0
     mna_state.vsource_currents[ElementID(tile, 2)] = -0.05  # Negative oxid current
-    
+
     update_flowbehav!(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
     @test is_inactive(comp.state.auto_deactivation)
     @test comp.state.output_temperature_state == HexFlowNozzleComponents.BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K
@@ -484,34 +491,34 @@ end
     comp = BipropChamberCompBehav()
     tile = TEST_TILE
     rotation = TEST_ROTATION
-    
+
     mna_state = MNA_State()
     derivedmapstate = DerivedMapState()
-    
+
     # Test temperature at different flow ratios
     # Perfect ratio (2.5:1)
     mna_state.vsource_currents[ElementID(tile, 1)] = 10.0
     mna_state.vsource_currents[ElementID(tile, 2)] = 25.0  # 2.5x flow
-    
+
     update_flowbehav!(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
     temp_at_optimal = comp.state.output_temperature_state
-    
+
     # Lean mixture (1.25:1)
     comp = BipropChamberCompBehav()
     mna_state.vsource_currents[ElementID(tile, 1)] = 20.0
     mna_state.vsource_currents[ElementID(tile, 2)] = 25.0  # Only 1.25x flow
-    
+
     update_flowbehav!(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
     temp_lean = comp.state.output_temperature_state
-    
+
     # Rich mixture (5.0:1)
     comp = BipropChamberCompBehav()
     mna_state.vsource_currents[ElementID(tile, 1)] = 10.0
     mna_state.vsource_currents[ElementID(tile, 2)] = 50.0  # 5x flow
-    
+
     update_flowbehav!(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
     temp_rich = comp.state.output_temperature_state
-    
+
     # Peak should be at optimal, with falloff on either side
     @test temp_at_optimal > temp_lean
     @test temp_at_optimal > temp_rich
@@ -520,25 +527,25 @@ end
 @testset "Bipropellant combustion chamber off-design temperature falloff" begin
     comp_lean = BipropChamberCompBehav()
     comp_rich = BipropChamberCompBehav()
-    
+
     tile = TEST_TILE
     rotation = TEST_ROTATION
-    
+
     mna_state_lean = MNA_State()
     mna_state_rich = MNA_State()
     derivedmapstate = DerivedMapState()
-    
+
     # Lean: ratio = 1.25 (deficit of oxidiser)
     mna_state_lean.vsource_currents[ElementID(tile, 1)] = 20.0
     mna_state_lean.vsource_currents[ElementID(tile, 2)] = 25.0
-    
-    # Rich: ratio = 5.0 (excess oxidiser)  
+
+    # Rich: ratio = 5.0 (excess oxidiser)
     mna_state_rich.vsource_currents[ElementID(tile, 1)] = 10.0
     mna_state_rich.vsource_currents[ElementID(tile, 2)] = 50.0
-    
+
     update_flowbehav!(comp_lean; rotation = rotation, tile = tile, mna_state = mna_state_lean, derivedmapstate = derivedmapstate)
     update_flowbehav!(comp_rich; rotation = rotation, tile = tile, mna_state = mna_state_rich, derivedmapstate = derivedmapstate)
-    
+
     # Both off-design conditions should produce lower temperature than optimal
     @test comp_lean.state.output_temperature_state < 2200.0
     @test comp_rich.state.output_temperature_state < 2200.0

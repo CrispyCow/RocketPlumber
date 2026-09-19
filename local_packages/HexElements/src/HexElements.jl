@@ -1,3 +1,8 @@
+#=
+Scope: Circuit element types, connection wrappers, and relative-to-absolute mapping helpers
+Formatter: Runic
+=#
+
 module HexElements
 
 using HexFrame, StructEquality

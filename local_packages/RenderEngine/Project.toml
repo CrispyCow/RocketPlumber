@@ -13,6 +13,9 @@ ModernGL = "66fc600b-dfda-50eb-8b99-91cfa97b1301"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 TimerOutputs = "a759f4b9-e2f1-59dc-863e-4aeb61b1ea8f"
 
+[sources]
+HexFlowTelemetry = {path = "../HexFlowTelemetry"}
+
 [compat]
 CSyntax = "0.4.1"
 ColorTypes = "0.12.1"
