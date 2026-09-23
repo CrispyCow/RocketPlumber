@@ -6,13 +6,32 @@ This repository-local command exports schema-version-2 Rocket Plumber
 time-lapse saves as ship-world-only H.264 MP4 or palette-optimised animated
 GIF. It does not start the game loop, calculator thread, CImGui, or any game UI.
 
-Run it from any directory by selecting the repository environment explicitly:
+## Normal workflow
+
+Open `tools/export_timelapse.jl` in VS Code, edit the input and output paths in
+the configuration block, adjust its options if needed, then use **Run File**.
+Configuration paths are relative to the repository root. With command-line
+arguments, the launcher forwards them to the exporter instead:
 
 ```bash
-julia --project=/path/to/RocketPlumberPrivate \
-  /path/to/RocketPlumberPrivate/tools/timelapse_export/export.jl \
-  /path/to/save.jld2 --output /path/to/timelapse.mp4
+julia tools/export_timelapse.jl
+julia tools/export_timelapse.jl maps/save.jld2 --output recordings/save.mp4 --camera fixed
 ```
+
+The launcher starts a fresh Julia process with the repository root project,
+regardless of the environment active in VS Code or the REPL. The underlying
+entry point remains available for direct use:
+
+```bash
+julia --project=. tools/TimelapseExport/export.jl --help
+julia --project=. tools/TimelapseExport/export.jl maps/save.jld2 --inspect
+julia --project=. tools/TimelapseExport/export.jl maps/save.jld2 \
+  --output recordings/save.mp4 --camera expand
+```
+
+The tool uses the root project because it depends on the game packages,
+rendering infrastructure, persisted component registrations, OpenGL, and
+FFmpeg. It does not have a separate Julia environment.
 
 The tool needs a working display server and OpenGL driver for its hidden GLFW
 context. It is UI-free, but the first implementation is not EGL/OSMesa
@@ -48,23 +67,18 @@ successful FFmpeg exit. `--force` leaves an existing destination untouched if
 the new export fails.
 
 For the complete option list, defaults, validation rules, examples, and stable
-exit codes, run:
-
-```bash
-julia --project=. tools/timelapse_export/export.jl --help
-```
-
-Exit codes are 0 for success/help/inspection, 2 for usage errors, 3 for save
-and timeline validation errors, 4 for assets/OpenGL/reconstruction/rendering
-errors, 5 for output/FFmpeg/encoded-output errors, and 130 for interruption.
+exit codes, run the exporter's `--help` command shown above. Exit codes are 0
+for success/help/inspection, 2 for usage errors, 3 for save and timeline
+validation errors, 4 for assets/OpenGL/reconstruction/rendering errors, 5 for
+output/FFmpeg/encoded-output errors, and 130 for interruption.
 
 ## Tests
 
-The tool's pure parser, timeline, camera, and timing tests do not initialise
-GLFW:
+The pure parser, timeline, camera, and timing tests do not initialise GLFW. Run
+them from the repository root with:
 
 ```bash
-julia --project=. tools/timelapse_export/test/runtests.jl
+julia --project=. tools/TimelapseExport/test/runtests.jl
 ```
 
 Display-enabled export checks should use a locally recorded save. Generated

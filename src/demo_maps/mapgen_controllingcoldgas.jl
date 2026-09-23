@@ -1,3 +1,8 @@
+#=
+Scope: Cold-gas thrust control tutorial map
+Formatter: Runic
+=#
+
 """
     mapgen_controllingcoldgas()
 
@@ -16,12 +21,12 @@ function mapgen_controllingcoldgas()
         initial_charge = 40.0,
         series_conductance = 5.0
     )
-    blueprint.components[TileCoord(-1, 0)]  = PlacedComponent(deepcopy(tank_template), HexFrame.R_NEG, :_blueprint)
-    blueprint.components[TileCoord(-2, 0)]  = PlacedComponent(deepcopy(tank_template), HexFrame.R_NEG, :_blueprint)
-    blueprint.components[TileCoord(-1, 1)]  = PlacedComponent(deepcopy(tank_template), HexFrame.R_NEG, :_blueprint)
-    blueprint.components[TileCoord(-2, 1)]  = PlacedComponent(deepcopy(tank_template), HexFrame.R_NEG, :_blueprint)
-    blueprint.components[TileCoord(0, 0)]   = PlacedComponent(deepcopy(tank_template), HexFrame.R_NEG, :_blueprint)
-    blueprint.components[TileCoord(-2, 2)]  = PlacedComponent(deepcopy(tank_template), HexFrame.R_NEG, :_blueprint)
+    blueprint.components[TileCoord(-1, 0)] = PlacedComponent(deepcopy(tank_template), HexFrame.R_NEG, :_blueprint)
+    blueprint.components[TileCoord(-2, 0)] = PlacedComponent(deepcopy(tank_template), HexFrame.R_NEG, :_blueprint)
+    blueprint.components[TileCoord(-1, 1)] = PlacedComponent(deepcopy(tank_template), HexFrame.R_NEG, :_blueprint)
+    blueprint.components[TileCoord(-2, 1)] = PlacedComponent(deepcopy(tank_template), HexFrame.R_NEG, :_blueprint)
+    blueprint.components[TileCoord(0, 0)] = PlacedComponent(deepcopy(tank_template), HexFrame.R_NEG, :_blueprint)
+    blueprint.components[TileCoord(-2, 2)] = PlacedComponent(deepcopy(tank_template), HexFrame.R_NEG, :_blueprint)
 
     # Switched nozzles -- 5 identical nozzles with separate instances
     nozzle_template = SwitchedNozzleCompBehav(
@@ -32,11 +37,11 @@ function mapgen_controllingcoldgas()
         growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS),
         limit_temperature_k = 400.0
     )
-    blueprint.components[TileCoord(-4, 3)]  = PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(-4, 1)]  = PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(-4, 2)]  = PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(1, -1)]  = PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_NEG, :_blueprint)
-    blueprint.components[TileCoord(1, 0)]   = PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(-4, 3)] = PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(-4, 1)] = PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(-4, 2)] = PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(1, -1)] = PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(1, 0)] = PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_NEG, :_blueprint)
 
     # Pipes -- connect left-side nozzles to tanks
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(-4, 3), HexFrame.Q_POS), VertexCoord(TileCoord(-2, 2), HexFrame.Q_NEG))] = ScrapPipeBehav()
@@ -44,16 +49,20 @@ function mapgen_controllingcoldgas()
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(-4, 2), HexFrame.Q_POS), VertexCoord(TileCoord(-2, 1), HexFrame.Q_NEG))] = ScrapPipeBehav()
 
     # Ship surface
-    union!(blueprint.ship_tiles, Set([
-        TileCoord(-1, 0),
-        TileCoord(-1, 1),
-        TileCoord(-2, 0),
-        TileCoord(-3, 2),
-        TileCoord(-2, 2),
-        TileCoord(-3, 1),
-        TileCoord(0, 0),
-        TileCoord(-2, 1),
-    ]))
+    union!(
+        blueprint.ship_tiles, Set(
+            [
+                TileCoord(-1, 0),
+                TileCoord(-1, 1),
+                TileCoord(-2, 0),
+                TileCoord(-3, 2),
+                TileCoord(-2, 2),
+                TileCoord(-3, 1),
+                TileCoord(0, 0),
+                TileCoord(-2, 1),
+            ]
+        )
+    )
 
     gamemap = GameMap(blueprint)
     return gamemap

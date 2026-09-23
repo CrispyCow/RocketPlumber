@@ -1,3 +1,8 @@
+#=
+Scope: Pressure-fed propulsion tutorial map
+Formatter: Runic
+=#
+
 """
     mapgen_pressurefedintro()
 
@@ -59,7 +64,8 @@ function mapgen_pressurefedintro()
 
     # Feed control and reaction hardware.
     blueprint.components[TileCoord(-2, 0)] = PlacedComponent(
-        StandardValveCompBehav(BoolSwitchBehavFrag, TinyValve;
+        StandardValveCompBehav(
+            BoolSwitchBehavFrag, TinyValve;
             max_conductance = 1.0,
             min_conductance = 0.0,
             growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
@@ -93,41 +99,45 @@ function mapgen_pressurefedintro()
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(1, -1), HexFrame.Q_NEG), VertexCoord(TileCoord(0, -1), HexFrame.Q_POS))] = ScrapPipeBehav()
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(0, -1), HexFrame.Q_POS), VertexCoord(TileCoord(2, -2), HexFrame.Q_NEG))] = ScrapPipeBehav()
 
-    union!(blueprint.ship_tiles, Set([
-        TileCoord(3, -3),
-        TileCoord(2, -4),
-        TileCoord(-2, 3),
-        TileCoord(-4, 0),
-        TileCoord(-3, -1),
-        TileCoord(-4, 1),
-        TileCoord(1, -1),
-        TileCoord(0, -1),
-        TileCoord(-1, -1),
-        TileCoord(2, -3),
-        TileCoord(-3, 0),
-        TileCoord(-2, -1),
-        TileCoord(-3, 1),
-        TileCoord(0, 0),
-        TileCoord(-5, 0),
-        TileCoord(-1, 0),
-        TileCoord(3, -5),
-        TileCoord(0, 1),
-        TileCoord(2, -2),
-        TileCoord(-5, 1),
-        TileCoord(-1, 1),
-        TileCoord(-2, 0),
-        TileCoord(3, -4),
-        TileCoord(-2, 1),
-        TileCoord(-5, 2),
-        TileCoord(2, -1),
-        TileCoord(4, -5),
-        TileCoord(-1, 2),
-        TileCoord(-1, 3),
-        TileCoord(-2, 2),
-        TileCoord(-4, -1),
-        TileCoord(1, -2),
-        TileCoord(4, -4),
-    ]))
+    union!(
+        blueprint.ship_tiles, Set(
+            [
+                TileCoord(3, -3),
+                TileCoord(2, -4),
+                TileCoord(-2, 3),
+                TileCoord(-4, 0),
+                TileCoord(-3, -1),
+                TileCoord(-4, 1),
+                TileCoord(1, -1),
+                TileCoord(0, -1),
+                TileCoord(-1, -1),
+                TileCoord(2, -3),
+                TileCoord(-3, 0),
+                TileCoord(-2, -1),
+                TileCoord(-3, 1),
+                TileCoord(0, 0),
+                TileCoord(-5, 0),
+                TileCoord(-1, 0),
+                TileCoord(3, -5),
+                TileCoord(0, 1),
+                TileCoord(2, -2),
+                TileCoord(-5, 1),
+                TileCoord(-1, 1),
+                TileCoord(-2, 0),
+                TileCoord(3, -4),
+                TileCoord(-2, 1),
+                TileCoord(-5, 2),
+                TileCoord(2, -1),
+                TileCoord(4, -5),
+                TileCoord(-1, 2),
+                TileCoord(-1, 3),
+                TileCoord(-2, 2),
+                TileCoord(-4, -1),
+                TileCoord(1, -2),
+                TileCoord(4, -4),
+            ]
+        )
+    )
 
     gamemap = GameMap(blueprint)
     return gamemap

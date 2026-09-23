@@ -1,3 +1,8 @@
+#=
+Scope: Three-ship liquid transfer sandbox map
+Formatter: Runic
+=#
+
 """
     mapgen_liquidtransfer()
 
@@ -64,20 +69,24 @@ function mapgen_liquidtransfer()
         primary_blueprint.components[coord] = PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_POS, :_blueprint)
     end
 
-    union!(primary_blueprint.ship_tiles, Set{TileCoord}([
-        TileCoord(1, -2),
-        TileCoord(-1, 0),
-        TileCoord(0, 1),
-        TileCoord(-1, 1),
-        TileCoord(-3, 2),
-        TileCoord(-2, 1),
-        TileCoord(1, -1),
-        TileCoord(0, -1),
-        TileCoord(1, 0),
-        TileCoord(-4, 2),
-        TileCoord(-3, 1),
-        TileCoord(0, 0),
-    ]))
+    union!(
+        primary_blueprint.ship_tiles, Set{TileCoord}(
+            [
+                TileCoord(1, -2),
+                TileCoord(-1, 0),
+                TileCoord(0, 1),
+                TileCoord(-1, 1),
+                TileCoord(-3, 2),
+                TileCoord(-2, 1),
+                TileCoord(1, -1),
+                TileCoord(0, -1),
+                TileCoord(1, 0),
+                TileCoord(-4, 2),
+                TileCoord(-3, 1),
+                TileCoord(0, 0),
+            ]
+        )
+    )
 
     # Tanker: a separate hull carrying the monopropellant reserve.
     tanker_blueprint = ShipBlueprint()
@@ -95,19 +104,23 @@ function mapgen_liquidtransfer()
         tanker_blueprint.components[coord] = PlacedComponent(deepcopy(full_liquid_tank_template), HexFrame.Q_POS, :_blueprint)
     end
 
-    union!(tanker_blueprint.ship_tiles, Set{TileCoord}([
-        TileCoord(5, -6),
-        TileCoord(7, -6),
-        TileCoord(6, -8),
-        TileCoord(5, -5),
-        TileCoord(7, -5),
-        TileCoord(7, -7),
-        TileCoord(8, -7),
-        TileCoord(6, -6),
-        TileCoord(7, -8),
-        TileCoord(6, -5),
-        TileCoord(6, -7),
-    ]))
+    union!(
+        tanker_blueprint.ship_tiles, Set{TileCoord}(
+            [
+                TileCoord(5, -6),
+                TileCoord(7, -6),
+                TileCoord(6, -8),
+                TileCoord(5, -5),
+                TileCoord(7, -5),
+                TileCoord(7, -7),
+                TileCoord(8, -7),
+                TileCoord(6, -6),
+                TileCoord(7, -8),
+                TileCoord(6, -5),
+                TileCoord(6, -7),
+            ]
+        )
+    )
 
     # Debris hulk: contains the transfer pump needed to move propellant across the gap.
     pump_holder_blueprint = ShipBlueprint()
@@ -125,11 +138,15 @@ function mapgen_liquidtransfer()
         :_blueprint
     )
 
-    union!(pump_holder_blueprint.ship_tiles, Set{TileCoord}([
-        TileCoord(-1, -4),
-        TileCoord(-1, -3),
-        TileCoord(0, -4),
-    ]))
+    union!(
+        pump_holder_blueprint.ship_tiles, Set{TileCoord}(
+            [
+                TileCoord(-1, -4),
+                TileCoord(-1, -3),
+                TileCoord(0, -4),
+            ]
+        )
+    )
 
     gamemap = GameMap(primary_blueprint)
     merge_ship!(gamemap, Symbol("##Hull SW-326#631"), tanker_blueprint)

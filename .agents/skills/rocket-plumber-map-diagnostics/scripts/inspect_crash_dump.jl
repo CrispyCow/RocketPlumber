@@ -13,9 +13,9 @@ Outputs:
   - optional component context for a focused tile coordinate
 
 Usage:
-    julia --project=. tools/map_diagnostics/inspect_crash_dump.jl <dump-path>
-    julia --project=. tools/map_diagnostics/inspect_crash_dump.jl <dump-path> --backtrace-lines <n>
-    julia --project=. tools/map_diagnostics/inspect_crash_dump.jl <dump-path> --coord <q> <r>
+    julia --project=. .agents/skills/rocket-plumber-map-diagnostics/scripts/inspect_crash_dump.jl <dump-path>
+    julia --project=. .agents/skills/rocket-plumber-map-diagnostics/scripts/inspect_crash_dump.jl <dump-path> --backtrace-lines <n>
+    julia --project=. .agents/skills/rocket-plumber-map-diagnostics/scripts/inspect_crash_dump.jl <dump-path> --coord <q> <r>
 """
 
 using JLD2, Accessors
@@ -28,7 +28,7 @@ using HexFlowBasicComponents, HexFlowTankComponents, HexFlowSwitchComponents
 using HexFlowNozzleComponents, HexFlowPumpComponents
 using HexFlowBasicPipes
 
-const _src_dir = normpath(joinpath(@__DIR__, "..", "..", "src"))
+const _src_dir = normpath(joinpath(@__DIR__, "../../../..", "src"))
 include(joinpath(_src_dir, "components.jl"))
 include(joinpath(_src_dir, "timelapse.jl"))
 include(joinpath(_src_dir, "map_loading.jl"))
@@ -45,9 +45,9 @@ function usage_and_exit(message::Union{Nothing, String} = nothing, code::Int = 1
         println()
     end
     println("Usage:")
-    println("  julia --project=. tools/map_diagnostics/inspect_crash_dump.jl <dump-path>")
-    println("  julia --project=. tools/map_diagnostics/inspect_crash_dump.jl <dump-path> --backtrace-lines <n>")
-    println("  julia --project=. tools/map_diagnostics/inspect_crash_dump.jl <dump-path> --coord <q> <r>")
+    println("  julia --project=. .agents/skills/rocket-plumber-map-diagnostics/scripts/inspect_crash_dump.jl <dump-path>")
+    println("  julia --project=. .agents/skills/rocket-plumber-map-diagnostics/scripts/inspect_crash_dump.jl <dump-path> --backtrace-lines <n>")
+    println("  julia --project=. .agents/skills/rocket-plumber-map-diagnostics/scripts/inspect_crash_dump.jl <dump-path> --coord <q> <r>")
     exit(code)
 end
 
@@ -95,17 +95,11 @@ end
 function tank_summary(comp)::Union{Nothing, String}
     if comp isa HexFlowTankComponents.PressureFedTankCompBehav
         tank = comp.tank
-        return join([
-            "liquid=$(round_or_raw(tank.liquid_state.charge))",
-            "gas=$(round_or_raw(tank.gas_state.charge))",
-            "stored=$(tank.stored_liquid.fluid)",
-        ], " ")
+        return "liquid=$(round_or_raw(tank.liquid_state.charge)) gas=$(round_or_raw(tank.gas_state.charge)) liquid_sealed=$(HexFlowTankComponents.liquid_is_sealed(tank)) gas_sealed=$(HexFlowTankComponents.gas_is_sealed(tank)) stored=$(tank.stored_liquid.fluid)"
+    elseif comp isa HexFlowTankComponents.ThevininTankCompBehav
+        tank = comp.tank.tank
+        return "charge=$(round_or_raw(tank.state.charge)) sealed=$(HexFlowTankComponents.is_sealed(tank))"
     end
-
-    if hasproperty(comp, :tank) && hasproperty(comp.tank, :state)
-        return "charge=$(round_or_raw(comp.tank.state.charge))"
-    end
-
     return nothing
 end
 
@@ -118,45 +112,34 @@ function component_state_summary(comp)::String
     tank_str = tank_summary(comp)
     isnothing(tank_str) || push!(parts, tank_str)
 
+    if hasproperty(comp, :state) && hasproperty(comp.state, :auto_deactivation)
+        push!(parts, "auto_deactivated=$(HexFlowBasicComponents.is_inactive(comp.state.auto_deactivation))")
+    end
+    if hasproperty(comp, :nozzle)
+        nozzle = comp.nozzle
+        push!(parts, "nozzle_inactive=$(HexFlowNozzleComponents.is_inactive(nozzle))")
+        push!(parts, "nozzle_damaged=$(HexFlowNozzleComponents.is_damaged(nozzle))")
+    end
+    if comp isa HexFlowPumpComponents.TurboPumpCompBehav
+        push!(parts, "pump_inactive=$(HexFlowBasicComponents.is_inactive(comp.deactivation))")
+        push!(parts, "pump_damaged=$(HexFlowBasicComponents.is_damaged(comp.overheat))")
+        push!(parts, "temperature_k=$(round_or_raw(HexFlowBasicComponents.get_component_temperature(comp.overheat)))")
+    end
+
     return isempty(parts) ? "" : "  " * join(parts, "  ")
 end
 
-function command_summary(cmd)::String
+"Use the calculator's current command diagnostics, retaining the click site it omits."
+function command_summary(cmd::MapEditCommand)::String
+    diagnostic = HexFlowCalculator.command_diagnostic(cmd)
     if cmd isa ClickTileCommand
-        return "ClickTileCommand id=$(cmd.id) coord=$(cmd.coord) click=$(cmd.unrotated_clicksite)"
-    elseif cmd isa DoActionCommand
-        target_count = length(cmd.component_coords)
-        coord = target_count == 1 ? " coord=$(only(cmd.component_coords))" : ""
-        return "DoActionCommand id=$(cmd.id) action=$(cmd.action_id) targets=$target_count$coord"
-    elseif cmd isa MoveCommand
-        return "MoveCommand id=$(cmd.id) source=$(cmd.source_coord) destination=$(cmd.dest_coord) rotation=$(cmd.delta_rotation) mirror=$(cmd.delta_mirror)"
-    elseif cmd isa DeleteElementsCommand
-        return "DeleteElementsCommand id=$(cmd.id) components=$(length(cmd.component_coords)) pipes=$(length(cmd.pipe_coords))"
-    elseif cmd isa TranslateElementsCommand
-        return "TranslateElementsCommand id=$(cmd.id) components=$(length(cmd.component_coords)) pipes=$(length(cmd.pipe_coords)) translation=$(cmd.translation)"
-    elseif cmd isa AddShipSurfaceCommand
-        return "AddShipSurfaceCommand id=$(cmd.id) coord=$(cmd.coord)"
-    elseif cmd isa RemoveShipSurfaceCommand
-        return "RemoveShipSurfaceCommand id=$(cmd.id) coord=$(cmd.coord)"
-    elseif cmd isa SetTileCommand
-        return "SetTileCommand id=$(cmd.id) coord=$(cmd.coord) component=$(component_type_name(cmd.component)) rot=$(cmd.rotation) mirrored=$(cmd.mirrored)"
-    elseif cmd isa SetPipeBehaviorCommand
-        pipe_name = replace(string(typeof(cmd.pipe_behavior)), r"^.*\." => "")
-        return "SetPipeBehaviorCommand id=$(cmd.id) coord=$(cmd.coord) pipe=$pipe_name"
-    elseif cmd isa MapOverrideCommand
-        map_state = HexFlowCalculator.map_diagnostic(cmd.new_map)
-        return "MapOverrideCommand id=$(cmd.id) ships=$(map_state.ships) surfaces=$(map_state.surfaces) components=$(map_state.components) pipes=$(map_state.pipes)"
-    elseif cmd isa AddEncounterShipCommand
-        return "AddEncounterShipCommand id=$(cmd.id) name=$(cmd.ship_name_base) seed=$(cmd.seed) dir=$(cmd.dir) target=$(cmd.target_encounter_index)"
-    elseif cmd isa RedockShipCommand
-        return "RedockShipCommand id=$(cmd.id) ship=$(cmd.ship_name) offset=$(cmd.offset)"
+        diagnostic = merge(diagnostic, (unrotated_clicksite = cmd.unrotated_clicksite,))
     end
-
-    return "$(nameof(typeof(cmd))) id=$(cmd.id)"
+    return string(diagnostic)
 end
 
 function print_dump_metadata(opts::InspectOptions)
-    file = jldopen(opts.dump_path, "r")
+    file = jldopen(opts.dump_path, "r"; typemap = _build_map_typemap())
     try
         println("===========================================================")
         println("CRASH DUMP METADATA")
@@ -174,11 +157,14 @@ function print_dump_metadata(opts::InspectOptions)
 
         if haskey(file, "exception_backtrace")
             println("\nBacktrace (first $(opts.backtrace_lines) lines):")
-            lines = split(file["exception_backtrace"], "\n")
+            lines = split(string(file["exception_backtrace"]), "\n")
             for line in Iterators.take(lines, opts.backtrace_lines)
                 println(line)
             end
         end
+
+        map_present = haskey(file, "stored_gamemap")
+        println(map_present ? "\nStored map: present" : "\nStored map: absent (this file may be an older or partial dump)")
 
         if haskey(file, "pending_commands")
             commands = file["pending_commands"]
@@ -194,6 +180,7 @@ function print_dump_metadata(opts::InspectOptions)
         if haskey(file, "vsource_currents")
             println("Captured voltage-source currents: $(length(file["vsource_currents"]))")
         end
+        return map_present
     finally
         close(file)
     end
@@ -285,9 +272,15 @@ function main(args::Vector{String})::Int
     opts = parse_args(args)
     isfile(opts.dump_path) || usage_and_exit("Dump file not found: $(opts.dump_path)")
 
-    print_dump_metadata(opts)
+    map_present = print_dump_metadata(opts)
+    if !map_present
+        println("\nMap summary unavailable: stored_gamemap is absent.")
+        return 0
+    end
 
-    gamemap = loadmap(opts.dump_path)
+    loaded = JLD2.load(opts.dump_path, "stored_gamemap"; typemap = _build_map_typemap())
+    loaded isa GameMap || error("stored_gamemap has type $(typeof(loaded)), expected GameMap")
+    gamemap = loaded
     print_map_summary(gamemap)
     print_valve_summary(gamemap)
     print_reactivation_candidates(gamemap)

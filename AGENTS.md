@@ -94,7 +94,9 @@ deliberate style pass.
 
 ### Scope of Style Changes
 
-Apply style improvements to modified code an
+Apply style improvements primarily to modified code and its immediate
+surroundings. Avoid broad reformatting during ordinary changes; follow the
+file's formatter policy and keep adjacent cleanup small and directly useful.
 
 
 ## Repository Map
@@ -104,10 +106,12 @@ Apply style improvements to modified code an
 - `local_packages/` contains the reusable Julia packages. Each package has its
   own environment; component API and implementations live under
   `local_packages/components/`.
-- `tools/` contains repository maintenance, diagnostics, asset generation, map
-  conversion, encounter analysis, and time-lapse export utilities.
-- `Project.toml` and `Manifest.toml` are the root game environment. Local
-  packages have their own environments, and some standalone tools do as well.
+- `tools/` contains developer-facing maintenance, asset-generation, analysis,
+  export, and similar utilities.
+- `.agents/skills/` contains reusable agent workflows and their specialist
+  instructions, scripts, and resources.
+- The root `Project.toml` and `Manifest.toml` define the game environment.
+  Local packages and some standalone tools may own separate environments.
 
 See the nested guides for package responsibilities and area-specific
 invariants. Keep detailed type and function inventories next to the code they
@@ -154,7 +158,7 @@ julia --project=. --threads=2,1 --gcthreads=1,1 src/julia_main.jl
 Choose verification proportional to the change: start with the affected
 package suite, then use the application smoke test for integration or gameplay
 changes. The all-package runner covers packages under `local_packages/`, not
-the separate `tools/timelapse_export` suite.
+the separate `tools/TimelapseExport` suite.
 
 There is no in-repository CI configuration, so report exactly which local
 checks were run and which display-dependent checks were not run.

@@ -151,24 +151,38 @@ end
 function start_test!(target::TestTarget, options::RunnerOptions, log_dir::AbstractString)
     log_path = joinpath(log_dir, log_filename(target.label))
     log_io = open(log_path, "w")
-    println(log_io, "=== Running ", target.label, " ===")
-    println(log_io, "Started: ", Dates.format(now(), dateformat"yyyy-mm-dd HH:MM:SS"))
-    println(log_io, "Command: ", build_test_cmd(target, options))
-    println(log_io)
-    flush(log_io)
+    try
+        println(log_io, "=== Running ", target.label, " ===")
+        println(log_io, "Started: ", Dates.format(now(), dateformat"yyyy-mm-dd HH:MM:SS"))
+        println(log_io, "Command: ", build_test_cmd(target, options))
+        println(log_io)
+        flush(log_io)
 
-    process = run(pipeline(build_test_cmd(target, options); stdout=log_io, stderr=log_io); wait=false)
-    return RunningTest(target, process, log_io, log_path, time())
+        process = run(pipeline(build_test_cmd(target, options); stdout=log_io, stderr=log_io); wait=false)
+        return RunningTest(target, process, log_io, log_path, time())
+    catch
+        try
+            close(log_io)
+        catch
+        end
+        rethrow()
+    end
 end
 
 "Finish a running package test and return its result."
 function finish_test!(running::RunningTest)
-    wait(running.process)
-    println(running.log_io)
-    println(running.log_io, "Finished: ", Dates.format(now(), dateformat"yyyy-mm-dd HH:MM:SS"))
-    println(running.log_io, "Exit code: ", running.process.exitcode)
-    flush(running.log_io)
-    close(running.log_io)
+    try
+        wait(running.process)
+        println(running.log_io)
+        println(running.log_io, "Finished: ", Dates.format(now(), dateformat"yyyy-mm-dd HH:MM:SS"))
+        println(running.log_io, "Exit code: ", running.process.exitcode)
+        flush(running.log_io)
+    finally
+        try
+            close(running.log_io)
+        catch
+        end
+    end
 
     return TestResult(
         ;
@@ -178,6 +192,25 @@ function finish_test!(running::RunningTest)
         elapsed_s=time() - running.started_at,
         log_path=running.log_path,
     )
+end
+
+"Stop active test processes and close their logs during exceptional exit."
+function cleanup_active!(active::Vector{RunningTest})
+    for running in active
+        try
+            process_exited(running.process) || kill(running.process)
+        catch
+        end
+        try
+            wait(running.process)
+        catch
+        end
+        try
+            isopen(running.log_io) && close(running.log_io)
+        catch
+        end
+    end
+    return nothing
 end
 
 "Print a readable summary for one completed test suite."
@@ -213,26 +246,31 @@ function run_tests(targets::Vector{TestTarget}, options::RunnerOptions)
     active = RunningTest[]
     results = TestResult[]
 
-    while !isempty(pending) || !isempty(active)
-        while !isempty(pending) && length(active) < jobs
-            target = popfirst!(pending)
-            println("[RUN ] ", target.label)
-            push!(active, start_test!(target, options, log_dir))
-        end
+    try
+        while !isempty(pending) || !isempty(active)
+            while !isempty(pending) && length(active) < jobs
+                target = popfirst!(pending)
+                println("[RUN ] ", target.label)
+                push!(active, start_test!(target, options, log_dir))
+            end
 
-        completed_indices = findall(running -> process_exited(running.process), active)
+            completed_indices = findall(running -> process_exited(running.process), active)
 
-        if isempty(completed_indices)
-            sleep(0.2)
-            continue
-        end
+            if isempty(completed_indices)
+                sleep(0.2)
+                continue
+            end
 
-        for index in reverse(completed_indices)
-            result = finish_test!(active[index])
-            deleteat!(active, index)
-            push!(results, result)
-            report_result(result; verbose_pass_logs=options.verbose_pass_logs)
+            for index in reverse(completed_indices)
+                result = finish_test!(active[index])
+                deleteat!(active, index)
+                push!(results, result)
+                report_result(result; verbose_pass_logs=options.verbose_pass_logs)
+            end
         end
+    catch
+        cleanup_active!(active)
+        rethrow()
     end
 
     sort!(results; by=result -> result.target.label)
@@ -252,7 +290,7 @@ function run_tests(targets::Vector{TestTarget}, options::RunnerOptions)
     return nothing
 end
 
-function main(args::Vector{String}=ARGS)
+function main(args::Vector{String}=String[])
     options = parse_args(args)
     options === nothing && return nothing
 
@@ -271,8 +309,6 @@ function main(args::Vector{String}=ARGS)
     return nothing
 end
 
-if abspath(PROGRAM_FILE) == @__FILE__
-    main()
-end
-
 end # module RunAllPackageTests
+
+RunAllPackageTests.main(abspath(PROGRAM_FILE) == (@__FILE__) ? ARGS : String[])

@@ -28,7 +28,7 @@
         "Pkg.resolve()": true,
         "Pkg.test(\\\"HexFlowProcGen\\\")": true,
         "\\\"HexFlowProcGen\\\"": true,
-        "/^julia --threads=2 --project=\\. tools/EncounterBalance/src/EncounterBalance\\.jl$/": {
+        "/^julia tools/encounter_balance\\.jl$/": {
             "approve": true,
             "matchCommandLine": true
         },

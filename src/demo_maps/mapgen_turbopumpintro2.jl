@@ -1,3 +1,8 @@
+#=
+Scope: Tap-off-cycle turbopump tutorial map
+Formatter: Runic
+=#
+
 """
     mapgen_turbopumpintro2()
 
@@ -40,7 +45,8 @@ function mapgen_turbopumpintro2()
         :_blueprint
     )
     blueprint.components[TileCoord(-1, 0)] = PlacedComponent(
-        StandardValveCompBehav(SteppedSwitchBehavFrag, TinyValve;
+        StandardValveCompBehav(
+            SteppedSwitchBehavFrag, TinyValve;
             max_conductance = 1.0,
             min_conductance = 0.0,
             growth_factor = 1.1931663751602173,
@@ -73,25 +79,29 @@ function mapgen_turbopumpintro2()
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(1, -1), HexFrame.Q_POS), VertexCoord(TileCoord(3, -2), HexFrame.Q_NEG))] = ScrapPipeBehav(2.0)
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(1, 0), HexFrame.Q_POS), VertexCoord(TileCoord(3, -1), HexFrame.Q_NEG))] = ScrapPipeBehav(2.0)
 
-    union!(blueprint.ship_tiles, Set([
-        TileCoord(-3, 1),
-        TileCoord(-3, 2),
-        TileCoord(-2, 0),
-        TileCoord(-2, 1),
-        TileCoord(-2, 2),
-        TileCoord(-1, 0),
-        TileCoord(-1, 1),
-        TileCoord(0, -1),
-        TileCoord(0, 0),
-        TileCoord(0, 1),
-        TileCoord(1, -1),
-        TileCoord(1, 0),
-        TileCoord(2, -2),
-        TileCoord(2, -1),
-        TileCoord(2, 0),
-        TileCoord(3, -2),
-        TileCoord(3, -1),
-    ]))
+    union!(
+        blueprint.ship_tiles, Set(
+            [
+                TileCoord(-3, 1),
+                TileCoord(-3, 2),
+                TileCoord(-2, 0),
+                TileCoord(-2, 1),
+                TileCoord(-2, 2),
+                TileCoord(-1, 0),
+                TileCoord(-1, 1),
+                TileCoord(0, -1),
+                TileCoord(0, 0),
+                TileCoord(0, 1),
+                TileCoord(1, -1),
+                TileCoord(1, 0),
+                TileCoord(2, -2),
+                TileCoord(2, -1),
+                TileCoord(2, 0),
+                TileCoord(3, -2),
+                TileCoord(3, -1),
+            ]
+        )
+    )
 
     gamemap = GameMap(blueprint)
     return gamemap

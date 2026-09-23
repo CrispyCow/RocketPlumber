@@ -1,3 +1,8 @@
+#=
+Scope: Fluid-flow demonstration tutorial map
+Formatter: Runic
+=#
+
 """
 Generate the flowdemo tutorial map.
 

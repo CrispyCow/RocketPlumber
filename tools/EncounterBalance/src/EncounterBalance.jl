@@ -2,19 +2,14 @@
 # Encounter Balance Visualisation Tool
 # ===============================================================
 #
-# Plots encounter generation scaling rules over the practical richness range
-# to visualise class ratios, fuel tag proportions, and component pool weights.
+# Plots encounter class, fuel tag, and component-set selection weights over a
+# representative richness range. The audit samples completed generated ships.
 #
-# Usage (from repo root):
-#   julia --project=. tools/EncounterBalance/src/EncounterBalance.jl
+# Recommended usage (from repo root):
+#   julia tools/encounter_balance.jl [--audit | --display]
 #
 # Prerequisite (first time only):
 #   julia --project=tools/EncounterBalance -e "using Pkg; Pkg.instantiate()"
-
-# Make the tool's environment visible so Plots.jl can be loaded,
-# while the root --project=. provides all game packages.
-const TOOL_ENV = normpath(joinpath(@__DIR__, ".."))
-pushfirst!(LOAD_PATH, TOOL_ENV)
 
 using Printf
 using Statistics
@@ -30,7 +25,7 @@ using HexFlowBasicPipes
 # Load the encounter config definitions from the game
 include(joinpath(@__DIR__, "..", "..", "..", "src", "components.jl"))
 
-const RICHNESS_RANGE = 0.0:0.05:8.0
+const RICHNESS_RANGE = 1.0:0.05:8.0  # calculate_richness clamps to at least 1.0
 const AUDIT_RICHNESS_VALUES = Float64[1.0, 2.0, 4.0, 8.0]
 const AUDIT_SEED_COUNT = 512
 const AUDIT_FLUIDS = (
@@ -52,13 +47,13 @@ function plot_scaling_lines(richness_range, names::Vector{String},
         for rule in rules
     ]...)
 
-    plot(richness_range, data,
+    return plot(richness_range, data,
         label = permutedims(names),
         xlabel = "Richness",
         ylabel = "Weight",
         title = title,
         linewidth = 2,
-        legend = :right,
+        legend = :outerright,
         size = (900, 500))
 end
 
@@ -73,13 +68,13 @@ function plot_proportions(richness_range, names::Vector{String},
     totals = sum(raw, dims=2)
     normalised = raw ./ max.(totals, 1e-10)
 
-    areaplot(richness_range, normalised,
+    return areaplot(richness_range, normalised,
         label = permutedims(names),
         xlabel = "Richness",
         ylabel = "Proportion",
         title = title,
         fillalpha = 0.85,
-        legend = :right,
+        legend = :outerright,
         ylims = (0, 1),
         size = (900, 500))
 end
@@ -121,8 +116,22 @@ function plot_fuel_tags(
     return p1, p2
 end
 
+"Plot the weights used to select component sets within one encounter pool."
+function plot_component_pool(class_name::String, fuel_tag::Union{FluidType, Nothing},
+        pool::Vector{WeightedComponentSet}, richness_range)
+    names = [weighted_set.component_set.name for weighted_set in pool]
+    rules = ScalingRule[weighted_set.weight for weighted_set in pool]
+    title_suffix = isnothing(fuel_tag) ? class_name : "$class_name — $fuel_tag"
+
+    p1 = plot_scaling_lines(richness_range, names, rules;
+        title = "Component Set Weights — $title_suffix")
+    p2 = plot_proportions(richness_range, names, rules;
+        title = "Component Set Proportions — $title_suffix")
+    return p1, p2
+end
+
 # ===============================================================
-# Main
+# Generated encounter audit
 # ===============================================================
 
 struct AuditSample
@@ -182,19 +191,17 @@ end
 "Return the initial state fields whose equality prevents visible cluster equilibration."
 function tank_initial_state(component::ThevininTankCompBehav)
     tank_core = component.tank.tank
-    stored_fluid = component.tank isa LiquidTankBehavFrag ?
-        component.tank.stored_fluid.fluid : component.fluid
     return (
         max_charge = tank_core.max_charge,
         charge = tank_core.state.charge,
         max_voltage = tank_core.max_voltage,
         series_conductance = component.series_conductance,
-        stored_fluid = stored_fluid,
+        stored_fluid = get_stored_fluid(component),
     )
 end
 
 "Validate that one generated tank cluster shares one rolled initial state."
-function validate_tank_clusters!(
+function validate_tank_clusters(
         blueprint::ShipBlueprint,
         encounter_class::EncounterClass,
         fuel_tag::Union{FluidType, Nothing},
@@ -210,23 +217,9 @@ function validate_tank_clusters!(
             state == reference && continue
             throw(ArgumentError(
                 "Unequal tank initial state in $encounter_class, fuel tag $fuel_tag, " *
-                "richness $richness, seed $seed at coordinates $(cluster)"
+                "richness $richness, seed $seed at $coord; " *
+                "reference $(first(cluster)) = $reference, actual = $state"
             ))
-        end
-    end
-
-    for first_index in 1:length(clusters)
-        for second_index in (first_index + 1):length(clusters)
-            for first_coord in clusters[first_index]
-                for neighbour in get_adjacent_tiles_for_tile(first_coord)
-                    neighbour in clusters[second_index] || continue
-                    throw(ArgumentError(
-                        "Adjacent tank clusters in $encounter_class, fuel tag $fuel_tag, " *
-                        "richness $richness, seed $seed at coordinates $(clusters[first_index]) " *
-                        "and $(clusters[second_index])"
-                    ))
-                end
-            end
         end
     end
 
@@ -254,7 +247,7 @@ function audit_sample(
         end
     end
 
-    tank_cluster_count = validate_tank_clusters!(
+    tank_cluster_count = validate_tank_clusters(
         blueprint, encounter_class, fuel_tag, richness, seed
     )
     return AuditSample(
@@ -290,7 +283,7 @@ function audit_encounter_case(
         richness::Float64,
     )::AuditSummary
     target_components = compute_target_components(class_config.target_components, richness)
-    clustered_count_scale = evaluate_scaling(class_config.clustered_spawn_count_scale, richness)
+    clustered_count_scale = HexFlowProcGen.compute_clustered_spawn_count_scale(class_config, richness)
     samples = AuditSample[]
 
     for seed in UInt32(1):UInt32(AUDIT_SEED_COUNT)
@@ -408,40 +401,80 @@ function run_audit(config::EncounterSystemConfig)
     return nothing
 end
 
-function main()
-    "--audit" in ARGS && return run_audit(encounter_system_config)
+"Save related weight and proportion plots as one image."
+function save_plot_pair(output_dir::String, filename::String, weight_plot::Plots.Plot,
+        proportion_plot::Plots.Plot; display_plot::Bool = false)
+    combined = plot(weight_plot, proportion_plot;
+        layout = (1, 2),
+        size = (1900, 600),
+        margin = 8Plots.mm)
+    output_path = joinpath(output_dir, filename)
+    savefig(combined, output_path)
+    display_plot && display(combined)
+    println("Saved $output_path")
+    return nothing
+end
 
-    config = encounter_system_config
-    richness_range = RICHNESS_RANGE
+"Generate class, fuel-tag, and component-set selection plots from the current game config."
+function run_plots(config::EncounterSystemConfig; display_plot::Bool = false)
+    output_dir = normpath(joinpath(@__DIR__, "..", "outputs"))
+    mkpath(output_dir)
 
-    subplots = Plots.Plot[]
+    class_weights, class_proportions = plot_encounter_classes(config, RICHNESS_RANGE)
+    save_plot_pair(output_dir, "encounter_classes.png", class_weights, class_proportions; display_plot)
 
-    # Encounter class weights and proportions
-    p_cw, p_cp = plot_encounter_classes(config, richness_range)
-    push!(subplots, p_cw, p_cp)
-
-    # Fuel tag weights and proportions per class (skip direct and single-fuel classes)
-    for cls in sort!(collect(keys(config.encounter_class_configs)))
-        class_config = config.encounter_class_configs[cls]
+    for encounter_class in sort!(collect(keys(config.encounter_class_configs)))
+        class_config = config.encounter_class_configs[encounter_class]
         source = class_config.component_source
-        source isa DirectEncounterComponents && continue
-        fluid_source = source::FluidTaggedEncounterComponents
-        length(fluid_source.fuel_configs) <= 1 && continue
-        p_fw, p_fp = plot_fuel_tags(string(cls), fluid_source, richness_range)
-        push!(subplots, p_fw, p_fp)
+        class_name = string(encounter_class)
+        class_slug = lowercase(class_name)
+
+        if source isa FluidTaggedEncounterComponents
+            fuel_weights, fuel_proportions = plot_fuel_tags(class_name, source, RICHNESS_RANGE)
+            save_plot_pair(output_dir, "fuel_tags_$class_slug.png",
+                fuel_weights, fuel_proportions; display_plot)
+        end
+
+        fuel_tags = source isa DirectEncounterComponents ?
+            Union{FluidType, Nothing}[nothing] :
+            Union{FluidType, Nothing}[sort!(collect(keys(source.fuel_configs)))...]
+
+        for fuel_tag in fuel_tags
+            pool = resolve_encounter_component_pool(source, fuel_tag)
+            component_weights, component_proportions =
+                plot_component_pool(class_name, fuel_tag, pool, RICHNESS_RANGE)
+            tag_slug = isnothing(fuel_tag) ? "direct" : lowercase(string(fuel_tag))
+            save_plot_pair(output_dir, "component_pool_$(class_slug)_$(tag_slug).png",
+                component_weights, component_proportions; display_plot)
+        end
     end
 
-    # Combine into a single figure with subplots in a 2-column grid
-    n = length(subplots)
-    rows = cld(n, 2)  # ceiling division
-    combined = plot(subplots...,
-        layout = (rows, 2),
-        size = (1600, 450 * rows),
-        margin = 8Plots.mm)
-    display(combined)
+    return nothing
+end
 
-    println("\nPlot displayed. Press Enter to exit.")
-    readline()
+"Run the requested plot or audit mode using the application's encounter configuration."
+function main(args::Vector{String} = ARGS)
+    if "--help" in args
+        println("Usage: julia tools/encounter_balance.jl [--audit | --display | --help]")
+        println("Default: save selection plots in tools/EncounterBalance/outputs/.")
+        println("--audit: sample generated encounters and print Markdown balance tables.")
+        println("--display: also display each generated plot in a graphical Julia front end.")
+        return nothing
+    end
+
+    invalid_args = filter(arg -> !(arg in ("--audit", "--display")), args)
+    isempty(invalid_args) || throw(ArgumentError("Unknown Encounter Balance argument(s): $(join(invalid_args, ", "))"))
+    if "--audit" in args && "--display" in args
+        throw(ArgumentError("--display applies only to the plot mode"))
+    end
+
+    if "--audit" in args
+        run_audit(encounter_system_config)
+    else
+        run_plots(encounter_system_config; display_plot = "--display" in args)
+    end
+
+    return nothing
 end
 
 main()

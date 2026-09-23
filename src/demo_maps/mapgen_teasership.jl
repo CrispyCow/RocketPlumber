@@ -1,3 +1,8 @@
+#=
+Scope: Four-ship teasership sandbox map
+Formatter: Runic
+=#
+
 """
     mapgen_teasership()
 
@@ -83,18 +88,21 @@ function mapgen_teasership()
         growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS),
         limit_temperature_k = 400.0
     )
-    tiny_on_off_valve = StandardValveCompBehav(BoolSwitchBehavFrag, TinyValve;
+    tiny_on_off_valve = StandardValveCompBehav(
+        BoolSwitchBehavFrag, TinyValve;
         max_conductance = 1.0,
         min_conductance = 0.0,
         growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS)
     )
-    open_tiny_on_off_valve = StandardValveCompBehav(BoolSwitchBehavFrag, TinyValve;
+    open_tiny_on_off_valve = StandardValveCompBehav(
+        BoolSwitchBehavFrag, TinyValve;
         max_conductance = 1.0,
         min_conductance = 0.0,
         target_conductance = 1.0,
         growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS)
     )
-    tiny_adjustable_valve = StandardValveCompBehav(SteppedSwitchBehavFrag, TinyValve;
+    tiny_adjustable_valve = StandardValveCompBehav(
+        SteppedSwitchBehavFrag, TinyValve;
         max_conductance = 1.0,
         min_conductance = 0.0,
         growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
@@ -109,31 +117,37 @@ function mapgen_teasership()
             AutoDeactivationBehavFrag(),
             OverheatLimitBehavFrag(400.0, 1.0, 0.3)
         ),
-        BoolSwitchBehavFrag(SwitchBehavFrag(
-            RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_INTERNAL_1),
-            2.0,
-            0.0,
-            calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS),
-            HexFlowSwitchComponents.SwitchState(2.0, 0.0)
-        ))
+        BoolSwitchBehavFrag(
+            SwitchBehavFrag(
+                RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_INTERNAL_1),
+                2.0,
+                0.0,
+                calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS),
+                HexFlowSwitchComponents.SwitchState(2.0, 0.0)
+            )
+        )
     )
     partially_open_legacy_valve = StandardValveCompBehav{SteppedSwitchBehavFrag, TinyValve}(
-        SteppedSwitchBehavFrag(SwitchBehavFrag(
-            RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG),
-            1.0,
-            0.0,
-            calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
-            HexFlowSwitchComponents.SwitchState(0.07071068090999705, 0.0)
-        ), 0.05)
+        SteppedSwitchBehavFrag(
+            SwitchBehavFrag(
+                RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG),
+                1.0,
+                0.0,
+                calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
+                HexFlowSwitchComponents.SwitchState(0.07071068090999705, 0.0)
+            ), 0.05
+        )
     )
     partially_open_platform_valve = StandardValveCompBehav{SteppedSwitchBehavFrag, TinyValve}(
-        SteppedSwitchBehavFrag(SwitchBehavFrag(
-            RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG),
-            1.0,
-            0.0,
-            calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
-            HexFlowSwitchComponents.SwitchState(0.01880301583656157, 0.0)
-        ), 0.05)
+        SteppedSwitchBehavFrag(
+            SwitchBehavFrag(
+                RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG),
+                1.0,
+                0.0,
+                calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
+                HexFlowSwitchComponents.SwitchState(0.01880301583656157, 0.0)
+            ), 0.05
+        )
     )
 
     scrap_pipe = ScrapPipeBehav()
@@ -148,17 +162,17 @@ function mapgen_teasership()
 
     # Cold-gas tank cluster
     for tile in [
-        TileCoord(3, -14),
-        TileCoord(1, -13),
-        TileCoord(1, -11),
-        TileCoord(2, -13),
-        TileCoord(1, -12),
-        TileCoord(2, -12),
-        TileCoord(3, -13),
-        TileCoord(4, -14),
-        TileCoord(3, -12),
-        TileCoord(2, -14),
-    ]
+            TileCoord(3, -14),
+            TileCoord(1, -13),
+            TileCoord(1, -11),
+            TileCoord(2, -13),
+            TileCoord(1, -12),
+            TileCoord(2, -12),
+            TileCoord(3, -13),
+            TileCoord(4, -14),
+            TileCoord(3, -12),
+            TileCoord(2, -14),
+        ]
         blueprint_av_551.components[tile] = PlacedComponent(deepcopy(av_gas_tank), HexFrame.Q_POS, :_blueprint)
     end
 
@@ -168,117 +182,125 @@ function mapgen_teasership()
     end
     blueprint_av_551.components[TileCoord(1, -14)] = PlacedComponent(deepcopy(armed_switched_tiny_nozzle), HexFrame.S_NEG, :_blueprint)
     for (tile_a, axis_a, tile_b, axis_b) in [
-        (TileCoord(3, -14), HexFrame.Q_NEG, TileCoord(2, -14), HexFrame.Q_POS),
-        (TileCoord(4, -14), HexFrame.Q_NEG, TileCoord(3, -13), HexFrame.Q_POS),
-        (TileCoord(2, -12), HexFrame.Q_NEG, TileCoord(1, -11), HexFrame.Q_POS),
-        (TileCoord(1, -11), HexFrame.Q_POS, TileCoord(3, -12), HexFrame.Q_NEG),
-        (TileCoord(2, -14), HexFrame.Q_NEG, TileCoord(1, -13), HexFrame.Q_POS),
-        (TileCoord(0, -12), HexFrame.Q_POS, TileCoord(2, -13), HexFrame.Q_NEG),
-        (TileCoord(3, -12), HexFrame.Q_NEG, TileCoord(2, -11), HexFrame.Q_POS),
-        (TileCoord(4, -14), HexFrame.Q_NEG, TileCoord(3, -14), HexFrame.Q_POS),
-        (TileCoord(1, -12), HexFrame.Q_POS, TileCoord(3, -13), HexFrame.Q_NEG),
-        (TileCoord(3, -13), HexFrame.Q_NEG, TileCoord(2, -12), HexFrame.Q_POS),
-        (TileCoord(3, -13), HexFrame.Q_NEG, TileCoord(2, -13), HexFrame.Q_POS),
-        (TileCoord(1, -11), HexFrame.Q_NEG, TileCoord(0, -11), HexFrame.Q_POS),
-        (TileCoord(2, -13), HexFrame.Q_NEG, TileCoord(1, -12), HexFrame.Q_POS),
-        (TileCoord(0, -13), HexFrame.Q_POS, TileCoord(2, -14), HexFrame.Q_NEG),
-        (TileCoord(2, -12), HexFrame.Q_NEG, TileCoord(1, -12), HexFrame.Q_POS),
-        (TileCoord(2, -13), HexFrame.Q_POS, TileCoord(4, -14), HexFrame.Q_NEG),
-        (TileCoord(2, -14), HexFrame.Q_NEG, TileCoord(1, -14), HexFrame.Q_POS),
-        (TileCoord(2, -12), HexFrame.Q_POS, TileCoord(4, -13), HexFrame.Q_NEG),
-        (TileCoord(0, -11), HexFrame.Q_POS, TileCoord(2, -12), HexFrame.Q_NEG),
-        (TileCoord(3, -14), HexFrame.Q_NEG, TileCoord(2, -13), HexFrame.Q_POS),
-    ]
+            (TileCoord(3, -14), HexFrame.Q_NEG, TileCoord(2, -14), HexFrame.Q_POS),
+            (TileCoord(4, -14), HexFrame.Q_NEG, TileCoord(3, -13), HexFrame.Q_POS),
+            (TileCoord(2, -12), HexFrame.Q_NEG, TileCoord(1, -11), HexFrame.Q_POS),
+            (TileCoord(1, -11), HexFrame.Q_POS, TileCoord(3, -12), HexFrame.Q_NEG),
+            (TileCoord(2, -14), HexFrame.Q_NEG, TileCoord(1, -13), HexFrame.Q_POS),
+            (TileCoord(0, -12), HexFrame.Q_POS, TileCoord(2, -13), HexFrame.Q_NEG),
+            (TileCoord(3, -12), HexFrame.Q_NEG, TileCoord(2, -11), HexFrame.Q_POS),
+            (TileCoord(4, -14), HexFrame.Q_NEG, TileCoord(3, -14), HexFrame.Q_POS),
+            (TileCoord(1, -12), HexFrame.Q_POS, TileCoord(3, -13), HexFrame.Q_NEG),
+            (TileCoord(3, -13), HexFrame.Q_NEG, TileCoord(2, -12), HexFrame.Q_POS),
+            (TileCoord(3, -13), HexFrame.Q_NEG, TileCoord(2, -13), HexFrame.Q_POS),
+            (TileCoord(1, -11), HexFrame.Q_NEG, TileCoord(0, -11), HexFrame.Q_POS),
+            (TileCoord(2, -13), HexFrame.Q_NEG, TileCoord(1, -12), HexFrame.Q_POS),
+            (TileCoord(0, -13), HexFrame.Q_POS, TileCoord(2, -14), HexFrame.Q_NEG),
+            (TileCoord(2, -12), HexFrame.Q_NEG, TileCoord(1, -12), HexFrame.Q_POS),
+            (TileCoord(2, -13), HexFrame.Q_POS, TileCoord(4, -14), HexFrame.Q_NEG),
+            (TileCoord(2, -14), HexFrame.Q_NEG, TileCoord(1, -14), HexFrame.Q_POS),
+            (TileCoord(2, -12), HexFrame.Q_POS, TileCoord(4, -13), HexFrame.Q_NEG),
+            (TileCoord(0, -11), HexFrame.Q_POS, TileCoord(2, -12), HexFrame.Q_NEG),
+            (TileCoord(3, -14), HexFrame.Q_NEG, TileCoord(2, -13), HexFrame.Q_POS),
+        ]
         blueprint_av_551.pipe_behaviors[PipeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = scrap_pipe
     end
 
-    union!(blueprint_av_551.ship_tiles, Set{TileCoord}([
-        TileCoord(2, -12),
-        TileCoord(3, -14),
-        TileCoord(3, -13),
-        TileCoord(1, -13),
-        TileCoord(4, -14),
-        TileCoord(3, -12),
-        TileCoord(1, -12),
-        TileCoord(1, -11),
-        TileCoord(2, -13),
-        TileCoord(2, -14),
-    ]))
+    union!(
+        blueprint_av_551.ship_tiles, Set{TileCoord}(
+            [
+                TileCoord(2, -12),
+                TileCoord(3, -14),
+                TileCoord(3, -13),
+                TileCoord(1, -13),
+                TileCoord(4, -14),
+                TileCoord(3, -12),
+                TileCoord(1, -12),
+                TileCoord(1, -11),
+                TileCoord(2, -13),
+                TileCoord(2, -14),
+            ]
+        )
+    )
     #= ---------- Ship :primary ----------- =#
     blueprint_primary = ShipBlueprint()
 
     for (tile, rotation) in [
-        (TileCoord(4, -6), HexFrame.R_NEG),
-        (TileCoord(1, -5), HexFrame.Q_POS),
-    ]
+            (TileCoord(4, -6), HexFrame.R_NEG),
+            (TileCoord(1, -5), HexFrame.Q_POS),
+        ]
         blueprint_primary.components[tile] = PlacedComponent(deepcopy(transfer_pump), rotation, :_blueprint)
     end
 
     for tile in [
-        TileCoord(5, -8),
-        TileCoord(4, -8),
-        TileCoord(2, -6),
-        TileCoord(5, -7),
-        TileCoord(3, -7),
-        TileCoord(4, -9),
-        TileCoord(4, -7),
-        TileCoord(2, -7),
-    ]
+            TileCoord(5, -8),
+            TileCoord(4, -8),
+            TileCoord(2, -6),
+            TileCoord(5, -7),
+            TileCoord(3, -7),
+            TileCoord(4, -9),
+            TileCoord(4, -7),
+            TileCoord(2, -7),
+        ]
         blueprint_primary.components[tile] = PlacedComponent(deepcopy(transfer_liquid_tank), HexFrame.Q_NEG, :_blueprint)
     end
     for (tile_a, axis_a, tile_b, axis_b) in [
-        (TileCoord(1, -5), HexFrame.Q_POS, TileCoord(3, -6), HexFrame.Q_NEG),
-        (TileCoord(4, -8), HexFrame.Q_NEG, TileCoord(3, -7), HexFrame.Q_POS),
-        (TileCoord(-3, -4), HexFrame.Q_POS, TileCoord(-1, -5), HexFrame.Q_NEG),
-        (TileCoord(4, -7), HexFrame.Q_POS, TileCoord(6, -8), HexFrame.Q_NEG),
-        (TileCoord(4, -8), HexFrame.Q_NEG, TileCoord(3, -8), HexFrame.Q_POS),
-        (TileCoord(2, -4), HexFrame.Q_POS, TileCoord(4, -5), HexFrame.Q_NEG),
-        (TileCoord(3, -4), HexFrame.Q_NEG, TileCoord(2, -4), HexFrame.Q_POS),
-        (TileCoord(4, -7), HexFrame.Q_NEG, TileCoord(3, -6), HexFrame.Q_POS),
-        (TileCoord(0, -5), HexFrame.Q_NEG, TileCoord(-1, -4), HexFrame.Q_POS),
-        (TileCoord(2, -7), HexFrame.Q_NEG, TileCoord(1, -6), HexFrame.Q_POS),
-        (TileCoord(2, -7), HexFrame.Q_POS, TileCoord(4, -8), HexFrame.Q_NEG),
-        (TileCoord(-4, -3), HexFrame.Q_POS, TileCoord(-2, -4), HexFrame.Q_NEG),
-        (TileCoord(4, -5), HexFrame.Q_NEG, TileCoord(3, -5), HexFrame.Q_POS),
-        (TileCoord(-1, -4), HexFrame.Q_POS, TileCoord(1, -5), HexFrame.Q_NEG),
-        (TileCoord(3, -8), HexFrame.Q_NEG, TileCoord(2, -7), HexFrame.Q_POS),
-        (TileCoord(2, -6), HexFrame.Q_NEG, TileCoord(1, -5), HexFrame.Q_POS),
-        (TileCoord(4, -9), HexFrame.Q_NEG, TileCoord(3, -8), HexFrame.Q_POS),
-        (TileCoord(-2, -4), HexFrame.Q_NEG, TileCoord(-3, -4), HexFrame.Q_POS),
-        (TileCoord(4, -7), HexFrame.Q_NEG, TileCoord(3, -7), HexFrame.Q_POS),
-        (TileCoord(3, -7), HexFrame.Q_POS, TileCoord(5, -8), HexFrame.Q_NEG),
-        (TileCoord(1, -7), HexFrame.Q_POS, TileCoord(3, -8), HexFrame.Q_NEG),
-        (TileCoord(3, -4), HexFrame.Q_NEG, TileCoord(2, -3), HexFrame.Q_POS),
-        (TileCoord(2, -6), HexFrame.Q_NEG, TileCoord(1, -6), HexFrame.Q_POS),
-        (TileCoord(3, -8), HexFrame.Q_POS, TileCoord(5, -9), HexFrame.Q_NEG),
-        (TileCoord(5, -8), HexFrame.Q_NEG, TileCoord(4, -7), HexFrame.Q_POS),
-        (TileCoord(2, -7), HexFrame.Q_NEG, TileCoord(1, -7), HexFrame.Q_POS),
-        (TileCoord(-2, -4), HexFrame.Q_POS, TileCoord(0, -5), HexFrame.Q_NEG),
-        (TileCoord(-1, -5), HexFrame.Q_NEG, TileCoord(-2, -4), HexFrame.Q_POS),
-        (TileCoord(3, -6), HexFrame.Q_POS, TileCoord(5, -7), HexFrame.Q_NEG),
-    ]
+            (TileCoord(1, -5), HexFrame.Q_POS, TileCoord(3, -6), HexFrame.Q_NEG),
+            (TileCoord(4, -8), HexFrame.Q_NEG, TileCoord(3, -7), HexFrame.Q_POS),
+            (TileCoord(-3, -4), HexFrame.Q_POS, TileCoord(-1, -5), HexFrame.Q_NEG),
+            (TileCoord(4, -7), HexFrame.Q_POS, TileCoord(6, -8), HexFrame.Q_NEG),
+            (TileCoord(4, -8), HexFrame.Q_NEG, TileCoord(3, -8), HexFrame.Q_POS),
+            (TileCoord(2, -4), HexFrame.Q_POS, TileCoord(4, -5), HexFrame.Q_NEG),
+            (TileCoord(3, -4), HexFrame.Q_NEG, TileCoord(2, -4), HexFrame.Q_POS),
+            (TileCoord(4, -7), HexFrame.Q_NEG, TileCoord(3, -6), HexFrame.Q_POS),
+            (TileCoord(0, -5), HexFrame.Q_NEG, TileCoord(-1, -4), HexFrame.Q_POS),
+            (TileCoord(2, -7), HexFrame.Q_NEG, TileCoord(1, -6), HexFrame.Q_POS),
+            (TileCoord(2, -7), HexFrame.Q_POS, TileCoord(4, -8), HexFrame.Q_NEG),
+            (TileCoord(-4, -3), HexFrame.Q_POS, TileCoord(-2, -4), HexFrame.Q_NEG),
+            (TileCoord(4, -5), HexFrame.Q_NEG, TileCoord(3, -5), HexFrame.Q_POS),
+            (TileCoord(-1, -4), HexFrame.Q_POS, TileCoord(1, -5), HexFrame.Q_NEG),
+            (TileCoord(3, -8), HexFrame.Q_NEG, TileCoord(2, -7), HexFrame.Q_POS),
+            (TileCoord(2, -6), HexFrame.Q_NEG, TileCoord(1, -5), HexFrame.Q_POS),
+            (TileCoord(4, -9), HexFrame.Q_NEG, TileCoord(3, -8), HexFrame.Q_POS),
+            (TileCoord(-2, -4), HexFrame.Q_NEG, TileCoord(-3, -4), HexFrame.Q_POS),
+            (TileCoord(4, -7), HexFrame.Q_NEG, TileCoord(3, -7), HexFrame.Q_POS),
+            (TileCoord(3, -7), HexFrame.Q_POS, TileCoord(5, -8), HexFrame.Q_NEG),
+            (TileCoord(1, -7), HexFrame.Q_POS, TileCoord(3, -8), HexFrame.Q_NEG),
+            (TileCoord(3, -4), HexFrame.Q_NEG, TileCoord(2, -3), HexFrame.Q_POS),
+            (TileCoord(2, -6), HexFrame.Q_NEG, TileCoord(1, -6), HexFrame.Q_POS),
+            (TileCoord(3, -8), HexFrame.Q_POS, TileCoord(5, -9), HexFrame.Q_NEG),
+            (TileCoord(5, -8), HexFrame.Q_NEG, TileCoord(4, -7), HexFrame.Q_POS),
+            (TileCoord(2, -7), HexFrame.Q_NEG, TileCoord(1, -7), HexFrame.Q_POS),
+            (TileCoord(-2, -4), HexFrame.Q_POS, TileCoord(0, -5), HexFrame.Q_NEG),
+            (TileCoord(-1, -5), HexFrame.Q_NEG, TileCoord(-2, -4), HexFrame.Q_POS),
+            (TileCoord(3, -6), HexFrame.Q_POS, TileCoord(5, -7), HexFrame.Q_NEG),
+        ]
         blueprint_primary.pipe_behaviors[PipeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = scrap_pipe
     end
 
-    union!(blueprint_primary.ship_tiles, Set{TileCoord}([
-        TileCoord(4, -8),
-        TileCoord(3, -7),
-        TileCoord(4, -9),
-        TileCoord(2, -8),
-        TileCoord(5, -7),
-        TileCoord(3, -8),
-        TileCoord(4, -6),
-        TileCoord(5, -8),
-        TileCoord(1, -5),
-        TileCoord(2, -6),
-        TileCoord(3, -9),
-        TileCoord(1, -7),
-        TileCoord(5, -9),
-        TileCoord(4, -7),
-        TileCoord(2, -5),
-        TileCoord(2, -7),
-        TileCoord(3, -6),
-    ]))
+    union!(
+        blueprint_primary.ship_tiles, Set{TileCoord}(
+            [
+                TileCoord(4, -8),
+                TileCoord(3, -7),
+                TileCoord(4, -9),
+                TileCoord(2, -8),
+                TileCoord(5, -7),
+                TileCoord(3, -8),
+                TileCoord(4, -6),
+                TileCoord(5, -8),
+                TileCoord(1, -5),
+                TileCoord(2, -6),
+                TileCoord(3, -9),
+                TileCoord(1, -7),
+                TileCoord(5, -9),
+                TileCoord(4, -7),
+                TileCoord(2, -5),
+                TileCoord(2, -7),
+                TileCoord(3, -6),
+            ]
+        )
+    )
     map = GameMap(blueprint_primary)
     merge_ship!(map, Symbol("##Ship AV-551#655"), blueprint_av_551)
 
@@ -286,22 +308,22 @@ function mapgen_teasership()
     blueprint_old_primary = ShipBlueprint()
 
     for tile in [
-        TileCoord(3, -3),
-        TileCoord(2, 0),
-        TileCoord(3, -2),
-        TileCoord(1, -1),
-        TileCoord(0, -1),
-        TileCoord(1, 0),
-        TileCoord(0, 0),
-        TileCoord(-1, 0),
-        TileCoord(0, 1),
-        TileCoord(1, 1),
-        TileCoord(2, -2),
-        TileCoord(-1, 1),
-        TileCoord(0, 2),
-        TileCoord(2, -1),
-        TileCoord(1, -2),
-    ]
+            TileCoord(3, -3),
+            TileCoord(2, 0),
+            TileCoord(3, -2),
+            TileCoord(1, -1),
+            TileCoord(0, -1),
+            TileCoord(1, 0),
+            TileCoord(0, 0),
+            TileCoord(-1, 0),
+            TileCoord(0, 1),
+            TileCoord(1, 1),
+            TileCoord(2, -2),
+            TileCoord(-1, 1),
+            TileCoord(0, 2),
+            TileCoord(2, -1),
+            TileCoord(1, -2),
+        ]
         blueprint_old_primary.components[tile] = PlacedComponent(deepcopy(legacy_liquid_tank), HexFrame.Q_POS, :_blueprint)
     end
 
@@ -318,87 +340,91 @@ function mapgen_teasership()
     blueprint_old_primary.components[TileCoord(-3, 2)] = PlacedComponent(deepcopy(partially_open_legacy_valve), HexFrame.Q_POS, :_blueprint)
     blueprint_old_primary.components[TileCoord(-6, 4)] = PlacedComponent(deepcopy(medium_nozzle), HexFrame.Q_POS, :_blueprint)
     for (tile_a, axis_a, tile_b, axis_b, behaviour) in [
-        (TileCoord(1, -2), HexFrame.Q_NEG, TileCoord(0, -2), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-1, 0), HexFrame.Q_NEG, TileCoord(-2, 1), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(0, 0), HexFrame.Q_NEG, TileCoord(-1, 1), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-4, 3), HexFrame.Q_POS, TileCoord(-2, 2), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(-4, 0), HexFrame.Q_NEG, TileCoord(-5, 1), HexFrame.Q_POS, big_pipe),
-        (TileCoord(3, -3), HexFrame.Q_NEG, TileCoord(2, -3), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(0, 1), HexFrame.Q_NEG, TileCoord(-1, 1), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-5, 3), HexFrame.Q_POS, TileCoord(-3, 2), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(-2, 2), HexFrame.Q_POS, TileCoord(0, 1), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(-3, 1), HexFrame.Q_POS, TileCoord(-1, 0), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(-2, 1), HexFrame.Q_POS, TileCoord(0, 0), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(1, -2), HexFrame.Q_NEG, TileCoord(0, -1), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-4, 3), HexFrame.Q_NEG, TileCoord(-5, 3), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-2, 0), HexFrame.Q_NEG, TileCoord(-3, 1), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-6, 4), HexFrame.Q_POS, TileCoord(-4, 3), HexFrame.Q_NEG, big_pipe),
-        (TileCoord(-1, 1), HexFrame.Q_POS, TileCoord(1, 0), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(2, -2), HexFrame.Q_NEG, TileCoord(1, -2), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-1, 0), HexFrame.Q_POS, TileCoord(1, -1), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(0, -1), HexFrame.Q_POS, TileCoord(2, -2), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(2, 0), HexFrame.Q_NEG, TileCoord(1, 1), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(1, -1), HexFrame.Q_NEG, TileCoord(0, -1), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-4, -1), HexFrame.Q_NEG, TileCoord(-5, -1), HexFrame.Q_POS, big_pipe),
-        (TileCoord(-4, -1), HexFrame.Q_NEG, TileCoord(-5, 0), HexFrame.Q_POS, big_pipe),
-        (TileCoord(0, 1), HexFrame.Q_POS, TileCoord(2, 0), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(0, 1), HexFrame.Q_NEG, TileCoord(-1, 2), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(0, 0), HexFrame.Q_NEG, TileCoord(-1, 0), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(1, 0), HexFrame.Q_NEG, TileCoord(0, 1), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(1, -2), HexFrame.Q_POS, TileCoord(3, -3), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(-4, 0), HexFrame.Q_NEG, TileCoord(-5, 0), HexFrame.Q_POS, big_pipe),
-    ]
+            (TileCoord(1, -2), HexFrame.Q_NEG, TileCoord(0, -2), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-1, 0), HexFrame.Q_NEG, TileCoord(-2, 1), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(0, 0), HexFrame.Q_NEG, TileCoord(-1, 1), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-4, 3), HexFrame.Q_POS, TileCoord(-2, 2), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-4, 0), HexFrame.Q_NEG, TileCoord(-5, 1), HexFrame.Q_POS, big_pipe),
+            (TileCoord(3, -3), HexFrame.Q_NEG, TileCoord(2, -3), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(0, 1), HexFrame.Q_NEG, TileCoord(-1, 1), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-5, 3), HexFrame.Q_POS, TileCoord(-3, 2), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-2, 2), HexFrame.Q_POS, TileCoord(0, 1), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-3, 1), HexFrame.Q_POS, TileCoord(-1, 0), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-2, 1), HexFrame.Q_POS, TileCoord(0, 0), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(1, -2), HexFrame.Q_NEG, TileCoord(0, -1), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-4, 3), HexFrame.Q_NEG, TileCoord(-5, 3), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-2, 0), HexFrame.Q_NEG, TileCoord(-3, 1), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-6, 4), HexFrame.Q_POS, TileCoord(-4, 3), HexFrame.Q_NEG, big_pipe),
+            (TileCoord(-1, 1), HexFrame.Q_POS, TileCoord(1, 0), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(2, -2), HexFrame.Q_NEG, TileCoord(1, -2), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-1, 0), HexFrame.Q_POS, TileCoord(1, -1), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(0, -1), HexFrame.Q_POS, TileCoord(2, -2), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(2, 0), HexFrame.Q_NEG, TileCoord(1, 1), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(1, -1), HexFrame.Q_NEG, TileCoord(0, -1), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-4, -1), HexFrame.Q_NEG, TileCoord(-5, -1), HexFrame.Q_POS, big_pipe),
+            (TileCoord(-4, -1), HexFrame.Q_NEG, TileCoord(-5, 0), HexFrame.Q_POS, big_pipe),
+            (TileCoord(0, 1), HexFrame.Q_POS, TileCoord(2, 0), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(0, 1), HexFrame.Q_NEG, TileCoord(-1, 2), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(0, 0), HexFrame.Q_NEG, TileCoord(-1, 0), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(1, 0), HexFrame.Q_NEG, TileCoord(0, 1), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(1, -2), HexFrame.Q_POS, TileCoord(3, -3), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-4, 0), HexFrame.Q_NEG, TileCoord(-5, 0), HexFrame.Q_POS, big_pipe),
+        ]
         blueprint_old_primary.pipe_behaviors[PipeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = behaviour
     end
 
-    union!(blueprint_old_primary.ship_tiles, Set{TileCoord}([
-        TileCoord(3, -3),
-        TileCoord(2, 0),
-        TileCoord(-4, 0),
-        TileCoord(-3, -1),
-        TileCoord(3, -2),
-        TileCoord(1, -1),
-        TileCoord(0, -1),
-        TileCoord(-3, 0),
-        TileCoord(1, 0),
-        TileCoord(-4, 2),
-        TileCoord(0, 0),
-        TileCoord(-3, 1),
-        TileCoord(-2, -1),
-        TileCoord(-1, 0),
-        TileCoord(1, 1),
-        TileCoord(0, 1),
-        TileCoord(2, -2),
-        TileCoord(-4, 3),
-        TileCoord(-4, 4),
-        TileCoord(-1, 1),
-        TileCoord(-2, 0),
-        TileCoord(-3, 2),
-        TileCoord(-2, 1),
-        TileCoord(-3, 3),
-        TileCoord(0, 2),
-        TileCoord(-3, 4),
-        TileCoord(-1, 2),
-        TileCoord(2, -1),
-        TileCoord(-5, 3),
-        TileCoord(-2, 2),
-        TileCoord(-4, -1),
-        TileCoord(-5, 4),
-        TileCoord(1, -2),
-    ]))
+    union!(
+        blueprint_old_primary.ship_tiles, Set{TileCoord}(
+            [
+                TileCoord(3, -3),
+                TileCoord(2, 0),
+                TileCoord(-4, 0),
+                TileCoord(-3, -1),
+                TileCoord(3, -2),
+                TileCoord(1, -1),
+                TileCoord(0, -1),
+                TileCoord(-3, 0),
+                TileCoord(1, 0),
+                TileCoord(-4, 2),
+                TileCoord(0, 0),
+                TileCoord(-3, 1),
+                TileCoord(-2, -1),
+                TileCoord(-1, 0),
+                TileCoord(1, 1),
+                TileCoord(0, 1),
+                TileCoord(2, -2),
+                TileCoord(-4, 3),
+                TileCoord(-4, 4),
+                TileCoord(-1, 1),
+                TileCoord(-2, 0),
+                TileCoord(-3, 2),
+                TileCoord(-2, 1),
+                TileCoord(-3, 3),
+                TileCoord(0, 2),
+                TileCoord(-3, 4),
+                TileCoord(-1, 2),
+                TileCoord(2, -1),
+                TileCoord(-5, 3),
+                TileCoord(-2, 2),
+                TileCoord(-4, -1),
+                TileCoord(-5, 4),
+                TileCoord(1, -2),
+            ]
+        )
+    )
     merge_ship!(map, Symbol("##old_primary#664"), blueprint_old_primary)
 
     #= ---------- Ship :##Platform BS-301#663 ----------- =#
     blueprint_platform_bs_301 = ShipBlueprint()
 
     for tile in [
-        TileCoord(-4, -5),
-        TileCoord(-4, -7),
-        TileCoord(-5, -4),
-        TileCoord(-4, -4),
-        TileCoord(-5, -5),
-        TileCoord(-4, -6),
-    ]
+            TileCoord(-4, -5),
+            TileCoord(-4, -7),
+            TileCoord(-5, -4),
+            TileCoord(-4, -4),
+            TileCoord(-5, -5),
+            TileCoord(-4, -6),
+        ]
         blueprint_platform_bs_301.components[tile] = PlacedComponent(deepcopy(pressure_fed_tank), HexFrame.Q_POS, :_blueprint)
     end
 
@@ -407,14 +433,14 @@ function mapgen_teasership()
     end
 
     for (tile, rotation) in [
-        (TileCoord(-3, -10), HexFrame.Q_NEG),
-        (TileCoord(-7, -6), HexFrame.Q_POS),
-        (TileCoord(-7, -3), HexFrame.Q_POS),
-        (TileCoord(-7, -5), HexFrame.Q_POS),
-        (TileCoord(-7, -4), HexFrame.Q_POS),
-        (TileCoord(-3, -8), HexFrame.Q_NEG),
-        (TileCoord(-3, -9), HexFrame.Q_NEG),
-    ]
+            (TileCoord(-3, -10), HexFrame.Q_NEG),
+            (TileCoord(-7, -6), HexFrame.Q_POS),
+            (TileCoord(-7, -3), HexFrame.Q_POS),
+            (TileCoord(-7, -5), HexFrame.Q_POS),
+            (TileCoord(-7, -4), HexFrame.Q_POS),
+            (TileCoord(-3, -8), HexFrame.Q_NEG),
+            (TileCoord(-3, -9), HexFrame.Q_NEG),
+        ]
         blueprint_platform_bs_301.components[tile] = PlacedComponent(deepcopy(tiny_nozzle), rotation, :_blueprint)
     end
 
@@ -424,73 +450,77 @@ function mapgen_teasership()
     blueprint_platform_bs_301.components[TileCoord(-5, -6)] = PlacedComponent(deepcopy(partially_open_platform_valve), HexFrame.S_NEG, :_blueprint)
     blueprint_platform_bs_301.components[TileCoord(-5, -7)] = PlacedComponent(deepcopy(tiny_adjustable_valve), HexFrame.S_NEG, :_blueprint)
     for (tile_a, axis_a, tile_b, axis_b, behaviour) in [
-        (TileCoord(-3, -5), HexFrame.Q_NEG, TileCoord(-4, -5), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-6, -6), HexFrame.Q_NEG, TileCoord(-7, -5), HexFrame.Q_POS, big_pipe),
-        (TileCoord(-5, -4), HexFrame.Q_NEG, TileCoord(-6, -3), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-6, -5), HexFrame.Q_NEG, TileCoord(-7, -4), HexFrame.Q_POS, big_pipe),
-        (TileCoord(0, -8), HexFrame.Q_NEG, TileCoord(-1, -8), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-6, -4), HexFrame.Q_NEG, TileCoord(-7, -4), HexFrame.Q_POS, big_pipe),
-        (TileCoord(-1, -8), HexFrame.Q_POS, TileCoord(1, -9), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(-3, -8), HexFrame.Q_NEG, TileCoord(-4, -8), HexFrame.Q_POS, big_pipe),
-        (TileCoord(-2, -9), HexFrame.Q_POS, TileCoord(0, -10), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(-6, -5), HexFrame.Q_NEG, TileCoord(-7, -5), HexFrame.Q_POS, big_pipe),
-        (TileCoord(-6, -4), HexFrame.Q_POS, TileCoord(-4, -5), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(-4, -7), HexFrame.Q_NEG, TileCoord(-5, -6), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-6, -4), HexFrame.Q_NEG, TileCoord(-7, -3), HexFrame.Q_POS, big_pipe),
-        (TileCoord(-3, -4), HexFrame.Q_NEG, TileCoord(-4, -3), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-3, -8), HexFrame.Q_POS, TileCoord(-1, -9), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(-3, -7), HexFrame.Q_NEG, TileCoord(-4, -6), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-3, -9), HexFrame.Q_NEG, TileCoord(-4, -9), HexFrame.Q_POS, big_pipe),
-        (TileCoord(-6, -7), HexFrame.Q_POS, TileCoord(-4, -8), HexFrame.Q_NEG, big_pipe),
-        (TileCoord(-3, -7), HexFrame.Q_NEG, TileCoord(-4, -7), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-3, -9), HexFrame.Q_NEG, TileCoord(-4, -8), HexFrame.Q_POS, big_pipe),
-        (TileCoord(-4, -6), HexFrame.Q_NEG, TileCoord(-5, -6), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(3, -11), HexFrame.Q_NEG, TileCoord(2, -11), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-1, -10), HexFrame.Q_POS, TileCoord(1, -11), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(-5, -5), HexFrame.Q_NEG, TileCoord(-6, -4), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-6, -5), HexFrame.Q_POS, TileCoord(-4, -6), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(0, -9), HexFrame.Q_POS, TileCoord(2, -10), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(-6, -3), HexFrame.Q_POS, TileCoord(-4, -4), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(2, -10), HexFrame.Q_NEG, TileCoord(1, -10), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-5, -4), HexFrame.Q_NEG, TileCoord(-6, -4), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(1, -9), HexFrame.Q_NEG, TileCoord(0, -9), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(0, -10), HexFrame.Q_NEG, TileCoord(-1, -10), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-3, -6), HexFrame.Q_NEG, TileCoord(-4, -6), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-3, -5), HexFrame.Q_NEG, TileCoord(-4, -4), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-5, -3), HexFrame.Q_POS, TileCoord(-3, -4), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(-3, -6), HexFrame.Q_NEG, TileCoord(-4, -5), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-2, -7), HexFrame.Q_POS, TileCoord(0, -8), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(1, -10), HexFrame.Q_POS, TileCoord(3, -11), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(-3, -10), HexFrame.Q_NEG, TileCoord(-4, -9), HexFrame.Q_POS, big_pipe),
-        (TileCoord(-5, -5), HexFrame.Q_POS, TileCoord(-3, -6), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(-5, -4), HexFrame.Q_POS, TileCoord(-3, -5), HexFrame.Q_NEG, scrap_pipe),
-        (TileCoord(-1, -9), HexFrame.Q_NEG, TileCoord(-2, -9), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-6, -6), HexFrame.Q_NEG, TileCoord(-7, -6), HexFrame.Q_POS, big_pipe),
-        (TileCoord(-5, -5), HexFrame.Q_NEG, TileCoord(-6, -5), HexFrame.Q_POS, scrap_pipe),
-        (TileCoord(-4, -4), HexFrame.Q_NEG, TileCoord(-5, -3), HexFrame.Q_POS, scrap_pipe),
-    ]
+            (TileCoord(-3, -5), HexFrame.Q_NEG, TileCoord(-4, -5), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-6, -6), HexFrame.Q_NEG, TileCoord(-7, -5), HexFrame.Q_POS, big_pipe),
+            (TileCoord(-5, -4), HexFrame.Q_NEG, TileCoord(-6, -3), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-6, -5), HexFrame.Q_NEG, TileCoord(-7, -4), HexFrame.Q_POS, big_pipe),
+            (TileCoord(0, -8), HexFrame.Q_NEG, TileCoord(-1, -8), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-6, -4), HexFrame.Q_NEG, TileCoord(-7, -4), HexFrame.Q_POS, big_pipe),
+            (TileCoord(-1, -8), HexFrame.Q_POS, TileCoord(1, -9), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-3, -8), HexFrame.Q_NEG, TileCoord(-4, -8), HexFrame.Q_POS, big_pipe),
+            (TileCoord(-2, -9), HexFrame.Q_POS, TileCoord(0, -10), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-6, -5), HexFrame.Q_NEG, TileCoord(-7, -5), HexFrame.Q_POS, big_pipe),
+            (TileCoord(-6, -4), HexFrame.Q_POS, TileCoord(-4, -5), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-4, -7), HexFrame.Q_NEG, TileCoord(-5, -6), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-6, -4), HexFrame.Q_NEG, TileCoord(-7, -3), HexFrame.Q_POS, big_pipe),
+            (TileCoord(-3, -4), HexFrame.Q_NEG, TileCoord(-4, -3), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-3, -8), HexFrame.Q_POS, TileCoord(-1, -9), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-3, -7), HexFrame.Q_NEG, TileCoord(-4, -6), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-3, -9), HexFrame.Q_NEG, TileCoord(-4, -9), HexFrame.Q_POS, big_pipe),
+            (TileCoord(-6, -7), HexFrame.Q_POS, TileCoord(-4, -8), HexFrame.Q_NEG, big_pipe),
+            (TileCoord(-3, -7), HexFrame.Q_NEG, TileCoord(-4, -7), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-3, -9), HexFrame.Q_NEG, TileCoord(-4, -8), HexFrame.Q_POS, big_pipe),
+            (TileCoord(-4, -6), HexFrame.Q_NEG, TileCoord(-5, -6), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(3, -11), HexFrame.Q_NEG, TileCoord(2, -11), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-1, -10), HexFrame.Q_POS, TileCoord(1, -11), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-5, -5), HexFrame.Q_NEG, TileCoord(-6, -4), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-6, -5), HexFrame.Q_POS, TileCoord(-4, -6), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(0, -9), HexFrame.Q_POS, TileCoord(2, -10), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-6, -3), HexFrame.Q_POS, TileCoord(-4, -4), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(2, -10), HexFrame.Q_NEG, TileCoord(1, -10), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-5, -4), HexFrame.Q_NEG, TileCoord(-6, -4), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(1, -9), HexFrame.Q_NEG, TileCoord(0, -9), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(0, -10), HexFrame.Q_NEG, TileCoord(-1, -10), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-3, -6), HexFrame.Q_NEG, TileCoord(-4, -6), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-3, -5), HexFrame.Q_NEG, TileCoord(-4, -4), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-5, -3), HexFrame.Q_POS, TileCoord(-3, -4), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-3, -6), HexFrame.Q_NEG, TileCoord(-4, -5), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-2, -7), HexFrame.Q_POS, TileCoord(0, -8), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(1, -10), HexFrame.Q_POS, TileCoord(3, -11), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-3, -10), HexFrame.Q_NEG, TileCoord(-4, -9), HexFrame.Q_POS, big_pipe),
+            (TileCoord(-5, -5), HexFrame.Q_POS, TileCoord(-3, -6), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-5, -4), HexFrame.Q_POS, TileCoord(-3, -5), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-1, -9), HexFrame.Q_NEG, TileCoord(-2, -9), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-6, -6), HexFrame.Q_NEG, TileCoord(-7, -6), HexFrame.Q_POS, big_pipe),
+            (TileCoord(-5, -5), HexFrame.Q_NEG, TileCoord(-6, -5), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-4, -4), HexFrame.Q_NEG, TileCoord(-5, -3), HexFrame.Q_POS, scrap_pipe),
+        ]
         blueprint_platform_bs_301.pipe_behaviors[PipeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = behaviour
     end
 
-    union!(blueprint_platform_bs_301.ship_tiles, Set{TileCoord}([
-        TileCoord(-4, -5),
-        TileCoord(-4, -7),
-        TileCoord(-2, -7),
-        TileCoord(-5, -4),
-        TileCoord(-4, -4),
-        TileCoord(-3, -6),
-        TileCoord(-6, -6),
-        TileCoord(-2, -8),
-        TileCoord(-4, -8),
-        TileCoord(-3, -7),
-        TileCoord(-6, -5),
-        TileCoord(-4, -9),
-        TileCoord(-5, -6),
-        TileCoord(-6, -4),
-        TileCoord(-5, -5),
-        TileCoord(-5, -7),
-        TileCoord(-4, -6),
-    ]))
+    union!(
+        blueprint_platform_bs_301.ship_tiles, Set{TileCoord}(
+            [
+                TileCoord(-4, -5),
+                TileCoord(-4, -7),
+                TileCoord(-2, -7),
+                TileCoord(-5, -4),
+                TileCoord(-4, -4),
+                TileCoord(-3, -6),
+                TileCoord(-6, -6),
+                TileCoord(-2, -8),
+                TileCoord(-4, -8),
+                TileCoord(-3, -7),
+                TileCoord(-6, -5),
+                TileCoord(-4, -9),
+                TileCoord(-5, -6),
+                TileCoord(-6, -4),
+                TileCoord(-5, -5),
+                TileCoord(-5, -7),
+                TileCoord(-4, -6),
+            ]
+        )
+    )
     merge_ship!(map, Symbol("##Platform BS-301#663"), blueprint_platform_bs_301)
 
     return map

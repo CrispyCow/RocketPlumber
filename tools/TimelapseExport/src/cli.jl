@@ -306,7 +306,7 @@ function print_help()
     print("""Time-Lapse Export Tool
 
 Usage:
-  julia --project=. tools/timelapse_export/export.jl INPUT --output OUTPUT [options]
+  julia --project=. tools/TimelapseExport/export.jl INPUT --output OUTPUT [options]
 
 Exports schema-version-2 construction history as H.264 MP4 (default) or a
 palette-optimised animated GIF. The exporter uses a hidden GLFW OpenGL context,
@@ -340,7 +340,7 @@ Camera bounds use stored base surface-tile coordinates and ignore ship render
 offsets. Automatic cameras never shrink. Manual camera rectangles are aspect-
 expanded without automatic padding. Keyframes receive equal holds; endpoint
 holds are added independently. Example:
-  julia --project=. tools/timelapse_export/export.jl maps/save.jld2 \\
+  julia --project=. tools/TimelapseExport/export.jl maps/save.jld2 \\
       --output recordings/save.mp4 --camera expand
 
 Exit codes: 0 success/help/inspection; 2 usage; 3 input/save/timeline; 4

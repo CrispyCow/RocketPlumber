@@ -1,3 +1,8 @@
+#=
+Scope: High-flow pipe plumbing tutorial map
+Formatter: Runic
+=#
+
 """
     mapgen_bigpipeplumbing()
 
@@ -63,23 +68,27 @@ function mapgen_bigpipeplumbing()
     ] = BigPipeBehav(10.0)
 
     # Define ship surface
-    union!(blueprint.ship_tiles, Set([
-        TileCoord(1, -2),
-        TileCoord(4, -2),
-        TileCoord(2, 0),
-        TileCoord(-1, 0),
-        TileCoord(1, 1),
-        TileCoord(0, 1),
-        TileCoord(2, -2),
-        TileCoord(-1, 1),
-        TileCoord(3, -2),
-        TileCoord(1, -1),
-        TileCoord(0, -1),
-        TileCoord(2, -1),
-        TileCoord(1, 0),
-        TileCoord(0, 0),
-        TileCoord(3, -1),
-    ]))
+    union!(
+        blueprint.ship_tiles, Set(
+            [
+                TileCoord(1, -2),
+                TileCoord(4, -2),
+                TileCoord(2, 0),
+                TileCoord(-1, 0),
+                TileCoord(1, 1),
+                TileCoord(0, 1),
+                TileCoord(2, -2),
+                TileCoord(-1, 1),
+                TileCoord(3, -2),
+                TileCoord(1, -1),
+                TileCoord(0, -1),
+                TileCoord(2, -1),
+                TileCoord(1, 0),
+                TileCoord(0, 0),
+                TileCoord(3, -1),
+            ]
+        )
+    )
 
     gamemap = GameMap(blueprint)
     return gamemap

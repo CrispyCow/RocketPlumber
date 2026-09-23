@@ -1,0 +1,246 @@
+#!/usr/bin/env julia
+
+"""Encode a saved GameMap as diagnostic text or a direct map-generator draft."""
+
+using JLD2, StaticArrays, LinearAlgebra
+using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowMap
+using HexFlowProcGen, HexFlowNozzleComponents, FlowEngine
+
+const _repo_root = normpath(joinpath(@__DIR__, "..", "..", "..", ".."))
+const _src_dir = joinpath(_repo_root, "src")
+
+include(joinpath(_src_dir, "components.jl"))
+include(joinpath(_src_dir, "timelapse.jl"))
+include(joinpath(_src_dir, "map_loading.jl"))
+
+function resolve_map_path(input::String)::String
+    endswith(lowercase(input), ".jld2") || error("Map input must have a .jld2 extension: $input")
+    path = abspath(input)
+    isfile(path) || error("Map file not found: $path")
+    return path
+end
+
+"Load a saved map through the application's migration typemap without fallback."
+function load_game_map(map_input::String)::GameMap
+    map_path = resolve_map_path(map_input)
+    typemap = _build_map_typemap()
+    stored_gamemap = JLD2.load(map_path, "stored_gamemap"; typemap = typemap)
+    stored_gamemap isa GameMap || error(
+        "JLD2 entry stored_gamemap has type $(typeof(stored_gamemap)), expected GameMap"
+    )
+    return stored_gamemap
+end
+
+format_coord(coord::TileCoord) = "TileCoord($(Int(coord.q)), $(Int(coord.r)))"
+format_coord(coord::VertexCoord) = "VertexCoord($(format_coord(coord.tile)), HexFrame.$(coord.dir))"
+format_coord(coord::PipeCoord) = "PipeCoord($(format_coord(coord.v1)), $(format_coord(coord.v2)))"
+
+tile_sort_key(coord::TileCoord) = (Int(coord.q), Int(coord.r))
+vertex_sort_key(coord::VertexCoord) = (Int(coord.tile.q), Int(coord.tile.r), Int(coord.dir))
+pipe_sort_key(coord::PipeCoord) = (vertex_sort_key(coord.v1), vertex_sort_key(coord.v2))
+
+"Return ship names with :primary first and deterministic ordering thereafter."
+function sorted_ship_names(gamemap::GameMap)::Vector{Symbol}
+    names = collect(keys(gamemap.ships))
+    sort!(names; by = name -> (name === :primary ? 0 : 1, string(name)))
+    return names
+end
+
+"Convert a ship symbol into the variable suffix used by generated drafts."
+function ship_var_name(ship_name::Symbol)::String
+    suffix = lowercase(replace(string(ship_name), r"[^A-Za-z0-9]" => "_"))
+    suffix = replace(suffix, r"_+" => "_")
+    suffix = strip(suffix, '_')
+    return "ship_" * (isempty(suffix) ? "unnamed" : suffix)
+end
+
+function validate_ship_variable_names(ship_names::Vector{Symbol})
+    variables = Dict{String, Symbol}()
+    for ship_name in ship_names
+        variable = ship_var_name(ship_name)
+        if haskey(variables, variable)
+            other = variables[variable]
+            error(
+                "Ship variable-name collision: $(repr(other)) and $(repr(ship_name)) " *
+                "both sanitise to `$variable`; rename a ship before generating Julia"
+            )
+        end
+        variables[variable] = ship_name
+    end
+    return nothing
+end
+
+function validate_generator_name(output_file::String)::String
+    stem = splitext(basename(output_file))[1]
+    startswith(stem, "mapgen_") || error(
+        "Julia output filename must start with mapgen_: $(basename(output_file))"
+    )
+    Base.isidentifier(stem) || error("Julia output filename is not a valid identifier: $stem")
+    return stem
+end
+
+function emit_ship_contents!(lines::Vector{String}, variable::String, gamemap::GameMap, ship_name::Symbol)
+    components = sort(
+        [(coord, placed) for (coord, placed) in gamemap.components if placed.ship === ship_name];
+        by = pair -> tile_sort_key(pair[1]),
+    )
+    if !isempty(components)
+        push!(lines, "    # Components")
+        for (coord, placed) in components
+            push!(lines, "    $variable.components[$(format_coord(coord))] = PlacedComponent($(repr(placed.component)), HexFrame.$(placed.rotation), $(placed.mirrored), :_blueprint)")
+        end
+    end
+
+    pipes = sort(
+        [(coord, placed) for (coord, placed) in gamemap.pipe_behaviors if placed.ship === ship_name];
+        by = pair -> pipe_sort_key(pair[1]),
+    )
+    if !isempty(pipes)
+        push!(lines, "    # Pipes")
+        for (coord, placed) in pipes
+            push!(lines, "    $variable.pipe_behaviors[$(format_coord(coord))] = $(repr(placed.pipe))")
+        end
+    end
+
+    tiles = collect(collect_surface_tiles!(Set{TileCoord}(), gamemap; ship_name = ship_name))
+    sort!(tiles; by = tile_sort_key)
+    if !isempty(tiles)
+        push!(lines, "    # Surface tiles")
+        push!(lines, "    union!($variable.ship_tiles, Set([")
+        for tile in tiles
+            push!(lines, "        $(format_coord(tile)),")
+        end
+        push!(lines, "    ]))")
+    end
+    return nothing
+end
+
+"Generate a direct, mechanically faithful map-generator draft."
+function generate_mapgen_code(gamemap::GameMap, function_name::String; mapnote::String = "")::String
+    ship_names = sorted_ship_names(gamemap)
+    :primary in ship_names || error("Cannot generate a map without the required :primary ship")
+    validate_ship_variable_names(ship_names)
+
+    lines = [
+        "# Generated map creation function",
+        "# Generated by .agents/skills/rocket-plumber-map-encoding/scripts/encode_map.jl",
+        "# Note: docking, space-map, learning, statistics, and time-lapse state are not encoded",
+    ]
+    !isempty(mapnote) && push!(lines, "# $mapnote")
+    push!(lines, "function $function_name()")
+
+    for ship_name in ship_names
+        variable = ship_var_name(ship_name)
+        push!(lines, "")
+        push!(lines, "    # Ship $(repr(ship_name))")
+        push!(lines, "    $variable = ShipBlueprint()")
+        emit_ship_contents!(lines, variable, gamemap, ship_name)
+    end
+
+    push!(lines, "")
+    push!(lines, "    gamemap = GameMap($(ship_var_name(:primary)))")
+    for ship_name in ship_names
+        ship_name === :primary && continue
+        push!(lines, "    merge_ship!(gamemap, $(repr(ship_name)), $(ship_var_name(ship_name)))")
+    end
+    push!(lines, "    return gamemap")
+    push!(lines, "end")
+    return join(lines, "\n") * "\n"
+end
+
+function encode_listing(gamemap::GameMap)::String
+    ship_names = sorted_ship_names(gamemap)
+    lines = String[
+        "GameMap listing",
+        "Ships: $(length(ship_names)) ($(join(repr.(ship_names), ", ")))" ,
+        "Components: $(length(gamemap.components))",
+        "Pipes: $(length(gamemap.pipe_behaviors))",
+        "Surfaces: $(length(gamemap.surface_shiptags))",
+        "",
+    ]
+
+    for ship_name in ship_names
+        push!(lines, "Ship $(repr(ship_name))")
+        push!(lines, "  components = [")
+        components = sort(
+            [(coord, placed) for (coord, placed) in gamemap.components if placed.ship === ship_name];
+            by = pair -> tile_sort_key(pair[1]),
+        )
+        for (coord, placed) in components
+            push!(lines, "    $(format_coord(coord)) => $(repr(placed)),")
+        end
+        push!(lines, "  ]")
+        push!(lines, "  pipes = [")
+        pipes = sort(
+            [(coord, placed) for (coord, placed) in gamemap.pipe_behaviors if placed.ship === ship_name];
+            by = pair -> pipe_sort_key(pair[1]),
+        )
+        for (coord, placed) in pipes
+            push!(lines, "    $(format_coord(coord)) => $(repr(placed)),")
+        end
+        push!(lines, "  ]")
+        push!(lines, "  surfaces = [")
+        tiles = collect(collect_surface_tiles!(Set{TileCoord}(), gamemap; ship_name = ship_name))
+        sort!(tiles; by = tile_sort_key)
+        for tile in tiles
+            push!(lines, "    $(format_coord(tile)),")
+        end
+        push!(lines, "  ]")
+        push!(lines, "")
+    end
+    return join(lines, "\n")
+end
+
+function output_path(output_file::String)::String
+    if basename(output_file) == output_file
+        return joinpath(_repo_root, "src", "demo_maps", basename(output_file))
+    end
+    return abspath(output_file)
+end
+
+function encode_map(map_input::String, output_file::Union{String, Nothing} = nothing)
+    gamemap = load_game_map(map_input)
+    listing = encode_listing(gamemap)
+    println(listing)
+
+    isnothing(output_file) && return listing
+    path = endswith(lowercase(output_file), ".jl") ? output_path(output_file) : abspath(output_file)
+    mkpath(dirname(path))
+    if endswith(lowercase(output_file), ".jl")
+        function_name = validate_generator_name(output_file)
+        code = generate_mapgen_code(gamemap, function_name; mapnote = "Source save: $map_input")
+        write(path, code)
+        println("Wrote generator $function_name to $path")
+    else
+        write(path, listing * "\n")
+        println("Wrote listing to $path")
+    end
+    return listing
+end
+
+function print_usage(io::IO = stdout)
+    println(io, "Usage: julia --project=. .agents/skills/rocket-plumber-map-encoding/scripts/encode_map.jl <map.jld2> [output]")
+    println(io, "  A bare .jl output filename is written to src/demo_maps; explicit paths are honoured.")
+end
+
+function main()
+    if any(argument -> argument in ("-h", "--help"), ARGS)
+        print_usage()
+        return nothing
+    end
+    length(ARGS) in (1, 2) || begin
+        print_usage(stderr)
+        exit(1)
+    end
+    try
+        encode_map(ARGS[1], length(ARGS) == 2 ? ARGS[2] : nothing)
+    catch error_value
+        println(stderr, "Error: ", sprint(showerror, error_value))
+        exit(1)
+    end
+    return nothing
+end
+
+if abspath(PROGRAM_FILE) == @__FILE__
+    main()
+end

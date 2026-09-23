@@ -1,102 +1,31 @@
-# TexturePacker Command Line Usage
+# Texture Packer
 
-TexturePacker can now be executed directly from the command line using Julia, eliminating the need for a separate runner script.
+From the repository root, run the standard Rocket Plumber atlas build with:
 
-## Usage
-
-```
-julia --project=. src/TexturePacker.jl <source_dir> <output_base> [OPTIONS]
+```shell
+julia tools/pack_textures.jl
 ```
 
-### Required Arguments
+You can also open `tools/pack_textures.jl` in VS Code and use **Run File**. The
+launcher uses this tool's Julia environment in a separate process and resolves
+all paths from its own location, regardless of the current working directory.
+It reads PNGs from `tools/TexturePacker/textures/` and writes the tracked
+`tools/TexturePacker/outputs/TileTextureAtlas1.png` and `.json` files. The
+standard atlas uses row packing and the tool's existing defaults for padding
+and other options. Review and commit both generated files together when the
+source textures change.
 
-- `source_dir`: Directory containing source images to pack
-- `output_base`: Base name for output files (without extension). Both `.png` and `.json` files will be created.
+For help or custom source, output, or packing options, invoke the underlying
+tool directly from the repository root:
 
-### Optional Arguments
-
-- `--pack-method`, `-m`: Packing method (`rect` or `row`, default: `rect`)
-  - `rect`: Uses Packing.jl's RectanglePacker for optimal packing
-  - `row`: Uses simple row-based packing
-- `--filetype`, `-t`: Image file extension to process (default: `.png`)
-- `--pack-margin`: Packing margin multiplier for atlas size estimation (default: `1.5`)
-- `--atlas-width-step`: Atlas width increment step when growing (default: `128`)
-- `--padding`, `-p`: Padding pixels around each sprite (default: `2`)
-
-### Help
-
-```
-julia --project=. src/TexturePacker.jl --help
+```shell
+julia --project=tools/TexturePacker tools/TexturePacker/src/TexturePacker.jl --help
+julia --project=tools/TexturePacker tools/TexturePacker/src/TexturePacker.jl \
+  tools/TexturePacker/textures tools/TexturePacker/outputs/TileTextureAtlas1 \
+  --pack-method row
 ```
 
-## Examples
-
-### Windows Commands
-
-#### Basic usage (equivalent to old run_pack.jl):
-```powershell
-cd TexturePacker
-julia --project=. src/TexturePacker.jl textures outputs/TileTextureAtlas1
-```
-
-#### With custom pack method:
-```powershell
-julia --project=. src/TexturePacker.jl textures outputs/TileTextureAtlas1 --pack-method row
-```
-
-#### With custom padding:
-```powershell
-julia --project=. src/TexturePacker.jl textures outputs/MyAtlas --padding 4 --pack-method rect
-```
-
-### Linux Commands
-
-#### Basic usage:
-```bash
-cd TexturePacker
-julia --project=. src/TexturePacker.jl textures outputs/TileTextureAtlas1
-```
-
-#### With custom pack method:
-```bash
-julia --project=. src/TexturePacker.jl textures outputs/TileTextureAtlas1 --pack-method row
-```
-
-#### With custom padding:
-```bash
-julia --project=. src/TexturePacker.jl textures outputs/MyAtlas --padding 4 --pack-method rect
-```
-
-## Output Files
-
-The tool generates two files:
-- `<output_base>.png`: The packed texture atlas
-- `<output_base>.json`: UV mapping data and sprite metadata
-
-## Migration from run_pack.jl
-
-The old `run_pack.jl` script is no longer needed. Replace:
-
-```julia
-julia --project=. app/run_pack.jl
-```
-
-With:
-
-```julia
-julia --project=. src/TexturePacker.jl textures outputs/TileTextureAtlas1 --pack-method rect
-```
-
-## Programmatic Usage
-
-The module can still be imported and used programmatically:
-
-```julia
-using TexturePacker
-
-pack_textures(
-    source_dir="textures",
-    out_dir="outputs/TileTextureAtlas1",
-    pack_method=:rect
-)
-```
+The CLI supports `--pack-method row|rect`, `--padding`, `--filetype`,
+`--pack-margin`, and `--atlas-width-step`. Run `--help` for their current
+defaults. The output base is a path without an extension; the tool writes both
+`<output_base>.png` and `<output_base>.json`.

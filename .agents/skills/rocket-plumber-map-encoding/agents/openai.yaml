@@ -1,0 +1,6 @@
+interface:
+  display_name: "Rocket Plumber Map Encoding"
+  short_description: "Reconstruct saved maps as maintainable Julia"
+  default_prompt: "Use $rocket-plumber-map-encoding to reconstruct a saved Rocket Plumber map as validated Julia source."
+policy:
+  allow_implicit_invocation: false

@@ -1,3 +1,8 @@
+#=
+Scope: Basic cold-gas plumbing tutorial map
+Formatter: Runic
+=#
+
 """
     mapgen_basicplumbing()
 
@@ -33,17 +38,21 @@ function mapgen_basicplumbing()
     blueprint.components[TileCoord(-4, 2)] = PlacedComponent(nozzle, HexFrame.Q_POS, :_blueprint)
 
     # Define ship surface
-    union!(blueprint.ship_tiles, Set([
-        TileCoord(1, -1),
-        TileCoord(-1, 0),
-        TileCoord(2, -1),
-        TileCoord(-1, 1),
-        TileCoord(-3, 2),
-        TileCoord(1, 0),
-        TileCoord(-3, 1),
-        TileCoord(-2, 1),
-        TileCoord(0, 0),
-    ]))
+    union!(
+        blueprint.ship_tiles, Set(
+            [
+                TileCoord(1, -1),
+                TileCoord(-1, 0),
+                TileCoord(2, -1),
+                TileCoord(-1, 1),
+                TileCoord(-3, 2),
+                TileCoord(1, 0),
+                TileCoord(-3, 1),
+                TileCoord(-2, 1),
+                TileCoord(0, 0),
+            ]
+        )
+    )
 
     gamemap = GameMap(blueprint)
     return gamemap

@@ -4,16 +4,13 @@
 Refresh every local package environment in this repository.
 
 By default this resolves, instantiates, and precompiles each environment without
-independently updating registry packages, which helps keep local package
-manifests aligned with the root game environment. Pass `--update` to opt into a
-full per-environment package update.
+explicitly requesting registry package upgrades. Pass `--update` to opt into a
+full per-environment package update. Pkg resolution may still change manifests.
 
 Any new local package should live somewhere under `local_packages/` with its own
 `Project.toml` so this script discovers it automatically.
 """
 module LocalPackageUpdater
-
-using Pkg
 
 const REPO_ROOT = normpath(joinpath(@__DIR__, ".."))
 const LOCAL_PACKAGES_ROOT = joinpath(REPO_ROOT, "local_packages")
@@ -60,23 +57,22 @@ function package_label(pkg_dir::AbstractString)
     return relpath(pkg_dir, REPO_ROOT)
 end
 
-"Run repository maintenance steps for one local package environment."
+"Run repository maintenance steps for one local package environment in a child Julia process."
 function refresh_package!(pkg_dir::AbstractString, options::RefreshOptions)
     label = package_label(pkg_dir)
 
     println()
     println("=== Refreshing ", label, " ===")
-    Pkg.activate(pkg_dir)
-    options.allow_updates && Pkg.update()
-    Pkg.resolve()
-    Pkg.instantiate()
-    Pkg.precompile()
+    update_code = options.allow_updates ? "Pkg.update(); " : ""
+    code = "using Pkg; " * update_code * "Pkg.resolve(); Pkg.instantiate(); Pkg.precompile()"
+    cmd = `$(Base.julia_cmd()) --project=$(pkg_dir) --startup-file=no -e $(code)`
+    run(cmd)
     println("=== Completed ", label, " ===")
 
     return nothing
 end
 
-function main(args::Vector{String}=ARGS)
+function main(args::Vector{String}=String[])
     options = parse_args(args)
     options === nothing && return nothing
 
@@ -97,6 +93,7 @@ function main(args::Vector{String}=ARGS)
         try
             refresh_package!(pkg_dir, options)
         catch err
+            err isa InterruptException && rethrow()
             push!(failures, package_label(pkg_dir) => err)
             println("*** Failed ", package_label(pkg_dir), ": ", sprint(showerror, err))
         end
@@ -116,8 +113,6 @@ function main(args::Vector{String}=ARGS)
     return nothing
 end
 
-if abspath(PROGRAM_FILE) == @__FILE__
-    main()
-end
-
 end # module LocalPackageUpdater
+
+LocalPackageUpdater.main(abspath(PROGRAM_FILE) == (@__FILE__) ? ARGS : String[])

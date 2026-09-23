@@ -1,0 +1,6 @@
+interface:
+  display_name: "Rocket Plumber Map Diagnostics"
+  short_description: "Inspect saved maps and FlowCalculator crashes"
+  default_prompt: "Use $rocket-plumber-map-diagnostics to investigate this Rocket Plumber saved map or crash dump."
+policy:
+  allow_implicit_invocation: false
