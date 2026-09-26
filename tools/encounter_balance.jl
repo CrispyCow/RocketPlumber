@@ -1,7 +1,7 @@
 #!/usr/bin/env julia
 
 let
-    # Keep the game project primary and make the plotting project available to Main.
+    # Keep the game project primary and add the plotting project to the load path.
     repository_root = normpath(joinpath(@__DIR__, ".."))
     tool_root = joinpath(@__DIR__, "EncounterBalance")
     entry_point = joinpath(tool_root, "src", "EncounterBalance.jl")

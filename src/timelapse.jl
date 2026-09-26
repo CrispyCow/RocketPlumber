@@ -11,21 +11,7 @@ using FlowMap
 
 #= ---------- Recorder State ---------- =#
 
-const TIMELAPSE_FORMAT_VERSION::UInt16 = UInt16(2)
 const TIMELAPSE_CAPTURE_INTERVAL_SECONDS::Float64 = 30.0
-
-@kwdef struct TimelapseHistory
-    format_version::UInt16 = TIMELAPSE_FORMAT_VERSION
-    frames::Vector{GameMap} = GameMap[]
-end
-
-"Pair the authoritative current map with its optional render-thread time-lapse history."
-@kwdef struct GameMapBundle
-    gamemap::GameMap
-    timelapse::Union{Nothing, TimelapseHistory} = nothing
-end
-
-GameMapBundle(gamemap::GameMap) = GameMapBundle(gamemap = gamemap)
 
 "Render-thread-owned runtime state for fixed-interval time-lapse capture."
 mutable struct TimelapseRecorder

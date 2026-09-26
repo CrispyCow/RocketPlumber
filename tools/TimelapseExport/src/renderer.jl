@@ -1,8 +1,3 @@
-struct RenderAssets
-    shader_dir::String
-    texture_atlas_dir::String
-end
-
 struct OffscreenTarget
     framebuffer::GLuint
     renderbuffer::GLuint
@@ -20,9 +15,9 @@ mutable struct ExportRenderer
     options::ExportOptions
 end
 
-function _required_asset_paths(repository_root::AbstractString)
-    shader_dir = joinpath(repository_root, "local_packages", "HexFlowRendering", "src", "shaders")
-    texture_dir = joinpath(repository_root, "tools", "TexturePacker", "outputs")
+function validate_render_assets!()
+    shader_dir = Runtime.HexFlowRendering.shader_dir()
+    texture_dir = Runtime.HexFlowRendering.texture_atlas_dir()
     required = [
         joinpath(shader_dir, "BaseTile.vert"),
         joinpath(shader_dir, "BaseTile.frag"),
@@ -31,14 +26,9 @@ function _required_asset_paths(repository_root::AbstractString)
         joinpath(texture_dir, "TileTextureAtlas1.png"),
         joinpath(texture_dir, "TileTextureAtlas1.json"),
     ]
-    return shader_dir, texture_dir, required
-end
-
-function validate_render_assets!(repository_root::AbstractString)
-    shader_dir, texture_dir, required = _required_asset_paths(repository_root)
     missing = filter(path -> !isfile(path), required)
     isempty(missing) || throw(RenderToolError("required renderer asset is missing: $(join(missing, ", "))"))
-    return RenderAssets(shader_dir, texture_dir)
+    return nothing
 end
 
 function _glfw_error_message(error)
@@ -46,7 +36,7 @@ function _glfw_error_message(error)
 end
 
 function _create_hidden_window()
-    glfw = Main.GLFW
+    glfw = Runtime.GLFW
     window = nothing
     try
         glfw.DefaultWindowHints()
@@ -110,17 +100,15 @@ function _delete_offscreen_target!(target::OffscreenTarget)
     return nothing
 end
 
-function create_renderer(options::ExportOptions, assets::RenderAssets)
+function create_renderer(options::ExportOptions)
     window = nothing
     glmap = nothing
     target = nothing
     try
         window = _create_hidden_window()
         target = _create_offscreen_target(options.width, options.height)
-        rendering = Main.HexFlowRendering
-        rendering.SHADER_DIR[] = assets.shader_dir
-        rendering.TEXTURE_ATLAS_DIR[] = assets.texture_atlas_dir
-        glmap = Main.RenderEngine.GLObjectMap()
+        rendering = Runtime.HexFlowRendering
+        glmap = Runtime.RenderEngine.GLObjectMap()
         rendering.viewtransform_glubo_init(glmap)
         rendering.basesprite_glprog_init(glmap)
         rendering.texatlas1_gltex_init(glmap)
@@ -135,19 +123,19 @@ function create_renderer(options::ExportOptions, assets::RenderAssets)
     catch error
         if !isnothing(glmap)
             try
-                Main.RenderEngine.teardown_glmap(glmap)
+                Runtime.RenderEngine.teardown_glmap(glmap)
             catch
             end
         end
         !isnothing(target) && _delete_offscreen_target!(target)
         if !isnothing(window)
             try
-                Main.GLFW.DestroyWindow(window)
+                Runtime.GLFW.DestroyWindow(window)
             catch
             end
         end
         try
-            Main.GLFW.Terminate()
+            Runtime.GLFW.Terminate()
         catch
         end
         (error isa ToolError || error isa InterruptException) && rethrow()
@@ -156,18 +144,18 @@ function create_renderer(options::ExportOptions, assets::RenderAssets)
 end
 
 function _set_camera!(renderer::ExportRenderer, camera::CameraViewport)
-    control = Main.HexFlowControl
+    control = Runtime.HexFlowControl
     viewstate = control.ViewState(
         fb_width = Int32(renderer.target.width), fb_height = Int32(renderer.target.height),
         window_width = Int32(renderer.target.width), window_height = Int32(renderer.target.height),
         view_x = camera.view_x, view_y = camera.view_y, view_zoom = camera.zoom,
     )
-    Main.HexFlowRendering.set_view_ubo(renderer.glmap, control.get_viewtransform(viewstate))
+    Runtime.HexFlowRendering.set_view_ubo(renderer.glmap, control.get_viewtransform(viewstate))
     return nothing
 end
 
 function _render_docking_beams!(queue, glmap, gamemap, gameticks::Int64)
-    rendering = Main.HexFlowRendering
+    rendering = Runtime.HexFlowRendering
     primary_centroid = get_surface_centroid(gamemap, :primary)
     isnothing(primary_centroid) && return nothing
     primary_pos = primary_centroid + get_ship_render_offset(gamemap, :primary)
@@ -197,8 +185,8 @@ function _render_docking_beams!(queue, glmap, gamemap, gameticks::Int64)
 end
 
 function _render_keyframe!(renderer::ExportRenderer, context::ReconstructionContext, entry::TimelineEntry, camera::CameraViewport, tick::Int64)
-    rendering = Main.HexFlowRendering
-    control = Main.HexFlowControl
+    rendering = Runtime.HexFlowRendering
+    control = Runtime.HexFlowControl
     _set_camera!(renderer, camera)
     target = renderer.target
     glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer)
@@ -214,7 +202,7 @@ function _render_keyframe!(renderer::ExportRenderer, context::ReconstructionCont
     rendering.pipe_queued_render!(renderer.renderqueue, renderer.glmap, entry.gamemap, context.derived, gamestate)
     rendering.node_queued_render!(renderer.renderqueue, renderer.glmap, entry.gamemap, context.derived, context.mna_snapshot)
     length(renderer.scratch_renderqueue) < length(renderer.renderqueue) && resize!(renderer.scratch_renderqueue, length(renderer.renderqueue))
-    Main.RenderEngine.glrender(renderer.glmap, renderer.renderqueue, renderer.scratch_renderqueue)
+    Runtime.RenderEngine.glrender(renderer.glmap, renderer.renderqueue, renderer.scratch_renderqueue)
     readback = target.readback
     GC.@preserve readback begin
         glReadPixels(GLint(0), GLint(0), GLsizei(target.width), GLsizei(target.height), GL_RGBA, GL_UNSIGNED_BYTE, pointer(readback))
@@ -247,15 +235,15 @@ end
 
 function destroy_renderer!(renderer::ExportRenderer)
     try
-        Main.RenderEngine.teardown_glmap(renderer.glmap)
+        Runtime.RenderEngine.teardown_glmap(renderer.glmap)
     finally
         try
             _delete_offscreen_target!(renderer.target)
         finally
             try
-                Main.GLFW.DestroyWindow(renderer.window)
+                Runtime.GLFW.DestroyWindow(renderer.window)
             finally
-                Main.GLFW.Terminate()
+                Runtime.GLFW.Terminate()
             end
         end
     end

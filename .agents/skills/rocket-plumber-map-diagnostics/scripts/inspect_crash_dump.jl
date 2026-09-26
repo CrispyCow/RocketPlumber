@@ -18,7 +18,7 @@ Usage:
     julia --project=. .agents/skills/rocket-plumber-map-diagnostics/scripts/inspect_crash_dump.jl <dump-path> --coord <q> <r>
 """
 
-using JLD2, Accessors
+using JLD2
 
 using HexFrame, HexElements, HexFluids, HexFlowTelemetry
 using HexComponentsAPI, FlowEngine, FlowMap, HexFlowProcGen
@@ -27,11 +27,7 @@ using SquirrelNoise
 using HexFlowBasicComponents, HexFlowTankComponents, HexFlowSwitchComponents
 using HexFlowNozzleComponents, HexFlowPumpComponents
 using HexFlowBasicPipes
-
-const _src_dir = normpath(joinpath(@__DIR__, "../../../..", "src"))
-include(joinpath(_src_dir, "components.jl"))
-include(joinpath(_src_dir, "timelapse.jl"))
-include(joinpath(_src_dir, "map_loading.jl"))
+using HexFlowPersistence
 
 Base.@kwdef struct InspectOptions
     dump_path::String
@@ -139,7 +135,7 @@ function command_summary(cmd::MapEditCommand)::String
 end
 
 function print_dump_metadata(opts::InspectOptions)
-    file = jldopen(opts.dump_path, "r"; typemap = _build_map_typemap())
+    file = jldopen(opts.dump_path, "r")
     try
         println("===========================================================")
         println("CRASH DUMP METADATA")
@@ -278,9 +274,7 @@ function main(args::Vector{String})::Int
         return 0
     end
 
-    loaded = JLD2.load(opts.dump_path, "stored_gamemap"; typemap = _build_map_typemap())
-    loaded isa GameMap || error("stored_gamemap has type $(typeof(loaded)), expected GameMap")
-    gamemap = loaded
+    gamemap = HexFlowPersistence.loadmap_strict(opts.dump_path)
     print_map_summary(gamemap)
     print_valve_summary(gamemap)
     print_reactivation_candidates(gamemap)

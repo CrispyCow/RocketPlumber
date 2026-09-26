@@ -94,18 +94,18 @@ function _stderr_tail(tail::Vector{UInt8})
 end
 
 function _mp4_command(options::ExportOptions, output::AbstractString)
-    ffmpeg = Main.FFMPEG.ffmpeg()
+    ffmpeg = Runtime.FFMPEG.ffmpeg()
     return `$ffmpeg -y -hide_banner -f rawvideo -pix_fmt rgba -s $(options.width)x$(options.height) -r $(options.fps) -i pipe:0 -vf vflip -threads 4 -c:v libx264 -preset $(options.preset) -crf $(options.crf) -pix_fmt yuv420p -movflags +faststart $(output)`
 end
 
 function _palette_command(options::ExportOptions, output::AbstractString)
-    ffmpeg = Main.FFMPEG.ffmpeg()
+    ffmpeg = Runtime.FFMPEG.ffmpeg()
     filter = "vflip,palettegen=stats_mode=diff:max_colors=256"
     return `$ffmpeg -y -hide_banner -f rawvideo -pix_fmt rgba -s $(options.width)x$(options.height) -r $(options.fps) -i pipe:0 -vf $filter -frames:v 1 -update 1 $(output)`
 end
 
 function _gif_command(options::ExportOptions, palette::AbstractString, output::AbstractString)
-    ffmpeg = Main.FFMPEG.ffmpeg()
+    ffmpeg = Runtime.FFMPEG.ffmpeg()
     filter = "[0:v]vflip[video];[video][1:v]paletteuse=dither=sierra2_4a:diff_mode=rectangle"
     return `$ffmpeg -y -hide_banner -f rawvideo -pix_fmt rgba -s $(options.width)x$(options.height) -r $(options.fps) -i pipe:0 -i $(palette) -lavfi $filter -loop 0 $(output)`
 end

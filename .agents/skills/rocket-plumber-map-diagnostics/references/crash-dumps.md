@@ -9,7 +9,7 @@ The writer drains the command channel as the calculator exits. Its `pending_comm
 ## Reading a dump
 
 1. Inspect the exception and backtrace first. Match frames to the phase of `flowcalculator_loop!`; follow any nested exception and coordinate in logs. Note that `exception_backtrace` is text from `showerror`, not a serialised stack object.
-2. Check that `stored_gamemap` loaded as a plausible current `GameMap`. The inspector uses the application's upgrade typemap. If reading fails, examine `src/map_loading.jl` and saved type compatibility before assuming a circuit fault.
+2. Check that `stored_gamemap` loaded as a plausible current `GameMap`. The inspector uses `HexFlowPersistence.loadmap_strict` for the embedded map and plain JLD2 for the calculator-owned metadata. If map reading fails, examine `HexFlowPersistence` migrations and saved type compatibility before assuming a circuit fault.
 3. Review queued command summaries and the map's component, valve, tank, nozzle, pump, deactivation, damage, and reactivation context. Use `--coord Q R` for a tile named by a frame, command, or circuit report; inspect its neighbours and map ownership.
 4. If the stack points into the solve or generated circuit, run the deep diagnostic on the dump's stored map. Label it a current-code reproduction. The saved map may already reflect component updates from the failing tick, while the deep tool starts with fresh derived/MNA state and no live command queue or reactivation scheduler.
 

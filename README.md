@@ -66,22 +66,22 @@ Julia is a JIT compiled language, and generally you are supposed to have Julia i
 #### Launching from the terminal
 To run the game from source you will need:
 
-- An up-to-date installation of Julia which can be acquired by following the instructions [here](https://julialang.org/install/).
+- Julia 1.12 or newer, which can be acquired by following the instructions [here](https://julialang.org/install/).
 - A copy of the code, just clone this repository!
 
 Once you have these run this command from the root folder to set up the required external dependencies (you only have to do this once):
 
 ```bash
-julia --project=. -e 'using Pkg; Pkg.instantiate()'
+julia --project=dev -e 'using Pkg; Pkg.instantiate()'
 ```
 
 From here you are ready to run! Start the demo with this command:
 
 ```bash
-julia --project=. --threads=2,1 --gcthreads=1,1 src/repl_launch.jl
+julia --project=dev --threads=2,1 --gcthreads=1,1 scripts/repl_launch.jl
 ```
 
-For source-based development this `src/repl_launch.jl` script is the right entry point. The production/packagecompiler entry point is `src/julia_main.jl`, which expects the production rendering artifacts to already have been built.
+The repository root is the `RocketPlumber` Julia package. `src/RocketPlumber.jl` is the single application source assembly point, and `using RocketPlumber` loads it without launching the game. Call `RocketPlumber.launch()` to start the normal game. The `dev/` workspace project supplies Revise for development; the production/PackageCompiler entry point remains `src/julia_main.jl`. Runtime shaders and the texture atlas are source-controlled in `HexFlowRendering` and accessed through relocatable package paths.
 On Julia 1.12 this starts 2 default worker threads plus 1 interactive main thread, which keeps the FlowCalculator off the main OpenGL loop without reserving an unnecessary third default worker.
 
 #### Using the REPL and Revise
@@ -93,18 +93,18 @@ You might notice Julia seems to take a while to start up, and that the demo seem
 To start the REPL in the project's environment run:
 
 ```bash
-julia --project=. --threads=2,1 --gcthreads=1,1
+julia --project=dev --threads=2,1 --gcthreads=1,1
 ```
 
-Then to run the launch script just include it:
+Then run the package development launcher from the REPL:
 
 ```julia
-include("src/repl_launch.jl")
+include("scripts/repl_launch.jl")
 ```
 
 Now when you exit the demo, your Julia REPL session should remain open!
 
-On its own this isn't that useful as you would need to restart the Julia session if you make changes to the code, but thankfully this project includes the [Revise.jl](https://timholy.github.io/Revise.jl/stable/) package. This package watches for changes in your source files and re-compiles modified functions as required, without requiring a restart of the Julia session. Now you can leave your REPL session open, make changes to the code, run the `repl_launch` script, and your changes should take effect automatically (with some [limitations](https://timholy.github.io/Revise.jl/stable/limitations/)).
+On its own this isn't that useful as you would need to restart the Julia session if you make changes to the code, but thankfully the `dev/` workspace environment includes the [Revise.jl](https://timholy.github.io/Revise.jl/stable/) package. Revise loads before RocketPlumber, so it tracks package source without being a runtime dependency. This package watches for changes in your source files and re-compiles modified functions as required, without requiring a restart of the Julia session. Now you can leave your REPL session open, make changes to the code, run `scripts/repl_launch.jl`, and your changes should take effect automatically (with some [limitations](https://timholy.github.io/Revise.jl/stable/limitations/)).
 
 I actually don't use the REPL much directly from the command line. I'd recommend working in VS Code with the Julia extension, where you can run scripts in the REPL just by pressing the 'run' button. This repository already includes the appropriate `.vscode` settings to ensure the REPL launches with the correct threading by default.
 
@@ -135,12 +135,9 @@ Development is likely to move pretty slowly as this is a hobby project. To get i
 ---
 ## Navigating the Codebase
 
-The source code is broken up into 2 main places:
+The root is the `RocketPlumber` application package. Its `src/RocketPlumber.jl` file owns source assembly, while `RocketPlumber.launch()` owns normal startup. The `dev/` project is a member of the root Julia workspace and provides development-only dependencies such as Revise. Local reusable packages remain under `/local_packages` as path dependencies, rather than workspace members.
 
-- Scripts in `/src`
-- Local development packages in `/local_packages`
-
-I generally use packages for relatively self-contained code with well-defined interfaces (ideally most of the code), and scripts for the program navigation, the main window, and user interaction.
+Application integration and local development packages live under `/src` and `/local_packages`, respectively. The package boundary keeps reusable code in local packages and application startup, UI, rendering, and persistence coordination in RocketPlumber.
 
 ### Execution Loops
 
@@ -218,7 +215,7 @@ A data structure which tracks all of the OpenGL objects instantiated in state ar
 
 A type is also defined for 'sprites' even though sprites are not a part of OpenGL directly. This is an additional abstraction I have added to allow specific sprites to be referenced by name symbol, and they refer to a specific location in a large sprite atlas texture. This is loaded as a PNG file, and as a JSON file which defines what named sprites are included and where to find them.
 
-A tool is provided in `tools/TexturePacker` which takes a folder full of individual sprites and packs them into an atlas and the corresponding JSON file. This packer also removes blank space from the edges of the sprites, but remembers the location offset to allow the relative location of sprites to be preserved while reducing the final atlas size.
+A tool is provided in `tools/TexturePacker` which takes a folder full of individual sprites and packs them into the runtime atlas and corresponding JSON file owned by `HexFlowRendering`. The packer removes blank space from sprite edges while preserving their relative offsets.
 
 ---
 ## Licence

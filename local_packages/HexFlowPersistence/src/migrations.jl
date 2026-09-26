@@ -1,19 +1,7 @@
 #=
-Scope: JLD2 game-map persistence and saved-state upgrade conversions
+Scope: JLD2 conversions and typemap for historical game saves
 Formatter: Runic
-Note: Kept free of rendering and UI dependencies for use by headless tools
 =#
-
-# ===============================================================
-# Map Loading and Saving
-# ===============================================================
-
-using JLD2
-using FlowMap
-using HexComponentsAPI
-using HexFlowProcGen
-using HexFrame
-import JLD2: rconvert
 
 #= ---------- JLD2 Upgrade Helpers ---------- =#
 
@@ -43,6 +31,14 @@ function rconvert(::Type{HexComponentsAPI.PlacedPipe}, nt::NamedTuple)
 end
 
 #= ---------- Game-State Upgrades ---------- =#
+
+"Reconstruct time-lapse history saved while application types lived in `Main`."
+function rconvert(::Type{TimelapseHistory}, nt::NamedTuple)
+    default_history = TimelapseHistory()
+    format_version = get(nt, :format_version, default_history.format_version)
+    frames = get(nt, :frames, default_history.frames)
+    return TimelapseHistory(; format_version, frames)
+end
 
 function rconvert(::Type{FlowMap.ShipState}, nt::NamedTuple)
     docking_status = get(nt, :docking_status, FlowMap.ConnectedDockStat())
@@ -269,6 +265,8 @@ function _build_map_typemap()::Dict{String, Any}
     typemap["HexComponentsAPI.ComponentOnTile"] = JLD2.Upgrade(HexComponentsAPI.PlacedComponent)
     typemap["HexComponentsAPI.PipeOnEdge"] = JLD2.Upgrade(HexComponentsAPI.PlacedPipe)
     typemap["FlowMap.GameMap"] = JLD2.Upgrade(FlowMap.GameMap)
+    # Historical saves use Main.TimelapseHistory; keep this until those saves are migrated.
+    typemap["Main.TimelapseHistory"] = JLD2.Upgrade(TimelapseHistory)
     typemap["FlowMap.PlaythroughStatistics"] = JLD2.Upgrade(FlowMap.PlaythroughStatistics)
     typemap["FlowMap.GalaxyEscapeSpaceMap"] = JLD2.Upgrade(FlowMap.GalaxyEscapeSpaceMap)
     # typemap["HexComponentsAPI.PlacedComponent"] = JLD2.Upgrade(HexComponentsAPI.PlacedComponent)
@@ -285,103 +283,3 @@ function _build_map_typemap()::Dict{String, Any}
 
     return typemap
 end
-
-#= ---------- Load and Save Entry Points ---------- =#
-
-"Load a `GameMap` from the given path, or return an empty map on failure."
-function loadmap(mappath::Union{Nothing, String})::GameMap
-    isnothing(mappath) && (@info "No map path provided; starting empty."; return GameMap())
-    try
-        typemap = _build_map_typemap()
-        result = isempty(typemap) ?
-            JLD2.load(mappath, "stored_gamemap") :
-            JLD2.load(mappath, "stored_gamemap"; typemap = typemap)
-        result isa GameMap && return result
-        @warn "Loaded object was not a GameMap; returning empty." loaded_type = typeof(result)
-    catch e
-        @warn "Map load failed; returning empty." exception = (e, catch_backtrace())
-    end
-    return GameMap()
-end
-
-"Load the authoritative map and optional version-2 time-lapse history in one file pass."
-function loadmap_bundle(mappath::String)::GameMapBundle
-    typemap = _build_map_typemap()
-    try
-        # Load the map while isolating optional time-lapse failures
-        loaded_gamemap, loaded_timelapse, timelapse_error = JLD2.jldopen(mappath, "r"; typemap) do file
-            stored_gamemap = file["stored_gamemap"]
-            history = nothing
-            history_error = nothing
-            if haskey(file, "stored_timelapse")
-                try
-                    history = file["stored_timelapse"]
-                catch e
-                    history_error = (e, catch_backtrace())
-                end
-            end
-            return stored_gamemap, history, history_error
-        end
-
-        # Reject an invalid authoritative map
-        loaded_gamemap isa GameMap || begin
-            @warn "Loaded object was not a GameMap; returning empty." loaded_type = typeof(loaded_gamemap)
-            return GameMapBundle(GameMap())
-        end
-
-        # Retain only supported time-lapse history
-        if !isnothing(timelapse_error)
-            @warn "Time-lapse load failed; continuing with the loaded map." exception = timelapse_error
-        elseif isnothing(loaded_timelapse)
-            return GameMapBundle(loaded_gamemap)
-        elseif !(loaded_timelapse isa TimelapseHistory)
-            @warn "Stored time-lapse has an invalid type; discarding it." loaded_type = typeof(loaded_timelapse)
-        elseif loaded_timelapse.format_version != TIMELAPSE_FORMAT_VERSION
-            @warn "Stored time-lapse uses an unsupported format version; discarding it." format_version = loaded_timelapse.format_version
-        else
-            return GameMapBundle(loaded_gamemap, loaded_timelapse)
-        end
-
-        return GameMapBundle(loaded_gamemap)
-    catch e
-        @warn "Map load failed; returning empty." exception = (e, catch_backtrace())
-        return GameMapBundle(GameMap())
-    end
-end
-
-"Dispatch map loading from multiple source types."
-function loadmap_from_source(map_source::Union{Nothing, String, GameMap, ShipState})::GameMap
-    map_source isa GameMap && (@info "Using pre-generated GameMap"; return map_source)
-    map_source isa ShipState && (@info "Wrapping ShipState as primary ship"; return GameMap(map_source))
-    return loadmap(map_source)
-end
-
-"Load a map source together with any time-lapse history available from a file source."
-function loadmap_bundle_from_source(map_source::Union{Nothing, String, GameMap, ShipState})::GameMapBundle
-    map_source isa String && return loadmap_bundle(map_source)
-    return GameMapBundle(loadmap_from_source(map_source))
-end
-
-"Save a `GameMapBundle` to disk via JLD2, retaining the legacy map key."
-function savemap(bundle::GameMapBundle, mappath::String)
-    # Reject history that this build cannot read back
-    timelapse = bundle.timelapse
-    if !isnothing(timelapse) && timelapse.format_version != TIMELAPSE_FORMAT_VERSION
-        throw(ArgumentError("unsupported time-lapse format version $(timelapse.format_version)"))
-    end
-
-    # Preserve map-only files when no history has been recorded
-    try
-        if isnothing(timelapse)
-            JLD2.jldsave(mappath; stored_gamemap = bundle.gamemap)
-        else
-            JLD2.jldsave(mappath; stored_gamemap = bundle.gamemap, stored_timelapse = timelapse)
-        end
-    catch e
-        @warn "Map save failed." path = mappath exception = (e, catch_backtrace())
-    end
-    return nothing
-end
-
-"Save a map without a time-lapse, preserving the legacy map-only API."
-savemap(gamemap::GameMap, mappath::String) = savemap(GameMapBundle(gamemap), mappath)

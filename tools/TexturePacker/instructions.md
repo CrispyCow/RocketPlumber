@@ -10,7 +10,9 @@ You can also open `tools/pack_textures.jl` in VS Code and use **Run File**. The
 launcher uses this tool's Julia environment in a separate process and resolves
 all paths from its own location, regardless of the current working directory.
 It reads PNGs from `tools/TexturePacker/textures/` and writes the tracked
-`tools/TexturePacker/outputs/TileTextureAtlas1.png` and `.json` files. The
+runtime atlas to
+`local_packages/HexFlowRendering/assets/texture_atlas/TileTextureAtlas1.png`
+and `.json`. `HexFlowRendering` owns and loads these package resources. The
 standard atlas uses row packing and the tool's existing defaults for padding
 and other options. Review and commit both generated files together when the
 source textures change.
@@ -21,7 +23,7 @@ tool directly from the repository root:
 ```shell
 julia --project=tools/TexturePacker tools/TexturePacker/src/TexturePacker.jl --help
 julia --project=tools/TexturePacker tools/TexturePacker/src/TexturePacker.jl \
-  tools/TexturePacker/textures tools/TexturePacker/outputs/TileTextureAtlas1 \
+  tools/TexturePacker/textures local_packages/HexFlowRendering/assets/texture_atlas/TileTextureAtlas1 \
   --pack-method row
 ```
 

@@ -101,8 +101,8 @@ file's formatter policy and keep adjacent cleanup small and directly useful.
 
 ## Repository Map
 
-- `src/` is the application and integration layer: launch scripts, game/UI
-  loops, persistence adapters, component registration, and demo maps.
+- `src/` is the application and integration layer: the `RocketPlumber` module,
+  game/UI loops, persistence adapters, component registration, and demo maps.
 - `local_packages/` contains the reusable Julia packages. Each package has its
   own environment; component API and implementations live under
   `local_packages/components/`.
@@ -110,8 +110,14 @@ file's formatter policy and keep adjacent cleanup small and directly useful.
   export, and similar utilities.
 - `.agents/skills/` contains reusable agent workflows and their specialist
   instructions, scripts, and resources.
-- The root `Project.toml` and `Manifest.toml` define the game environment.
-  Local packages and some standalone tools may own separate environments.
+- The repository root is the `RocketPlumber` Julia package. Its
+  `src/RocketPlumber.jl` module is the application assembly point; use
+  `RocketPlumber.launch()` for normal startup. The root `Project.toml` and
+  `Manifest.toml` define the package and its workspace.
+- `dev/` is a workspace project for development-only dependencies such as
+  Revise. Use it for interactive development; local packages remain path
+  dependencies rather than workspace members. Standalone tools may own separate
+  environments.
 
 See the nested guides for package responsibilities and area-specific
 invariants. Keep detailed type and function inventories next to the code they
@@ -124,9 +130,9 @@ describe rather than expanding this file.
 - UI and input code send `MapEditCommand` values through
   `try_enqueue_command!`; render code reads `FlowCalculatorSnapshot` values and
   must not mutate the live `GameMap`.
-- Changes to saved structs require an explicit compatibility review of the JLD2
-  upgrade hooks in `src/map_loading.jl`; field defaults alone do not migrate old
-  saves.
+- Changes to saved structs require an explicit compatibility review of
+  `local_packages/HexFlowPersistence/src/migrations.jl` and historical tests;
+  field defaults alone do not migrate old saves.
 - Preserve established package dependency direction. Inspect the affected
   `Project.toml` files before adding a cross-package import.
 
@@ -135,30 +141,30 @@ describe rather than expanding this file.
 Run commands from the repository root unless a package-local command says otherwise.
 
 ```shell
-# Set up the root environment
-julia --project=. -e 'using Pkg; Pkg.instantiate()'
+# Set up the shared package and development workspace
+julia --project=dev -e 'using Pkg; Pkg.instantiate()'
 
 # Test one local package
 julia --project=local_packages/<PackageName> -e 'using Pkg; Pkg.test()'
 
-# Discover or run all local-package test suites
+# Discover or run the root application and all local-package test suites
 julia tools/run_all_package_tests.jl --list
 julia tools/run_all_package_tests.jl
 
 # Scripted full-application smoke test
-julia --project=. --threads=2,1 --gcthreads=1,1 src/auto_test_launch.jl
+julia --project=. --threads=2,1 --gcthreads=1,1 scripts/smoke_test.jl
 
 # Interactive development launch
-julia --project=. --threads=2,1 --gcthreads=1,1 src/repl_launch.jl
+julia --project=dev --threads=2,1 --gcthreads=1,1 scripts/repl_launch.jl
 
-# Production entry point; requires pre-built rendering artifacts
+# Production entry point
 julia --project=. --threads=2,1 --gcthreads=1,1 src/julia_main.jl
 ```
 
 Choose verification proportional to the change: start with the affected
 package suite, then use the application smoke test for integration or gameplay
-changes. The all-package runner covers packages under `local_packages/`, not
-the separate `tools/TimelapseExport` suite.
+changes. The all-package runner includes the root `RocketPlumber` test suite and
+packages under `local_packages/`, not the separate `tools/TimelapseExport` suite.
 
 There is no in-repository CI configuration, so report exactly which local
 checks were run and which display-dependent checks were not run.
@@ -166,4 +172,6 @@ checks were run and which display-dependent checks were not run.
 All game launch paths need a display/OpenGL context and at least two default
 Julia worker threads. The smoke test opens a real window, is not headless, and
 can take several minutes; allow roughly six minutes before treating it as hung.
-Production artifact creation lives outside this repository.
+Runtime shaders and the texture atlas are source-controlled inside
+`HexFlowRendering`. The TexturePacker inputs remain under
+`tools/TexturePacker/textures/`.

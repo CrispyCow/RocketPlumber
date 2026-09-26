@@ -35,7 +35,7 @@ The readable listing contains, per ship:
 
 It resembles Julia constructors but is diagnostic text, not an executable `GameMap` expression. Redirect stdout or provide a non-`.jl` output path when a retained listing is useful.
 
-The skill scripts load with the application's JLD2 upgrade typemap but fail hard on missing, malformed, incompatible, or non-`GameMap` data. A successful command therefore cannot be the application's normal empty-map fallback. Still sanity-check the expected ship names, approximate counts, surface extent, and several distinctive component types and coordinates: a valid but unintended save is still the wrong input.
+The skill scripts use `HexFlowPersistence.loadmap_strict` and fail hard on missing, malformed, incompatible, or non-`GameMap` data. A successful command therefore cannot be the application's normal empty-map fallback. Still sanity-check the expected ship names, approximate counts, surface extent, and several distinctive component types and coordinates: a valid but unintended save is still the wrong input.
 
 ### Generator naming
 

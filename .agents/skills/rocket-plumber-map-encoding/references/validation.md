@@ -22,7 +22,7 @@ julia --project=. .agents/skills/rocket-plumber-map-encoding/scripts/compare_map
 
 The generator file must define a top-level zero-argument function whose name equals the `.jl` file stem. `mapgen_source_map.jl` must therefore define `mapgen_source_map()`. The function must return a `GameMap`. A function hidden inside a module is not found.
 
-Both scripts use strict loading with the application's JLD2 upgrade typemap. Missing files, incompatible saves, absent `stored_gamemap` data, and stored values of the wrong type are errors. There is no default-map fallback in this workflow.
+Both scripts use `HexFlowPersistence.loadmap_strict`. Missing files, incompatible saves, absent `stored_gamemap` data, and stored values of the wrong type are errors. There is no default-map fallback in this workflow.
 
 Status 0 means every implemented required comparison passed. A mismatch, invalid generator result, include error, or load error exits 1.
 
@@ -79,7 +79,7 @@ This remains a structural check of objects reachable through current fields. It 
 
 - Confirm the path exists and ends in `.jld2` (case-insensitive).
 - Confirm the file contains `stored_gamemap` and was produced by a compatible Rocket Plumber version.
-- Inspect `src/map_loading.jl` migration hooks when an older save type cannot be reconstructed.
+- Inspect `local_packages/HexFlowPersistence/src/migrations.jl` when an older save type cannot be reconstructed.
 - Do not bypass strict loading with `loadmap`, because its application behaviour intentionally returns an empty map after failure.
 
 ### Function not found or invalid generator name

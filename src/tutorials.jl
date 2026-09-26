@@ -1,22 +1,5 @@
 # src/tutorials.jl
 
-const _demo_map_include = isdefined(Main, :Revise) ? includet : include
-
-function _include_demo_map_generator(file_name::String, function_name::Symbol)
-    isdefined(Main, function_name) || _demo_map_include(joinpath(dirname(@__FILE__), "demo_maps", file_name))
-    return nothing
-end
-
-_include_demo_map_generator("mapgen_basicplumbing.jl", :mapgen_basicplumbing)
-_include_demo_map_generator("mapgen_bigpipeplumbing.jl", :mapgen_bigpipeplumbing)
-_include_demo_map_generator("mapgen_flowdemo.jl", :mapgen_flowdemo)
-_include_demo_map_generator("mapgen_controllingcoldgas.jl", :mapgen_controllingcoldgas)
-_include_demo_map_generator("mapgen_pressurefedintro.jl", :mapgen_pressurefedintro)
-_include_demo_map_generator("mapgen_turbopumpintro2.jl", :mapgen_turbopumpintro2)
-_include_demo_map_generator("mapgen_liquidtransfer.jl", :mapgen_liquidtransfer)
-_include_demo_map_generator("mapgen_teasership.jl", :mapgen_teasership)
-
-
 function tutorial_dedent(s::AbstractString)
     lines = split(s, '\n'; keepempty=true)
     out = IOBuffer()

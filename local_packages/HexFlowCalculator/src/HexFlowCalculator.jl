@@ -6,7 +6,7 @@ Formatter: Runic
 module HexFlowCalculator
 
 # Packages
-using Base.Threads, Dates, JLD2, LinearAlgebra, StructEquality
+using Base.Threads, Dates, LinearAlgebra, StructEquality
 using TimerOutputs, StaticArrays
 # Custom Packages
 using HexFrame, HexElements, HexFluids, HexFlowTelemetry

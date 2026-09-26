@@ -1,7 +1,14 @@
 #=
-Scope: Scripted smoke-test command schedules and response tracking for the application harness
+Scope: Graphical smoke-test support loaded only by the smoke-test launcher
 Formatter: Runic
 =#
+
+module SmokeTestSupport
+
+using GLFW, HexFrame
+using FlowMap: SandboxLearningState, set_learning_system!
+using RocketPlumber: configure_threads, start_window, enter_gameloop, ui_teardown
+using RocketPlumber: mapgen_teasership, TinyOnOffValve, TinyNozzle, ScrapPipe
 
 # ===============================================================
 # Test Harness
@@ -13,6 +20,7 @@ using HexFlowCalculator: ClickTileCommand, DoActionCommand
 using HexFlowCalculator: AddShipSurfaceCommand, RemoveShipSurfaceCommand, RedockShipCommand
 using HexFlowCalculator: AddEncounterShipCommand, MapOverrideCommand, CommandQueue, try_enqueue_command!
 using HexFlowCalculator: CommandStatus, APPLIED, REJECTED, QUEUED_FAILED, INVALID
+using HexFlowCalculator: create_command_queue, create_delete_elements_command, create_set_pipe_behavior_command, create_move_command
 using Accessors
 using HexFlowControl: EXIT_QUIT, InputState
 using HexFrame: TileCoord, PipeCoord, HexAxis, CartesianCoord
@@ -259,3 +267,14 @@ function test_system_tick!(
 
     return nothing
 end
+include("fixture.jl")
+
+"Run the graphical command harness against the application's teaser map."
+function run_smoke_test()::Bool
+    GLFW.GetPlatform() == GLFW.PLATFORM_NULL && throw(ArgumentError("Graphical startup requires a display"))
+    configure_threads()
+    window = start_window()
+    return run_smoke_test_fixture(window)
+end
+
+end # module SmokeTestSupport

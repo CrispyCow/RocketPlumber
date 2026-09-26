@@ -7,22 +7,16 @@ canonical sparse MNA matrix. Ticks retain in-memory map and solver state; the
 script does not emulate reactivation scheduling or the full game loop.
 """
 
-using LinearAlgebra, SparseArrays, JLD2
+using LinearAlgebra, SparseArrays
 using HexFrame, HexElements, HexFluids, HexFlowTelemetry
 using HexComponentsAPI, FlowEngine, FlowMap, HexFlowProcGen
 using HexFlowControl, HexFlowCalculator, SquirrelNoise
 using HexFlowBasicComponents, HexFlowTankComponents, HexFlowSwitchComponents
 using HexFlowNozzleComponents, HexFlowPumpComponents, HexFlowBasicPipes
-
-const _src_dir = normpath(joinpath(@__DIR__, "../../../..", "src"))
-include(joinpath(_src_dir, "components.jl"))
-include(joinpath(_src_dir, "timelapse.jl"))
-include(joinpath(_src_dir, "map_loading.jl"))
+using HexFlowPersistence
 
 function load_saved_map(path::String)::GameMap
-    loaded = JLD2.load(path, "stored_gamemap"; typemap = _build_map_typemap())
-    loaded isa GameMap || error("stored_gamemap in $path has type $(typeof(loaded)), expected GameMap")
-    return loaded
+    return HexFlowPersistence.loadmap_strict(path)
 end
 
 component_type_name(comp) = replace(string(typeof(comp)), r"^.*\." => "")

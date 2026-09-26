@@ -267,7 +267,23 @@ function cleanup!(flowcalc_ipc::FlowCalculatorIPC, flowcalc_task::Task, globjmap
     return nothing
 end
 
-# (Map loading/saving and JLD2 serialisation are in map_loading.jl)
+# (Map loading/saving and JLD2 serialisation are in HexFlowPersistence)
+
+# Map-source dispatch
+
+"Dispatch map loading from multiple source types."
+function loadmap_from_source(map_source::Union{Nothing, String, GameMap, ShipState})::GameMap
+    map_source isa GameMap && (@info "Using pre-generated GameMap"; return map_source)
+    map_source isa ShipState && (@info "Wrapping ShipState as primary ship"; return GameMap(map_source))
+    isnothing(map_source) && (@info "No map path provided; starting empty."; return GameMap())
+    return loadmap(map_source)
+end
+
+"Load a map source together with any time-lapse history available from a file source."
+function loadmap_bundle_from_source(map_source::Union{Nothing, String, GameMap, ShipState})::GameMapBundle
+    map_source isa String && return loadmap_bundle(map_source)
+    return GameMapBundle(loadmap_from_source(map_source))
+end
 
 # ===============================================================
 # Game Main Loop
@@ -357,20 +373,13 @@ function save_pre_escape_map(recorder::TimelapseRecorder, gamemap::GameMap, save
     return nothing
 end
 
-"""
-Enter the main game loop with a loaded, generated, or empty map.
-
-If `test_commands` is supplied, the non-interactive smoke-test harness drives
-the loop by enqueueing at most one scheduled `MapEditCommand` per render frame
-and signalling a normal quit once the schedule is exhausted. See
-`src/test_harness.jl` and `src/auto_test_launch.jl`.
-"""
+"Enter the main game loop with a loaded, generated, or empty map. An optional frame hook receives the current snapshot, input state, command queue, and calculator task."
 function enter_gameloop(
         window::GLFW.Window;
         map_source::Union{Nothing, String, GameMap, ShipState} = nothing,
         initial_bundle::Union{Nothing, GameMapBundle} = nothing,
         initial_active_tutorial_id::Union{Nothing, Symbol} = nothing,
-        test_commands = nothing,
+        frame_hook::Union{Nothing, Function} = nothing,
     )::GameLoopResult
     # Initialise session state
     ui_loadingscreen_render(window, "Instantiating game state")
@@ -413,10 +422,6 @@ function enter_gameloop(
     g_flowcalc_task = Threads.@spawn flowcalculator_loop!(g_flowcalc_ipc, deepcopy(initial_snapshot))
     @info "FlowCalculator task spawned: $(g_flowcalc_task)"
 
-    if !isnothing(test_commands)
-        sort!(test_commands, by = step -> step.tick, rev = true)
-    end
-
     # MAIN LOOP
     ui_loadingscreen_render(window, "Entering main loop")
 
@@ -425,8 +430,8 @@ function enter_gameloop(
         updatefps(window, g_inputstate.is_recording ? "(RECORDING)" : "")
         @timeit render_loop_timer "Get Snapshot" g_snapshot::FlowCalculatorSnapshot = g_flowcalc_ipc.get_snapshot()
 
-        if !isnothing(test_commands)
-            test_system_tick!(test_commands, g_snapshot, g_inputstate, g_flowcalc_ipc.command_queue, g_flowcalc_task)
+        if !isnothing(frame_hook)
+            frame_hook(g_snapshot, g_inputstate, g_flowcalc_ipc.command_queue, g_flowcalc_task)
         end
 
         # Advance the learning system

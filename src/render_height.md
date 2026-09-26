@@ -99,4 +99,4 @@ Within each band, the fluid mask renders first and the pipe sprite renders secon
 
 - Prefer placing draw-height assignment at the component fragment level (lowest-level helpers) rather than in the central renderer.
 - When using literal offsets in code, cast to `Int32` or accept `Integer` consistently to avoid accidental type mismatches.
-- After changing render-height constants or call sites, run `include("src/repl_launch.jl")` from a Julia REPL to surface signature or constructor errors early.
+- After changing render-height constants or call sites, run `include("scripts/repl_launch.jl")` from a Julia REPL started with `--project=dev` to surface signature or constructor errors early.

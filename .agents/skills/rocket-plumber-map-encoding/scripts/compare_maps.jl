@@ -2,16 +2,11 @@
 
 """Compare a trusted map-generator function with a saved GameMap."""
 
-using JLD2, StaticArrays, LinearAlgebra
+using StaticArrays, LinearAlgebra
 using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowMap
 using HexFlowProcGen, HexFlowNozzleComponents, FlowEngine
-
-const _repo_root = normpath(joinpath(@__DIR__, "..", "..", "..", ".."))
-const _src_dir = joinpath(_repo_root, "src")
-
-include(joinpath(_src_dir, "components.jl"))
-include(joinpath(_src_dir, "timelapse.jl"))
-include(joinpath(_src_dir, "map_loading.jl"))
+using HexFlowPersistence
+using RocketPlumber
 
 const COMPARISON_TOLERANCE = 1.0e-6
 
@@ -24,12 +19,7 @@ end
 
 function load_game_map(map_input::String)::GameMap
     map_path = resolve_map_path(map_input)
-    typemap = _build_map_typemap()
-    stored_gamemap = JLD2.load(map_path, "stored_gamemap"; typemap = typemap)
-    stored_gamemap isa GameMap || error(
-        "JLD2 entry stored_gamemap has type $(typeof(stored_gamemap)), expected GameMap"
-    )
-    return stored_gamemap
+    return HexFlowPersistence.loadmap_strict(map_path)
 end
 
 function validate_generator_name(generator_file::String)::Symbol
@@ -369,11 +359,11 @@ function compare_map_files(original_map_input::String, generator_file::String)
     isfile(generator_file) || error("Generator file not found: $generator_file")
     function_name = validate_generator_name(generator_file)
     original_map = load_game_map(original_map_input)
-    include(abspath(generator_file))
-    isdefined(Main, function_name) || error(
+    Base.include(RocketPlumber, abspath(generator_file))
+    isdefined(RocketPlumber, function_name) || error(
         "Generator $(basename(generator_file)) must define top-level function $function_name()"
     )
-    generator = Base.invokelatest(getfield, Main, function_name)
+    generator = Base.invokelatest(getfield, RocketPlumber, function_name)
     generated_map = Base.invokelatest(generator)
     generated_map isa GameMap || error(
         "$function_name() returned $(typeof(generated_map)); expected GameMap"

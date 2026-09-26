@@ -7,6 +7,14 @@ Formatter: Runic
 # Initial Setup
 # ===============================================================
 
+# Keep the I/O scheduler clear of blocking OpenGL loops, once per process
+const _initialise_io_thread = Base.OncePerProcess{Nothing}(
+    () -> begin
+        Base.Experimental.make_io_thread()
+        return nothing
+    end
+)
+
 "Check the Julia thread count and move I/O scheduling to a separate thread."
 function configure_threads()
     # Inspect available thread pools
@@ -17,7 +25,7 @@ function configure_threads()
         @warn "Only $(default_threads) default thread(s) available. Consider starting Julia with --threads=2,1 --gcthreads=1,1 for proper FlowCalculator operation"
     end
 
-    Base.Experimental.make_io_thread() # Keep the I/O scheduler clear of blocking OpenGL loops
+    _initialise_io_thread()
     return nothing
 end
 
@@ -102,12 +110,6 @@ function ui_loadingscreen_render(window::GLFW.Window, status::AbstractString = "
     GLFW.SwapBuffers(window)
     GLFW.PollEvents()
     return nothing
-end
-
-"Show the loading screen while including a file from this script's directory."
-function include_with_loadingscreen(window::GLFW.Window, filename::AbstractString)
-    ui_loadingscreen_render(window, "Loading $(basename(filename))")
-    return includet(joinpath(dirname(@__FILE__), filename))
 end
 
 # ===============================================================

@@ -2,8 +2,9 @@
 
 `local_packages/` contains the Julia packages that implement the game. Prefer
 putting reusable domain behaviour here and leaving `src/` as the application
-integration layer. Every package is a separate Julia environment with its own
-`Project.toml` and `Manifest.toml`.
+integration layer. Each package has a `Project.toml`; a package root may also
+own workspace member projects that share its root `Manifest.toml`. The local
+package updater refreshes package-root workspaces.
 
 ## Responsibility Map
 
@@ -23,6 +24,8 @@ integration layer. Every package is a separate Julia environment with its own
   propagation, region temperatures, sparse MNA construction, and solving.
 - `HexFlowProcGen`: deterministic ship/encounter generation, encounter space
   maps, and manoeuvre planning.
+- `HexFlowPersistence`: persisted time-lapse types, game-map save/load, and
+  historical save migrations.
 - `HexFlowCalculator`: authoritative simulation loop, command transactions,
   reactivation trials, snapshots, and calculator IPC.
 - `HexFlowLearningSystem`: tutorial definitions, runtime learning state, and
@@ -51,7 +54,8 @@ packages.
   in `FlowEngine`; keep tick orchestration and mutation transactions in
   `HexFlowCalculator`.
 - A type stored beneath `GameMap` is persistence-facing even if its package has
-  no JLD2 dependency. Review `src/map_loading.jl` whenever such a type changes.
+  no JLD2 dependency. Changes to its identity or layout require review of
+  `HexFlowPersistence` migrations and appropriate historical fixtures/tests.
 - Adding an `ElementTypes` member requires matching labels/units in
   `HexElements`, plus `FlowEngine` classification, matrix stamping, solution
   extraction, and tests.

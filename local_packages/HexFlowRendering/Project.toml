@@ -5,7 +5,6 @@ authors = ["Christos Lillis <christos.lillis@gmail.com>"]
 
 [deps]
 Accessors = "7d9f7c33-5ae7-4f3b-8dc6-eff91059b697"
-Artifacts = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
 CSyntax = "ea656a56-6ca6-5dda-bba5-7b6963a5f74c"
 ColorSchemes = "35d6a980-a343-548e-a6ea-1d62b119f2f4"
 ColorTypes = "3da002f7-5984-5a60-b8a6-cbb66c0b333f"
@@ -19,6 +18,7 @@ HexFluids = "98a914a9-3572-461b-8ee2-d8d3de40252c"
 HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"
 ModernGL = "66fc600b-dfda-50eb-8b99-91cfa97b1301"
 PNGFiles = "f57f5aa1-a3ce-4bc8-8ab9-96f992907883"
+RelocatableFolders = "05181044-ff0b-4ac5-8273-598c1e38db00"
 RenderEngine = "e4d19546-dba0-4e1b-bafa-713bf6e720c9"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 StructArrays = "09ab397b-f2b6-538f-b94a-2f83cf4a842a"
@@ -36,8 +36,8 @@ HexFrame = {path = "../HexFrame"}
 RenderEngine = {path = "../RenderEngine"}
 
 [compat]
-Artifacts = "1.11.0"
 PNGFiles = "0.4.4"
+RelocatableFolders = "1"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"

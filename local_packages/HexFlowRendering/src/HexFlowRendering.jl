@@ -7,7 +7,7 @@ module HexFlowRendering
 
 #= Dependencies =#
 # Packages
-using ModernGL, TimerOutputs, Artifacts
+using ModernGL, TimerOutputs, RelocatableFolders
 using StaticArrays, StructArrays, CSyntax.CRef, Accessors
 using ColorSchemes, ColorTypes
 using PNGFiles
@@ -44,14 +44,21 @@ export create_particle_group, spawn_particles!, update_particle_physics!
 export thrust_dust_particle_effect!, render_particles!
 export get_particle_accel_scale, set_particle_accel_scale!
 export animation_sprite_picker, animation_vibe_offset, animation_rotate
+export shader_dir, texture_atlas_dir
 
 # Const exports
 export hex_size_pixels # used in interactions.jl for view transform
 export DEFAULT_EMPTY_FLUID_COLOUR
 
-#= Global references for file paths (set during __init__) =#
-const SHADER_DIR = Ref{String}()
-const TEXTURE_ATLAS_DIR = Ref{String}()
+#= Package-owned runtime resources =#
+const SHADER_DIR = @path joinpath(@__DIR__, "..", "assets", "shaders")
+const TEXTURE_ATLAS_DIR = @path joinpath(@__DIR__, "..", "assets", "texture_atlas")
+
+"Return the package-owned shader resource directory."
+shader_dir() = String(SHADER_DIR)
+
+"Return the package-owned texture-atlas resource directory."
+texture_atlas_dir() = String(TEXTURE_ATLAS_DIR)
 
 #= ---------- Particle Acceleration Tuning ----------- =#
 
@@ -124,12 +131,12 @@ end
 
 "Loads shader source code from the shaders subdirectory."
 function grab_shader(name::String)
-    return read(joinpath(SHADER_DIR[], name), String)
+    return read(joinpath(shader_dir(), name), String)
 end
 
 "Load the main texture-atlas PNG with the direct PNG-only runtime path."
-function load_texatlas1_png(texture_atlas_dir::AbstractString = TEXTURE_ATLAS_DIR[])
-    return PNGFiles.load(joinpath(texture_atlas_dir, "TileTextureAtlas1.png"))
+function load_texatlas1_png(atlas_dir::AbstractString = texture_atlas_dir())
+    return PNGFiles.load(joinpath(atlas_dir, "TileTextureAtlas1.png"))
 end
 
 #= Shared OpenGL Objects =#
@@ -153,9 +160,10 @@ end
 "Initializes the main texture atlas and loads sprite metadata."
 function texatlas1_gltex_init(map::GLObjectMap)
     texname = :TileTextureAtlas1
-    texdata = load_texatlas1_png(TEXTURE_ATLAS_DIR[])
+    atlas_dir = texture_atlas_dir()
+    texdata = load_texatlas1_png(atlas_dir)
     setup_gltex!(map, texname, texdata)
-    return setup_glsprite!(map, texname, TEXTURE_ATLAS_DIR[])
+    return setup_glsprite!(map, texname, atlas_dir)
 end
 
 #= Render Program Definitions and setup =#
@@ -1347,30 +1355,5 @@ function animation_rotate(gameticks::Integer, speed::Float64)::SMatrix{2, 2, Flo
     return SMatrix{2, 2, Float32}(cos_a, sin_a, -sin_a, cos_a)
 end
 
-# ===============================================================
-# Module Initialisation
-# ===============================================================
-
-"Initialises HexFlowRendering, detecting dev/production mode and setting paths."
-function __init__()
-    # Auto-detect development mode by checking if Revise is loaded
-    if isdefined(Main, :Revise)
-        # Development mode: use source files directly for instant updates
-        SHADER_DIR[] = joinpath(pkgdir(@__MODULE__), "src", "shaders")
-        TEXTURE_ATLAS_DIR[] = joinpath(
-            dirname(dirname(pkgdir(@__MODULE__))),
-            "tools", "TexturePacker", "outputs"
-        )
-        @info "HexFlowRendering: Development mode (using source files for instant updates)"
-    else
-        # Production mode: use artifacts (bundled by JuliaC automatically)
-        artifacts_toml = joinpath(pkgdir(@__MODULE__), "Artifacts.toml")
-        SHADER_DIR[] = artifact_path(artifact_hash("shaders", artifacts_toml))
-        TEXTURE_ATLAS_DIR[] = artifact_path(artifact_hash("texture_atlas", artifacts_toml))
-        @info "HexFlowRendering: Production mode (using bundled artifacts)"
-    end
-
-    return nothing
-end
 
 end # module HexFlowRendering

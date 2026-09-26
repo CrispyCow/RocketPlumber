@@ -781,6 +781,9 @@ const encounter_system_config = EncounterSystemConfig(
     encounter_class_configs = encounter_class_configs
 )
 
+"Return the application encounter configuration used by game sessions."
+get_encounter_system_config() = encounter_system_config
+
 #= ---------- Explorer Opening ----------- =#
 
 const EXPLORER_OPENING_ENCOUNTER_INDEX = 1

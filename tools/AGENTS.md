@@ -15,21 +15,25 @@ command an agent might run into a skill.
 
 ## Maintenance Tools
 
-- `run_all_package_tests.jl` dynamically discovers
-  `local_packages/**/test/runtests.jl`, runs suites in separate processes, and
-  writes ignored logs under `logs/package_test_runs/`. It does not run tool
-  tests. Use `--list` or `--help` before a large sweep.
-- `local_package_updater.jl` refreshes every local package environment by
-  resolving, instantiating, and precompiling it in a separate Julia process.
+- `run_all_package_tests.jl` includes the root `RocketPlumber` test suite and
+  dynamically discovers package suites under `local_packages/`. It runs suites
+  in separate processes and writes ignored logs under
+  `logs/package_test_runs/`. It does not run tool tests. Use `--list` or
+  `--help` before a large sweep.
+- `local_package_updater.jl` discovers local package roots and refreshes each
+  declared workspace as a unit by resolving, instantiating, and precompiling it
+  in a separate Julia process. Use `--list` to inspect the deterministic target
+  list without running Pkg.
   This broader maintenance action may change manifests through Pkg resolution,
   even without `--update`, so use it intentionally. `--update` explicitly
   requests package upgrades and should only be used when upgrades are in scope.
 
 ## Texture Atlas
 
-`TexturePacker/` has its own environment. Source PNGs are in `textures/`, and
-the generated `outputs/TileTextureAtlas1.png` and `.json` files are tracked and
-used directly in development.
+`TexturePacker/` has its own environment. Source PNGs are in `textures/`; the
+generated runtime atlas is tracked in
+`local_packages/HexFlowRendering/assets/texture_atlas/` and owned by
+`HexFlowRendering`.
 
 From the repository root, rebuild the standard atlas with:
 
@@ -44,7 +48,7 @@ the underlying tool directly:
 ```shell
 julia --project=tools/TexturePacker tools/TexturePacker/src/TexturePacker.jl --help
 julia --project=tools/TexturePacker tools/TexturePacker/src/TexturePacker.jl \
-  tools/TexturePacker/textures tools/TexturePacker/outputs/TileTextureAtlas1 \
+  tools/TexturePacker/textures local_packages/HexFlowRendering/assets/texture_atlas/TileTextureAtlas1 \
   --pack-method row
 ```
 
@@ -55,8 +59,8 @@ JSON together and launch the application to inspect any changed sprites.
 ## Time-Lapse Export
 
 - `TimelapseExport/` uses the root project because it depends on the game's
-  packages, rendering stack, and persisted component registrations. Run
-  `julia tools/export_timelapse.jl` to export using the editable configuration
+  packages and rendering stack; it loads saves through `HexFlowPersistence`.
+  Run `julia tools/export_timelapse.jl` to export using the editable configuration
   near the top of the launcher; its relative input and output paths are rooted
   at the repository. Arguments supplied to the launcher are forwarded to the
   exporter. Use `julia --project=. tools/TimelapseExport/export.jl --help` for
@@ -65,10 +69,11 @@ JSON together and launch the application to inspect any changed sprites.
   `--inspect` does not. Do not commit generated videos, GIFs, palettes, or test
   saves.
 
-## Production Artifacts
+## Executable Builds
 
-Production rendering artifacts and executable builds are created in an
-external build repository. Tools here generate development assets only.
+Executable builds are created in an external build repository. Rendering
+resources are source controlled in `HexFlowRendering` and used in all
+environments.
 
 ## Encounter Balance
 

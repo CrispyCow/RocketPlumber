@@ -5,9 +5,28 @@ using HexComponentsAPI
 using StaticArrays
 
 const TOOL_DIR = normpath(joinpath(@__DIR__, ".."))
-include(joinpath(dirname(dirname(dirname(@__DIR__))), "src", "timelapse.jl"))
 include(joinpath(TOOL_DIR, "src", "TimelapseExportTool.jl"))
 using .TimelapseExportTool
+
+@testset "Lazy export runtime" begin
+    @test !isdefined(TimelapseExportTool.Runtime, :GLFW)
+    @test !isdefined(TimelapseExportTool.Runtime, :FFMPEG)
+    @test !isdefined(TimelapseExportTool.Persistence, :HexFlowPersistence)
+    @test TimelapseExportTool.main(["--help"]) == 0
+    @test !isdefined(TimelapseExportTool.Runtime, :GLFW)
+    @test !isdefined(TimelapseExportTool.Persistence, :HexFlowPersistence)
+end
+
+struct TestTimelapseHistory
+    format_version::UInt16
+    frames::Vector{GameMap}
+end
+TestTimelapseHistory(; frames::Vector{GameMap}) = TestTimelapseHistory(UInt16(2), frames)
+
+struct TestMapBundle
+    gamemap::GameMap
+    timelapse::TestTimelapseHistory
+end
 
 function options(arguments...)
     return parse_cli(["input.jld2", "--inspect", arguments...]; repository_root = normpath(joinpath(@__DIR__, "..", "..", "..")))
@@ -35,6 +54,18 @@ function map_with_component(state::Bool; behaviour = TimelineTestCompBehav(state
     gamemap = map_with_tiles([TileCoord(0, 0)])
     gamemap.components[TileCoord(0, 0)] = PlacedComponent(behaviour, HexFrame.Q_POS, :primary)
     return gamemap
+end
+
+@testset "Rendering asset lookup" begin
+    rendering_package = dirname(dirname(Base.find_package("HexFlowRendering")))
+    shader_dir = joinpath(rendering_package, "assets", "shaders")
+    texture_atlas_dir = joinpath(rendering_package, "assets", "texture_atlas")
+    @test isfile(joinpath(shader_dir, "BaseTile.vert"))
+    @test isfile(joinpath(shader_dir, "BaseTile.frag"))
+    @test isfile(joinpath(shader_dir, "BaseTile_LiquidEffect.frag"))
+    @test isfile(joinpath(shader_dir, "BaseTile_GasEffect.frag"))
+    @test isfile(joinpath(texture_atlas_dir, "TileTextureAtlas1.png"))
+    @test isfile(joinpath(texture_atlas_dir, "TileTextureAtlas1.json"))
 end
 
 @testset "CLI parsing and validation" begin
@@ -177,7 +208,7 @@ end
     duplicate = deepcopy(first_map)
     later = map_with_tiles([TileCoord(2, 0)])
     current = map_with_tiles([TileCoord(4, 0)])
-    bundle = GameMapBundle(current, TimelapseHistory(frames = [first_map, duplicate, later]))
+    bundle = TestMapBundle(current, TestTimelapseHistory(frames = [first_map, duplicate, later]))
     auto = assemble_timeline(bundle, options())
     @test length(auto.candidates) == 4
     @test length(auto.frames) == 3
@@ -185,14 +216,14 @@ end
     @test auto.frames[2].origin == "history frame 3"
     never = assemble_timeline(bundle, parse_cli(["input.jld2", "--inspect", "--include-current=never"]))
     @test length(never.frames) == 2
-    always = assemble_timeline(GameMapBundle(first_map, TimelapseHistory(frames = [first_map])), parse_cli(["input.jld2", "--inspect", "--include-current=always"]))
+    always = assemble_timeline(TestMapBundle(first_map, TestTimelapseHistory(frames = [first_map])), parse_cli(["input.jld2", "--inspect", "--include-current=always"]))
     @test length(always.frames) == 2
-    empty_history = GameMapBundle(first_map, TimelapseHistory(frames = GameMap[]))
+    empty_history = TestMapBundle(first_map, TestTimelapseHistory(frames = GameMap[]))
     @test_throws ValidationError assemble_timeline(empty_history, parse_cli(["input.jld2", "--inspect"]))
     only_current = assemble_timeline(empty_history, parse_cli(["input.jld2", "--inspect", "--include-current=always"]))
     @test length(only_current.frames) == 1
     escape = GalaxyEscapeSpaceMap(SVector{2, Float64}(1.0, 0.0), 0.0, 0.0, first_map)
-    escape_bundle = GameMapBundle(GameMap(space_map = escape), TimelapseHistory(frames = [first_map]))
+    escape_bundle = TestMapBundle(GameMap(space_map = escape), TestTimelapseHistory(frames = [first_map]))
     omitted = assemble_timeline(escape_bundle, parse_cli(["input.jld2", "--inspect"]))
     @test !omitted.current_appended
     @test_throws ValidationError assemble_timeline(escape_bundle, parse_cli(["input.jld2", "--inspect", "--include-current=always"]))
@@ -200,7 +231,7 @@ end
 
     stateful = map_with_component(true)
     stateful_copy = deepcopy(stateful)
-    stateful_bundle = GameMapBundle(stateful_copy, TimelapseHistory(frames = [stateful]))
+    stateful_bundle = TestMapBundle(stateful_copy, TestTimelapseHistory(frames = [stateful]))
     stateful_timeline = assemble_timeline(stateful_bundle, options())
     @test length(stateful_timeline.candidates) == 1
     @test length(stateful_timeline.frames) == 1
@@ -209,7 +240,7 @@ end
     changed_state = deepcopy(stateful)
     changed_state.components[TileCoord(0, 0)].component.visible_state = false
     changed_timeline = assemble_timeline(
-        GameMapBundle(changed_state, TimelapseHistory(frames = [stateful])),
+        TestMapBundle(changed_state, TestTimelapseHistory(frames = [stateful])),
         options(),
     )
     @test length(changed_timeline.frames) == 2

@@ -1,0 +1,20 @@
+[deps]
+FlowMap = "86ae9052-88d6-4179-aacc-02095df7ba41"
+HexComponentsAPI = "a2289db6-e3a5-4e05-9c21-8734dce2bbd4"
+HexFlowBasicComponents = "32458d45-9755-4715-857d-57f99caca23f"
+HexFlowBasicPipes = "a5bfb9cd-4dce-4d41-851e-e34bf63bcb54"
+HexFlowPersistence = "7cb62a29-528c-4794-9753-ba1699b41bf0"
+HexFlowProcGen = "46cebafd-6e5b-4504-9515-23fc742129ca"
+HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"
+JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[sources]
+FlowMap = {path = "../../FlowMap"}
+HexComponentsAPI = {path = "../../components/HexComponentsAPI"}
+HexFlowBasicComponents = {path = "../../components/HexFlowBasicComponents"}
+HexFlowBasicPipes = {path = "../../components/HexFlowBasicPipes"}
+HexFlowPersistence = {path = ".."}
+HexFlowProcGen = {path = "../../HexFlowProcGen"}
+HexFrame = {path = "../../HexFrame"}

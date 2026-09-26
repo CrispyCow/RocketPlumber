@@ -1,0 +1,6 @@
+[deps]
+Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
+RocketPlumber = "49293a16-84b5-4c04-b023-19c4eddda1c7"
+
+[sources]
+RocketPlumber = {path = ".."}

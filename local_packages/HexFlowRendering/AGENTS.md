@@ -29,16 +29,15 @@ and render-height constants. Keep raw OpenGL resource mechanics in
   `RENDER_HEIGHT_PIPE_RANK_MULTIPLIER`; preserve deterministic ordering for
   overlapping pipe spans.
 
-## Assets And Modes
+## Assets
 
-- When `Revise` is loaded, `__init__` uses shaders from `src/shaders/` and the
-  atlas in `tools/TexturePacker/outputs/`.
-- Without `Revise`, it resolves the `shaders` and `texture_atlas` entries in
-  `Artifacts.toml`. `src/julia_main.jl` verifies these artifacts but does not
-  build them.
-- Add source sprites under `tools/TexturePacker/textures/` and regenerate both
-  tracked `TileTextureAtlas1.png` and `TileTextureAtlas1.json`. See
-  `tools/AGENTS.md`.
+- Runtime shaders and the texture atlas belong under `assets/` in this package.
+  Resource accessors `shader_dir()` and `texture_atlas_dir()` expose their
+  relocatable package paths for same-repository consumers.
+- Resource roots use `RelocatableFolders.@path`; resolve child paths when the
+  resource is accessed. Revise does not affect resource selection.
+- Add source sprites under `tools/TexturePacker/textures/` and regenerate the
+  tracked atlas in `assets/texture_atlas/`. See `tools/AGENTS.md`.
 
 ## Verification
 

@@ -14,16 +14,14 @@
 using Printf
 using Statistics
 using Plots
+using RocketPlumber
 using HexFlowProcGen, HexFluids, FlowMap, SquirrelNoise
 
-# Bring in all dependencies that src/components.jl expects in scope
+# Domain packages used by the generated-encounter audit
 using HexFrame, HexElements, HexComponentsAPI
 using HexFlowBasicComponents, HexFlowTankComponents, HexFlowSwitchComponents
 using HexFlowNozzleComponents, HexFlowPumpComponents
 using HexFlowBasicPipes
-
-# Load the encounter config definitions from the game
-include(joinpath(@__DIR__, "..", "..", "..", "src", "components.jl"))
 
 const RICHNESS_RANGE = 1.0:0.05:8.0  # calculate_richness clamps to at least 1.0
 const AUDIT_RICHNESS_VALUES = Float64[1.0, 2.0, 4.0, 8.0]
@@ -469,9 +467,9 @@ function main(args::Vector{String} = ARGS)
     end
 
     if "--audit" in args
-        run_audit(encounter_system_config)
+        run_audit(RocketPlumber.get_encounter_system_config())
     else
-        run_plots(encounter_system_config; display_plot = "--display" in args)
+        run_plots(RocketPlumber.get_encounter_system_config(); display_plot = "--display" in args)
     end
 
     return nothing

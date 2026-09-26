@@ -41,8 +41,9 @@ implementations.
 
 `GameMap`, ship/docking state, space-map values, learning progress, encounter
 data, and playthrough statistics can all reach saved files. Any layout or type
-identity change needs corresponding review of the repository-root
-`src/map_loading.jl` and an older-save fixture when available.
+identity change needs corresponding review of
+`local_packages/HexFlowPersistence/src/migrations.jl` and an older-save fixture
+when available.
 
 Run:
 

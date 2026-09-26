@@ -1,12 +1,13 @@
 #!/usr/bin/env julia
 
 """
-Run every local package test suite in this repository.
+Run the root application and every local package test suite in this repository.
 
-The runner discovers any directory under `local_packages/` that contains both a
-`Project.toml` and `test/runtests.jl`, then executes `Pkg.test()` for each one
-in a fresh Julia process. Output for each package is captured to a dedicated log
-file, and the runner only prints the full log when a package fails.
+The runner includes the root `RocketPlumber` project and discovers any directory
+under `local_packages/` that contains both a `Project.toml` and
+`test/runtests.jl`. It executes `Pkg.test()` for each target in a fresh Julia
+process. Output for each target is captured to a dedicated log file, and the
+runner only prints the full log when a target fails.
 """
 module RunAllPackageTests
 
@@ -43,6 +44,8 @@ Base.@kwdef struct TestTarget
     pkg_dir::String
     label::String
 end
+
+const ROOT_TEST_TARGET = TestTarget(; pkg_dir=REPO_ROOT, label="RocketPlumber")
 
 mutable struct RunningTest
     target::TestTarget
@@ -119,7 +122,7 @@ function parse_args(args::Vector{String})
     return options
 end
 
-"Discover every local package that has its own test suite."
+"Discover the root application and every local package with its own test suite."
 function find_test_targets()
     isdir(LOCAL_PACKAGES_ROOT) || error("Could not find local_packages directory at $(LOCAL_PACKAGES_ROOT)")
 
@@ -131,6 +134,7 @@ function find_test_targets()
         push!(targets, TestTarget(; pkg_dir=normpath(root), label=relpath(root, REPO_ROOT)))
     end
 
+    push!(targets, ROOT_TEST_TARGET)
     sort!(targets; by=target -> target.label)
     return targets
 end
@@ -295,7 +299,7 @@ function main(args::Vector{String}=String[])
     options === nothing && return nothing
 
     targets = find_test_targets()
-    isempty(targets) && error("No package test suites were found under $(LOCAL_PACKAGES_ROOT)")
+    isempty(targets) && error("No package test suites were found")
 
     if options.list_only
         println("Discovered ", length(targets), " package test suite", length(targets) == 1 ? "" : "s", ":")

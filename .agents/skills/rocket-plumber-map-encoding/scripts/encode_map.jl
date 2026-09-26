@@ -2,16 +2,12 @@
 
 """Encode a saved GameMap as diagnostic text or a direct map-generator draft."""
 
-using JLD2, StaticArrays, LinearAlgebra
+using StaticArrays, LinearAlgebra
 using HexFrame, HexElements, HexFluids, HexComponentsAPI, FlowMap
 using HexFlowProcGen, HexFlowNozzleComponents, FlowEngine
+using HexFlowPersistence
 
 const _repo_root = normpath(joinpath(@__DIR__, "..", "..", "..", ".."))
-const _src_dir = joinpath(_repo_root, "src")
-
-include(joinpath(_src_dir, "components.jl"))
-include(joinpath(_src_dir, "timelapse.jl"))
-include(joinpath(_src_dir, "map_loading.jl"))
 
 function resolve_map_path(input::String)::String
     endswith(lowercase(input), ".jld2") || error("Map input must have a .jld2 extension: $input")
@@ -20,15 +16,10 @@ function resolve_map_path(input::String)::String
     return path
 end
 
-"Load a saved map through the application's migration typemap without fallback."
+"Load a saved map through the persistence package without fallback."
 function load_game_map(map_input::String)::GameMap
     map_path = resolve_map_path(map_input)
-    typemap = _build_map_typemap()
-    stored_gamemap = JLD2.load(map_path, "stored_gamemap"; typemap = typemap)
-    stored_gamemap isa GameMap || error(
-        "JLD2 entry stored_gamemap has type $(typeof(stored_gamemap)), expected GameMap"
-    )
-    return stored_gamemap
+    return HexFlowPersistence.loadmap_strict(map_path)
 end
 
 format_coord(coord::TileCoord) = "TileCoord($(Int(coord.q)), $(Int(coord.r)))"

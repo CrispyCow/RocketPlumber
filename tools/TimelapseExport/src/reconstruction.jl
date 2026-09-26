@@ -12,7 +12,7 @@ end
 ReconstructionError(message::AbstractString) = ReconstructionError(String(message), 4)
 
 function create_reconstruction_context()
-    flow_engine = Main.FlowEngine
+    flow_engine = Runtime.FlowEngine
     return ReconstructionContext(
         flow_engine.DerivedMapState(),
         flow_engine.MNA_State(),
@@ -25,7 +25,7 @@ end
 function reconstruct_keyframe!(context::ReconstructionContext, entry::TimelineEntry; retained_index::Union{Nothing, Int} = nothing, verbose::Bool = false)
     verbose && println("Reconstructing $(entry.origin)")
     try
-        calculator = Main.HexFlowCalculator
+        calculator = Runtime.HexFlowCalculator
         calculator.collect_primary_map_inputs!(entry.gamemap, context.derived)
         calculator.solve_from_inputs!(context.derived, context.mna, context.scratchpad, get_simulated_ticks(entry.gamemap))
         calculator.snapshot!(context.mna_snapshot, context.mna)

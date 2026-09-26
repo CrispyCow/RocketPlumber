@@ -60,10 +60,10 @@ function _contains(outer::WorldRect, inner::WorldRect)
 end
 
 function _hex_size_pixels()::Float64
-    if isdefined(Main, :HexFlowRendering)
-        return Float64(Main.HexFlowRendering.hex_size_pixels)
+    if isdefined(Runtime, :HexFlowRendering)
+        return Float64(Runtime.HexFlowRendering.hex_size_pixels)
     end
-    # Pure camera tests intentionally do not load the display-dependent renderer.
+    # Inspection and pure camera tests fall back to the default pixel scale.
     return 256.0
 end
 

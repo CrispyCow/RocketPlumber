@@ -9,13 +9,36 @@ using HexFrame
 using FlowMap
 using FlowEngine
 using HexFlowRendering
+using RelocatableFolders
 using RenderEngine
 using StaticArrays
 using HexComponentsAPI
 
 @testset "Texture atlas PNG loading" begin
-    texture_atlas_dir = joinpath(dirname(dirname(pkgdir(HexFlowRendering))), "tools", "TexturePacker", "outputs")
-    atlas_image = HexFlowRendering.load_texatlas1_png(texture_atlas_dir)
+    shader_dir = HexFlowRendering.shader_dir()
+    atlas_dir = HexFlowRendering.texture_atlas_dir()
+
+    @test HexFlowRendering.SHADER_DIR isa RelocatableFolders.Path
+    @test HexFlowRendering.TEXTURE_ATLAS_DIR isa RelocatableFolders.Path
+    @test isdir(shader_dir)
+    @test all(
+        isfile(joinpath(shader_dir, name)) for name in (
+                "BaseTile.vert",
+                "BaseTile.frag",
+                "BaseTile_GasEffect.frag",
+                "BaseTile_LiquidEffect.frag",
+                "particle.vert",
+                "particle.geom",
+                "particle.frag",
+            )
+    )
+    @test isfile(joinpath(HexFlowRendering.shader_dir(), "BaseTile.vert"))
+    @test occursin("#version 410", HexFlowRendering.grab_shader("BaseTile.vert"))
+    @test isdir(atlas_dir)
+    @test isfile(joinpath(atlas_dir, "TileTextureAtlas1.png"))
+    @test isfile(joinpath(atlas_dir, "TileTextureAtlas1.json"))
+
+    atlas_image = HexFlowRendering.load_texatlas1_png()
 
     @test ndims(atlas_image) == 2
     @test !isempty(atlas_image)

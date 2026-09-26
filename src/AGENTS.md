@@ -6,14 +6,20 @@ launching, input, UI, rendering, persistence, and game-session flow.
 
 ## File Map
 
-- `repl_launch.jl` is the development entry point. It loads Revise so package
-  code, shaders, and source assets can be iterated on in place.
-- `auto_test_launch.jl` boots the real application, drives
-  `test_harness.jl`, and exits through the normal shutdown path.
-- `julia_main.jl` is the production/JuliaC entry point. It does not build
-  assets; it verifies that the externally produced rendering artifacts exist.
+- `RocketPlumber.jl` is the canonical application assembly point. Keep normal
+  application source includes and runtime imports there.
+- `scripts/repl_launch.jl` is a thin development adapter that loads Revise
+  before RocketPlumber and calls `RocketPlumber.launch()`.
+- `scripts/smoke_test.jl` loads `test/smoke/` support after importing the package.
+  Its fixture drives the optional frame hook and exits through normal shutdown;
+  smoke-only definitions are not part of normal package assembly.
+- `julia_main.jl` is the production/JuliaC entry point. Runtime rendering
+  resources are owned by `HexFlowRendering`; no launcher asset mode is needed.
 - `initial_window_setup.jl`, `startmenu.jl`, and `gameloop.jl` own application
-  startup, session transitions, the render loop, and calculator IPC.
+  startup, session transitions, the render loop, and calculator IPC. Startup is
+  invoked through the package API; importing the package must remain passive.
+  Headless callers must set `JULIA_GLFW_PLATFORM=null` before importing the
+  package; `RocketPlumber.jl` must not choose a process-wide GLFW backend.
 - `interactions.jl` translates keyboard and mouse input into view-only changes
   or calculator commands.
 - `ui_*.jl` contains the CImGui interface. `recording.jl` and `timelapse.jl`
@@ -23,7 +29,9 @@ launching, input, UI, rendering, persistence, and game-session flow.
   `local_packages/components/`.
 - `tutorials.jl` defines learning entries and includes generators from
   `demo_maps/`.
-- `map_loading.jl` owns JLD2 save/load adapters and upgrade conversions.
+- `gameloop.jl` owns session orchestration, calculator IPC, and dispatch from
+  saved, generated, or empty map sources; `HexFlowPersistence` owns saved types,
+  JLD2 save/load, and upgrade conversions.
 
 ## Thread And State Boundaries
 
@@ -44,9 +52,9 @@ new mutation, add a command rather than bypassing that boundary.
 
 ## Persistence
 
-- When a persisted type changes shape, package, or meaning, update the typemap
-  and/or `rconvert` reconstruction in `map_loading.jl` and test an older save
-  when one is available.
+- When a persisted type changes shape, package, or meaning, review the typemap
+  and `rconvert` reconstruction in `HexFlowPersistence/src/migrations.jl`
+  under `local_packages/`, and test an older save when one is available.
 - Struct field defaults are not a substitute for JLD2 migration logic.
 - Keep `GameMap` and saved domain types independent of UI/OpenGL state.
 - Demo maps are Julia generators under `demo_maps/`; keep tutorial registration
@@ -58,9 +66,10 @@ new mutation, add a command rather than bypassing that boundary.
   and reserved bands are documented in `render_height.md`.
 - Preserve per-ship `pos_offset` and `render_height_offset` as render calls pass
   through application code.
-- Source sprites belong in `tools/TexturePacker/textures/`; development uses
-  the tracked atlas in `tools/TexturePacker/outputs/`. Follow
-  `tools/AGENTS.md` for regeneration.
+- Runtime shaders and the atlas belong to `HexFlowRendering`. Source sprites
+  remain in `tools/TexturePacker/textures/`; follow `tools/AGENTS.md` for
+  regeneration. Same-repository consumers should use the package resource
+  accessors rather than reconstructing package paths.
 - Shader and render-program changes belong in `HexFlowRendering` or
   `RenderEngine`, not in the UI files.
 
@@ -69,10 +78,10 @@ new mutation, add a command rather than bypassing that boundary.
 For application integration or gameplay changes, run:
 
 ```shell
-julia --project=. --threads=2,1 --gcthreads=1,1 src/auto_test_launch.jl
+julia --project=. --threads=2,1 --gcthreads=1,1 scripts/smoke_test.jl
 ```
 
 This opens a real window and needs a working display/OpenGL context. Allow
 roughly six minutes before treating startup or execution as hung. Use
-`src/repl_launch.jl` for behaviour that requires manual inspection. Changes
+`scripts/repl_launch.jl` for behaviour that requires manual inspection. Changes
 limited to a local package should run that package's tests first.
