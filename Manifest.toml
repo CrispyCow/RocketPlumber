@@ -2,7 +2,7 @@
 
 julia_version = "1.13.0"
 manifest_format = "2.1"
-project_hash = "5f4f1afd9c3ef98288551846d1fb6a3d8b0516df"
+project_hash = "3f0cc4adeb7ec33e6065ee4bbe2a25431da8d305"
 
 [[deps.ATK_jll]]
 deps = ["Artifacts", "Glib_jll", "JLLWrappers", "Libdl"]
@@ -478,7 +478,7 @@ uuid = "a5bfb9cd-4dce-4d41-851e-e34bf63bcb54"
 version = "0.1.0"
 
 [[deps.HexFlowCalculator]]
-deps = ["Dates", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowControl", "HexFlowProcGen", "HexFlowTelemetry", "HexFluids", "HexFrame", "JLD2", "LinearAlgebra", "StaticArrays", "StructEquality", "TimerOutputs"]
+deps = ["Dates", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowControl", "HexFlowProcGen", "HexFlowTelemetry", "HexFluids", "HexFrame", "LinearAlgebra", "StaticArrays", "StructEquality", "TimerOutputs"]
 path = "local_packages/HexFlowCalculator"
 uuid = "d8e9f3a2-7b4c-4e1d-9f3a-2c5b8e7d9f1a"
 version = "0.1.0"

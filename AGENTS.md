@@ -158,7 +158,7 @@ julia --project=. --threads=2,1 --gcthreads=1,1 scripts/smoke_test.jl
 julia --project=dev --threads=2,1 --gcthreads=1,1 scripts/repl_launch.jl
 
 # Production entry point
-julia --project=. --threads=2,1 --gcthreads=1,1 src/julia_main.jl
+julia --project=. --threads=2,1 --gcthreads=1,1 -m RocketPlumber
 ```
 
 Choose verification proportional to the change: start with the affected

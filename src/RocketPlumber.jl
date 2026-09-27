@@ -53,4 +53,18 @@ function launch()
     return nothing
 end
 
+"Run the production application and report failures to compiled launchers."
+function (@main)(args::Vector{String})::Cint
+    try
+        launch()
+        return 0
+    catch err
+        @error "Rocket Plumber failed" exception = (err, catch_backtrace())
+        return 1
+    end
+end
+
+"PackageCompiler entry point, sharing the JuliaC startup path."
+julia_main()::Cint = main(ARGS)
+
 end # module RocketPlumber

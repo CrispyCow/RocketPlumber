@@ -66,7 +66,7 @@ Julia is a JIT compiled language, and generally you are supposed to have Julia i
 #### Launching from the terminal
 To run the game from source you will need:
 
-- Julia 1.12 or newer, which can be acquired by following the instructions [here](https://julialang.org/install/).
+- Julia 1.13, which can be acquired by following the instructions [here](https://julialang.org/install/).
 - A copy of the code, just clone this repository!
 
 Once you have these run this command from the root folder to set up the required external dependencies (you only have to do this once):
@@ -81,8 +81,8 @@ From here you are ready to run! Start the demo with this command:
 julia --project=dev --threads=2,1 --gcthreads=1,1 scripts/repl_launch.jl
 ```
 
-The repository root is the `RocketPlumber` Julia package. `src/RocketPlumber.jl` is the single application source assembly point, and `using RocketPlumber` loads it without launching the game. Call `RocketPlumber.launch()` to start the normal game. The `dev/` workspace project supplies Revise for development; the production/PackageCompiler entry point remains `src/julia_main.jl`. Runtime shaders and the texture atlas are source-controlled in `HexFlowRendering` and accessed through relocatable package paths.
-On Julia 1.12 this starts 2 default worker threads plus 1 interactive main thread, which keeps the FlowCalculator off the main OpenGL loop without reserving an unnecessary third default worker.
+The repository root is the `RocketPlumber` Julia package. `src/RocketPlumber.jl` is the single application source assembly point, and `using RocketPlumber` loads it without launching the game. Call `RocketPlumber.launch()` to start the normal game. The package owns the production `@main(args)` and PackageCompiler `julia_main()` entry points. The `dev/` workspace project supplies Revise for development only. Runtime shaders and the texture atlas are source-controlled in `HexFlowRendering` and accessed through `RelocatableFolders` paths.
+With two default worker threads plus one interactive main thread, the FlowCalculator runs away from the main OpenGL loop without reserving an unnecessary third default worker.
 
 #### Using the REPL and Revise
 

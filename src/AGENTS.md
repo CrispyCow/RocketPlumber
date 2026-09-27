@@ -13,8 +13,9 @@ launching, input, UI, rendering, persistence, and game-session flow.
 - `scripts/smoke_test.jl` loads `test/smoke/` support after importing the package.
   Its fixture drives the optional frame hook and exits through normal shutdown;
   smoke-only definitions are not part of normal package assembly.
-- `julia_main.jl` is the production/JuliaC entry point. Runtime rendering
-  resources are owned by `HexFlowRendering`; no launcher asset mode is needed.
+- `RocketPlumber.jl` owns the JuliaC `@main(args)` and PackageCompiler
+  `julia_main()::Cint` entry points. Both call `launch()` through one startup
+  path. Runtime resources are owned by `HexFlowRendering`.
 - `initial_window_setup.jl`, `startmenu.jl`, and `gameloop.jl` own application
   startup, session transitions, the render loop, and calculator IPC. Startup is
   invoked through the package API; importing the package must remain passive.
