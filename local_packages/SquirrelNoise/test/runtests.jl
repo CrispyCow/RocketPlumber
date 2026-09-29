@@ -3,6 +3,8 @@ Scope: Tests for SquirrelNoise noise and selection utilities
 Formatter: Runic
 =#
 
+ENV["JULIA_GLFW_PLATFORM"] = "null"
+
 using Test
 using Random
 

@@ -3,6 +3,8 @@ Scope: Tests for basic component behaviour fragments
 Formatter: Runic
 =#
 
+ENV["JULIA_GLFW_PLATFORM"] = "null"
+
 using Test
 using HexComponentsAPI
 using HexFlowBasicComponents

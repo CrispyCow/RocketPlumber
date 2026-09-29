@@ -3,6 +3,8 @@ Scope: Test suite for HexFlowProcGen procedural generation and encounter balance
 Formatter: Runic
 =#
 
+ENV["JULIA_GLFW_PLATFORM"] = "null"
+
 using Test
 using SquirrelNoise
 using GeometryBasics

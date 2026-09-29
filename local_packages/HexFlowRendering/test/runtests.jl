@@ -4,6 +4,8 @@ and render-height conventions
 Formatter: Runic
 =#
 
+ENV["JULIA_GLFW_PLATFORM"] = "null"
+
 using Test
 using HexFrame
 using FlowMap

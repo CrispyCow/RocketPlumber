@@ -3,6 +3,8 @@ Scope: Tests for switch and valve component behaviours
 Formatter: Runic
 =#
 
+ENV["JULIA_GLFW_PLATFORM"] = "null"
+
 using Test
 using HexFrame
 using HexElements

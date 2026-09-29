@@ -3,6 +3,8 @@ Scope: Tests for HexFlowBasicPipes pipe click-radius behaviour
 Formatter: Runic
 =#
 
+ENV["JULIA_GLFW_PLATFORM"] = "null"
+
 using Test
 using HexComponentsAPI
 using HexFlowBasicPipes

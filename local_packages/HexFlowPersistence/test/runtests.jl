@@ -3,6 +3,8 @@ Scope: Save-file round trips and historical JLD2 migration tests
 Formatter: Runic
 =#
 
+ENV["JULIA_GLFW_PLATFORM"] = "null"
+
 using Test
 using HexFlowPersistence
 using FlowMap

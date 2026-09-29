@@ -3,6 +3,8 @@ Scope: FlowMap test suite covering map domain model, validation, docking state, 
 Formatter: Runic
 =#
 
+ENV["JULIA_GLFW_PLATFORM"] = "null"
+
 using Test
 using FlowMap
 using HexFrame

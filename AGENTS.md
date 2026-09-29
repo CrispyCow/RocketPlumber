@@ -166,8 +166,10 @@ package suite, then use the application smoke test for integration or gameplay
 changes. The all-package runner includes the root `RocketPlumber` test suite and
 packages under `local_packages/`, not the separate `tools/TimelapseExport` suite.
 
-There is no in-repository CI configuration, so report exactly which local
-checks were run and which display-dependent checks were not run.
+The GitHub Actions test workflow runs the all-package test sweep for pull
+requests targeting `main`. It does not run the graphical smoke test or separate
+tool tests. Report exactly which local checks were run and which
+display-dependent checks were not run.
 
 All game launch paths need a display/OpenGL context and at least two default
 Julia worker threads. The smoke test opens a real window, is not headless, and

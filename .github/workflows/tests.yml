@@ -1,0 +1,37 @@
+name: Tests
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: tests-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1.13'
+      - uses: julia-actions/cache@v3
+      - name: Run package tests
+        id: package-tests
+        run: julia --color=yes tools/run_all_package_tests.jl --jobs 2
+      - name: Upload package test logs
+        if: failure() && steps.package-tests.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-test-logs
+          path: logs/package_test_runs/
+          if-no-files-found: ignore
+          retention-days: 7

@@ -3,6 +3,8 @@ Scope: Fluid types, properties, lookup functions, and runtime-tunable setters
 Formatter: Runic
 =#
 
+ENV["JULIA_GLFW_PLATFORM"] = "null"
+
 using Test
 using HexFluids
 using Base.Threads: @spawn

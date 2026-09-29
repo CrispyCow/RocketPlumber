@@ -3,6 +3,8 @@ Scope: Nozzle and combustion-chamber component behaviour tests
 Formatter: Runic
 =#
 
+ENV["JULIA_GLFW_PLATFORM"] = "null"
+
 using Test
 using HexFrame
 using HexElements

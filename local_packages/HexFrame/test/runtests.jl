@@ -3,6 +3,8 @@ Scope: Test suite for HexFrame coordinate systems, conversions, and spatial oper
 Formatter: Runic
 =#
 
+ENV["JULIA_GLFW_PLATFORM"] = "null"
+
 using Test
 using StaticArrays
 using HexFrame

@@ -1,3 +1,5 @@
+ENV["JULIA_GLFW_PLATFORM"] = "null"
+
 using Test
 using HexFlowTelemetry
 

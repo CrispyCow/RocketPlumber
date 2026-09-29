@@ -3,6 +3,8 @@ Scope: Unit tests for HexFlowCalculator: simulation tick pipeline, command trans
 Formatter: Runic
 =#
 
+ENV["JULIA_GLFW_PLATFORM"] = "null"
+
 using Test
 using HexFlowCalculator
 using FlowMap

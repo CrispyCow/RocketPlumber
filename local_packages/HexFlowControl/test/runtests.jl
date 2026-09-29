@@ -3,6 +3,8 @@ Scope: HexFlowControl state and control helpers
 Formatter: Runic
 =#
 
+ENV["JULIA_GLFW_PLATFORM"] = "null"
+
 using Test
 using HexComponentsAPI
 using HexFlowControl

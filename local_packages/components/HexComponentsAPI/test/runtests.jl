@@ -3,6 +3,8 @@ Scope: Contract tests for action metadata, validation errors, and request result
 Formatter: Runic
 =#
 
+ENV["JULIA_GLFW_PLATFORM"] = "null"
+
 using Test
 using HexComponentsAPI
 

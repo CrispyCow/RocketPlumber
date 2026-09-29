@@ -3,6 +3,8 @@ Scope: Tests for FlowEngine circuit/fluid state derivation, MNA construction and
 Formatter: Runic
 =#
 
+ENV["JULIA_GLFW_PLATFORM"] = "null"
+
 using Test
 using LinearAlgebra: SingularException
 using SparseArrays: sparse, nonzeros, rowvals, nnz

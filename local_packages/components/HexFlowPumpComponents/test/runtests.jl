@@ -3,6 +3,8 @@ Scope: Pump component behaviour and regression tests
 Formatter: Runic
 =#
 
+ENV["JULIA_GLFW_PLATFORM"] = "null"
+
 using Test
 using HexFrame
 using HexElements

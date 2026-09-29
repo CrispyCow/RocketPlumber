@@ -6,8 +6,8 @@ Run the root application and every local package test suite in this repository.
 The runner includes the root `RocketPlumber` project and discovers any directory
 under `local_packages/` that contains both a `Project.toml` and
 `test/runtests.jl`. It executes `Pkg.test()` for each target in a fresh Julia
-process. Output for each target is captured to a dedicated log file, and the
-runner only prints the full log when a target fails.
+process. Output for each target is captured to a dedicated log file. Failed
+targets print a bounded log tail by default.
 """
 module RunAllPackageTests
 
@@ -26,6 +26,7 @@ Base.@kwdef struct RunnerOptions
     instantiate::Bool = false
     list_only::Bool = false
     verbose_pass_logs::Bool = false
+    full_failure_logs::Bool = false
 end
 
 "Return a copy of RunnerOptions with selected fields replaced."
@@ -36,8 +37,9 @@ function updated_options(
     instantiate::Bool=options.instantiate,
     list_only::Bool=options.list_only,
     verbose_pass_logs::Bool=options.verbose_pass_logs,
+    full_failure_logs::Bool=options.full_failure_logs,
 )
-    return RunnerOptions(; jobs, julia_threads, instantiate, list_only, verbose_pass_logs)
+    return RunnerOptions(; jobs, julia_threads, instantiate, list_only, verbose_pass_logs, full_failure_logs)
 end
 
 Base.@kwdef struct TestTarget
@@ -73,6 +75,7 @@ function usage_text()
         "      --instantiate          Run Pkg.instantiate() in each test environment first.",
         "      --list                 Print discovered test suites and exit.",
         "      --verbose-pass-logs    Also print captured logs for passing test suites.",
+        "      --full-failure-logs    Print complete failed logs instead of the last 120 lines.",
         "  -h, --help                 Show this help text.",
     ], '\n')
 end
@@ -112,6 +115,8 @@ function parse_args(args::Vector{String})
             options = updated_options(options; list_only=true)
         elseif arg == "--verbose-pass-logs"
             options = updated_options(options; verbose_pass_logs=true)
+        elseif arg == "--full-failure-logs"
+            options = updated_options(options; full_failure_logs=true)
         else
             error("Unrecognised argument: $(arg)")
         end
@@ -218,13 +223,20 @@ function cleanup_active!(active::Vector{RunningTest})
 end
 
 "Print a readable summary for one completed test suite."
-function report_result(result::TestResult; verbose_pass_logs::Bool=false)
+function report_result(result::TestResult; verbose_pass_logs::Bool=false, full_failure_logs::Bool=false)
     status = result.success ? "PASS" : "FAIL"
     println("[", status, "] ", result.target.label, " (", round(result.elapsed_s; digits=1), " s)")
 
     if !result.success || verbose_pass_logs
-        log_contents = read(result.log_path, String)
-        println("Log: ", result.log_path)
+        println("Full log: ", result.log_path)
+        if result.success || full_failure_logs
+            log_contents = read(result.log_path, String)
+        else
+            lines = readlines(result.log_path; keep=true)
+            tail = lines[max(1, length(lines) - 119):end]
+            log_contents = join(tail)
+            println("Last ", length(tail), " log lines:")
+        end
         println(repeat("-", 80))
         print(log_contents)
         endswith(log_contents, "\n") || println()
@@ -269,7 +281,7 @@ function run_tests(targets::Vector{TestTarget}, options::RunnerOptions)
                 result = finish_test!(active[index])
                 deleteat!(active, index)
                 push!(results, result)
-                report_result(result; verbose_pass_logs=options.verbose_pass_logs)
+                report_result(result; verbose_pass_logs=options.verbose_pass_logs, full_failure_logs=options.full_failure_logs)
             end
         end
     catch

@@ -3,6 +3,8 @@ Scope: Test suite for HexFlowLearningSystem tutorial and learning state manageme
 Formatter: Runic
 =#
 
+ENV["JULIA_GLFW_PLATFORM"] = "null"
+
 using Test
 using FlowMap
 using FlowEngine
