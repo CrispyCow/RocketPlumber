@@ -186,6 +186,5 @@ end
 
 end # module LocalPackageUpdater
 
-if !isempty(PROGRAM_FILE) && abspath(PROGRAM_FILE) == abspath(@__FILE__)
-    LocalPackageUpdater.main(ARGS)
-end
+is_direct_execution = !isempty(PROGRAM_FILE) && abspath(PROGRAM_FILE) == abspath(@__FILE__)
+LocalPackageUpdater.main(is_direct_execution ? ARGS : String[])

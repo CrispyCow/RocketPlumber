@@ -67,4 +67,6 @@ end
 "PackageCompiler entry point, sharing the JuliaC startup path."
 julia_main()::Cint = main(ARGS)
 
+include("precompile_workload.jl")
+
 end # module RocketPlumber

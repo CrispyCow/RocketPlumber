@@ -6,7 +6,14 @@ Formatter: Runic
 using Test
 ENV["JULIA_GLFW_PLATFORM"] = "null"
 using RocketPlumber
-using FlowMap: GameMap, ShipState
+using FlowMap: GameMap, ShipState, set_surface_tile!
+using HexFrame: TileCoord
+using HexFlowCalculator: FlowCalculatorSnapshot
+using HexFlowControl: InputState
+using HexFlowRendering: SpriteRenderCommand
+using RenderEngine: GLObjectMap, GLspriteData
+using StaticArrays: SVector
+import RenderEngine
 using HexFlowPersistence: TimelapseHistory, GameMapBundle, savemap
 using RocketPlumber: TimelapseRecorder, timelapse_frame_count, capture_timelapse_frame!,
     set_timelapse_enabled!, maybe_capture_timelapse!, snapshot_timelapse_history
@@ -34,6 +41,28 @@ using RocketPlumber: TimelapseRecorder, timelapse_frame_count, capture_timelapse
         @test bundle.timelapse isa TimelapseHistory
         @test length(bundle.timelapse.frames) == 1
     end
+end
+
+@testset "world render queue population" begin
+    gamemap = GameMap()
+    set_surface_tile!(gamemap, TileCoord(0, 0))
+    snapshot = FlowCalculatorSnapshot(gamemap = gamemap)
+    inputstate = InputState()
+    renderqueue = SpriteRenderCommand[]
+
+    glmap = GLObjectMap()
+    glmap.textures[:TestAtlas] = RenderEngine.GLtexData(RenderEngine.GLtexID(0), UInt32(0), UInt(256), UInt(256))
+    glmap.sprites[:ShipSurface_basic] = GLspriteData(
+        :TestAtlas,
+        SVector{2, Float32}(0.1f0, 0.1f0),
+        SVector{2, Float32}(0.0f0, 0.0f0),
+        SVector{2, Float32}(256.0f0, 256.0f0),
+        SVector{2, Float32}(256.0f0, 256.0f0),
+        SVector{2, Float32}(0.0f0, 0.0f0),
+    )
+
+    RocketPlumber.populate_renderqueue!(renderqueue, glmap, snapshot, inputstate)
+    @test !isempty(renderqueue)
 end
 
 @testset "render-thread time-lapse recorder" begin

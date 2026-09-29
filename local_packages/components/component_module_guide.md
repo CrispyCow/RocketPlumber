@@ -18,6 +18,42 @@ Component modules are organised into packages under `local_packages/components/`
 The examples below describe implementation modules. `HexComponentsAPI` may use
 API-specific documentation and sections where this layout does not fit.
 
+## Precompile Workloads
+
+Implementation packages own compilation of API defaults and wrappers
+specialised for their supported concrete `ComponentBehavior` and `PipeBehavior`
+types. `HexComponentsAPI` owns interface definitions and generic behaviour
+contracts; it needs no dedicated workload merely for abstract/default methods.
+The root application will later own a small realistic workload for
+heterogeneous and runtime-dispatch integration paths.
+
+Place a package workload in `src/precompile_workload.jl` and include it near the
+end of the package module, after its behaviour definitions. Add `PrecompileTools`
+as a direct dependency and import its needed macros in the workload file.
+Construct minimal deterministic fixtures under `@setup_workload` without
+executing the API paths being precompiled, then call representative methods
+under `@compile_workload`. Multiple compile-workload stages are appropriate
+when target calls produce state needed by later target calls.
+Prefer executing the methods to explicit `precompile(...)` signatures; document
+any path that genuinely cannot be run safely during precompilation.
+
+For each concrete specialisation actually supported or used by the game,
+exercise mandatory methods, overridden optional hooks, and important
+`PlacedComponent` or `PlacedPipe` paths, including `produce_abs_elements` where
+applicable. Cover extra states only when they reach materially different
+compilation or runtime dispatch. Tests can supply patterns for the smallest
+valid map or solver state, but the workload should not repeat their behavioural
+assertions or enumerate every value and action.
+
+Rendering methods that only construct queued commands can use a fake
+`GLObjectMap` with sprite metadata, without a display or GL execution. Keep
+fixtures internal to the workload file unless repeated implementation needs
+justify shared infrastructure. Avoid external I/O and lasting runtime side
+effects. When dependencies load GLFW, use `JULIA_GLFW_PLATFORM=null` for
+display-free verification rather than setting it in the workload. Update the
+workload whenever a new concrete specialisation or materially new API
+execution path is added.
+
 ## Module Structure
 
 ### File Organisation
@@ -588,6 +624,7 @@ Benefits:
     `pos_offset` through every helper and delegate call
 11. **Use the mass hooks deliberately**: Override `get_component_dry_mass` and `get_component_wet_mass` when the component contributes structural or stored-fluid mass
 12. **Use action hooks for interactions**: Expose right-click actions through `get_actions` and `do_action!` instead of inventing ad-hoc UI paths
+13. **Maintain precompile coverage**: Add supported concrete specialisations and materially new API paths to the package workload
 
 ## Example: Simple Component
 

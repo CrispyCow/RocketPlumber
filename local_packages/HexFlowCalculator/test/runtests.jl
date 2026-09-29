@@ -1883,6 +1883,69 @@ end
 # Tests — Snapshot Storage
 # ===============================================================
 
+@testset "step_flowcalc_sim!" begin
+    @testset "advances a normal tick and publishes it" begin
+        gamemap = make_gamemap()
+        set_component!(gamemap, TileCoord(0, 0), PlacedComponent(FixedThrustCompBehav(SVector(3.0, 4.0)), Q_POS, :primary))
+        gamestate = GameState()
+        publish_snapshot, get_snapshot = create_snapshot_storage(FlowCalculatorSnapshot())
+        ipc = FlowCalculatorIPC(
+            shared_state = FlowCalculatorSharedState(),
+            command_queue = create_command_queue(),
+            publish_snapshot = publish_snapshot,
+            get_snapshot = get_snapshot,
+            console_push = silent_console,
+            console_see = () -> String[],
+        )
+
+        HexFlowCalculator.step_flowcalc_sim!(
+            gamemap, DerivedMapState(), MNA_State(), gamestate,
+            HexFlowCalculator.CalculatorScratchpad(), HexFlowCalculator.ReactivationScheduler(),
+            ipc, false, 42.0
+        )
+
+        snapshot = get_snapshot()
+        @test gamestate.ticks == 1
+        @test get_simulated_ticks(gamemap) == 1
+        @test get_peak_thrust(gamemap) == 5.0
+        @test snapshot.timestamp == 42.0
+        @test snapshot.gamestate.ticks == 1
+        @test get_simulated_ticks(snapshot.gamemap) == 1
+    end
+
+    @testset "applies and publishes a paused surface edit without advancing time" begin
+        gamemap = make_gamemap()
+        gamestate = GameState()
+        publish_snapshot, get_snapshot = create_snapshot_storage(FlowCalculatorSnapshot())
+        command_queue = create_command_queue()
+        ipc = FlowCalculatorIPC(
+            shared_state = FlowCalculatorSharedState(),
+            command_queue = command_queue,
+            publish_snapshot = publish_snapshot,
+            get_snapshot = get_snapshot,
+            console_push = silent_console,
+            console_see = () -> String[],
+        )
+        new_surface = TileCoord(1, 0)
+        command = create_add_ship_surface_command(command_queue, new_surface)
+        @test try_enqueue_command!(command_queue, command)
+
+        HexFlowCalculator.step_flowcalc_sim!(
+            gamemap, DerivedMapState(), MNA_State(), gamestate,
+            HexFlowCalculator.CalculatorScratchpad(), HexFlowCalculator.ReactivationScheduler(),
+            ipc, true, 43.0
+        )
+
+        snapshot = get_snapshot()
+        @test is_on_surface_tile(new_surface, gamemap; ship_name = :primary)
+        @test snapshot.timestamp == 43.0
+        @test is_on_surface_tile(new_surface, snapshot.gamemap; ship_name = :primary)
+        @test gamestate.ticks == 0
+        @test snapshot.gamestate.ticks == 0
+        @test get_simulated_ticks(gamemap) == 0
+    end
+end
+
 @testset "create_snapshot_storage — triple buffer" begin
     snap = FlowCalculatorSnapshot(timestamp = 1.0)
     publish_snap, get_snap = create_snapshot_storage(snap)

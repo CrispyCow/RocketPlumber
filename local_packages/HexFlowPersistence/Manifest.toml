@@ -356,13 +356,13 @@ uuid = "2f6a9512-4d00-40fa-a3ea-0a7372983a4b"
 version = "0.1.0"
 
 [[deps.HexFlowBasicComponents]]
-deps = ["Accessors", "HexComponentsAPI", "HexElements", "HexFlowRendering", "HexFluids", "HexFrame", "RenderEngine", "StaticArrays"]
+deps = ["Accessors", "HexComponentsAPI", "HexElements", "HexFlowRendering", "HexFluids", "HexFrame", "PrecompileTools", "RenderEngine", "StaticArrays"]
 path = "../components/HexFlowBasicComponents"
 uuid = "32458d45-9755-4715-857d-57f99caca23f"
 version = "0.1.0"
 
 [[deps.HexFlowBasicPipes]]
-deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowRendering", "HexFluids", "HexFrame", "RenderEngine", "StaticArrays"]
+deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowRendering", "HexFluids", "HexFrame", "PrecompileTools", "RenderEngine", "StaticArrays"]
 path = "../components/HexFlowBasicPipes"
 uuid = "a5bfb9cd-4dce-4d41-851e-e34bf63bcb54"
 version = "0.1.0"
@@ -374,7 +374,7 @@ uuid = "c4f7b3e2-9a5d-4c8e-b1f2-3e8d9a5c7f1b"
 version = "0.1.0"
 
 [[deps.HexFlowNozzleComponents]]
-deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowRendering", "HexFlowSwitchComponents", "HexFluids", "HexFrame", "RenderEngine", "StaticArrays"]
+deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowRendering", "HexFlowSwitchComponents", "HexFluids", "HexFrame", "PrecompileTools", "RenderEngine", "StaticArrays"]
 path = "../components/HexFlowNozzleComponents"
 uuid = "50144448-a4f3-475c-b61f-abbe157c0594"
 version = "0.1.0"
@@ -392,7 +392,7 @@ uuid = "46cebafd-6e5b-4504-9515-23fc742129ca"
 version = "0.1.0"
 
 [[deps.HexFlowPumpComponents]]
-deps = ["Accessors", "ColorSchemes", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowRendering", "HexFlowSwitchComponents", "HexFluids", "HexFrame", "RenderEngine", "StaticArrays"]
+deps = ["Accessors", "ColorSchemes", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowRendering", "HexFlowSwitchComponents", "HexFluids", "HexFrame", "PrecompileTools", "RenderEngine", "StaticArrays"]
 path = "../components/HexFlowPumpComponents"
 uuid = "1290d7bd-b4cc-419e-8854-09761d3fc36b"
 version = "0.1.0"
@@ -404,13 +404,13 @@ uuid = "4ae3e4b3-9148-4249-9c49-b5ebbd5f9e90"
 version = "0.1.0"
 
 [[deps.HexFlowSwitchComponents]]
-deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowRendering", "HexFluids", "HexFrame", "RenderEngine", "StaticArrays"]
+deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowRendering", "HexFluids", "HexFrame", "PrecompileTools", "RenderEngine", "StaticArrays"]
 path = "../components/HexFlowSwitchComponents"
 uuid = "2757ce39-ab9e-404a-8c92-d547522109e8"
 version = "0.1.0"
 
 [[deps.HexFlowTankComponents]]
-deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowRendering", "HexFluids", "HexFrame", "RenderEngine", "StaticArrays"]
+deps = ["Accessors", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowRendering", "HexFluids", "HexFrame", "PrecompileTools", "RenderEngine", "StaticArrays"]
 path = "../components/HexFlowTankComponents"
 uuid = "609e9a39-c1ed-488c-b014-91800377b13c"
 version = "0.1.0"

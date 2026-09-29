@@ -152,4 +152,6 @@ function render_pipe_map!(queue::AbstractVector, behav::BigPipeBehav; glmap::GLO
     return nothing
 end
 
+include("precompile_workload.jl")
+
 end # module HexFlowBasicPipes

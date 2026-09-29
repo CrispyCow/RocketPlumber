@@ -28,6 +28,20 @@ function init_opengl_objects()
     return glmap, renderqueue, scratch_renderqueue
 end
 
+"Populate world sprite commands from the current calculator snapshot."
+function populate_renderqueue!(renderqueue::Vector{SpriteRenderCommand}, glmap::GLObjectMap, snapshot::FlowCalculatorSnapshot, inputstate::InputState)
+    @timeit render_loop_timer "Populate Render Queue" begin
+        @timeit render_loop_timer "Ship Surface" ship_surface_queued_render!(renderqueue, glmap, snapshot.gamemap; selected_ship = highlighted_ship(inputstate))
+        @timeit render_loop_timer "Docking Beams" render_docking_beams!(renderqueue, glmap, snapshot.gamemap, snapshot.gamestate.ticks)
+        @timeit render_loop_timer "Tiles" tile_queued_render!(renderqueue, glmap, snapshot.gamemap, snapshot.derived, snapshot.mna, snapshot.gamestate)
+        @timeit render_loop_timer "Ghosts" render_cursor_ghosts!(renderqueue, glmap, inputstate, snapshot.gamemap, snapshot.gamestate)
+        @timeit render_loop_timer "Pipes" pipe_queued_render!(renderqueue, glmap, snapshot.gamemap, snapshot.derived, snapshot.gamestate)
+        @timeit render_loop_timer "Nodes" node_queued_render!(renderqueue, glmap, snapshot.gamemap, snapshot.derived, snapshot.mna)
+    end
+
+    return nothing
+end
+
 "Render a frame with background particles, queued sprites, and foreground particles."
 function custom_rendering!(
         renderqueue::Vector{SpriteRenderCommand},
@@ -58,15 +72,7 @@ function custom_rendering!(
 
     # Queued world sprites
     @timeit render_loop_timer "Sprite Rendering" begin
-        @timeit render_loop_timer "Populate Render Queue" begin
-            @timeit render_loop_timer "Ship Surface" ship_surface_queued_render!(renderqueue, glmap, snapshot.gamemap; selected_ship = highlighted_ship(inputstate))
-            @timeit render_loop_timer "Docking Beams" render_docking_beams!(renderqueue, glmap, snapshot.gamemap, snapshot.gamestate.ticks)
-            @timeit render_loop_timer "Tiles" tile_queued_render!(renderqueue, glmap, snapshot.gamemap, snapshot.derived, snapshot.mna, snapshot.gamestate)
-            @timeit render_loop_timer "Ghosts" render_cursor_ghosts!(renderqueue, glmap, inputstate, snapshot.gamemap, snapshot.gamestate)
-            @timeit render_loop_timer "Pipes" pipe_queued_render!(renderqueue, glmap, snapshot.gamemap, snapshot.derived, snapshot.gamestate)
-            @timeit render_loop_timer "Nodes" node_queued_render!(renderqueue, glmap, snapshot.gamemap, snapshot.derived, snapshot.mna)
-        end
-
+        populate_renderqueue!(renderqueue, glmap, snapshot, inputstate)
         @timeit render_loop_timer "Execute Render Queue" glrender(glmap, renderqueue, scratch_renderqueue)
     end
 

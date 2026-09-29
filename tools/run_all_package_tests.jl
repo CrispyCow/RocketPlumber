@@ -315,4 +315,5 @@ end
 
 end # module RunAllPackageTests
 
-RunAllPackageTests.main(abspath(PROGRAM_FILE) == (@__FILE__) ? ARGS : String[])
+is_direct_execution = !isempty(PROGRAM_FILE) && abspath(PROGRAM_FILE) == abspath(@__FILE__)
+RunAllPackageTests.main(is_direct_execution ? ARGS : String[])

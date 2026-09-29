@@ -8,6 +8,8 @@ launching, input, UI, rendering, persistence, and game-session flow.
 
 - `RocketPlumber.jl` is the canonical application assembly point. Keep normal
   application source includes and runtime imports there.
+- `precompile_workload.jl` exercises a headless game-session path during root
+  package precompilation, after application definitions and entry points.
 - `scripts/repl_launch.jl` is a thin development adapter that loads Revise
   before RocketPlumber and calls `RocketPlumber.launch()`.
 - `scripts/smoke_test.jl` loads `test/smoke/` support after importing the package.

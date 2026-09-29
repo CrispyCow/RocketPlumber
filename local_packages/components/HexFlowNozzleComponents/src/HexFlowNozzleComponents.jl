@@ -985,4 +985,6 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::BipropChamberCom
     return nothing
 end
 
+include("precompile_workload.jl")
+
 end # module HexFlowNozzleComponents

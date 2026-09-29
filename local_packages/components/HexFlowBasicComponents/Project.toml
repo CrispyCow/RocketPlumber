@@ -10,6 +10,7 @@ HexElements = "2f6a9512-4d00-40fa-a3ea-0a7372983a4b"
 HexFlowRendering = "4ae3e4b3-9148-4249-9c49-b5ebbd5f9e90"
 HexFluids = "98a914a9-3572-461b-8ee2-d8d3de40252c"
 HexFrame = "5e4e96f9-9c53-49aa-b8a9-74f43a6aaf47"
+PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 RenderEngine = "e4d19546-dba0-4e1b-bafa-713bf6e720c9"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
@@ -23,6 +24,7 @@ RenderEngine = {path = "../../RenderEngine"}
 
 [compat]
 Accessors = "0.1.42"
+PrecompileTools = "1.3.4"
 StaticArrays = "1.9.15"
 
 [extras]

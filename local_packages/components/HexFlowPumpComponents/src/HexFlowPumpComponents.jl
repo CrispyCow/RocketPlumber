@@ -855,4 +855,6 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::ElectricPumpComp
     return nothing
 end
 
+include("precompile_workload.jl")
+
 end # module HexFlowPumpComponents

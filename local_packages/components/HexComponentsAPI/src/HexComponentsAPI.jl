@@ -218,25 +218,25 @@ end
 #= ---------- Optional defaults ----------- =#
 
 "Default optional method: render_map_elem! forwards to render_base_elem! The kwarg `pos_offset` may be any coordinate acceptable to `glvec()` or `nothing` to indicate no offset."
-function render_map_elem!(queue::AbstractVector, behav::T; glmap, rotation, position, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...) where {T}
+function render_map_elem!(queue::AbstractVector, behav::ComponentBehavior; glmap, rotation, position, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     # Forward visual offset and height without leaking unrelated keywords
     return render_base_elem!(queue, behav; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, render_height_offset = render_height_offset)
 end
 
 "Default `produce_rel_fluid_declarations` returns an empty tuple (no fluid declarations)."
-produce_rel_fluid_declarations(behav::T) where {T <: ComponentBehavior} = ()
+produce_rel_fluid_declarations(behav::ComponentBehavior) = ()
 
 "Default `update_flowbehav!` does nothing."
-update_flowbehav!(behav::T; kwargs...) where {T <: ComponentBehavior} = nothing
+update_flowbehav!(behav::ComponentBehavior; kwargs...) = nothing
 
 "Default `on_click!` does nothing."
-on_click!(behav::T; kwargs...) where {T <: ComponentBehavior} = nothing
+on_click!(behav::ComponentBehavior; kwargs...) = nothing
 
 "Default thrust is a zero vector for non-nozzles."
-get_thrust(behav::T; kwargs...) where {T <: ComponentBehavior} = SVector{2, Float64}(0.0, 0.0)
+get_thrust(behav::ComponentBehavior; kwargs...) = SVector{2, Float64}(0.0, 0.0)
 
 "Default component temperature is `nothing`, meaning the component does not expose a component-local temperature."
-get_component_temperature(behav::T; kwargs...) where {T <: ComponentBehavior} = nothing
+get_component_temperature(behav::ComponentBehavior; kwargs...) = nothing
 
 #= ---------- Mass hooks ----------- =#
 
@@ -250,16 +250,16 @@ function set_default_component_mass!(value::Float64)
 end
 
 "Dry (structural) mass of a component, excluding any stored fluid. Defaults to the tunable default component mass."
-get_component_dry_mass(behav::T; kwargs...) where {T <: ComponentBehavior} = get_default_component_mass()
+get_component_dry_mass(behav::ComponentBehavior; kwargs...) = get_default_component_mass()
 
 "Mass of fluid stored in a component. If `fluid` is `nothing`, returns total fluid mass; if a specific FluidType, returns mass of only that fluid. Defaults to 0.0 (no stored fluid)."
-get_component_wet_mass(behav::T; fluid::Union{FluidType, Nothing} = nothing, kwargs...) where {T <: ComponentBehavior} = 0.0
+get_component_wet_mass(behav::ComponentBehavior; fluid::Union{FluidType, Nothing} = nothing, kwargs...) = 0.0
 
 "Total mass of a component (dry + wet). Override `get_component_dry_mass` and/or `get_component_wet_mass` rather than this."
-get_component_mass(behav::T; kwargs...) where {T <: ComponentBehavior} = get_component_dry_mass(behav) + get_component_wet_mass(behav)
+get_component_mass(behav::ComponentBehavior; kwargs...) = get_component_dry_mass(behav) + get_component_wet_mass(behav)
 
 "Default `get_actions` returns an empty tuple; the component has no actions."
-get_actions(behav::T; kwargs...) where {T <: ComponentBehavior} = ()
+get_actions(behav::ComponentBehavior; kwargs...) = ()
 
 "Default do_action! rejects unsupported action IDs as programming errors."
 function do_action!(behav::T, action_id::Symbol; kwargs...) where {T <: ComponentBehavior}
@@ -267,23 +267,23 @@ function do_action!(behav::T, action_id::Symbol; kwargs...) where {T <: Componen
 end
 
 "Default `collect_effect_particles!` does nothing (the component produces no particles)."
-collect_effect_particles!(manager, behav::T; kwargs...) where {T <: ComponentBehavior} = nothing
+collect_effect_particles!(manager, behav::ComponentBehavior; kwargs...) = nothing
 
 "Default `map_rotation` does not modify rotation."
-map_rotation(behav::T, rotation::HexAxis) where {T <: ComponentBehavior} = rotation
+map_rotation(behav::ComponentBehavior, rotation::HexAxis) = rotation
 
 "Default map_mirroring opts components out of functional mirroring."
-map_mirroring(behav::T, mirrored::Bool) where {T <: ComponentBehavior} = false
+map_mirroring(behav::ComponentBehavior, mirrored::Bool) = false
 
 "Default can_be_moved returns a valid request, indicating the component can be moved."
-can_be_moved(behav::T; kwargs...) where {T <: ComponentBehavior} = ValidRequest()
+can_be_moved(behav::ComponentBehavior; kwargs...) = ValidRequest()
 
 """
 Default implementation of `placement_valid` raises an error.
 
 Default behaviour should be provided by FlowMap with a concrete surface type GameMap.
 """
-function placement_valid(behav::T, coord::TileCoord, surface; kwargs...) where {T <: ComponentBehavior}
+function placement_valid(behav::ComponentBehavior, coord::TileCoord, surface; kwargs...)
     error("placement_valid should be called with GameMap as the surface argument; the method for that is implemented in FlowMap")
 end
 
@@ -314,7 +314,7 @@ wishes to test whether it can be safely reactivated. The scheduler will run a sp
 solve with the probe's elements appended, classify the result with `classify_reactivation_probe`,
 and call `commit_reactivation_probe!` only when the classification is useful.
 """
-get_reactivation_probe(behav::T; kwargs...) where {T <: ComponentBehavior} = nothing
+get_reactivation_probe(behav::ComponentBehavior; kwargs...) = nothing
 
 """
 Classify the outcome of a speculative reactivation probe for this component.
@@ -340,7 +340,7 @@ Apply the committed effect of a useful speculative reactivation probe.
 The scheduler only calls this hook after `classify_reactivation_probe` returned
 `PROBE_USEFUL` for the corresponding speculative solve.
 """
-commit_reactivation_probe!(behav::T; kwargs...) where {T <: ComponentBehavior} = nothing
+commit_reactivation_probe!(behav::ComponentBehavior; kwargs...) = nothing
 
 # ===============================================================
 # PlacedComponent Wrapper
@@ -506,16 +506,16 @@ end
 #= ---------- Optional defaults ----------- =#
 
 "Default optional method: `render_pipe_map!` forwards to `render_pipe_base!`. The kwarg `pos_offset` may be any coordinate acceptable to `glvec()` or `nothing` to indicate no offset."
-function render_pipe_map!(queue::AbstractVector, behav::T; glmap, rotation, position, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...) where {T <: PipeBehavior}
+function render_pipe_map!(queue::AbstractVector, behav::PipeBehavior; glmap, rotation, position, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)
     # Forward visual offset and height without leaking unrelated keywords
     return render_pipe_base!(queue, behav; glmap = glmap, rotation = rotation, position = position, pos_offset = pos_offset, render_height_offset = render_height_offset)
 end
 
 "Default can_pipe_be_moved returns a valid request, indicating the pipe can be moved."
-can_pipe_be_moved(behav::T; kwargs...) where {T <: PipeBehavior} = ValidRequest()
+can_pipe_be_moved(behav::PipeBehavior; kwargs...) = ValidRequest()
 
 "Default `produce_abs_elements` creates a resistor element from conductance."
-function produce_abs_elements(behav::T, coord::PipeCoord) where {T <: PipeBehavior}
+function produce_abs_elements(behav::PipeBehavior, coord::PipeCoord)
     connections = AbsoluteElementConnections(to_nodecoord(coord.v1), to_nodecoord(coord.v2))
     conductance = get_conductance(behav)
     absolute_element = AbsoluteElement(connections, conductance, HexElements.CONST_RESISTOR, ElementID(coord))

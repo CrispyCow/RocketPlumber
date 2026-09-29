@@ -1321,4 +1321,6 @@ function render_map_elem!(queue::Vector{<:RenderCommand}, comp::PressureFedTankC
     return nothing
 end
 
+include("precompile_workload.jl")
+
 end # module HexFlowTankComponents

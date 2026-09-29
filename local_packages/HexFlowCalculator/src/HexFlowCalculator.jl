@@ -2226,6 +2226,61 @@ function update_ups_metrics!(
     return new_update_count
 end
 
+"Run one due calculator update step, publishing a snapshot when state advances or paused commands change the map."
+function step_flowcalc_sim!(
+        gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State,
+        gamestate::GameState, scratchpad::CalculatorScratchpad,
+        reactivation_scheduler::ReactivationScheduler, ipc::FlowCalculatorIPC,
+        is_paused::Bool, snapshot_timestamp::Float64
+    )
+    # Drain command queue
+    commands_processed = false
+    @timeit flowcalc_loop_timer "Command Processing" begin
+        while isready(ipc.command_queue.command_channel)
+            command = take!(ipc.command_queue.command_channel)
+            process_command!(command, gamemap, ipc.console_push, throw_errors = false)
+            commands_processed = true
+        end
+    end
+
+    if !is_paused
+        # Full update: advance game state
+        gamestate.ticks += 1
+
+        # Simulation pipeline
+        update_docking!(gamemap)
+        update_manoeuvre_phase!(gamestate, gamemap, ipc)
+        @timeit flowcalc_loop_timer "Component Updates" update_components!(gamemap, mna_state, derivedmapstate)
+        @timeit flowcalc_loop_timer "Reactivation Scan" scan_reactivation_requests!(reactivation_scheduler, gamemap)
+        @timeit flowcalc_loop_timer "Primary Inputs" collect_primary_map_inputs!(gamemap, derivedmapstate)
+
+        # Attempt one speculative reactivation probe; if none pending, run the base solve
+        @timeit flowcalc_loop_timer "Reactivation Trial" begin
+            if !run_reactivation_trial!(reactivation_scheduler, gamemap, derivedmapstate, mna_state, scratchpad, gamestate.ticks)
+                solve_from_inputs!(derivedmapstate, mna_state, scratchpad, gamestate.ticks)
+            end
+        end
+
+        @timeit flowcalc_loop_timer "Thruster Handling" handle_thrusters!(gamestate, gamemap, derivedmapstate, mna_state)
+        target_time = @atomic ipc.shared_state.target_spacemap_time
+        step_space_map_time!(gamemap.space_map, target_time)
+        refresh_estimated_min_delta_v!(gamestate, gamemap)
+        increment_simulated_ticks!(gamemap)
+
+        _publish_snapshot!(ipc.publish_snapshot, gamemap, derivedmapstate, mna_state, gamestate, snapshot_timestamp)
+
+    elseif commands_processed
+        # Paused with pending commands: rebuild derived state without advancing time
+        collect_primary_map_inputs!(gamemap, derivedmapstate)
+        solve_from_inputs!(derivedmapstate, mna_state, scratchpad, gamestate.ticks)
+        refresh_estimated_min_delta_v!(gamestate, gamemap; force = true)
+
+        _publish_snapshot!(ipc.publish_snapshot, gamemap, derivedmapstate, mna_state, gamestate, snapshot_timestamp)
+    end
+
+    return nothing
+end
+
 "Main FlowCalculator loop: runs deterministic game simulation on a fixed timestep."
 function flowcalculator_loop!(
         ipc::FlowCalculatorIPC,
@@ -2234,7 +2289,6 @@ function flowcalculator_loop!(
     # Unpack IPC elements
     shared_state = ipc.shared_state
     command_queue = ipc.command_queue
-    publish_snapshot = ipc.publish_snapshot
     threadsafe_console_push = ipc.console_push
 
     @info "FlowCalculator loop started on thread $(Threads.threadid())"
@@ -2276,54 +2330,13 @@ function flowcalculator_loop!(
                 # Not enough time accumulated, sleep briefly
                 sleep(0.001)  # 1ms
             else
-                # Drain command queue
-                commands_processed = false
-                @timeit flowcalc_loop_timer "Command Processing" begin
-                    while isready(command_queue.command_channel)
-                        command = take!(command_queue.command_channel)
-                        process_command!(command, gamemap, threadsafe_console_push, throw_errors = false)
-                        commands_processed = true
-                    end
-                end
-
                 # Consume accumulated time
                 timing.accumulator -= target_update_time
                 update_count += 1
-
-                if !is_paused
-                    # Full update: advance game state
-                    gamestate.ticks += 1
-
-                    # Simulation pipeline
-                    update_docking!(gamemap)
-                    update_manoeuvre_phase!(gamestate, gamemap, ipc)
-                    @timeit flowcalc_loop_timer "Component Updates" update_components!(gamemap, mna_state, derivedmapstate)
-                    @timeit flowcalc_loop_timer "Reactivation Scan" scan_reactivation_requests!(reactivation_scheduler, gamemap)
-                    @timeit flowcalc_loop_timer "Primary Inputs" collect_primary_map_inputs!(gamemap, derivedmapstate)
-
-                    # Attempt one speculative reactivation probe; if none pending, run the base solve
-                    @timeit flowcalc_loop_timer "Reactivation Trial" begin
-                        if !run_reactivation_trial!(reactivation_scheduler, gamemap, derivedmapstate, mna_state, scratchpad, gamestate.ticks)
-                            solve_from_inputs!(derivedmapstate, mna_state, scratchpad, gamestate.ticks)
-                        end
-                    end
-
-                    @timeit flowcalc_loop_timer "Thruster Handling" handle_thrusters!(gamestate, gamemap, derivedmapstate, mna_state)
-                    target_time = @atomic shared_state.target_spacemap_time
-                    step_space_map_time!(gamemap.space_map, target_time)
-                    refresh_estimated_min_delta_v!(gamestate, gamemap)
-                    increment_simulated_ticks!(gamemap)
-
-                    _publish_snapshot!(publish_snapshot, gamemap, derivedmapstate, mna_state, gamestate, timing.current_time)
-
-                elseif commands_processed
-                    # Paused with pending commands: rebuild derived state without advancing time
-                    collect_primary_map_inputs!(gamemap, derivedmapstate)
-                    solve_from_inputs!(derivedmapstate, mna_state, scratchpad, gamestate.ticks)
-                    refresh_estimated_min_delta_v!(gamestate, gamemap; force = true)
-
-                    _publish_snapshot!(publish_snapshot, gamemap, derivedmapstate, mna_state, gamestate, timing.current_time)
-                end
+                step_flowcalc_sim!(
+                    gamemap, derivedmapstate, mna_state, gamestate, scratchpad,
+                    reactivation_scheduler, ipc, is_paused, timing.current_time
+                )
             end
 
             # UPS metrics and diagnostics

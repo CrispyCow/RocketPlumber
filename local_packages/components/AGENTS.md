@@ -82,6 +82,33 @@ names such as `ComponentBehavior` exactly.
 - Reactivation classification must be pure. Mutate behaviour state only in
   `commit_reactivation_probe!` after the calculator accepts a useful probe.
 
+## Precompile Workloads
+
+- Concrete implementation packages own compilation of API defaults and wrappers
+  specialised for their supported `ComponentBehavior` and `PipeBehavior` types.
+  `HexComponentsAPI` owns interface definitions and generic behaviour contracts;
+  it needs no dedicated workload merely for abstract/default methods. The root
+  application owns a small realistic workload for heterogeneous and
+  runtime-dispatch integration paths.
+- Put an implementation workload in `src/precompile_workload.jl` and include it
+  from the package module after the relevant definitions. Import the needed
+  `PrecompileTools` macros in the workload file. Use `@setup_workload` to
+  construct fixtures without executing the API paths being precompiled; use
+  `@compile_workload` for those calls. Multiple compile-workload stages are
+  appropriate when target calls produce state needed by later target calls.
+- Cover supported concrete specialisations, mandatory methods, overridden
+  optional hooks, and important placed-wrapper paths such as
+  `produce_abs_elements`. Add states only when they reach materially different
+  execution paths; a workload is not a behavioural test suite.
+- Use minimal, deterministic fixtures. Reuse test patterns for valid solver
+  state. Render headlessly with fake sprite metadata when methods only enqueue
+  commands. Avoid display, GL execution, external I/O, and lasting runtime
+  side effects during package precompilation. Where dependencies load GLFW,
+  verify headlessly with `JULIA_GLFW_PLATFORM=null`; do not set it in the workload.
+- Keep fixture helpers internal and local until repeated use justifies shared
+  infrastructure. Update the workload when adding a concrete specialisation or
+  a materially new API execution path.
+
 ## Adding Or Changing A Component
 
 1. Update the most appropriate existing package unless the behaviour introduces
@@ -94,7 +121,9 @@ names such as `ComponentBehavior` exactly.
    generation needs to create it, and update relevant generation pools.
 5. Add source sprites under `tools/TexturePacker/textures/` and regenerate the
    tracked atlas when rendering needs new artwork.
-6. Run the package test suite, plus dependent component or application tests
+6. Add or update the package precompile workload for each supported concrete
+   specialisation and materially new API path.
+7. Run the package test suite, plus dependent component or application tests
    when a shared fragment or interface changed.
 
 Application names such as `TurboPump`, `TriGasTank`, and `LargeAdjValve` are

@@ -402,4 +402,6 @@ function render_base_elem!(queue::Vector{<:RenderCommand}, behav::BasicCompBehav
     return render_base_elem!(queue, behav.sprite; kwargs...) # Delegate to the sprite fragment
 end
 
+include("precompile_workload.jl")
+
 end # module HexFlowBasicComponents
