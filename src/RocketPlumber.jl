@@ -19,7 +19,10 @@ using HexComponentsAPI, FlowEngine, FlowMap, RenderEngine, HexFlowProcGen
 using HexFlowControl, HexFlowCalculator, HexFlowRendering
 using SquirrelNoise, HexFlowLearningSystem, HexFlowPersistence
 
-# Application assembly
+# ===============================================================
+# Application Assembly
+# ===============================================================
+
 include("initial_window_setup.jl")
 include("recording.jl")
 include("interactions.jl")
@@ -42,21 +45,35 @@ include(joinpath("demo_maps", "mapgen_teasership.jl"))
 include("tutorials.jl")
 include("startmenu.jl")
 
+# ===============================================================
+# Application Startup
+# ===============================================================
+
 export launch
 
+"Parse the application's optional telemetry flag without adding a CLI dependency."
+function parse_launch_args(args::Vector{String})
+    for arg in args
+        arg == "--telemetry" || throw(ArgumentError("Unrecognised argument: $arg"))
+    end
+    return (telemetry = "--telemetry" in args,)
+end
+
 "Configure runtime threading, open the game window, and enter the start menu."
-function launch()
+function launch(; telemetry::Bool = false)
     GLFW.GetPlatform() == GLFW.PLATFORM_NULL && throw(ArgumentError("Graphical startup requires a display"))
     configure_threads()
+    start_telemetry!(telemetry)
     window = start_window()
     enter_start_menu(window)
+    finish_telemetry!(; directory = joinpath(@__DIR__, "..", "logs", "telemetry"))
     return nothing
 end
 
 "Run the production application and report failures to compiled launchers."
 function (@main)(args::Vector{String})::Cint
     try
-        launch()
+        launch(; parse_launch_args(args)...)
         return 0
     catch err
         @error "Rocket Plumber failed" exception = (err, catch_backtrace())
@@ -66,6 +83,10 @@ end
 
 "PackageCompiler entry point, sharing the JuliaC startup path."
 julia_main()::Cint = main(ARGS)
+
+# ===============================================================
+# Precompilation
+# ===============================================================
 
 include("precompile_workload.jl")
 

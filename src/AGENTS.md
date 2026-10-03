@@ -17,7 +17,10 @@ launching, input, UI, rendering, persistence, and game-session flow.
   smoke-only definitions are not part of normal package assembly.
 - `RocketPlumber.jl` owns the JuliaC `@main(args)` and PackageCompiler
   `julia_main()::Cint` entry points. Both call `launch()` through one startup
-  path. Runtime resources are owned by `HexFlowRendering`.
+  path. `parse_launch_args` handles `--telemetry`, and `launch(; telemetry)`
+  starts telemetry before the loops and saves its report on normal shutdown.
+  Session cleanup collects partial intervals after waiting for the calculator.
+  Runtime resources are owned by `HexFlowRendering`.
 - `initial_window_setup.jl`, `startmenu.jl`, and `gameloop.jl` own application
   startup, session transitions, the render loop, and calculator IPC. Startup is
   invoked through the package API; importing the package must remain passive.
@@ -88,6 +91,8 @@ This opens a real window and needs a working display/OpenGL context and the
 documented Julia threading setup. Its 1200-tick script represents about twenty
 seconds at 60 UPS; a warmed run took about half a minute including startup and
 teardown. Fresh compilation may take longer. The graphical test is not part of
-the headless CI sweep. Use `scripts/repl_launch.jl` for behaviour that requires
+the headless CI sweep. Pass `--telemetry --duration 60` for a longer telemetry
+run; the default remains 20 simulated seconds, and shorter runs are rejected.
+Use `scripts/repl_launch.jl` for behaviour that requires
 manual inspection. Changes limited to a local package should run that
 package's tests first.

@@ -34,6 +34,7 @@ HexFrame = {path = "../HexFrame"}
 StaticArrays = "1.9.15"
 StructEquality = "2.1.0"
 Test = "1.11.0"
+TimerOutputs = "1.2"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"

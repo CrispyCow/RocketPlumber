@@ -6,6 +6,7 @@ Formatter: Runic
 module SmokeTestSupport
 
 using GLFW, HexFluids
+using HexFlowTelemetry: start_telemetry!, finish_telemetry!
 using FlowMap: SandboxLearningState, set_learning_system!, ShipBlueprint, ENCOUNTER_SHIP
 using HexFrame: TileCoord
 using HexFlowProcGen: generate_encounter, generate_encounter_name
@@ -202,14 +203,57 @@ function test_system_tick!(
 
     return nothing
 end
+
+# ===============================================================
+# Smoke Test Startup
+# ===============================================================
+
+#= ---------- Arguments and duration ----------- =#
+
+"Parse telemetry and a smoke duration of at least twenty simulated seconds."
+function parse_smoke_args(args::Vector{String})
+    telemetry = false
+    duration = 20.0
+    index = 1
+    while index <= length(args)
+        arg = args[index]
+        if arg == "--telemetry"
+            telemetry = true
+        elseif arg == "--duration"
+            index += 1
+            index <= length(args) || throw(ArgumentError("--duration requires seconds"))
+            seconds = tryparse(Float64, args[index])
+            isnothing(seconds) && throw(ArgumentError("--duration requires a number of seconds"))
+            duration = seconds
+        else
+            throw(ArgumentError("Unrecognised argument: $arg"))
+        end
+        index += 1
+    end
+    smoke_exit_tick(duration)  # Validate before opening a window
+    return (; telemetry, duration)
+end
+
+"Convert a smoke duration to an exit tick without truncating the scripted workload."
+function smoke_exit_tick(duration::Float64)
+    isfinite(duration) && duration >= 20.0 || throw(ArgumentError("Smoke duration must be finite and at least 20 seconds"))
+    return ceil(Int, duration * 60)
+end
+
+#= ---------- Fixture and launch ----------- =#
+
 include("fixture.jl")
 
 "Run the graphical smoke test against the application's teaser map."
-function run_smoke_test()::Bool
+function run_smoke_test(; telemetry::Bool = false, duration::Float64 = 20.0)::Bool
+    exit_tick = smoke_exit_tick(duration)
     GLFW.GetPlatform() == GLFW.PLATFORM_NULL && throw(ArgumentError("Graphical startup requires a display"))
     configure_threads()
+    start_telemetry!(telemetry)
     window = start_window()
-    return run_smoke_test_fixture(window)
+    result = run_smoke_test_fixture(window; exit_tick)
+    finish_telemetry!(; directory = joinpath(@__DIR__, "..", "..", "logs", "telemetry"))
+    return result
 end
 
 end # module SmokeTestSupport

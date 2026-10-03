@@ -2,7 +2,7 @@
 
 julia_version = "1.13.0"
 manifest_format = "2.1"
-project_hash = "cff94b4345cfface753f993b0b0dd2a5b1b9d4d4"
+project_hash = "c7034a36718e00863aff8293457c844a84fbca08"
 
 [[deps.Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
@@ -42,7 +42,7 @@ uuid = "7b1f6079-737a-58dc-b8bc-7a2ca5c1b5ee"
 version = "1.11.0"
 
 [[deps.HexFlowTelemetry]]
-deps = ["Printf", "TimerOutputs"]
+deps = ["TimerOutputs"]
 path = "."
 uuid = "83376590-ca7c-4863-a202-c842a58accce"
 version = "0.1.0"

@@ -21,6 +21,25 @@ using HexFlowPersistence: TimelapseHistory, GameMapBundle, savemap
 using RocketPlumber: TimelapseRecorder, timelapse_frame_count, capture_timelapse_frame!,
     set_timelapse_enabled!, maybe_capture_timelapse!, snapshot_timelapse_history
 
+include(joinpath(@__DIR__, "smoke", "SmokeTestSupport.jl"))
+
+@testset "Launch and smoke arguments" begin
+    @test RocketPlumber.parse_launch_args(String[]) == (telemetry = false,)
+    @test RocketPlumber.parse_launch_args(["--telemetry"]) == (telemetry = true,)
+    @test_throws ArgumentError RocketPlumber.parse_launch_args(["--unknown"])
+    @test_throws ArgumentError RocketPlumber.parse_launch_args(["--duration", "60"])
+
+    @test SmokeTestSupport.parse_smoke_args(String[]) == (telemetry = false, duration = 20.0)
+    @test SmokeTestSupport.parse_smoke_args(["--telemetry", "--duration", "60"]) == (telemetry = true, duration = 60.0)
+    @test SmokeTestSupport.parse_smoke_args(["--duration", "21.5", "--telemetry"]) == (telemetry = true, duration = 21.5)
+    @test SmokeTestSupport.smoke_exit_tick(20.0) == 1200
+    @test SmokeTestSupport.smoke_exit_tick(60.0) == 3600
+    @test SmokeTestSupport.smoke_exit_tick(20.01) == 1201
+    for args in (["--duration"], ["--duration", "bad"], ["--duration", "19.9"], ["--duration", "NaN"], ["--duration", "Inf"], ["--unknown"])
+        @test_throws ArgumentError SmokeTestSupport.parse_smoke_args(args)
+    end
+end
+
 @testset "Editor Mode transitions" begin
     inputstate = InputState()
     @test !editor_capabilities_enabled(inputstate)

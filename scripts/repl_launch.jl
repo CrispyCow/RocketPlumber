@@ -41,4 +41,4 @@ Formatter: Runic
 using Revise
 using RocketPlumber
 
-RocketPlumber.launch()
+RocketPlumber.launch(; RocketPlumber.parse_launch_args(ARGS)...)

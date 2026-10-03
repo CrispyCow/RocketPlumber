@@ -1739,14 +1739,23 @@ function update_map_from_inputs!(
         resize!(derivedmapstate.filteredelements, length(derivedmapstate.primaryelements))
         copyto!(derivedmapstate.filteredelements, derivedmapstate.primaryelements)
 
-        # Iteratively prune until clear_dangling_dependants reaches a fixed point.
-        # All three passes operate in-place on filteredelements through a single fixed-point loop.
-        last_hash::UInt64 = 0
-        while last_hash != hash(derivedmapstate.filteredelements)
+        # Rerun pruning and grounding until no more dangling dependants are removed.
+        changed = true
+        iteration_count = 0
+        max_iterations = length(derivedmapstate.filteredelements) + 1
+        while changed
+            iteration_count += 1
+            iteration_count > max_iterations && error("Map filtering did not converge after $max_iterations passes")
+
             @timeit flowcalc_loop_timer "prune" prune!(derivedmapstate.filteredelements, scratchpad)
             @timeit flowcalc_loop_timer "grounding search" ground_search!(derivedmapstate.filteredelements, scratchpad)
-            last_hash = hash(derivedmapstate.filteredelements)
-            @timeit flowcalc_loop_timer "dangling dependants" clear_dangling_dependants!(derivedmapstate.filteredelements, scratchpad.dangling_dependant_element_id_set)
+
+            survivor_count = length(derivedmapstate.filteredelements)
+            @timeit flowcalc_loop_timer "dangling dependants" begin
+                clear_dangling_dependants!(derivedmapstate.filteredelements, scratchpad.dangling_dependant_element_id_set)
+            end
+
+            changed = length(derivedmapstate.filteredelements) != survivor_count
         end
 
         @timeit flowcalc_loop_timer "list filtered nodes" list_nodes!(derivedmapstate.filterednodes, derivedmapstate.filteredelements)

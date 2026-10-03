@@ -7,4 +7,4 @@ Formatter: Runic
 using RocketPlumber
 include(joinpath(@__DIR__, "..", "test", "smoke", "SmokeTestSupport.jl"))
 
-SmokeTestSupport.run_smoke_test() || exit(1)
+SmokeTestSupport.run_smoke_test(; SmokeTestSupport.parse_smoke_args(ARGS)...) || exit(1)

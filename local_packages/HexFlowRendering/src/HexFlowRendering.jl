@@ -986,14 +986,16 @@ function cull_particles_to_buffer!(
         velocities = group.particles.velocity::Vector{SVector{2, Float64}}
         particle_count = length(positions)
 
-        # Interpolate positions into buffer (map! closure is zero-alloc with type-asserted arrays)
+        # Interpolate positions into buffer
         @timeit render_loop_timer "interpolate" begin
             time_since_last_tick = time() - timestamp
             passed_time_fraction = clamp(time_since_last_tick / (1.0 / ups), 0.0, 1.0)
 
             resize!(manager.cull_buffer, particle_count)
-            map!(manager.cull_buffer, positions, velocities) do pos, vel
-                SVector{2, Float32}(
+            for i in eachindex(positions)
+                pos = positions[i]
+                vel = velocities[i]
+                manager.cull_buffer[i] = SVector{2, Float32}(
                     pos[1] + Float32(vel[1] * passed_time_fraction),
                     pos[2] + Float32(vel[2] * passed_time_fraction)
                 )

@@ -267,6 +267,7 @@ function cleanup!(flowcalc_ipc::FlowCalculatorIPC, flowcalc_task::Task, globjmap
 
     @info "Waiting for FlowCalculator task to exit"
     wait(flowcalc_task)
+    collect_telemetry!()
 
     @info "Cleaning up OpenGL resources"
     teardown_glmap(globjmap)
@@ -509,7 +510,6 @@ function enter_gameloop(
         end
 
         handle_diagnostics(render_loop_diagnostic_config, g_viewstate.frame_count)
-        print_gc_statistics()
     end
 
     # Materialise the session result

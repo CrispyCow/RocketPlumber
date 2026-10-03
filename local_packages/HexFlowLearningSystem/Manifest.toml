@@ -280,7 +280,7 @@ uuid = "46cebafd-6e5b-4504-9515-23fc742129ca"
 version = "0.1.0"
 
 [[deps.HexFlowTelemetry]]
-deps = ["Printf", "TimerOutputs"]
+deps = ["TimerOutputs"]
 path = "../HexFlowTelemetry"
 uuid = "83376590-ca7c-4863-a202-c842a58accce"
 version = "0.1.0"

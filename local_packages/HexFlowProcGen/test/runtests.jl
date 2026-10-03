@@ -705,21 +705,29 @@ end
 
     @testset "place_random_pipes!" begin
         surface = make_pipe_test_surface()
-        gm = make_test_gamemap(surface)
-        set_component!(gm, TileCoord(0, 0), PlacedComponent(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
+        total_pipes = 0
 
-        place_random_pipes!(gm, :MockPipe, UInt32(0xAAAA); pipe_density = 0.3)
+        # A seed may leave no isolated pipes, and Julia hashes vary between compilations.
+        # Check every seed's invariants and require placement across the whole sample.
+        for seed in UInt32(0xAAAA):UInt32(0xAAE9)
+            gm = make_test_gamemap(surface)
+            set_component!(gm, TileCoord(0, 0), PlacedComponent(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
 
-        pipes = gm.pipe_behaviors
-        @test !isempty(pipes)
-        @test all(p.pipe isa MockPipeBehav for (_, p) in pipes)
+            place_random_pipes!(gm, :MockPipe, seed; pipe_density = 0.3)
 
-        # Verify no two placed pipes share a vertex
-        placed_edges = collect(keys(pipes))
-        for i in eachindex(placed_edges), j in (i + 1):length(placed_edges)
-            a, b = placed_edges[i], placed_edges[j]
-            @test a.v1 != b.v1 && a.v1 != b.v2 && a.v2 != b.v1 && a.v2 != b.v2
+            pipes = gm.pipe_behaviors
+            total_pipes += length(pipes)
+            @test all(p.pipe isa MockPipeBehav for (_, p) in pipes)
+
+            # Verify no two placed pipes share a vertex
+            placed_edges = collect(keys(pipes))
+            for i in eachindex(placed_edges), j in (i + 1):length(placed_edges)
+                a, b = placed_edges[i], placed_edges[j]
+                @test a.v1 != b.v1 && a.v1 != b.v2 && a.v2 != b.v1 && a.v2 != b.v2
+            end
         end
+
+        @test total_pipes > 0
     end
 
     @testset "place_connected_pipes!" begin
@@ -743,23 +751,28 @@ end
         surface = make_pipe_test_surface()
         gm = make_test_gamemap(surface)
         set_component!(gm, TileCoord(0, 0), PlacedComponent(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
+        expected_gm = deepcopy(gm)
 
         opts = PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES, 0.3)
         place_pipeset!(gm, opts, UInt32(0xCCCC))
-        @test !isempty(gm.pipe_behaviors)
+        place_random_pipes!(expected_gm, :MockPipe, UInt32(0xCCCC); pipe_density = 0.3)
+        @test gm.pipe_behaviors == expected_gm.pipe_behaviors
     end
 
     @testset "place_pipeset! vector" begin
         surface = make_small_surface()
         gm = make_test_gamemap(surface)
         set_component!(gm, TileCoord(0, 0), PlacedComponent(MockCompBehav(1.0), HexFrame.Q_POS, :primary))
+        expected_gm = deepcopy(gm)
 
         opts_vec = [
             PipeSpawnOptions(:MockPipe, HexFlowProcGen.RANDOM_PIPES, 0.5),
             PipeSpawnOptions(:MockPipe, HexFlowProcGen.ONE_CONNECT_PIPES, 0.5),
         ]
         place_pipeset!(gm, opts_vec, UInt32(0xDDDD))
-        @test !isempty(gm.pipe_behaviors)
+        place_random_pipes!(expected_gm, :MockPipe, UInt32(0xDDDD); pipe_density = 0.5)
+        place_connected_pipes!(expected_gm, :MockPipe, UInt32(0xDDDD); pipe_density = 0.5)
+        @test gm.pipe_behaviors == expected_gm.pipe_behaviors
     end
 
     @testset "zero density places no pipes" begin

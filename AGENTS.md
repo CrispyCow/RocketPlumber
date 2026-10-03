@@ -179,3 +179,10 @@ Fresh compilation or a slower machine may take longer.
 Runtime shaders and the texture atlas are source-controlled inside
 `HexFlowRendering`. The TexturePacker inputs remain under
 `tools/TexturePacker/textures/`.
+
+All three launch paths accept `--telemetry` to enable periodic TimerOutputs
+tables and a cumulative shutdown report under ignored `logs/telemetry/`.
+Telemetry is disabled by default; the first periodic sample per stream is
+printed as warm-up and excluded from the cumulative report. The smoke launcher
+also accepts `--duration <seconds>` (at least 20, default 20) to move its final
+exit marker without changing the scripted action ticks.

@@ -4,7 +4,7 @@ Formatter: Runic
 =#
 
 """Run the scripted graphical smoke-test fixture in an already-created window."""
-function run_smoke_test_fixture(window::GLFW.Window)
+function run_smoke_test_fixture(window::GLFW.Window; exit_tick::Int = 1200)
     teaser_map = mapgen_teasership()
     set_learning_system!(
         teaser_map,
@@ -25,10 +25,10 @@ function run_smoke_test_fixture(window::GLFW.Window)
         make_test_step(120, make_test_action(TileCoord(-3, 7), :close_valve); expected_status = APPLIED, description = "Close monoprop platform valve"),
         make_test_step(240, make_test_redock_ship(Symbol("##Craft CL-204#148"), TileCoord(8, 0)); expected_status = APPLIED, description = "Redock oxidiser tanker"),
         make_test_step(460, make_test_add_encounter_ship(encounter_blueprint, encounter_name, encounter_seed); expected_status = APPLIED, description = "Dock generated encounter ship"),
-        make_test_step(1200; description = "Exit after encounter docks and settles"),
+        make_test_step(exit_tick; description = "Exit after encounter docks and settles"),
     ]
 
-    @info "Smoke test running with $(length(test_commands)) scheduled entries"
+    @info "Smoke test running with $(length(test_commands)) scheduled entries; exit tick = $exit_tick ($(exit_tick / 60) simulated seconds)"
     sort!(test_commands, by = step -> step.tick, rev = true)
     frame_hook = (snapshot, inputstate, command_queue, flowcalc_task) ->
     test_system_tick!(test_commands, snapshot, inputstate, command_queue, flowcalc_task)
