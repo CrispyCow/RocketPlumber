@@ -7,9 +7,12 @@ using Test
 ENV["JULIA_GLFW_PLATFORM"] = "null"
 using RocketPlumber
 using FlowMap: GameMap, ShipState, set_surface_tile!
-using HexFrame: TileCoord
+using HexFrame: TileCoord, VertexCoord, Q_POS
 using HexFlowCalculator: FlowCalculatorSnapshot
-using HexFlowControl: InputState
+using HexFlowControl: InputState, PlacementReadyState, PlacementPipeChainState,
+    PlacementDeleteState, PlacementTileState, PlacementSurfaceEditState,
+    placement_state, set_placement_state!, editor_capabilities_enabled
+using HexFlowBasicPipes: BigPipeBehav, ScrapPipeBehav
 using HexFlowRendering: SpriteRenderCommand
 using RenderEngine: GLObjectMap, GLspriteData
 using StaticArrays: SVector
@@ -17,6 +20,39 @@ import RenderEngine
 using HexFlowPersistence: TimelapseHistory, GameMapBundle, savemap
 using RocketPlumber: TimelapseRecorder, timelapse_frame_count, capture_timelapse_frame!,
     set_timelapse_enabled!, maybe_capture_timelapse!, snapshot_timelapse_history
+
+@testset "Editor Mode transitions" begin
+    inputstate = InputState()
+    @test !editor_capabilities_enabled(inputstate)
+
+    # Exercise the same state changes used by the shortcut and checkbox.
+    RocketPlumber.set_editor_mode!(inputstate, !inputstate.editor_mode)
+    @test editor_capabilities_enabled(inputstate)
+    RocketPlumber.set_editor_mode!(inputstate, false)
+    @test !editor_capabilities_enabled(inputstate)
+
+    RocketPlumber.set_editor_mode!(inputstate, true)
+    @test editor_capabilities_enabled(inputstate)
+    RocketPlumber.set_editor_mode!(inputstate, !inputstate.editor_mode)
+    @test !editor_capabilities_enabled(inputstate)
+
+    for editor_state in (PlacementDeleteState(), RocketPlumber.new_tile_placement_state(), PlacementSurfaceEditState())
+        RocketPlumber.set_editor_mode!(inputstate, true)
+        set_placement_state!(inputstate, editor_state)
+        RocketPlumber.set_editor_mode!(inputstate, false)
+        @test placement_state(inputstate) isa PlacementReadyState
+    end
+
+    pipe_state = PlacementPipeChainState(
+        source_node = VertexCoord(TileCoord(0, 0), Q_POS),
+        pipe_behavior = BigPipeBehav(),
+    )
+    RocketPlumber.set_editor_mode!(inputstate, true)
+    set_placement_state!(inputstate, pipe_state)
+    RocketPlumber.set_editor_mode!(inputstate, false)
+    @test placement_state(inputstate) === pipe_state
+    @test pipe_state.pipe_behavior isa ScrapPipeBehav
+end
 
 @testset "application map-source dispatch" begin
     gamemap = GameMap()

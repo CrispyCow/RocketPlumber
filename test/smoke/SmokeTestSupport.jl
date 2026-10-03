@@ -5,27 +5,21 @@ Formatter: Runic
 
 module SmokeTestSupport
 
-using GLFW, HexFrame
-using FlowMap: SandboxLearningState, set_learning_system!
+using GLFW, HexFluids
+using FlowMap: SandboxLearningState, set_learning_system!, ShipBlueprint, ENCOUNTER_SHIP
+using HexFrame: TileCoord
+using HexFlowProcGen: generate_encounter, generate_encounter_name
 using RocketPlumber: configure_threads, start_window, enter_gameloop, ui_teardown
-using RocketPlumber: mapgen_teasership, TinyOnOffValve, TinyNozzle, ScrapPipe
+using RocketPlumber: mapgen_teasership, get_encounter_system_config
 
 # ===============================================================
 # Test Harness
 # ===============================================================
 
-using HexFlowCalculator: MapEditCommand, SetTileCommand, DeleteElementsCommand
-using HexFlowCalculator: SetPipeBehaviorCommand, MoveCommand, TranslateElementsCommand
-using HexFlowCalculator: ClickTileCommand, DoActionCommand
-using HexFlowCalculator: AddShipSurfaceCommand, RemoveShipSurfaceCommand, RedockShipCommand
-using HexFlowCalculator: AddEncounterShipCommand, MapOverrideCommand, CommandQueue, try_enqueue_command!
-using HexFlowCalculator: CommandStatus, APPLIED, REJECTED, QUEUED_FAILED, INVALID
-using HexFlowCalculator: create_command_queue, create_delete_elements_command, create_set_pipe_behavior_command, create_move_command
+using HexFlowCalculator: MapEditCommand, DoActionCommand, RedockShipCommand, AddEncounterShipCommand
+using HexFlowCalculator: CommandQueue, try_enqueue_command!, CommandStatus, APPLIED, QUEUED_FAILED
 using Accessors
 using HexFlowControl: EXIT_QUIT, InputState
-using HexFrame: TileCoord, PipeCoord, HexAxis, CartesianCoord
-using HexComponentsAPI: ComponentBehavior
-using FlowMap: PipeBehavior, ShipBlueprint, GameMap, get_ship_blueprint
 
 #= ---------- Harness State ---------- =#
 
@@ -55,65 +49,11 @@ end
 
 #= ---------- Queue-free command builders ----------- =#
 
-# These intentionally mirror the create_*_command helpers in HexFlowCalculator
-# so the harness can build commands without depending on a live `CommandQueue`.
-
-"Build a `SetTileCommand` for harness use."
-function make_test_set_tile(coord::TileCoord, component::ComponentBehavior, rotation::HexAxis, mirrored::Bool = false)
-    return SetTileCommand(
-        id = UInt64(0),
-        coord = coord,
-        component = component,
-        rotation = rotation,
-        mirrored = mirrored,
-        response_channel = nothing,
-    )
-end
-
-"Build a singleton `DeleteElementsCommand` for harness use."
-function make_test_delete(coord::T) where {T <: Union{TileCoord, PipeCoord}}
-    return create_delete_elements_command(create_command_queue(1), coord; response_channel = nothing)
-end
-
-"Build a `SetPipeBehaviorCommand` for harness use."
-function make_test_set_pipe(coord::PipeCoord, pipe::PipeBehavior)
-    return create_set_pipe_behavior_command(create_command_queue(1), coord, pipe; response_channel = nothing)
-end
-
-"Build a `MoveCommand` for harness use."
-function make_test_move(src::T, dst::T, delta_rotation::HexAxis, delta_mirror::Bool = false) where {T <: Union{TileCoord, PipeCoord}}
-    return create_move_command(create_command_queue(1), src, dst, delta_rotation, delta_mirror; response_channel = nothing)
-end
-
-"Build a simultaneous `TranslateElementsCommand` for harness use."
-function make_test_move_components(sources::AbstractSet{TileCoord}, translation::TileCoord)
-    return TranslateElementsCommand(
-        id = UInt64(0),
-        component_coords = sources,
-        pipe_coords = Set{PipeCoord}(),
-        translation = translation,
-        response_channel = nothing,
-    )
-end
-
-"Build a `ClickTileCommand` for harness use."
-function make_test_click(coord::TileCoord, clicksite::CartesianCoord = CartesianCoord(0.0, 0.0))
-    return ClickTileCommand(id = UInt64(0), coord = coord, unrotated_clicksite = clicksite, response_channel = nothing)
-end
+# Build commands before the live calculator queue exists.
 
 "Build a `DoActionCommand` for harness use."
 function make_test_action(coord::TileCoord, action_id::Symbol)
     return DoActionCommand(id = UInt64(0), component_coords = [coord], action_id = action_id, response_channel = nothing)
-end
-
-"Build an `AddShipSurfaceCommand` for harness use."
-function make_test_add_ship_surface(coord::TileCoord)
-    return AddShipSurfaceCommand(id = UInt64(0), coord = coord, response_channel = nothing)
-end
-
-"Build a `RemoveShipSurfaceCommand` for harness use."
-function make_test_remove_ship_surface(coord::TileCoord)
-    return RemoveShipSurfaceCommand(id = UInt64(0), coord = coord, response_channel = nothing)
 end
 
 "Build a `RedockShipCommand` for harness use."
@@ -121,23 +61,18 @@ function make_test_redock_ship(ship_name::Symbol, offset::TileCoord)
     return RedockShipCommand(id = UInt64(0), ship_name = ship_name, offset = offset, response_channel = nothing)
 end
 
-"Build an `AddEncounterShipCommand` using repeatable placement without mutating `space_map`."
-function make_test_add_encounter_ship(blueprint::ShipBlueprint, name_base::AbstractString, seed::UInt32; dir::Union{Nothing, HexAxis} = nothing)
+"Build an `AddEncounterShipCommand` with automatic docking and no space-map bookkeeping."
+function make_test_add_encounter_ship(blueprint::ShipBlueprint, name_base::String, seed::UInt32)
     return AddEncounterShipCommand(
         id = UInt64(0),
         blueprint = blueprint,
-        ship_name_base = String(name_base),
+        ship_name_base = name_base,
         seed = seed,
-        dir = dir,
+        dir = nothing,
         target_encounter_index = nothing,
         max_view_bounds = nothing,
         response_channel = nothing,
     )
-end
-
-"Build a `MapOverrideCommand` for harness use."
-function make_test_map_override(new_map::GameMap)
-    return MapOverrideCommand(id = UInt64(0), new_map = new_map, response_channel = nothing)
 end
 
 #= ---------- Response verification ----------- =#
@@ -269,7 +204,7 @@ function test_system_tick!(
 end
 include("fixture.jl")
 
-"Run the graphical command harness against the application's teaser map."
+"Run the graphical smoke test against the application's teaser map."
 function run_smoke_test()::Bool
     GLFW.GetPlatform() == GLFW.PLATFORM_NULL && throw(ArgumentError("Graphical startup requires a display"))
     configure_threads()

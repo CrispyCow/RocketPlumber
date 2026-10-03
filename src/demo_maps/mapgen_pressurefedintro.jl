@@ -88,8 +88,8 @@ function mapgen_pressurefedintro()
 
     # Liquid feed plumbing from the tanks through the valve and decomposition chamber.
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(-4, 1), HexFrame.Q_POS), VertexCoord(TileCoord(-2, 0), HexFrame.Q_NEG))] = ScrapPipeBehav()
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(-2, 0), HexFrame.Q_POS), VertexCoord(TileCoord(-1, 0), HexFrame.Q_POS))] = ScrapPipeBehav()
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(0, -1), HexFrame.Q_NEG), VertexCoord(TileCoord(-1, 0), HexFrame.Q_POS))] = ScrapPipeBehav()
-    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(-2, 0), HexFrame.Q_POS), VertexCoord(TileCoord(0, -1), HexFrame.Q_NEG))] = ScrapPipeBehav()
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(0, 0), HexFrame.Q_NEG), VertexCoord(TileCoord(-1, 0), HexFrame.Q_POS))] = ScrapPipeBehav()
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(-6, 2), HexFrame.Q_POS), VertexCoord(TileCoord(-4, 1), HexFrame.Q_NEG))] = BigPipeBehav()
 
@@ -97,7 +97,6 @@ function mapgen_pressurefedintro()
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(3, -3), HexFrame.Q_NEG), VertexCoord(TileCoord(2, -3), HexFrame.Q_POS))] = ScrapPipeBehav()
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(1, -1), HexFrame.Q_NEG), VertexCoord(TileCoord(0, 0), HexFrame.Q_POS))] = ScrapPipeBehav()
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(1, -1), HexFrame.Q_NEG), VertexCoord(TileCoord(0, -1), HexFrame.Q_POS))] = ScrapPipeBehav()
-    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(0, -1), HexFrame.Q_POS), VertexCoord(TileCoord(2, -2), HexFrame.Q_NEG))] = ScrapPipeBehav()
 
     union!(
         blueprint.ship_tiles, Set(

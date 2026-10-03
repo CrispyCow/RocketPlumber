@@ -447,6 +447,7 @@ function enter_gameloop(
                 derivedmapstate = g_snapshot.derived,
                 gamestate = g_snapshot.gamestate,
                 inputstate = g_inputstate,
+                viewstate = g_viewstate,
                 flowcalc_shared_state = g_flowcalc_ipc.shared_state,
             )
             learning_system_tick!(learning_state, learning_inputs)

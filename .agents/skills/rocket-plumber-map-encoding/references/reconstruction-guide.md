@@ -88,7 +88,7 @@ Prefer manual authoring for small tutorial/showcase maps or when the saved repre
 Current references include:
 
 - `src/demo_maps/mapgen_basicplumbing.jl` for a small single-ship map;
-- `src/demo_maps/mapgen_controllingcoldgas.jl` for repeated stateful components;
+- `src/demo_maps/mapgen_bigpipeplumbing.jl` for repeated stateful components using a template plus `deepcopy`;
 - `src/demo_maps/mapgen_pressurefedintro.jl` for liquid and pressure-fed tank construction;
 - `src/demo_maps/mapgen_liquidtransfer.jl` for multiple ships; and
 - `src/demo_maps/mapgen_teasership.jl` for a large, grouped map.

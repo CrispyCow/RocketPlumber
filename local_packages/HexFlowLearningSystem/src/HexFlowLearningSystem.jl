@@ -37,6 +37,7 @@ export find_learning_entry, get_learning_def
     derivedmapstate::DerivedMapState
     gamestate::GameState
     inputstate::InputState
+    viewstate::ViewState
     flowcalc_shared_state::FlowCalculatorSharedState
 end
 

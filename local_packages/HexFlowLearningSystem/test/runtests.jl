@@ -43,6 +43,7 @@ function make_test_inputs(;
         derivedmapstate::DerivedMapState = DerivedMapState(),
         gamestate::GameState = GameState(),
         inputstate::InputState = make_test_inputstate(),
+        viewstate::ViewState = ViewState(),
         flowcalc_shared_state::FlowCalculatorSharedState = FlowCalculatorSharedState(),
     )
     return LearningInputs(
@@ -50,6 +51,7 @@ function make_test_inputs(;
         derivedmapstate = derivedmapstate,
         gamestate = gamestate,
         inputstate = inputstate,
+        viewstate = viewstate,
         flowcalc_shared_state = flowcalc_shared_state,
     )
 end

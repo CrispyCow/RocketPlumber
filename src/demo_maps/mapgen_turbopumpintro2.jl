@@ -68,16 +68,35 @@ function mapgen_turbopumpintro2()
         :_blueprint
     )
 
-    # Pipes
+    # Engine core plumbing
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(-4, 2), HexFrame.Q_POS), VertexCoord(TileCoord(-2, 1), HexFrame.Q_NEG))] = BigPipeBehav(10.0)
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(-2, 1), HexFrame.Q_POS), VertexCoord(TileCoord(0, 0), HexFrame.Q_NEG))] = ScrapPipeBehav(2.0)
+
+    # Pump outlet — left junction header and direct tank feed
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(0, 0), HexFrame.Q_POS), VertexCoord(TileCoord(1, -1), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(0, 0), HexFrame.Q_POS), VertexCoord(TileCoord(1, 0), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(0, 0), HexFrame.Q_POS), VertexCoord(TileCoord(2, -1), HexFrame.Q_NEG))] = ScrapPipeBehav(2.0)
+
+    # Left-side manifold: outer tanks → junctions → inner tanks
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(2, -2), HexFrame.Q_NEG), VertexCoord(TileCoord(1, -2), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(2, -2), HexFrame.Q_NEG), VertexCoord(TileCoord(1, -1), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
-    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(2, -1), HexFrame.Q_NEG), VertexCoord(TileCoord(1, -1), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(2, 0), HexFrame.Q_NEG), VertexCoord(TileCoord(1, 0), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
-    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(2, -1), HexFrame.Q_NEG), VertexCoord(TileCoord(1, 0), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(2, 0), HexFrame.Q_NEG), VertexCoord(TileCoord(1, 1), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(1, -2), HexFrame.Q_POS), VertexCoord(TileCoord(3, -3), HexFrame.Q_NEG))] = ScrapPipeBehav(2.0)
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(1, -1), HexFrame.Q_POS), VertexCoord(TileCoord(3, -2), HexFrame.Q_NEG))] = ScrapPipeBehav(2.0)
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(1, 0), HexFrame.Q_POS), VertexCoord(TileCoord(3, -1), HexFrame.Q_NEG))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(1, 1), HexFrame.Q_POS), VertexCoord(TileCoord(3, 0), HexFrame.Q_NEG))] = ScrapPipeBehav(2.0)
+
+    # Right-side manifold: inner tanks via centre hub to junctions to outer tanks
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(3, -2), HexFrame.Q_NEG), VertexCoord(TileCoord(2, -1), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(3, -1), HexFrame.Q_NEG), VertexCoord(TileCoord(2, -1), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(2, -1), HexFrame.Q_POS), VertexCoord(TileCoord(4, -2), HexFrame.Q_NEG))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(3, 0), HexFrame.Q_NEG), VertexCoord(TileCoord(4, -1), HexFrame.Q_NEG))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(3, -3), HexFrame.Q_NEG), VertexCoord(TileCoord(4, -3), HexFrame.Q_NEG))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(4, -3), HexFrame.Q_NEG), VertexCoord(TileCoord(3, -2), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(4, -2), HexFrame.Q_NEG), VertexCoord(TileCoord(3, -2), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(4, -2), HexFrame.Q_NEG), VertexCoord(TileCoord(3, -1), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
+    blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(4, -1), HexFrame.Q_NEG), VertexCoord(TileCoord(3, -1), HexFrame.Q_POS))] = ScrapPipeBehav(2.0)
 
     union!(
         blueprint.ship_tiles, Set(

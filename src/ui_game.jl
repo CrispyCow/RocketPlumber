@@ -732,11 +732,11 @@ function ui_explorer_opening_wake_render!(
     # Wake message
     CImGui.PushFont(C_NULL, 20.0)
     CImGui.PushStyleColor(CImGui.ImGuiCol_Text, ImVec4(1.0, 0.75, 0.25, 1.0))
-    CImGui.Text("WAKE SIGNAL: SHIP PROXIMITY")
+    CImGui.Text("PROXIMITY ALERT")
     CImGui.PopStyleColor()
     CImGui.PopFont()
     CImGui.Spacing()
-    CImGui.TextWrapped("Useful resources detected, intercept planned.")
+    CImGui.TextWrapped("Useful resources detected on nearby ship, intercept planned!")
     CImGui.Spacing()
     CImGui.TextWrapped("Complete the capture burn to match velocity and establish contact.")
     CImGui.Spacing()

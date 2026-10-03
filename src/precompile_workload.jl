@@ -16,10 +16,10 @@ using PrecompileTools: @setup_workload, @compile_workload
         mapgen_basicplumbing()
         mapgen_bigpipeplumbing()
         mapgen_flowdemo()
-        mapgen_controllingcoldgas()
         mapgen_pressurefedintro()
         mapgen_turbopumpintro2()
         mapgen_liquidtransfer()
+        mapgen_bipropdemo()
 
         # compile procgen of the starter ship
         starter_seed = UInt32(42)
@@ -62,7 +62,7 @@ using PrecompileTools: @setup_workload, @compile_workload
         HexFlowCalculator.step_flowcalc_sim!(calculator_map, derived, mna, gamestate, scratchpad, scheduler, ipc, false, 1.0)
 
         response_channel = Channel{CommandStatus}(1)
-        command = create_do_action_command(ipc.command_queue, TileCoord(2, -12), :seal_tank; response_channel)
+        command = create_do_action_command(ipc.command_queue, TileCoord(0, 0), :seal_tank; response_channel)
         @assert try_enqueue_command!(ipc.command_queue, command)
         HexFlowCalculator.step_flowcalc_sim!(calculator_map, derived, mna, gamestate, scratchpad, scheduler, ipc, false, 2.0)
         @assert isready(response_channel)

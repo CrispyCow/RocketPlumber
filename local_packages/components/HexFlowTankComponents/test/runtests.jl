@@ -653,6 +653,34 @@ end
     commit_reactivation_probe!(overpressure; tile = TEST_TILE, derivedmapstate = dm_op_gas, mna_state = mna_op_gas)
     @test !liquid_is_force_reactivated(overpressure.tank)
     @test gas_is_force_reactivated(overpressure.tank)
+
+    # Both sides probe independently; useful flow wins for the component, and only useful sides commit
+    for (label, liquid_current, gas_current, expected_class, force_liquid, force_gas) in (
+            ("useful gas, harmful liquid", 5.0, -5.0, PROBE_USEFUL, false, true),
+            ("useful liquid, harmful gas", -5.0, 5.0, PROBE_USEFUL, true, false),
+            ("both harmful", 5.0, 5.0, PROBE_HARMFUL, false, false),
+            ("both neutral", 0.0, 0.0, PROBE_NEUTRAL, false, false),
+        )
+        @testset "$label" begin
+            comp = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 22.0)
+            probe = get_reactivation_probe(comp)
+            @test probe.rel_elements[1].active
+            @test probe.rel_elements[2].active
+
+            dm_liquid, mna_liquid = setup_pf_probe(comp, TEST_TILE, 1, liquid_current)
+            dm_gas, mna_gas = setup_pf_probe(comp, TEST_TILE, 2, gas_current)
+            append!(dm_liquid.filteredelements, dm_gas.filteredelements)
+            merge!(mna_liquid.vsource_currents, mna_gas.vsource_currents)
+
+            @test classify_reactivation_probe(comp; tile = TEST_TILE, derivedmapstate = dm_liquid, mna_state = mna_liquid) === expected_class
+            @test !liquid_is_force_reactivated(comp.tank)
+            @test !gas_is_force_reactivated(comp.tank)
+
+            commit_reactivation_probe!(comp; tile = TEST_TILE, derivedmapstate = dm_liquid, mna_state = mna_liquid)
+            @test liquid_is_force_reactivated(comp.tank) === force_liquid
+            @test gas_is_force_reactivated(comp.tank) === force_gas
+        end
+    end
 end
 
 # ===============================================================

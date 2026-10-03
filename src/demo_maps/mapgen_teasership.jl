@@ -1,20 +1,37 @@
 #=
-Scope: Four-ship teasership sandbox map
+Scope: Five-ship teasership2 sandbox map with biprop engine, cold-gas tugs, and monoprop platform
 Formatter: Runic
 =#
 
 """
     mapgen_teasership()
 
-Hand-authored encoding of the teasership sandbox map.
-Preserves the original four-ship layout and the few live switch states that were
-already present in the saved map.
+Hand-authored encoding of the teasership2 sandbox map.
+Five-ship layout: a biprop engine (:primary), two liquid-propellant tankers
+(oxidiser and fuel), a cold-gas manoeuvring craft, and a monoprop refuelling
+platform.
 """
 function mapgen_teasership()
-    map = GameMap()
 
     # Shared templates. Stateful behaviours are deep-copied at placement time.
-    av_gas_tank = ThevininTankCompBehav(
+
+    oxidiser_liquid_tank = ThevininTankCompBehav(
+        LiquidTankBehavFrag, 3;
+        fluid = HexFluids.OXIDISER_LIQUID,
+        max_charge = 40.0,
+        max_voltage = 1.0,
+        initial_charge = 30.0,
+        series_conductance = 5.0
+    )
+    fuel_liquid_tank = ThevininTankCompBehav(
+        LiquidTankBehavFrag, 3;
+        fluid = HexFluids.FUEL_LIQUID,
+        max_charge = 40.0,
+        max_voltage = 1.0,
+        initial_charge = 30.0,
+        series_conductance = 5.0
+    )
+    cold_gas_tank = ThevininTankCompBehav(
         GasTankBehavFrag, 3;
         fluid = HexFluids.COLD_GAS,
         max_charge = 50.0,
@@ -22,26 +39,19 @@ function mapgen_teasership()
         initial_charge = 40.0,
         series_conductance = 5.0
     )
-    transfer_liquid_tank = ThevininTankCompBehav(
+    monoprop_liquid_tank = ThevininTankCompBehav(
         LiquidTankBehavFrag, 3;
         fluid = HexFluids.MONOPROP_LIQUID,
         max_charge = 40.0,
         max_voltage = 1.0,
-        initial_charge = 35.0,
+        initial_charge = 30.0,
         series_conductance = 5.0
     )
-    legacy_liquid_tank = ThevininTankCompBehav(
-        LiquidTankBehavFrag, 3;
-        fluid = HexFluids.MONOPROP_LIQUID,
-        max_charge = 100.0,
-        max_voltage = 1.0,
-        initial_charge = 80.0,
-        series_conductance = 5.0
-    )
-    pressure_fed_tank = PressureFedTankCompBehav(
+    # Partially pressurised -- gas charge is 5.0, not empty.
+    pressure_fed_monoprop_tank = PressureFedTankCompBehav(
         PressureFedTankBehavFrag(
             initial_liquid_charge = 30.0,
-            initial_gas_charge = 0.0,
+            initial_gas_charge = 5.0,
             max_liquid_charge = 40.0,
             max_gas_pressure = 50.0,
             gas_node = HexFrame.NODE_Q_POS,
@@ -52,23 +62,9 @@ function mapgen_teasership()
         HexFluids.COLD_GAS,
         NoRotationBehavFrag()
     )
-    transfer_pump = ElectricPumpCompBehav(
-        ElectricTransferPump;
-        pump_voltage = 5.0,
-        max_energy = 150000.0,
-        initial_energy = 150000.0,
-        max_conductance = 0.5,
-        min_conductance = 0.0,
-        growth_factor = calculate_growth_factor(0.5, 0.0, 0.4 / BASE_UPS)
-    )
     turbo_pump = TurboPumpCompBehav(
         max_pump_voltage = 50.0,
         series_conductance = 1.0,
-    )
-    tiny_nozzle = BasicNozzleCompBehav(
-        connected_node = HexFrame.NODE_Q_POS,
-        throat_area = 0.2,
-        sprite = :AllNozzles_TinyNozzle
     )
     small_nozzle = BasicNozzleCompBehav(
         connected_node = HexFrame.NODE_Q_POS,
@@ -80,37 +76,34 @@ function mapgen_teasership()
         throat_area = 1.5,
         sprite = :AllNozzles_MediumNozzle
     )
-    switched_tiny_nozzle = SwitchedNozzleCompBehav(
-        throat_area = 0.2,
+    tiny_nozzle = BasicNozzleCompBehav(
         connected_node = HexFrame.NODE_Q_POS,
-        max_conductance = 2.0,
-        min_conductance = 0.0,
-        growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS),
-        limit_temperature_k = 400.0
+        throat_area = 0.2,
+        sprite = :AllNozzles_TinyNozzle
     )
-    tiny_on_off_valve = StandardValveCompBehav(
+    # Valves are armed (target = max) but not yet open (current = 0).
+    open_large_valve = StandardValveCompBehav(
+        BoolSwitchBehavFrag, LargeValve;
+        max_conductance = 4.0,
+        growth_factor = calculate_growth_factor(4.0, 0.0, 2.0 / BASE_UPS),
+        target_conductance = 4.0,
+        current_conductance = 0.0
+    )
+    # Fully open -- both target and current at max.
+    open_tiny_valve = StandardValveCompBehav(
         BoolSwitchBehavFrag, TinyValve;
         max_conductance = 1.0,
-        min_conductance = 0.0,
-        growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS)
-    )
-    open_tiny_on_off_valve = StandardValveCompBehav(
-        BoolSwitchBehavFrag, TinyValve;
-        max_conductance = 1.0,
-        min_conductance = 0.0,
-        target_conductance = 1.0,
-        growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS)
-    )
-    tiny_adjustable_valve = StandardValveCompBehav(
-        SteppedSwitchBehavFrag, TinyValve;
-        max_conductance = 1.0,
-        min_conductance = 0.0,
         growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
-        percentage_step_size = 0.05
+        target_conductance = 1.0,
+        current_conductance = 1.0
     )
+    scrap_pipe = ScrapPipeBehav()
+    big_pipe = BigPipeBehav()
 
-    # The save contains one armed nozzle and two partially-open valves.
-    armed_switched_tiny_nozzle = SwitchedNozzleCompBehav(
+    # Standard cold-gas switched nozzle, armed but not yet open.
+    # Internal construction is required to set target_conductance to max
+    # because the public constructor always starts closed.
+    armed_cold_gas_nozzle = SwitchedNozzleCompBehav(
         NozzleBehavFrag(
             HexFrame.NODE_INTERNAL_1,
             0.2,
@@ -127,401 +120,573 @@ function mapgen_teasership()
             )
         )
     )
-    partially_open_legacy_valve = StandardValveCompBehav{SteppedSwitchBehavFrag, TinyValve}(
-        SteppedSwitchBehavFrag(
-            SwitchBehavFrag(
-                RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG),
-                1.0,
-                0.0,
-                calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
-                HexFlowSwitchComponents.SwitchState(0.07071068090999705, 0.0)
-            ), 0.05
-        )
-    )
-    partially_open_platform_valve = StandardValveCompBehav{SteppedSwitchBehavFrag, TinyValve}(
-        SteppedSwitchBehavFrag(
-            SwitchBehavFrag(
-                RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_Q_NEG),
-                1.0,
-                0.0,
-                calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
-                HexFlowSwitchComponents.SwitchState(0.01880301583656157, 0.0)
-            ), 0.05
-        )
-    )
-
-    scrap_pipe = ScrapPipeBehav()
-    big_pipe = BigPipeBehav()
 
     # ===============================================================
     # Ship Construction
     # ===============================================================
 
-    #= ---------- Ship :##Ship AV-551#655 ----------- =#
-    blueprint_av_551 = ShipBlueprint()
-
-    # Cold-gas tank cluster
-    for tile in [
-            TileCoord(3, -14),
-            TileCoord(1, -13),
-            TileCoord(1, -11),
-            TileCoord(2, -13),
-            TileCoord(1, -12),
-            TileCoord(2, -12),
-            TileCoord(3, -13),
-            TileCoord(4, -14),
-            TileCoord(3, -12),
-            TileCoord(2, -14),
-        ]
-        blueprint_av_551.components[tile] = PlacedComponent(deepcopy(av_gas_tank), HexFrame.Q_POS, :_blueprint)
-    end
-
-    # Two nozzles start closed; one preserves the armed save-state.
-    for tile in [TileCoord(0, -12), TileCoord(0, -11)]
-        blueprint_av_551.components[tile] = PlacedComponent(deepcopy(switched_tiny_nozzle), HexFrame.Q_POS, :_blueprint)
-    end
-    blueprint_av_551.components[TileCoord(1, -14)] = PlacedComponent(deepcopy(armed_switched_tiny_nozzle), HexFrame.S_NEG, :_blueprint)
-    for (tile_a, axis_a, tile_b, axis_b) in [
-            (TileCoord(3, -14), HexFrame.Q_NEG, TileCoord(2, -14), HexFrame.Q_POS),
-            (TileCoord(4, -14), HexFrame.Q_NEG, TileCoord(3, -13), HexFrame.Q_POS),
-            (TileCoord(2, -12), HexFrame.Q_NEG, TileCoord(1, -11), HexFrame.Q_POS),
-            (TileCoord(1, -11), HexFrame.Q_POS, TileCoord(3, -12), HexFrame.Q_NEG),
-            (TileCoord(2, -14), HexFrame.Q_NEG, TileCoord(1, -13), HexFrame.Q_POS),
-            (TileCoord(0, -12), HexFrame.Q_POS, TileCoord(2, -13), HexFrame.Q_NEG),
-            (TileCoord(3, -12), HexFrame.Q_NEG, TileCoord(2, -11), HexFrame.Q_POS),
-            (TileCoord(4, -14), HexFrame.Q_NEG, TileCoord(3, -14), HexFrame.Q_POS),
-            (TileCoord(1, -12), HexFrame.Q_POS, TileCoord(3, -13), HexFrame.Q_NEG),
-            (TileCoord(3, -13), HexFrame.Q_NEG, TileCoord(2, -12), HexFrame.Q_POS),
-            (TileCoord(3, -13), HexFrame.Q_NEG, TileCoord(2, -13), HexFrame.Q_POS),
-            (TileCoord(1, -11), HexFrame.Q_NEG, TileCoord(0, -11), HexFrame.Q_POS),
-            (TileCoord(2, -13), HexFrame.Q_NEG, TileCoord(1, -12), HexFrame.Q_POS),
-            (TileCoord(0, -13), HexFrame.Q_POS, TileCoord(2, -14), HexFrame.Q_NEG),
-            (TileCoord(2, -12), HexFrame.Q_NEG, TileCoord(1, -12), HexFrame.Q_POS),
-            (TileCoord(2, -13), HexFrame.Q_POS, TileCoord(4, -14), HexFrame.Q_NEG),
-            (TileCoord(2, -14), HexFrame.Q_NEG, TileCoord(1, -14), HexFrame.Q_POS),
-            (TileCoord(2, -12), HexFrame.Q_POS, TileCoord(4, -13), HexFrame.Q_NEG),
-            (TileCoord(0, -11), HexFrame.Q_POS, TileCoord(2, -12), HexFrame.Q_NEG),
-            (TileCoord(3, -14), HexFrame.Q_NEG, TileCoord(2, -13), HexFrame.Q_POS),
-        ]
-        blueprint_av_551.pipe_behaviors[PipeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = scrap_pipe
-    end
-
-    union!(
-        blueprint_av_551.ship_tiles, Set{TileCoord}(
-            [
-                TileCoord(2, -12),
-                TileCoord(3, -14),
-                TileCoord(3, -13),
-                TileCoord(1, -13),
-                TileCoord(4, -14),
-                TileCoord(3, -12),
-                TileCoord(1, -12),
-                TileCoord(1, -11),
-                TileCoord(2, -13),
-                TileCoord(2, -14),
-            ]
-        )
-    )
-    #= ---------- Ship :primary ----------- =#
+    #= ---------- Ship :primary (biprop engine) ---------- =#
     blueprint_primary = ShipBlueprint()
 
     for (tile, rotation) in [
-            (TileCoord(4, -6), HexFrame.R_NEG),
-            (TileCoord(1, -5), HexFrame.Q_POS),
+            (TileCoord(-7, -3), HexFrame.Q_POS),
+            (TileCoord(-6, -4), HexFrame.Q_POS),
         ]
-        blueprint_primary.components[tile] = PlacedComponent(deepcopy(transfer_pump), rotation, :_blueprint)
+        blueprint_primary.components[tile] = PlacedComponent(deepcopy(small_nozzle), rotation, :_blueprint)
+    end
+    blueprint_primary.components[TileCoord(-7, -2)] = PlacedComponent(deepcopy(medium_nozzle), HexFrame.Q_POS, :_blueprint)
+
+    for (tile, rotation) in [
+            (TileCoord(-5, -3), HexFrame.Q_POS),
+            (TileCoord(-2, -5), HexFrame.R_NEG),
+        ]
+        blueprint_primary.components[tile] = PlacedComponent(BipropChamberCompBehav(), rotation, :_blueprint)
     end
 
-    for tile in [
-            TileCoord(5, -8),
-            TileCoord(4, -8),
-            TileCoord(2, -6),
-            TileCoord(5, -7),
-            TileCoord(3, -7),
-            TileCoord(4, -9),
-            TileCoord(4, -7),
-            TileCoord(2, -7),
-        ]
-        blueprint_primary.components[tile] = PlacedComponent(deepcopy(transfer_liquid_tank), HexFrame.Q_NEG, :_blueprint)
+    blueprint_primary.components[TileCoord(-3, -5)] = PlacedComponent(deepcopy(turbo_pump), HexFrame.R_NEG, :_blueprint)
+    # Mirrored turbopump on the other side.
+    blueprint_primary.components[TileCoord(-3, -3)] = PlacedComponent(deepcopy(turbo_pump), HexFrame.S_NEG, true, :_blueprint)
+
+    for tile in [TileCoord(-2, -6), TileCoord(-2, -3)]
+        blueprint_primary.components[tile] = PlacedComponent(deepcopy(open_large_valve), HexFrame.Q_POS, :_blueprint)
     end
-    for (tile_a, axis_a, tile_b, axis_b) in [
-            (TileCoord(1, -5), HexFrame.Q_POS, TileCoord(3, -6), HexFrame.Q_NEG),
-            (TileCoord(4, -8), HexFrame.Q_NEG, TileCoord(3, -7), HexFrame.Q_POS),
-            (TileCoord(-3, -4), HexFrame.Q_POS, TileCoord(-1, -5), HexFrame.Q_NEG),
-            (TileCoord(4, -7), HexFrame.Q_POS, TileCoord(6, -8), HexFrame.Q_NEG),
-            (TileCoord(4, -8), HexFrame.Q_NEG, TileCoord(3, -8), HexFrame.Q_POS),
-            (TileCoord(2, -4), HexFrame.Q_POS, TileCoord(4, -5), HexFrame.Q_NEG),
-            (TileCoord(3, -4), HexFrame.Q_NEG, TileCoord(2, -4), HexFrame.Q_POS),
-            (TileCoord(4, -7), HexFrame.Q_NEG, TileCoord(3, -6), HexFrame.Q_POS),
-            (TileCoord(0, -5), HexFrame.Q_NEG, TileCoord(-1, -4), HexFrame.Q_POS),
-            (TileCoord(2, -7), HexFrame.Q_NEG, TileCoord(1, -6), HexFrame.Q_POS),
-            (TileCoord(2, -7), HexFrame.Q_POS, TileCoord(4, -8), HexFrame.Q_NEG),
-            (TileCoord(-4, -3), HexFrame.Q_POS, TileCoord(-2, -4), HexFrame.Q_NEG),
-            (TileCoord(4, -5), HexFrame.Q_NEG, TileCoord(3, -5), HexFrame.Q_POS),
-            (TileCoord(-1, -4), HexFrame.Q_POS, TileCoord(1, -5), HexFrame.Q_NEG),
-            (TileCoord(3, -8), HexFrame.Q_NEG, TileCoord(2, -7), HexFrame.Q_POS),
-            (TileCoord(2, -6), HexFrame.Q_NEG, TileCoord(1, -5), HexFrame.Q_POS),
-            (TileCoord(4, -9), HexFrame.Q_NEG, TileCoord(3, -8), HexFrame.Q_POS),
-            (TileCoord(-2, -4), HexFrame.Q_NEG, TileCoord(-3, -4), HexFrame.Q_POS),
-            (TileCoord(4, -7), HexFrame.Q_NEG, TileCoord(3, -7), HexFrame.Q_POS),
-            (TileCoord(3, -7), HexFrame.Q_POS, TileCoord(5, -8), HexFrame.Q_NEG),
-            (TileCoord(1, -7), HexFrame.Q_POS, TileCoord(3, -8), HexFrame.Q_NEG),
-            (TileCoord(3, -4), HexFrame.Q_NEG, TileCoord(2, -3), HexFrame.Q_POS),
-            (TileCoord(2, -6), HexFrame.Q_NEG, TileCoord(1, -6), HexFrame.Q_POS),
-            (TileCoord(3, -8), HexFrame.Q_POS, TileCoord(5, -9), HexFrame.Q_NEG),
-            (TileCoord(5, -8), HexFrame.Q_NEG, TileCoord(4, -7), HexFrame.Q_POS),
-            (TileCoord(2, -7), HexFrame.Q_NEG, TileCoord(1, -7), HexFrame.Q_POS),
-            (TileCoord(-2, -4), HexFrame.Q_POS, TileCoord(0, -5), HexFrame.Q_NEG),
-            (TileCoord(-1, -5), HexFrame.Q_NEG, TileCoord(-2, -4), HexFrame.Q_POS),
-            (TileCoord(3, -6), HexFrame.Q_POS, TileCoord(5, -7), HexFrame.Q_NEG),
+    blueprint_primary.components[TileCoord(-2, -4)] = PlacedComponent(deepcopy(open_tiny_valve), HexFrame.Q_POS, :_blueprint)
+
+    for (tile_a, axis_a, tile_b, axis_b, behaviour) in [
+            (TileCoord(-7, -3), HexFrame.Q_POS, TileCoord(-5, -3), HexFrame.Q_NEG, big_pipe),
+            (TileCoord(-7, -2), HexFrame.Q_POS, TileCoord(-5, -3), HexFrame.Q_NEG, big_pipe),
+            (TileCoord(-6, -3), HexFrame.Q_POS, TileCoord(-6, -4), HexFrame.Q_POS, big_pipe),
+            (TileCoord(-5, -3), HexFrame.Q_NEG, TileCoord(-6, -3), HexFrame.Q_POS, big_pipe),
+            (TileCoord(-4, -4), HexFrame.Q_POS, TileCoord(-2, -5), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-4, -4), HexFrame.Q_NEG, TileCoord(-4, -4), HexFrame.Q_POS, big_pipe),
+            (TileCoord(-4, -3), HexFrame.Q_POS, TileCoord(-2, -4), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-4, -3), HexFrame.Q_NEG, TileCoord(-4, -3), HexFrame.Q_POS, big_pipe),
+            (TileCoord(-3, -4), HexFrame.Q_NEG, TileCoord(-3, -5), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-3, -4), HexFrame.Q_NEG, TileCoord(-3, -4), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-3, -3), HexFrame.Q_NEG, TileCoord(-3, -4), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-2, -5), HexFrame.Q_NEG, TileCoord(-3, -5), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-2, -4), HexFrame.Q_POS, TileCoord(-2, -5), HexFrame.Q_POS, scrap_pipe),
         ]
-        blueprint_primary.pipe_behaviors[PipeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = scrap_pipe
+        blueprint_primary.pipe_behaviors[PipeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = behaviour
     end
 
     union!(
         blueprint_primary.ship_tiles, Set{TileCoord}(
             [
-                TileCoord(4, -8),
-                TileCoord(3, -7),
-                TileCoord(4, -9),
-                TileCoord(2, -8),
-                TileCoord(5, -7),
-                TileCoord(3, -8),
-                TileCoord(4, -6),
-                TileCoord(5, -8),
-                TileCoord(1, -5),
-                TileCoord(2, -6),
-                TileCoord(3, -9),
-                TileCoord(1, -7),
-                TileCoord(5, -9),
-                TileCoord(4, -7),
-                TileCoord(2, -5),
-                TileCoord(2, -7),
-                TileCoord(3, -6),
-            ]
-        )
-    )
-    map = GameMap(blueprint_primary)
-    merge_ship!(map, Symbol("##Ship AV-551#655"), blueprint_av_551)
-
-    #= ---------- Ship :##old_primary#664 ----------- =#
-    blueprint_old_primary = ShipBlueprint()
-
-    for tile in [
-            TileCoord(3, -3),
-            TileCoord(2, 0),
-            TileCoord(3, -2),
-            TileCoord(1, -1),
-            TileCoord(0, -1),
-            TileCoord(1, 0),
-            TileCoord(0, 0),
-            TileCoord(-1, 0),
-            TileCoord(0, 1),
-            TileCoord(1, 1),
-            TileCoord(2, -2),
-            TileCoord(-1, 1),
-            TileCoord(0, 2),
-            TileCoord(2, -1),
-            TileCoord(1, -2),
-        ]
-        blueprint_old_primary.components[tile] = PlacedComponent(deepcopy(legacy_liquid_tank), HexFrame.Q_POS, :_blueprint)
-    end
-
-    for tile in [TileCoord(-5, -1), TileCoord(-5, 0), TileCoord(-5, 1)]
-        blueprint_old_primary.components[tile] = PlacedComponent(deepcopy(small_nozzle), HexFrame.Q_POS, :_blueprint)
-    end
-
-    blueprint_old_primary.components[TileCoord(-4, 0)] = PlacedComponent(DecompChamberCompBehav(), HexFrame.Q_POS, :_blueprint)
-    blueprint_old_primary.components[TileCoord(-4, 3)] = PlacedComponent(DecompChamberCompBehav(), HexFrame.Q_POS, :_blueprint)
-    blueprint_old_primary.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(-3, -1), HexFrame.S_POS), VertexCoord(TileCoord(-3, -1), HexFrame.S_NEG))] = ScrapPipeBehav()
-    blueprint_old_primary.components[TileCoord(-3, 0)] = PlacedComponent(deepcopy(turbo_pump), HexFrame.S_NEG, :_blueprint)
-    blueprint_old_primary.components[TileCoord(-2, 2)] = PlacedComponent(deepcopy(turbo_pump), HexFrame.Q_POS, :_blueprint)
-    blueprint_old_primary.components[TileCoord(-4, -1)] = PlacedComponent(deepcopy(tiny_on_off_valve), HexFrame.Q_POS, :_blueprint)
-    blueprint_old_primary.components[TileCoord(-3, 2)] = PlacedComponent(deepcopy(partially_open_legacy_valve), HexFrame.Q_POS, :_blueprint)
-    blueprint_old_primary.components[TileCoord(-6, 4)] = PlacedComponent(deepcopy(medium_nozzle), HexFrame.Q_POS, :_blueprint)
-    for (tile_a, axis_a, tile_b, axis_b, behaviour) in [
-            (TileCoord(1, -2), HexFrame.Q_NEG, TileCoord(0, -2), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-1, 0), HexFrame.Q_NEG, TileCoord(-2, 1), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(0, 0), HexFrame.Q_NEG, TileCoord(-1, 1), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-4, 3), HexFrame.Q_POS, TileCoord(-2, 2), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(-4, 0), HexFrame.Q_NEG, TileCoord(-5, 1), HexFrame.Q_POS, big_pipe),
-            (TileCoord(3, -3), HexFrame.Q_NEG, TileCoord(2, -3), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(0, 1), HexFrame.Q_NEG, TileCoord(-1, 1), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-5, 3), HexFrame.Q_POS, TileCoord(-3, 2), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(-2, 2), HexFrame.Q_POS, TileCoord(0, 1), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(-3, 1), HexFrame.Q_POS, TileCoord(-1, 0), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(-2, 1), HexFrame.Q_POS, TileCoord(0, 0), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(1, -2), HexFrame.Q_NEG, TileCoord(0, -1), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-4, 3), HexFrame.Q_NEG, TileCoord(-5, 3), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-2, 0), HexFrame.Q_NEG, TileCoord(-3, 1), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-6, 4), HexFrame.Q_POS, TileCoord(-4, 3), HexFrame.Q_NEG, big_pipe),
-            (TileCoord(-1, 1), HexFrame.Q_POS, TileCoord(1, 0), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(2, -2), HexFrame.Q_NEG, TileCoord(1, -2), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-1, 0), HexFrame.Q_POS, TileCoord(1, -1), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(0, -1), HexFrame.Q_POS, TileCoord(2, -2), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(2, 0), HexFrame.Q_NEG, TileCoord(1, 1), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(1, -1), HexFrame.Q_NEG, TileCoord(0, -1), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-4, -1), HexFrame.Q_NEG, TileCoord(-5, -1), HexFrame.Q_POS, big_pipe),
-            (TileCoord(-4, -1), HexFrame.Q_NEG, TileCoord(-5, 0), HexFrame.Q_POS, big_pipe),
-            (TileCoord(0, 1), HexFrame.Q_POS, TileCoord(2, 0), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(0, 1), HexFrame.Q_NEG, TileCoord(-1, 2), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(0, 0), HexFrame.Q_NEG, TileCoord(-1, 0), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(1, 0), HexFrame.Q_NEG, TileCoord(0, 1), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(1, -2), HexFrame.Q_POS, TileCoord(3, -3), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(-4, 0), HexFrame.Q_NEG, TileCoord(-5, 0), HexFrame.Q_POS, big_pipe),
-        ]
-        blueprint_old_primary.pipe_behaviors[PipeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = behaviour
-    end
-
-    union!(
-        blueprint_old_primary.ship_tiles, Set{TileCoord}(
-            [
-                TileCoord(3, -3),
-                TileCoord(2, 0),
-                TileCoord(-4, 0),
-                TileCoord(-3, -1),
-                TileCoord(3, -2),
-                TileCoord(1, -1),
-                TileCoord(0, -1),
-                TileCoord(-3, 0),
-                TileCoord(1, 0),
-                TileCoord(-4, 2),
-                TileCoord(0, 0),
-                TileCoord(-3, 1),
-                TileCoord(-2, -1),
-                TileCoord(-1, 0),
-                TileCoord(1, 1),
-                TileCoord(0, 1),
-                TileCoord(2, -2),
-                TileCoord(-4, 3),
-                TileCoord(-4, 4),
-                TileCoord(-1, 1),
-                TileCoord(-2, 0),
-                TileCoord(-3, 2),
-                TileCoord(-2, 1),
-                TileCoord(-3, 3),
-                TileCoord(0, 2),
-                TileCoord(-3, 4),
-                TileCoord(-1, 2),
-                TileCoord(2, -1),
-                TileCoord(-5, 3),
-                TileCoord(-2, 2),
-                TileCoord(-4, -1),
-                TileCoord(-5, 4),
-                TileCoord(1, -2),
-            ]
-        )
-    )
-    merge_ship!(map, Symbol("##old_primary#664"), blueprint_old_primary)
-
-    #= ---------- Ship :##Platform BS-301#663 ----------- =#
-    blueprint_platform_bs_301 = ShipBlueprint()
-
-    for tile in [
-            TileCoord(-4, -5),
-            TileCoord(-4, -7),
-            TileCoord(-5, -4),
-            TileCoord(-4, -4),
-            TileCoord(-5, -5),
-            TileCoord(-4, -6),
-        ]
-        blueprint_platform_bs_301.components[tile] = PlacedComponent(deepcopy(pressure_fed_tank), HexFrame.Q_POS, :_blueprint)
-    end
-
-    for tile in [TileCoord(-2, -7), TileCoord(-2, -8)]
-        blueprint_platform_bs_301.components[tile] = PlacedComponent(deepcopy(av_gas_tank), HexFrame.R_POS, :_blueprint)
-    end
-
-    for (tile, rotation) in [
-            (TileCoord(-3, -10), HexFrame.Q_NEG),
-            (TileCoord(-7, -6), HexFrame.Q_POS),
-            (TileCoord(-7, -3), HexFrame.Q_POS),
-            (TileCoord(-7, -5), HexFrame.Q_POS),
-            (TileCoord(-7, -4), HexFrame.Q_POS),
-            (TileCoord(-3, -8), HexFrame.Q_NEG),
-            (TileCoord(-3, -9), HexFrame.Q_NEG),
-        ]
-        blueprint_platform_bs_301.components[tile] = PlacedComponent(deepcopy(tiny_nozzle), rotation, :_blueprint)
-    end
-
-    blueprint_platform_bs_301.components[TileCoord(-6, -6)] = PlacedComponent(DecompChamberCompBehav(), HexFrame.Q_POS, :_blueprint)
-    blueprint_platform_bs_301.components[TileCoord(-4, -8)] = PlacedComponent(DecompChamberCompBehav(), HexFrame.Q_NEG, :_blueprint)
-    blueprint_platform_bs_301.components[TileCoord(-3, -7)] = PlacedComponent(deepcopy(open_tiny_on_off_valve), HexFrame.Q_POS, :_blueprint)
-    blueprint_platform_bs_301.components[TileCoord(-5, -6)] = PlacedComponent(deepcopy(partially_open_platform_valve), HexFrame.S_NEG, :_blueprint)
-    blueprint_platform_bs_301.components[TileCoord(-5, -7)] = PlacedComponent(deepcopy(tiny_adjustable_valve), HexFrame.S_NEG, :_blueprint)
-    for (tile_a, axis_a, tile_b, axis_b, behaviour) in [
-            (TileCoord(-3, -5), HexFrame.Q_NEG, TileCoord(-4, -5), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-6, -6), HexFrame.Q_NEG, TileCoord(-7, -5), HexFrame.Q_POS, big_pipe),
-            (TileCoord(-5, -4), HexFrame.Q_NEG, TileCoord(-6, -3), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-6, -5), HexFrame.Q_NEG, TileCoord(-7, -4), HexFrame.Q_POS, big_pipe),
-            (TileCoord(0, -8), HexFrame.Q_NEG, TileCoord(-1, -8), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-6, -4), HexFrame.Q_NEG, TileCoord(-7, -4), HexFrame.Q_POS, big_pipe),
-            (TileCoord(-1, -8), HexFrame.Q_POS, TileCoord(1, -9), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(-3, -8), HexFrame.Q_NEG, TileCoord(-4, -8), HexFrame.Q_POS, big_pipe),
-            (TileCoord(-2, -9), HexFrame.Q_POS, TileCoord(0, -10), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(-6, -5), HexFrame.Q_NEG, TileCoord(-7, -5), HexFrame.Q_POS, big_pipe),
-            (TileCoord(-6, -4), HexFrame.Q_POS, TileCoord(-4, -5), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(-4, -7), HexFrame.Q_NEG, TileCoord(-5, -6), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-6, -4), HexFrame.Q_NEG, TileCoord(-7, -3), HexFrame.Q_POS, big_pipe),
-            (TileCoord(-3, -4), HexFrame.Q_NEG, TileCoord(-4, -3), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-3, -8), HexFrame.Q_POS, TileCoord(-1, -9), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(-3, -7), HexFrame.Q_NEG, TileCoord(-4, -6), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-3, -9), HexFrame.Q_NEG, TileCoord(-4, -9), HexFrame.Q_POS, big_pipe),
-            (TileCoord(-6, -7), HexFrame.Q_POS, TileCoord(-4, -8), HexFrame.Q_NEG, big_pipe),
-            (TileCoord(-3, -7), HexFrame.Q_NEG, TileCoord(-4, -7), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-3, -9), HexFrame.Q_NEG, TileCoord(-4, -8), HexFrame.Q_POS, big_pipe),
-            (TileCoord(-4, -6), HexFrame.Q_NEG, TileCoord(-5, -6), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(3, -11), HexFrame.Q_NEG, TileCoord(2, -11), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-1, -10), HexFrame.Q_POS, TileCoord(1, -11), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(-5, -5), HexFrame.Q_NEG, TileCoord(-6, -4), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-6, -5), HexFrame.Q_POS, TileCoord(-4, -6), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(0, -9), HexFrame.Q_POS, TileCoord(2, -10), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(-6, -3), HexFrame.Q_POS, TileCoord(-4, -4), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(2, -10), HexFrame.Q_NEG, TileCoord(1, -10), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-5, -4), HexFrame.Q_NEG, TileCoord(-6, -4), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(1, -9), HexFrame.Q_NEG, TileCoord(0, -9), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(0, -10), HexFrame.Q_NEG, TileCoord(-1, -10), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-3, -6), HexFrame.Q_NEG, TileCoord(-4, -6), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-3, -5), HexFrame.Q_NEG, TileCoord(-4, -4), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-5, -3), HexFrame.Q_POS, TileCoord(-3, -4), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(-3, -6), HexFrame.Q_NEG, TileCoord(-4, -5), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-2, -7), HexFrame.Q_POS, TileCoord(0, -8), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(1, -10), HexFrame.Q_POS, TileCoord(3, -11), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(-3, -10), HexFrame.Q_NEG, TileCoord(-4, -9), HexFrame.Q_POS, big_pipe),
-            (TileCoord(-5, -5), HexFrame.Q_POS, TileCoord(-3, -6), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(-5, -4), HexFrame.Q_POS, TileCoord(-3, -5), HexFrame.Q_NEG, scrap_pipe),
-            (TileCoord(-1, -9), HexFrame.Q_NEG, TileCoord(-2, -9), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-6, -6), HexFrame.Q_NEG, TileCoord(-7, -6), HexFrame.Q_POS, big_pipe),
-            (TileCoord(-5, -5), HexFrame.Q_NEG, TileCoord(-6, -5), HexFrame.Q_POS, scrap_pipe),
-            (TileCoord(-4, -4), HexFrame.Q_NEG, TileCoord(-5, -3), HexFrame.Q_POS, scrap_pipe),
-        ]
-        blueprint_platform_bs_301.pipe_behaviors[PipeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = behaviour
-    end
-
-    union!(
-        blueprint_platform_bs_301.ship_tiles, Set{TileCoord}(
-            [
-                TileCoord(-4, -5),
-                TileCoord(-4, -7),
-                TileCoord(-2, -7),
+                TileCoord(-6, -3),
                 TileCoord(-5, -4),
+                TileCoord(-5, -3),
                 TileCoord(-4, -4),
-                TileCoord(-3, -6),
-                TileCoord(-6, -6),
-                TileCoord(-2, -8),
-                TileCoord(-4, -8),
-                TileCoord(-3, -7),
-                TileCoord(-6, -5),
-                TileCoord(-4, -9),
-                TileCoord(-5, -6),
-                TileCoord(-6, -4),
-                TileCoord(-5, -5),
-                TileCoord(-5, -7),
-                TileCoord(-4, -6),
+                TileCoord(-4, -3),
+                TileCoord(-3, -5),
+                TileCoord(-3, -4),
+                TileCoord(-3, -3),
+                TileCoord(-3, -2),
+                TileCoord(-2, -6),
+                TileCoord(-2, -5),
+                TileCoord(-2, -4),
+                TileCoord(-2, -3),
+                TileCoord(-1, -5),
+                TileCoord(-1, -4),
             ]
         )
     )
-    merge_ship!(map, Symbol("##Platform BS-301#663"), blueprint_platform_bs_301)
 
+    #= ---------- Ship ##Craft CL-204#148 (oxidiser tanker) ---------- =#
+    blueprint_cl_204 = ShipBlueprint()
+
+    for tile in [
+            TileCoord(-1, 0),
+            TileCoord(-1, 1),
+            TileCoord(0, -2),
+            TileCoord(0, -1),
+            TileCoord(0, 0),
+            TileCoord(0, 1),
+            TileCoord(0, 2),
+            TileCoord(1, -2),
+            TileCoord(1, -1),
+            TileCoord(1, 0),
+            TileCoord(1, 1),
+            TileCoord(2, -4),
+            TileCoord(2, -3),
+            TileCoord(2, -2),
+            TileCoord(2, -1),
+            TileCoord(2, 0),
+            TileCoord(3, -3),
+            TileCoord(3, -2),
+            TileCoord(3, -1),
+            TileCoord(4, -4),
+            TileCoord(4, -3),
+            TileCoord(4, -2),
+            TileCoord(4, -1),
+            TileCoord(4, 0),
+            TileCoord(5, -5),
+            TileCoord(5, -4),
+            TileCoord(5, -3),
+            TileCoord(5, -2),
+            TileCoord(5, -1),
+        ]
+        blueprint_cl_204.components[tile] = PlacedComponent(deepcopy(oxidiser_liquid_tank), HexFrame.Q_NEG, :_blueprint)
+    end
+
+    for (tile_a, axis_a, tile_b, axis_b) in [
+            (TileCoord(-2, -3), HexFrame.Q_POS, TileCoord(-1, -3), HexFrame.Q_POS),
+            (TileCoord(-2, -2), HexFrame.Q_POS, TileCoord(-2, -3), HexFrame.Q_POS),
+            (TileCoord(-2, -2), HexFrame.Q_POS, TileCoord(0, -2), HexFrame.Q_NEG),
+            (TileCoord(-1, -3), HexFrame.Q_POS, TileCoord(1, -3), HexFrame.Q_NEG),
+            (TileCoord(-1, -1), HexFrame.Q_POS, TileCoord(1, -2), HexFrame.Q_NEG),
+            (TileCoord(-1, 1), HexFrame.Q_POS, TileCoord(1, 0), HexFrame.Q_NEG),
+            (TileCoord(0, -2), HexFrame.Q_POS, TileCoord(2, -3), HexFrame.Q_NEG),
+            (TileCoord(0, -2), HexFrame.Q_NEG, TileCoord(-1, -1), HexFrame.Q_POS),
+            (TileCoord(0, 0), HexFrame.Q_POS, TileCoord(2, -1), HexFrame.Q_NEG),
+            (TileCoord(0, 1), HexFrame.Q_POS, TileCoord(2, 0), HexFrame.Q_NEG),
+            (TileCoord(0, 1), HexFrame.Q_NEG, TileCoord(-1, 1), HexFrame.Q_POS),
+            (TileCoord(1, -3), HexFrame.Q_NEG, TileCoord(0, -2), HexFrame.Q_POS),
+            (TileCoord(1, -2), HexFrame.Q_POS, TileCoord(3, -3), HexFrame.Q_NEG),
+            (TileCoord(1, -2), HexFrame.Q_NEG, TileCoord(0, -1), HexFrame.Q_POS),
+            (TileCoord(1, -1), HexFrame.Q_POS, TileCoord(3, -2), HexFrame.Q_NEG),
+            (TileCoord(1, -1), HexFrame.Q_NEG, TileCoord(0, -1), HexFrame.Q_POS),
+            (TileCoord(1, -1), HexFrame.Q_NEG, TileCoord(0, 0), HexFrame.Q_POS),
+            (TileCoord(1, 0), HexFrame.Q_NEG, TileCoord(0, 0), HexFrame.Q_POS),
+            (TileCoord(1, 0), HexFrame.Q_NEG, TileCoord(0, 1), HexFrame.Q_POS),
+            (TileCoord(2, -3), HexFrame.Q_NEG, TileCoord(1, -2), HexFrame.Q_POS),
+            (TileCoord(2, -2), HexFrame.Q_POS, TileCoord(4, -3), HexFrame.Q_NEG),
+            (TileCoord(2, -1), HexFrame.Q_NEG, TileCoord(1, -1), HexFrame.Q_POS),
+            (TileCoord(3, -3), HexFrame.Q_POS, TileCoord(5, -4), HexFrame.Q_NEG),
+            (TileCoord(3, -3), HexFrame.Q_NEG, TileCoord(2, -2), HexFrame.Q_POS),
+            (TileCoord(3, -2), HexFrame.Q_POS, TileCoord(5, -3), HexFrame.Q_NEG),
+            (TileCoord(4, -3), HexFrame.Q_NEG, TileCoord(3, -3), HexFrame.Q_POS),
+            (TileCoord(4, -3), HexFrame.Q_NEG, TileCoord(3, -2), HexFrame.Q_POS),
+            (TileCoord(5, -3), HexFrame.Q_NEG, TileCoord(4, -2), HexFrame.Q_POS),
+            (TileCoord(5, -2), HexFrame.Q_NEG, TileCoord(4, -2), HexFrame.Q_POS),
+            (TileCoord(5, -2), HexFrame.Q_NEG, TileCoord(4, -1), HexFrame.Q_POS),
+            (TileCoord(5, -1), HexFrame.Q_NEG, TileCoord(4, -1), HexFrame.Q_POS),
+        ]
+        blueprint_cl_204.pipe_behaviors[PipeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = big_pipe
+    end
+
+    union!(
+        blueprint_cl_204.ship_tiles, Set{TileCoord}(
+            [
+                TileCoord(-1, 0),
+                TileCoord(-1, 1),
+                TileCoord(0, -2),
+                TileCoord(0, -1),
+                TileCoord(0, 0),
+                TileCoord(0, 1),
+                TileCoord(0, 2),
+                TileCoord(1, -2),
+                TileCoord(1, -1),
+                TileCoord(1, 0),
+                TileCoord(1, 1),
+                TileCoord(2, -4),
+                TileCoord(2, -3),
+                TileCoord(2, -2),
+                TileCoord(2, -1),
+                TileCoord(2, 0),
+                TileCoord(3, -3),
+                TileCoord(3, -2),
+                TileCoord(3, -1),
+                TileCoord(4, -4),
+                TileCoord(4, -3),
+                TileCoord(4, -2),
+                TileCoord(4, -1),
+                TileCoord(4, 0),
+                TileCoord(5, -5),
+                TileCoord(5, -4),
+                TileCoord(5, -3),
+                TileCoord(5, -2),
+                TileCoord(5, -1),
+            ]
+        )
+    )
+
+    #= ---------- Ship ##Craft XB-882#144 (fuel tanker) ---------- =#
+    blueprint_xb_882_144 = ShipBlueprint()
+
+    for tile in [
+            TileCoord(1, -10),
+            TileCoord(1, -9),
+            TileCoord(1, -8),
+            TileCoord(2, -11),
+            TileCoord(2, -10),
+            TileCoord(2, -9),
+            TileCoord(2, -8),
+            TileCoord(3, -11),
+            TileCoord(3, -10),
+            TileCoord(3, -9),
+            TileCoord(3, -8),
+            TileCoord(3, -7),
+            TileCoord(4, -12),
+            TileCoord(4, -11),
+            TileCoord(4, -10),
+            TileCoord(4, -9),
+            TileCoord(4, -8),
+            TileCoord(5, -12),
+            TileCoord(5, -11),
+            TileCoord(5, -10),
+            TileCoord(5, -9),
+            TileCoord(6, -13),
+            TileCoord(6, -12),
+        ]
+        blueprint_xb_882_144.components[tile] = PlacedComponent(deepcopy(fuel_liquid_tank), HexFrame.Q_POS, :_blueprint)
+    end
+
+    for (tile_a, axis_a, tile_b, axis_b) in [
+            (TileCoord(-2, -6), HexFrame.Q_POS, TileCoord(-1, -7), HexFrame.Q_POS),
+            (TileCoord(-1, -7), HexFrame.Q_POS, TileCoord(0, -8), HexFrame.Q_POS),
+            (TileCoord(-1, -7), HexFrame.Q_POS, TileCoord(0, -7), HexFrame.Q_POS),
+            (TileCoord(0, -8), HexFrame.Q_POS, TileCoord(2, -9), HexFrame.Q_NEG),
+            (TileCoord(1, -9), HexFrame.Q_POS, TileCoord(3, -10), HexFrame.Q_NEG),
+            (TileCoord(2, -10), HexFrame.Q_POS, TileCoord(4, -11), HexFrame.Q_NEG),
+            (TileCoord(2, -9), HexFrame.Q_POS, TileCoord(4, -10), HexFrame.Q_NEG),
+            (TileCoord(2, -9), HexFrame.Q_NEG, TileCoord(1, -9), HexFrame.Q_POS),
+            (TileCoord(2, -8), HexFrame.Q_POS, TileCoord(4, -9), HexFrame.Q_NEG),
+            (TileCoord(3, -11), HexFrame.Q_POS, TileCoord(5, -12), HexFrame.Q_NEG),
+            (TileCoord(3, -10), HexFrame.Q_NEG, TileCoord(2, -10), HexFrame.Q_POS),
+            (TileCoord(3, -10), HexFrame.Q_NEG, TileCoord(2, -9), HexFrame.Q_POS),
+            (TileCoord(3, -9), HexFrame.Q_POS, TileCoord(5, -10), HexFrame.Q_NEG),
+            (TileCoord(4, -12), HexFrame.Q_POS, TileCoord(6, -13), HexFrame.Q_NEG),
+            (TileCoord(4, -12), HexFrame.Q_NEG, TileCoord(3, -11), HexFrame.Q_POS),
+            (TileCoord(4, -11), HexFrame.Q_NEG, TileCoord(3, -11), HexFrame.Q_POS),
+            (TileCoord(4, -10), HexFrame.Q_NEG, TileCoord(3, -9), HexFrame.Q_POS),
+            (TileCoord(4, -9), HexFrame.Q_NEG, TileCoord(3, -9), HexFrame.Q_POS),
+            (TileCoord(5, -12), HexFrame.Q_NEG, TileCoord(4, -12), HexFrame.Q_POS),
+            (TileCoord(5, -10), HexFrame.Q_NEG, TileCoord(4, -10), HexFrame.Q_POS),
+        ]
+        blueprint_xb_882_144.pipe_behaviors[PipeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = big_pipe
+    end
+
+    union!(
+        blueprint_xb_882_144.ship_tiles, Set{TileCoord}(
+            [
+                TileCoord(1, -10),
+                TileCoord(1, -9),
+                TileCoord(1, -8),
+                TileCoord(2, -11),
+                TileCoord(2, -10),
+                TileCoord(2, -9),
+                TileCoord(2, -8),
+                TileCoord(3, -11),
+                TileCoord(3, -10),
+                TileCoord(3, -9),
+                TileCoord(3, -8),
+                TileCoord(3, -7),
+                TileCoord(4, -12),
+                TileCoord(4, -11),
+                TileCoord(4, -10),
+                TileCoord(4, -9),
+                TileCoord(4, -8),
+                TileCoord(5, -12),
+                TileCoord(5, -11),
+                TileCoord(5, -10),
+                TileCoord(5, -9),
+                TileCoord(6, -13),
+                TileCoord(6, -12),
+            ]
+        )
+    )
+
+    #= ---------- Ship ##Craft XB-882#150 (cold-gas manoeuvring) ---------- =#
+    blueprint_xb_882_150 = ShipBlueprint()
+
+    for tile in [
+            TileCoord(-7, 3),
+            TileCoord(-7, 4),
+            TileCoord(-6, 3),
+            TileCoord(-6, 4),
+            TileCoord(-6, 5),
+            TileCoord(-5, 2),
+            TileCoord(-5, 3),
+            TileCoord(-5, 4),
+            TileCoord(-4, 1),
+            TileCoord(-4, 2),
+        ]
+        blueprint_xb_882_150.components[tile] = PlacedComponent(deepcopy(cold_gas_tank), HexFrame.R_NEG, :_blueprint)
+    end
+
+    # Standard armed nozzles (axial orientation).
+    for tile in [TileCoord(-7, 5), TileCoord(-6, 6)]
+        blueprint_xb_882_150.components[tile] = PlacedComponent(deepcopy(armed_cold_gas_nozzle), HexFrame.R_NEG, :_blueprint)
+    end
+
+    # Diagonal nozzles -- tuned throat areas from in-game adjustments.
+    blueprint_xb_882_150.components[TileCoord(-6, 2)] = PlacedComponent(
+        SwitchedNozzleCompBehav(
+            NozzleBehavFrag(
+                HexFrame.NODE_INTERNAL_1,
+                0.1561048474162817,
+                AutoDeactivationBehavFrag(),
+                OverheatLimitBehavFrag(400.0, 1.0, 0.3)
+            ),
+            BoolSwitchBehavFrag(
+                SwitchBehavFrag(
+                    RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_INTERNAL_1),
+                    1.122096948325634,
+                    0.0,
+                    1.6521566588887608,
+                    HexFlowSwitchComponents.SwitchState(1.122096948325634, 0.0)
+                )
+            )
+        ),
+        HexFrame.S_NEG,
+        :_blueprint
+    )
+    blueprint_xb_882_150.components[TileCoord(-5, 1)] = PlacedComponent(
+        SwitchedNozzleCompBehav(
+            NozzleBehavFrag(
+                HexFrame.NODE_INTERNAL_1,
+                0.15860411077737807,
+                AutoDeactivationBehavFrag(),
+                OverheatLimitBehavFrag(400.0, 1.0, 0.3)
+            ),
+            BoolSwitchBehavFrag(
+                SwitchBehavFrag(
+                    RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.NODE_INTERNAL_1),
+                    1.1720822155475616,
+                    0.0,
+                    1.6360695216571548,
+                    HexFlowSwitchComponents.SwitchState(1.1720822155475616, 0.0)
+                )
+            )
+        ),
+        HexFrame.S_NEG,
+        :_blueprint
+    )
+
+    # Closed feed valve.
+    blueprint_xb_882_150.components[TileCoord(-4, 3)] = PlacedComponent(
+        StandardValveCompBehav(
+            BoolSwitchBehavFrag, TinyValve;
+            max_conductance = 1.0,
+            growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS)
+        ),
+        HexFrame.S_POS,
+        :_blueprint
+    )
+
+    for (tile_a, axis_a, tile_b, axis_b) in [
+            (TileCoord(-7, 5), HexFrame.Q_POS, TileCoord(-5, 4), HexFrame.Q_NEG),
+            (TileCoord(-6, 3), HexFrame.Q_POS, TileCoord(-4, 2), HexFrame.Q_NEG),
+            (TileCoord(-6, 4), HexFrame.Q_POS, TileCoord(-4, 3), HexFrame.Q_NEG),
+            (TileCoord(-6, 4), HexFrame.Q_NEG, TileCoord(-7, 5), HexFrame.Q_POS),
+            (TileCoord(-5, 2), HexFrame.Q_NEG, TileCoord(-6, 3), HexFrame.Q_POS),
+            (TileCoord(-5, 4), HexFrame.Q_NEG, TileCoord(-6, 4), HexFrame.Q_POS),
+            (TileCoord(-4, 2), HexFrame.Q_NEG, TileCoord(-5, 3), HexFrame.Q_POS),
+            (TileCoord(-4, 3), HexFrame.Q_NEG, TileCoord(-5, 3), HexFrame.Q_POS),
+            (TileCoord(-4, 4), HexFrame.Q_POS, TileCoord(-2, 4), HexFrame.Q_NEG),
+            (TileCoord(-3, 3), HexFrame.Q_NEG, TileCoord(-4, 4), HexFrame.Q_POS),
+            (TileCoord(-2, 4), HexFrame.Q_NEG, TileCoord(-1, 4), HexFrame.Q_NEG),
+        ]
+        blueprint_xb_882_150.pipe_behaviors[PipeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = scrap_pipe
+    end
+
+    union!(
+        blueprint_xb_882_150.ship_tiles, Set{TileCoord}(
+            [
+                TileCoord(-7, 3),
+                TileCoord(-7, 4),
+                TileCoord(-6, 3),
+                TileCoord(-6, 4),
+                TileCoord(-6, 5),
+                TileCoord(-5, 2),
+                TileCoord(-5, 3),
+                TileCoord(-5, 4),
+                TileCoord(-4, 1),
+                TileCoord(-4, 2),
+                TileCoord(-4, 3),
+            ]
+        )
+    )
+
+    #= ---------- Ship ##Platform HX-034#152 (monoprop platform) ---------- =#
+    blueprint_platform = ShipBlueprint()
+
+    for tile in [
+            TileCoord(1, 4),
+            TileCoord(1, 5),
+            TileCoord(1, 6),
+            TileCoord(1, 7),
+            TileCoord(2, 4),
+            TileCoord(2, 5),
+            TileCoord(2, 6),
+            TileCoord(2, 7),
+            TileCoord(3, 4),
+            TileCoord(3, 5),
+            TileCoord(3, 6),
+            TileCoord(4, 4),
+            TileCoord(4, 5),
+        ]
+        blueprint_platform.components[tile] = PlacedComponent(deepcopy(monoprop_liquid_tank), HexFrame.Q_POS, :_blueprint)
+    end
+
+    for tile in [
+            TileCoord(-2, 5),
+            TileCoord(-2, 6),
+            TileCoord(-2, 7),
+            TileCoord(-2, 8),
+            TileCoord(-1, 5),
+            TileCoord(-1, 6),
+            TileCoord(-1, 7),
+        ]
+        blueprint_platform.components[tile] = PlacedComponent(deepcopy(pressure_fed_monoprop_tank), HexFrame.Q_POS, :_blueprint)
+    end
+
+    for tile in [TileCoord(-6, 11), TileCoord(-6, 12)]
+        blueprint_platform.components[tile] = PlacedComponent(deepcopy(small_nozzle), HexFrame.Q_POS, :_blueprint)
+    end
+    for tile in [TileCoord(-5, 7), TileCoord(-5, 8)]
+        blueprint_platform.components[tile] = PlacedComponent(deepcopy(tiny_nozzle), HexFrame.Q_POS, :_blueprint)
+    end
+
+    for tile in [TileCoord(-4, 7), TileCoord(-4, 11)]
+        blueprint_platform.components[tile] = PlacedComponent(DecompChamberCompBehav(), HexFrame.Q_POS, :_blueprint)
+    end
+
+    blueprint_platform.components[TileCoord(-2, 10)] = PlacedComponent(deepcopy(turbo_pump), HexFrame.Q_POS, :_blueprint)
+
+    # Valve at (-3, 7): armed open (target = max, current = 0).
+    blueprint_platform.components[TileCoord(-3, 7)] = PlacedComponent(
+        StandardValveCompBehav(
+            BoolSwitchBehavFrag, TinyValve;
+            max_conductance = 1.0,
+            growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
+            target_conductance = 1.0,
+            current_conductance = 0.0
+        ),
+        HexFrame.S_POS,
+        :_blueprint
+    )
+    # Valve at (-1, 8): closed.
+    blueprint_platform.components[TileCoord(-1, 8)] = PlacedComponent(
+        StandardValveCompBehav(
+            BoolSwitchBehavFrag, TinyValve;
+            max_conductance = 1.0,
+            growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS)
+        ),
+        HexFrame.Q_NEG,
+        :_blueprint
+    )
+    # Stepped valve at (-3, 10): partially open target.
+    blueprint_platform.components[TileCoord(-3, 10)] = PlacedComponent(
+        StandardValveCompBehav(
+            SteppedSwitchBehavFrag, TinyValve;
+            max_conductance = 1.0,
+            growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
+            percentage_step_size = 0.05,
+            target_conductance = 0.031939676627404275,
+            current_conductance = 0.0
+        ),
+        HexFrame.Q_POS,
+        :_blueprint
+    )
+    # Large valve at (-1, 9): armed open (target = max, current = 0).
+    blueprint_platform.components[TileCoord(-1, 9)] = PlacedComponent(
+        deepcopy(open_large_valve), HexFrame.R_NEG, :_blueprint
+    )
+
+    for (tile_a, axis_a, tile_b, axis_b, behaviour) in [
+            (TileCoord(-6, 11), HexFrame.Q_POS, TileCoord(-4, 11), HexFrame.Q_NEG, big_pipe),
+            (TileCoord(-6, 12), HexFrame.Q_POS, TileCoord(-4, 11), HexFrame.Q_NEG, big_pipe),
+            (TileCoord(-5, 11), HexFrame.Q_POS, TileCoord(-3, 10), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-4, 7), HexFrame.Q_NEG, TileCoord(-5, 7), HexFrame.Q_POS, big_pipe),
+            (TileCoord(-4, 7), HexFrame.Q_NEG, TileCoord(-5, 8), HexFrame.Q_POS, big_pipe),
+            (TileCoord(-4, 11), HexFrame.Q_POS, TileCoord(-2, 10), HexFrame.Q_NEG, big_pipe),
+            (TileCoord(-4, 11), HexFrame.Q_NEG, TileCoord(-5, 11), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-3, 6), HexFrame.Q_POS, TileCoord(-1, 5), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-3, 7), HexFrame.Q_POS, TileCoord(-1, 6), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-3, 8), HexFrame.Q_POS, TileCoord(-1, 7), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-3, 9), HexFrame.Q_POS, TileCoord(-1, 8), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-2, 5), HexFrame.Q_POS, TileCoord(0, 4), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-2, 5), HexFrame.Q_NEG, TileCoord(-3, 6), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-2, 6), HexFrame.Q_POS, TileCoord(0, 5), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-2, 6), HexFrame.Q_NEG, TileCoord(-3, 6), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-2, 6), HexFrame.Q_NEG, TileCoord(-3, 7), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-2, 7), HexFrame.Q_POS, TileCoord(0, 6), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-2, 7), HexFrame.Q_NEG, TileCoord(-3, 7), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-2, 7), HexFrame.Q_NEG, TileCoord(-3, 8), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-2, 8), HexFrame.Q_POS, TileCoord(0, 7), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(-2, 8), HexFrame.Q_NEG, TileCoord(-3, 8), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-2, 8), HexFrame.Q_NEG, TileCoord(-3, 9), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-1, 4), HexFrame.Q_NEG, TileCoord(-2, 5), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(-1, 8), HexFrame.Q_POS, TileCoord(0, 7), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(0, 4), HexFrame.Q_NEG, TileCoord(-1, 5), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(0, 5), HexFrame.Q_NEG, TileCoord(-1, 5), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(0, 5), HexFrame.Q_NEG, TileCoord(-1, 6), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(0, 6), HexFrame.Q_NEG, TileCoord(-1, 6), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(0, 6), HexFrame.Q_NEG, TileCoord(-1, 7), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(0, 7), HexFrame.Q_POS, TileCoord(2, 6), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(0, 7), HexFrame.Q_NEG, TileCoord(-1, 7), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(0, 8), HexFrame.Q_POS, TileCoord(2, 7), HexFrame.Q_NEG, big_pipe),
+            (TileCoord(0, 8), HexFrame.Q_NEG, TileCoord(0, 8), HexFrame.Q_POS, big_pipe),
+            (TileCoord(1, 5), HexFrame.Q_POS, TileCoord(3, 4), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(1, 6), HexFrame.Q_POS, TileCoord(3, 5), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(1, 7), HexFrame.Q_POS, TileCoord(3, 6), HexFrame.Q_NEG, big_pipe),
+            (TileCoord(2, 5), HexFrame.Q_POS, TileCoord(4, 4), HexFrame.Q_NEG, scrap_pipe),
+            (TileCoord(2, 6), HexFrame.Q_POS, TileCoord(4, 5), HexFrame.Q_NEG, big_pipe),
+            (TileCoord(2, 6), HexFrame.Q_NEG, TileCoord(1, 6), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(2, 7), HexFrame.Q_NEG, TileCoord(1, 7), HexFrame.Q_POS, big_pipe),
+            (TileCoord(3, 4), HexFrame.Q_NEG, TileCoord(2, 5), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(3, 5), HexFrame.Q_NEG, TileCoord(2, 5), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(3, 5), HexFrame.Q_NEG, TileCoord(2, 6), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(3, 6), HexFrame.Q_NEG, TileCoord(2, 6), HexFrame.Q_POS, big_pipe),
+            (TileCoord(4, 4), HexFrame.Q_NEG, TileCoord(3, 5), HexFrame.Q_POS, scrap_pipe),
+            (TileCoord(4, 5), HexFrame.Q_NEG, TileCoord(3, 5), HexFrame.Q_POS, big_pipe),
+        ]
+        blueprint_platform.pipe_behaviors[PipeCoord(VertexCoord(tile_a, axis_a), VertexCoord(tile_b, axis_b))] = behaviour
+    end
+
+    union!(
+        blueprint_platform.ship_tiles, Set{TileCoord}(
+            [
+                TileCoord(-5, 11),
+                TileCoord(-4, 7),
+                TileCoord(-4, 10),
+                TileCoord(-4, 11),
+                TileCoord(-3, 6),
+                TileCoord(-3, 7),
+                TileCoord(-3, 8),
+                TileCoord(-3, 9),
+                TileCoord(-3, 10),
+                TileCoord(-3, 11),
+                TileCoord(-2, 5),
+                TileCoord(-2, 6),
+                TileCoord(-2, 7),
+                TileCoord(-2, 8),
+                TileCoord(-2, 9),
+                TileCoord(-2, 10),
+                TileCoord(-1, 5),
+                TileCoord(-1, 6),
+                TileCoord(-1, 7),
+                TileCoord(-1, 8),
+                TileCoord(-1, 9),
+                TileCoord(0, 5),
+                TileCoord(0, 6),
+                TileCoord(0, 7),
+                TileCoord(0, 8),
+                TileCoord(0, 9),
+                TileCoord(1, 4),
+                TileCoord(1, 5),
+                TileCoord(1, 6),
+                TileCoord(1, 7),
+                TileCoord(1, 8),
+                TileCoord(2, 4),
+                TileCoord(2, 5),
+                TileCoord(2, 6),
+                TileCoord(2, 7),
+                TileCoord(3, 4),
+                TileCoord(3, 5),
+                TileCoord(3, 6),
+                TileCoord(4, 4),
+                TileCoord(4, 5),
+            ]
+        )
+    )
+
+    map = GameMap(blueprint_primary)
+    merge_ship!(map, Symbol("##Craft CL-204#148"), blueprint_cl_204)
+    merge_ship!(map, Symbol("##Craft XB-882#144"), blueprint_xb_882_144)
+    merge_ship!(map, Symbol("##Craft XB-882#150"), blueprint_xb_882_150)
+    merge_ship!(map, Symbol("##Platform HX-034#152"), blueprint_platform)
     return map
 end

@@ -1189,10 +1189,9 @@ function pressurefed_probe_current_class(current::Float64, desired_direction::Sy
 end
 
 """
-Classify a speculative pressure-fed tank probe when at least one probed side has useful flow and
-no probed side has harmful flow. Pruned companion sides are treated as unavailable rather
-than harmful so one side can still reactivate independently. Useful sides are committed later
-via `commit_reactivation_probe!`.
+Classify a speculative pressure-fed tank probe as useful when either side has useful flow,
+even if the companion side is harmful. Pruned sides are treated as neutral. Useful sides
+are committed independently via `commit_reactivation_probe!`.
 """
 function classify_reactivation_probe(comp::PressureFedTankCompBehav{N}; tile::TileCoord, derivedmapstate::DerivedMapState, mna_state, rotation::HexAxis = HexFrame.Q_POS, kwargs...) where {N}
     tank = comp.tank
@@ -1218,7 +1217,6 @@ function classify_reactivation_probe(comp::PressureFedTankCompBehav{N}; tile::Ti
                 :positive  # auto-empty: want inflow to fill
             end
             liquid_class = pressurefed_probe_current_class(liquid_current, liquid_desired)
-            liquid_class === HexComponentsAPI.PROBE_HARMFUL && return HexComponentsAPI.PROBE_HARMFUL
         end
     end
 
@@ -1229,11 +1227,11 @@ function classify_reactivation_probe(comp::PressureFedTankCompBehav{N}; tile::Ti
         isnothing(gas_current) || begin
             gas_desired = sides.gas_auto_empty ? :positive : :negative  # empty wants inflow, overpressure wants outflow
             gas_class = pressurefed_probe_current_class(gas_current, gas_desired)
-            gas_class === HexComponentsAPI.PROBE_HARMFUL && return HexComponentsAPI.PROBE_HARMFUL
         end
     end
 
     (liquid_class === HexComponentsAPI.PROBE_USEFUL || gas_class === HexComponentsAPI.PROBE_USEFUL) && return HexComponentsAPI.PROBE_USEFUL
+    (liquid_class === HexComponentsAPI.PROBE_HARMFUL || gas_class === HexComponentsAPI.PROBE_HARMFUL) && return HexComponentsAPI.PROBE_HARMFUL
     return HexComponentsAPI.PROBE_NEUTRAL
 end
 

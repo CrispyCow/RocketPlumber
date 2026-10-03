@@ -178,6 +178,21 @@ function cycle_tile_component!(state::PlacementTileState, step::Int)
     return nothing
 end
 
+"Change Editor Mode, restoring normal placement behaviour when disabling it."
+function set_editor_mode!(inputstate::InputState, enabled::Bool)
+    inputstate.editor_mode = enabled
+    if !enabled
+        state = placement_state(inputstate)
+        if state isa AbstractEditorPlacementState
+            enter_ready_placement_state!(inputstate)
+        elseif state isa PlacementPipeChainState
+            state.pipe_behavior = ScrapPipeBehav()
+        end
+    end
+
+    return nothing
+end
+
 "Handle action-key edges for placement tools, application modes, and simulation controls."
 function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedState, window::GLFW.Window)
     state = placement_state(inputstate)
@@ -220,13 +235,14 @@ function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedSt
         end
     end
 
-    # Pause and application overlays (Space, Backslash, M)
+    # Pause, application overlays, and Editor Mode (Space, Backslash, Grave, M)
     if get_inrising!(inputstate, GLFW.KEY_SPACE, window)
         current_paused = @atomic :monotonic shared_state.is_paused
         @atomic :monotonic shared_state.is_paused = !current_paused
     end
 
     get_inrising!(inputstate, GLFW.KEY_BACKSLASH, window) && (inputstate.dev_utils_menu_active = !inputstate.dev_utils_menu_active)
+    get_inrising!(inputstate, GLFW.KEY_GRAVE_ACCENT, window) && set_editor_mode!(inputstate, !inputstate.editor_mode)
     if get_inrising!(inputstate, GLFW.KEY_M, window)
         time_prog = get(inputstate.gui_inputs, :time_progressing, false)::Bool
         galaxy_escape_active = get(inputstate.gui_inputs, :galaxy_escape_active, false)::Bool

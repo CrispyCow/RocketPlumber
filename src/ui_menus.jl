@@ -137,7 +137,7 @@ end
 
 "Enqueue a `MapOverrideCommand` on the flow calculator's command queue."
 function enqueue_map_override!(flowcalc_ipc::FlowCalculatorIPC, gamemap::GameMap)
-    cmd = create_map_override_command(flowcalc_ipc.command_queue, deepcopy(gamemap))
+    cmd = create_map_override_command(flowcalc_ipc.command_queue, gamemap)
     try_enqueue_command!(flowcalc_ipc.command_queue, cmd)
     return nothing
 end
@@ -216,6 +216,53 @@ function ui_dev_utils_menu_render!(
     CImGui.Text("Frames: $(viewstate.frame_count)")
     CImGui.Separator()
 
+    button_width = propertyboxwidth - 50.0
+    button_height = 20.0
+
+    if CImGui.CollapsingHeader("Editor")
+        editor_state = placement_state(inputstate)
+        editor_state_label = if editor_state isa PlacementReadyState
+            "Standard"
+        elseif editor_state isa PlacementPressedState
+            "Move Pending"
+        elseif editor_state isa PlacementMoveState
+            "Move"
+        elseif editor_state isa PlacementMovePendingState
+            "Applying Move"
+        elseif editor_state isa PlacementPipeChainState
+            "Pipe Chain"
+        elseif editor_state isa PlacementTileState
+            "Tile Placement"
+        elseif editor_state isa PlacementDeleteState
+            "Delete"
+        elseif editor_state isa PlacementSurfaceEditState
+            "Surface Edit"
+        elseif editor_state isa PlacementRedockState
+            "Redock"
+        else
+            "Unknown"
+        end
+        CImGui.Text("State: $(editor_state_label)")
+
+        editor_enabled = inputstate.editor_mode
+        @cref CImGui.Checkbox("Editor Mode", &editor_enabled)
+        if editor_enabled != inputstate.editor_mode
+            set_editor_mode!(inputstate, editor_enabled)
+        end
+
+        !inputstate.editor_mode && CImGui.BeginDisabled()
+        if CImGui.RadioButton("[4] Delete", placement_state(inputstate) isa PlacementDeleteState)
+            toggle_editor_placement_state!(inputstate, PlacementDeleteState())
+        end
+        if CImGui.RadioButton("[5] Tile Placement", placement_state(inputstate) isa PlacementTileState)
+            toggle_tile_placement_state!(inputstate)
+        end
+        if CImGui.RadioButton("[6] Surface Edit", placement_state(inputstate) isa PlacementSurfaceEditState)
+            toggle_editor_placement_state!(inputstate, PlacementSurfaceEditState())
+        end
+        !inputstate.editor_mode && CImGui.EndDisabled()
+    end
+
     if CImGui.CollapsingHeader("Playthrough Statistics")
         gamemap = snapshot.gamemap
         game_time = get_time_years(gamemap)
@@ -248,65 +295,26 @@ function ui_dev_utils_menu_render!(
         end
     end
 
-    button_width = propertyboxwidth - 50.0
-    button_height = 20.0
-
-    if CImGui.CollapsingHeader("Editor")
-        editor_state = placement_state(inputstate)
-        editor_state_label = if editor_state isa PlacementReadyState
-            "Standard"
-        elseif editor_state isa PlacementPressedState
-            "Move Pending"
-        elseif editor_state isa PlacementMoveState
-            "Move"
-        elseif editor_state isa PlacementMovePendingState
-            "Applying Move"
-        elseif editor_state isa PlacementPipeChainState
-            "Pipe Chain"
-        elseif editor_state isa PlacementTileState
-            "Tile Placement"
-        elseif editor_state isa PlacementDeleteState
-            "Delete"
-        elseif editor_state isa PlacementSurfaceEditState
-            "Surface Edit"
-        elseif editor_state isa PlacementRedockState
-            "Redock"
-        else
-            "Unknown"
-        end
-        CImGui.Text("State: $(editor_state_label)")
-
-        editor_enabled = inputstate.editor_mode
-        @cref CImGui.Checkbox("Editor Mode", &editor_enabled)
-        if editor_enabled != inputstate.editor_mode
-            inputstate.editor_mode = editor_enabled
-            if !editor_enabled
-                state = placement_state(inputstate)
-                if state isa AbstractEditorPlacementState
-                    enter_ready_placement_state!(inputstate)
-                elseif state isa PlacementPipeChainState
-                    state.pipe_behavior = ScrapPipeBehav()
-                end
-            end
-        end
-
-        !inputstate.editor_mode && CImGui.BeginDisabled()
-        if CImGui.RadioButton("[4] Delete", placement_state(inputstate) isa PlacementDeleteState)
-            toggle_editor_placement_state!(inputstate, PlacementDeleteState())
-        end
-        if CImGui.RadioButton("[5] Tile Placement", placement_state(inputstate) isa PlacementTileState)
-            toggle_tile_placement_state!(inputstate)
-        end
-        if CImGui.RadioButton("[6] Surface Edit", placement_state(inputstate) isa PlacementSurfaceEditState)
-            toggle_editor_placement_state!(inputstate, PlacementSurfaceEditState())
-        end
-        !inputstate.editor_mode && CImGui.EndDisabled()
-    end
-
     if CImGui.CollapsingHeader("Tools")
         if CImGui.Button("Clear Map", (button_width, button_height))
             @info "Clearing map..."
             enqueue_map_override!(flowcalc_ipc, GameMap())
+        end
+
+        if CImGui.TreeNode("Load Tutorial Mapgen")
+            selected_mapgen_idx = get(inputstate.gui_inputs, :tutorial_mapgen_selection, Int32(0))::Int32
+            selected_mapgen_idx = clamp(selected_mapgen_idx, Int32(0), Int32(length(TUTORIAL_MAPGENS) - 1))
+            @cref CImGui.Combo("Map", &selected_mapgen_idx, TUTORIAL_MAPGEN_LABELS)
+            inputstate.gui_inputs[:tutorial_mapgen_selection] = selected_mapgen_idx
+
+            CImGui.TextWrapped("This replaces the current map with a fresh copy of the selected tutorial map. Unsaved changes will be lost.")
+            if CImGui.Button("Load Selected Tutorial Map", (button_width, button_height))
+                selected_mapgen = TUTORIAL_MAPGENS[selected_mapgen_idx + 1]
+                enqueue_map_override!(flowcalc_ipc, selected_mapgen.generator())
+                @info "Queued tutorial mapgen override" mapgen = selected_mapgen.label
+            end
+
+            CImGui.TreePop()
         end
 
         # Modify Space Map

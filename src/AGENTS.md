@@ -30,8 +30,8 @@ launching, input, UI, rendering, persistence, and game-session flow.
 - `components.jl` defines application-level component instances and
   procedural-generation registrations; implementations live in
   `local_packages/components/`.
-- `tutorials.jl` defines learning entries and includes generators from
-  `demo_maps/`.
+- `RocketPlumber.jl` includes generators from `demo_maps/`; `tutorials.jl`
+  defines the tutorial map registry and learning entries.
 - `gameloop.jl` owns session orchestration, calculator IPC, and dispatch from
   saved, generated, or empty map sources; `HexFlowPersistence` owns saved types,
   JLD2 save/load, and upgrade conversions.
@@ -84,7 +84,10 @@ For application integration or gameplay changes, run:
 julia --project=. --threads=2,1 --gcthreads=1,1 scripts/smoke_test.jl
 ```
 
-This opens a real window and needs a working display/OpenGL context. Allow
-roughly six minutes before treating startup or execution as hung. Use
-`scripts/repl_launch.jl` for behaviour that requires manual inspection. Changes
-limited to a local package should run that package's tests first.
+This opens a real window and needs a working display/OpenGL context and the
+documented Julia threading setup. Its 1200-tick script represents about twenty
+seconds at 60 UPS; a warmed run took about half a minute including startup and
+teardown. Fresh compilation may take longer. The graphical test is not part of
+the headless CI sweep. Use `scripts/repl_launch.jl` for behaviour that requires
+manual inspection. Changes limited to a local package should run that
+package's tests first.

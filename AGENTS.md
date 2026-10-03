@@ -172,8 +172,10 @@ tool tests. Report exactly which local checks were run and which
 display-dependent checks were not run.
 
 All game launch paths need a display/OpenGL context and at least two default
-Julia worker threads. The smoke test opens a real window, is not headless, and
-can take several minutes; allow roughly six minutes before treating it as hung.
+Julia worker threads. The smoke test opens a real window and is not headless.
+Its script runs for 1200 simulation ticks (about twenty seconds at 60 UPS); a
+warmed graphical run took about half a minute including startup and teardown.
+Fresh compilation or a slower machine may take longer.
 Runtime shaders and the texture atlas are source-controlled inside
 `HexFlowRendering`. The TexturePacker inputs remain under
 `tools/TexturePacker/textures/`.
