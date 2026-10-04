@@ -442,15 +442,7 @@ end
 #= ---------- Velocity Tracker Constants ---------- =#
 
 const VELOCITY_TRACKER_WIDTH = 300.0
-const VELOCITY_TRACKER_MIN_AXIS_RANGE = 0.001    # Minimum axis half-range to avoid degenerate plot
-
-# Mode colours for the ImPlot velocity tracker
-const ACCEL_COLOUR = ImVec4(0.4, 1.0, 0.4, 1.0)       # green
-const ACCEL_GRID_COLOUR = ImVec4(0.4, 1.0, 0.4, 0.15)      # faint green grid
 const DV_COLOUR = ImVec4(1.0, 0.7, 0.2, 1.0)       # amber
-const DV_GRID_COLOUR = ImVec4(1.0, 0.7, 0.2, 0.15)      # faint amber grid
-const COMPASS_X_COLOUR = ImVec4(1.0, 0.5, 0.3, 0.45)
-const COMPASS_Y_COLOUR = ImVec4(0.3, 0.8, 1.0, 0.45)
 
 "Render the shared simulation speed and pause controls."
 function render_simulation_controls!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC)
@@ -477,46 +469,93 @@ function render_simulation_controls!(inputstate::InputState, flowcalc_ipc::FlowC
     return nothing
 end
 
-"""
-Render the velocity tracker and the active manoeuvre or galaxy-escape status.
-Uses ImPlot with axes coloured green (acceleration mode) or amber (manoeuvre/delta-V mode).
-"""
+"Draw and reserve a rocket pointing along non-zero ship-local remaining delta-V."
+function _render_required_thrust_rocket!(remaining_dv::SVector{2, Float64})
+    magnitude = norm(remaining_dv)
+    magnitude <= 1.0e-10 && return nothing  # No required direction when the burn is complete
+
+    cursor = CImGui.GetCursorScreenPos()
+    width = CImGui.GetContentRegionAvail().x
+    height = 112.0f0
+    centre = ImVec2(cursor.x + width * 0.5f0, cursor.y + height * 0.5f0)
+    drawlist = CImGui.GetWindowDrawList()
+
+    # Nozzle burn coordinates use +Y down relative to the rendered ship
+    forward = SVector(Float32(remaining_dv[1] / magnitude), Float32(remaining_dv[2] / magnitude))
+    side = SVector(-forward[2], forward[1])
+    point(along, across) = ImVec2(
+        centre.x + along * forward[1] + across * side[1],
+        centre.y + along * forward[2] + across * side[2],
+    )
+
+    # Fixed instrument dial and eight reference notches
+    CImGui.AddCircleFilled(drawlist, centre, 44.0f0, CImGui.GetColorU32(ImVec4(0.07, 0.09, 0.11, 1.0)), 64)
+    CImGui.AddCircle(drawlist, centre, 44.0f0, CImGui.GetColorU32(ImVec4(0.36, 0.41, 0.46, 1.0)), 64, 1.5f0)
+    tick_colour = CImGui.GetColorU32(ImVec4(0.27, 0.31, 0.35, 1.0))
+    for index in 0:7
+        angle = Float32(index * pi / 4)
+        inner_radius = iseven(index) ? 37.0f0 : 39.0f0
+        inner = ImVec2(centre.x + inner_radius * cos(angle), centre.y + inner_radius * sin(angle))
+        outer = ImVec2(centre.x + 42.0f0 * cos(angle), centre.y + 42.0f0 * sin(angle))
+        CImGui.AddLine(drawlist, inner, outer, tick_colour, 1.0f0)
+    end
+
+    # Burn-axis signs sit clear of the ring; pixel-aligned bars keep the arms symmetric
+    sign_colour = CImGui.GetColorU32(ImVec4(0.65, 0.69, 0.73, 1.0))
+    for (x, y, positive) in ((1, 0, true), (0, 1, true), (-1, 0, false), (0, -1, false))
+        sign_centre = ImVec2(floor(centre.x + 52.0f0 * x) + 0.5f0, floor(centre.y + 52.0f0 * y) + 0.5f0)
+        CImGui.AddRectFilled(drawlist, ImVec2(sign_centre.x - 3.5f0, sign_centre.y - 0.5f0), ImVec2(sign_centre.x + 3.5f0, sign_centre.y + 0.5f0), sign_colour)
+        if positive
+            CImGui.AddRectFilled(drawlist, ImVec2(sign_centre.x - 0.5f0, sign_centre.y - 3.5f0), ImVec2(sign_centre.x + 0.5f0, sign_centre.y + 3.5f0), sign_colour)
+        end
+    end
+
+    # Direction notch shares the rocket's transform for precise alignment
+    direction_colour = CImGui.GetColorU32(ImVec4(1.0, 0.2, 0.2, 1.0))
+    CImGui.AddLine(drawlist, point(37, 0), point(42, 0), direction_colour, 1.5f0)
+
+    # Finless hull, tapered nose and engine bell; nose and rear sit equally far from the pivot
+    for (colour, vertices) in (
+            (ImVec4(0.48, 0.54, 0.6, 1.0), ((-17, -5), (-17, 5), (-29, 8), (-29, -8))),
+            (ImVec4(0.82, 0.87, 0.92, 1.0), ((13, -9), (13, 9), (-17, 9), (-17, -9))),
+            (DV_COLOUR, ((29, 0), (13, 9), (13, -9))),
+            (ImVec4(0.12, 0.16, 0.2, 1.0), ((-25, -5), (-25, 5), (-28, 5), (-28, -5))),
+        )
+        CImGui.PathClear(drawlist)
+        for (along, across) in vertices
+            CImGui.PathLineTo(drawlist, point(along, across))
+        end
+        CImGui.PathFillConvex(drawlist, CImGui.GetColorU32(colour))
+    end
+
+    # Engine mounting collar and a recessed longitudinal hull seam
+    detail_colour = CImGui.GetColorU32(ImVec4(0.3, 0.36, 0.42, 1.0))
+    CImGui.AddLine(drawlist, point(-12, -9), point(-12, 9), detail_colour, 2.0f0)
+    CImGui.AddLine(drawlist, point(-7, 0), point(10, 0), detail_colour, 1.5f0)
+
+    CImGui.Dummy(ImVec2(width, height))
+    return nothing
+end
+
+"Render ship information and required thrust during manoeuvre burns, or galaxy-escape status."
 function ui_velocity_tracker_render!(
         gamestate::GameState, gamemap::GameMap,
         inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC,
     )
     velocity = get_velocity(gamemap)
-    accel_world = gamestate.acceleration_space_map_frame
     vel_mag = norm(velocity)
-    accel_mag = norm(accel_world)
+    accel_mag = norm(gamestate.acceleration_space_map_frame)
 
     escape_active = is_galaxy_escape_active(gamemap)
     has_manoeuvre = has_active_manoeuvre(gamemap)
     manoeuvre = get_active_manoeuvre(gamemap)
 
-    # Show ΔV plot only during active burn phases
-    show_dv_mode = has_manoeuvre &&
-        (manoeuvre.phase == PHASE_APPROACH_BURN || manoeuvre.phase == PHASE_CAPTURE_BURN)
-
-    compass_angle = 0.0
-    accel_plot = accel_world
-    if show_dv_mode
-        # Derive burn direction from the planned space-map ΔV vector
-        burn_dv = manoeuvre.phase == PHASE_APPROACH_BURN ? manoeuvre.approach_burn_dv : manoeuvre.capture_burn_dv
-        burn_unit = normalise_or_default(burn_dv)
-        compass_angle = atan(burn_unit[2], burn_unit[1])
-
-        # Display acceleration in local burn-frame coordinates during burn phases.
-        accel_plot = rotate_vec2(accel_world, -compass_angle)
-    end
-
-    # Reserve the lower portion of the tracker for the active flight status.
-    base_height = 320.0
-    speed_controls_height = 60.0
-    status_height = escape_active ? 120.0 : (has_manoeuvre ? 110.0 : 0.0)
-    total_height = base_height + speed_controls_height + status_height
-
-    ui_window("Velocity Tracker", (0.0, 0.0), (VELOCITY_TRACKER_WIDTH, total_height))
+    # Fixed width, with height fitted to the current flight status
+    CImGui.SetNextWindowSizeConstraints(ImVec2(VELOCITY_TRACKER_WIDTH, 0.0), ImVec2(VELOCITY_TRACKER_WIDTH, Inf))
+    ui_window(
+        "Velocity Tracker", (0.0, 0.0), (VELOCITY_TRACKER_WIDTH, 0.0);
+        flags = DEFAULT_WINDOW_FLAGS | CImGui.ImGuiWindowFlags_AlwaysAutoResize,
+    )
 
     render_simulation_controls!(inputstate, flowcalc_ipc)
 
@@ -526,117 +565,6 @@ function ui_velocity_tracker_render!(
     CImGui.Text(@sprintf("Acceleration: %.4f", accel_mag))
     CImGui.Text(@sprintf("Mass:         %.1f", get_mass(gamemap)))
     CImGui.Text(@sprintf("Ship delta-V: %.1f", gamestate.estimated_min_delta_v))
-
-    # Choose axis labels and colours
-    if show_dv_mode
-        axis_colour = DV_COLOUR
-        grid_colour = DV_GRID_COLOUR
-        x_label = "delta-V X"
-        y_label = "delta-V Y"
-    else
-        axis_colour = ACCEL_COLOUR
-        grid_colour = ACCEL_GRID_COLOUR
-        x_label = "Accel X"
-        y_label = "Accel Y"
-    end
-
-    # Compute symmetric axis range
-    max_component = 0.0
-    if show_dv_mode
-        rem_dv = manoeuvre.burn_remaining_dv
-        max_component = max(max_component, abs(rem_dv[1]), abs(rem_dv[2]))
-    elseif accel_mag > 1.0e-10
-        max_component = max(max_component, abs(accel_plot[1]), abs(accel_plot[2]))
-    end
-    axis_range = max(max_component * 1.4, VELOCITY_TRACKER_MIN_AXIS_RANGE)
-
-    # Style axes with mode-appropriate colours
-    ImPlot.PushStyleColor(ImPlot.ImPlotCol_AxisText, axis_colour)
-    ImPlot.PushStyleColor(ImPlot.ImPlotCol_AxisGrid, grid_colour)
-    ImPlot.PushStyleColor(ImPlot.ImPlotCol_AxisTick, axis_colour)
-    ImPlot.PushStyleColor(ImPlot.ImPlotCol_PlotBg, ImVec4(0.08, 0.08, 0.13, 1.0))
-
-    available_plot_size = CImGui.GetContentRegionAvail()
-    plot_size = ImVec2(available_plot_size.x, available_plot_size.y - status_height)
-
-    plot_flags = ImPlot.ImPlotFlags_Equal | ImPlot.ImPlotFlags_NoLegend |
-        ImPlot.ImPlotFlags_NoMenus | ImPlot.ImPlotFlags_NoBoxSelect |
-        ImPlot.ImPlotFlags_NoTitle | ImPlot.ImPlotFlags_NoMouseText
-    ImPlot.SetNextAxesLimits(-axis_range, axis_range, -axis_range, axis_range, CImGui.ImGuiCond_Always)
-
-    if ImPlot.BeginPlot("##velocity_tracker", plot_size, plot_flags)
-        axis_flags = ImPlot.ImPlotAxisFlags_NoMenus
-        ImPlot.SetupAxes(x_label, y_label, axis_flags, axis_flags)
-        if !show_dv_mode
-            ImPlot.SetupAxisFormat(ImPlot.ImAxis_X1, "%.2f")
-            ImPlot.SetupAxisFormat(ImPlot.ImAxis_Y1, "%.2f")
-        end
-
-        # Compass guides: ship-local X/Y axes, rotated during burn phases.
-        compass_len = axis_range * 0.9
-        x_axis = rotate_vec2(SVector(compass_len, 0.0), compass_angle)
-        y_axis = rotate_vec2(SVector(0.0, compass_len), compass_angle)
-
-        ImPlot.PlotLine(
-            "##compass_x",
-            Float64[-x_axis[1], x_axis[1]],
-            Float64[-x_axis[2], x_axis[2]];
-            spec = ImPlot.ImPlotSpec(LineColor = COMPASS_X_COLOUR, LineWeight = 1.0),
-        )
-        ImPlot.PlotLine(
-            "##compass_y",
-            Float64[-y_axis[1], y_axis[1]],
-            Float64[-y_axis[2], y_axis[2]];
-            spec = ImPlot.ImPlotSpec(LineColor = COMPASS_Y_COLOUR, LineWeight = 1.0),
-        )
-
-        # Remaining ΔV arrow (amber, only during burn phases)
-        if show_dv_mode
-            rem_dv = manoeuvre.burn_remaining_dv
-            if norm(rem_dv) > 1.0e-10
-                ImPlot.PlotLine(
-                    "Remaining ΔV", Float64[0.0, rem_dv[1]], Float64[0.0, rem_dv[2]];
-                    spec = ImPlot.ImPlotSpec(LineColor = DV_COLOUR, LineWeight = 2.5),
-                )
-                ImPlot.PlotScatter(
-                    "##dv_tip", Float64[rem_dv[1]], Float64[rem_dv[2]];
-                    spec = ImPlot.ImPlotSpec(Marker = ImPlot.ImPlotMarker_Circle, MarkerSize = 4.0, MarkerFillColor = DV_COLOUR),
-                )
-            end
-        end
-
-
-        # Acceleration arrow (green line from origin)
-        if accel_mag > 1.0e-10
-            if show_dv_mode
-                accel_dir = accel_plot / max(norm(accel_plot), 1.0e-10)
-                accel_display = accel_dir * (axis_range * 0.3)
-                ImPlot.PlotLine(
-                    "##accel_dir", Float64[0.0, accel_display[1]], Float64[0.0, accel_display[2]];
-                    spec = ImPlot.ImPlotSpec(LineColor = ImVec4(0.4, 1.0, 0.4, 0.5), LineWeight = 4.0),
-                )
-            else
-                ImPlot.PlotLine(
-                    "Acceleration", Float64[0.0, accel_plot[1]], Float64[0.0, accel_plot[2]];
-                    spec = ImPlot.ImPlotSpec(LineColor = ACCEL_COLOUR, LineWeight = 2.5),
-                )
-                ImPlot.PlotScatter(
-                    "##accel_tip", Float64[accel_plot[1]], Float64[accel_plot[2]];
-                    spec = ImPlot.ImPlotSpec(Marker = ImPlot.ImPlotMarker_Circle, MarkerSize = 5.0, MarkerFillColor = ACCEL_COLOUR),
-                )
-            end
-        end
-
-        # Origin marker (white plus sign)
-        ImPlot.PlotScatter(
-            "##origin", Float64[0.0], Float64[0.0];
-            spec = ImPlot.ImPlotSpec(Marker = ImPlot.ImPlotMarker_Plus, MarkerSize = 6.0, MarkerFillColor = ImVec4(1.0, 1.0, 1.0, 0.8)),
-        )
-
-        ImPlot.EndPlot()
-    end
-
-    ImPlot.PopStyleColor(4)
 
     if escape_active
         progress = get_galaxy_escape_progress(gamemap)::Float64
@@ -682,21 +610,43 @@ function ui_velocity_tracker_render!(
         # Manoeuvre status is read-only; all phase transitions happen in the calculator.
         CImGui.SeparatorText("Manoeuvre Info")
         phase = manoeuvre.phase
-        CImGui.TextWrapped(phase_description(phase))
 
-        if phase == PHASE_APPROACH_BURN
+        if phase == PHASE_APPROACH_BURN || phase == PHASE_CAPTURE_BURN
             rem_dv = manoeuvre.burn_remaining_dv
-            CImGui.TextWrapped(@sprintf("Remaining delta-V: (%.2f, %.2f)", rem_dv[1], rem_dv[2]))
+            table_flags = CImGui.ImGuiTableFlags_SizingStretchSame | CImGui.ImGuiTableFlags_BordersInnerV
+            if CImGui.BeginTable("##manoeuvre_burn", 2, table_flags)
+                CImGui.TableNextColumn()
+                CImGui.TextWrapped(phase_description(phase))
+                CImGui.NewLine()
+                CImGui.Text("Remaining delta-V:")
+                dv_text = @sprintf("(%.2f, %.2f)", rem_dv[1], rem_dv[2])
+                column_width = CImGui.GetContentRegionAvail().x
+                normal_font_size = CImGui.GetFontSize()
+                dv_font_size = 24.0
+                CImGui.PushFont(C_NULL, dv_font_size)
+                # Keep the value prominent while fitting signed values in the column
+                while dv_font_size > normal_font_size && CImGui.CalcTextSize(dv_text).x > column_width
+                    CImGui.PopFont()
+                    dv_font_size = max(normal_font_size, dv_font_size - 1.0)
+                    CImGui.PushFont(C_NULL, dv_font_size)
+                end
+                CImGui.TextColored(DV_COLOUR, dv_text)
+                CImGui.PopFont()
 
-        elseif phase == PHASE_COAST
-            CImGui.TextWrapped("Open Space Map (M) and progress time until intercept.")
+                CImGui.TableNextColumn()
+                _render_required_thrust_rocket!(rem_dv)
+                CImGui.EndTable()
+            end
 
-        elseif phase == PHASE_CAPTURE_BURN
-            rem_dv = manoeuvre.burn_remaining_dv
-            CImGui.TextWrapped(@sprintf("Remaining delta-V: (%.2f, %.2f)", rem_dv[1], rem_dv[2]))
+        else
+            CImGui.TextWrapped(phase_description(phase))
+            CImGui.NewLine()
 
-        elseif phase == PHASE_ENCOUNTER_READY
-            CImGui.TextWrapped("Encounter triggering...")
+            if phase == PHASE_COAST
+                CImGui.TextWrapped("Open Space Map (M) and progress time until intercept.")
+            elseif phase == PHASE_ENCOUNTER_READY
+                CImGui.TextWrapped("Encounter triggering...")
+            end
         end
     end
 
