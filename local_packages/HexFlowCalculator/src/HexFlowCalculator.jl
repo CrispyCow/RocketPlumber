@@ -1382,7 +1382,7 @@ end
 function drop_pending_coord!(scheduler::ReactivationScheduler, coord::TileCoord)
     coord in scheduler.pending_set || return nothing
     delete!(scheduler.pending_set, coord)
-    filter!(pending_coord -> pending_coord != coord, scheduler.pending)
+    filter_no_shrink!(pending_coord -> pending_coord != coord, scheduler.pending)
     return nothing
 end
 

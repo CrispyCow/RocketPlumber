@@ -18,7 +18,7 @@ export FluidCompatibilityError
 # Function Exports
 export add_pipes_abs_element!, abs_element_get_current, update_components!, index_grounded_source_elements!
 export list_elements, list_elements!, list_nodes, list_nodes!, prune!, ground_search!, clear_dangling_dependants!
-export clear_calculator_scratchpad!
+export filter_no_shrink!, clear_calculator_scratchpad!
 export list_fluid_declarations!, push_mapped_declarations!, map_declaration
 export index_fluid_declarations!, propagate_fluid_types!, compute_region_temperatures!
 export prioritise_declarations, build_node_connection_map!
@@ -218,6 +218,23 @@ end
 # ===============================================================
 # Element Collection and Graph Filtering
 # ===============================================================
+
+"""
+Filter a reusable vector in place, preserving order and backing capacity.
+Mirrors the `Vector` implementation of `Base.filter!`, with shrinking disabled in the final size hint.
+"""
+function filter_no_shrink!(predicate, elements::Vector)
+    destination = firstindex(elements)
+    for element in elements
+        @inbounds elements[destination] = element
+        destination = ifelse(predicate(element)::Bool, nextind(elements, destination), destination)
+    end
+    destination > lastindex(elements) && return elements
+
+    resize!(elements, destination - 1)
+    sizehint!(elements, destination - 1; shrink = false)
+    return elements
+end
 
 # DerivedMapState ship surface edge access
 "Get all ship surface edge tile coordinates (tiles on the boundary of the ship)"
@@ -431,7 +448,7 @@ function prune!(elements::Vector{AbsoluteElement}, scratchpad::CalculatorScratch
     end
 
     present_nodes = keys(pruning_nodeconnections)
-    filter!(element -> _all_non_ground_nodes_present(element, present_nodes), elements)
+    filter_no_shrink!(element -> _all_non_ground_nodes_present(element, present_nodes), elements)
 
     empty!(pruning_nodeconnections)
 
@@ -556,7 +573,7 @@ function ground_search!(elements::Vector{AbsoluteElement}, scratchpad::Calculato
         end
     end
 
-    filter!(element -> _all_non_ground_nodes_present(element, groundsearch_grounded_nodes), elements)
+    filter_no_shrink!(element -> _all_non_ground_nodes_present(element, groundsearch_grounded_nodes), elements)
 
     empty!(groundsearch_nodeconnections)
     empty!(root_index)
@@ -599,7 +616,7 @@ function clear_dangling_dependants!(elements::Vector{AbsoluteElement}, element_i
     end
 
     # Compact the vector in place, keep only elements still in the survivor set.
-    filter!(element -> element.id in element_id_set, elements)
+    filter_no_shrink!(element -> element.id in element_id_set, elements)
 
     empty!(element_id_set)  # leave the scratch buffer clean for the next call
 

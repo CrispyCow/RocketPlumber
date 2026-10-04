@@ -127,6 +127,50 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
 # Phase 1: Existing Infrastructure Tests (list_elements, etc.)
 # ===============================================================
 
+"Repeatedly refill and filter the same buffer to exercise capacity reuse."
+function repeat_refill_and_filter!(predicate::F, buffer::Vector{T}, source::Vector{T}, iterations::Int) where {F, T}
+    for _ in 1:iterations
+        resize!(buffer, length(source))
+        copyto!(buffer, source)
+        filter_no_shrink!(predicate, buffer)
+    end
+    return nothing
+end
+
+@testset "filter_no_shrink!" begin
+    @testset "matches Base.filter! and returns the input vector" begin
+        for input in (Int[], [1], [2], [1, 2, 3, 2, 1], [2, 4, 6], [1, 3, 5])
+            buffer = copy(input)
+            @test filter_no_shrink!(isodd, buffer) === buffer
+            @test buffer == filter!(isodd, copy(input))
+        end
+
+        words = ["keep", "drop", "keep", "drop"]
+        @test filter_no_shrink!(==("keep"), words) === words
+        @test words == ["keep", "keep"]
+
+        visited = Int[]
+        buffer = [1, 2, 3, 4]
+        filter_no_shrink!(buffer) do value
+            push!(visited, value)
+            iseven(value)
+        end
+        @test visited == [1, 2, 3, 4]
+        @test buffer == [2, 4]
+        @test_throws TypeError filter_no_shrink!(_ -> 1, [1, 2])
+    end
+
+    @testset "refilling after partial or complete removal does not allocate" begin
+        source = collect(1:1024)
+        for predicate in (isodd, Returns(false))
+            buffer = copy(source)
+            repeat_refill_and_filter!(predicate, buffer, source, 10)
+            @test (@allocated repeat_refill_and_filter!(predicate, buffer, source, 100)) == 0
+            @test buffer == filter(predicate, source)
+        end
+    end
+end
+
 @testset "list_elements" begin
     # Multi-ship element collection
     gm = GameMap()
@@ -393,6 +437,21 @@ function run_prune(elements::Vector{AbsoluteElement})
     return elems
 end
 
+"Run the fixed-point filtering loop used by HexFlowCalculator.update_map_from_inputs! on a copy."
+function run_prune_pipeline(elements::Vector{AbsoluteElement})
+    pruned = copy(elements)
+    scratchpad = CalculatorScratchpad()
+    max_iterations = length(pruned) + 1
+    for _ in 1:max_iterations
+        prune!(pruned, scratchpad)
+        ground_search!(pruned, scratchpad)
+        survivor_count = length(pruned)
+        clear_dangling_dependants!(pruned, scratchpad.dangling_dependant_element_id_set)
+        length(pruned) == survivor_count && return pruned
+    end
+    error("Map filtering did not converge after $max_iterations passes")
+end
+
 
 # ===============================================================
 # Phase 2: list_nodes Tests
@@ -465,6 +524,17 @@ end
         ]
         result = run_prune(elems)
         @test isempty(result)
+    end
+
+    @testset "removes attached multi-element branch without affecting the core" begin
+        elems = [
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_a, gnd, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(2, 0), 1, n_b, n_c, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(3, 0), 1, n_c, n_d, 1.0, CONST_RESISTOR),
+        ]
+        @test Set(e.id for e in run_prune(elems)) == Set(e.id for e in elems[1:2])
     end
 
     @testset "keeps grounded ring" begin
@@ -634,6 +704,16 @@ end
         @test length(result) == 3
     end
 
+    @testset "dependent current sources provide neither a ground anchor nor traversal" begin
+        for source_node in (gnd, n_a)
+            elems = [
+                make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+                make_element(TileCoord(0, 0), 2, source_node, n_b, 0.5, C_DEP_CURRENT; dependent_index = 1),
+            ]
+            @test Set(e.id for e in run_ground_search(elems)) == Set((elems[1].id,))
+        end
+    end
+
     @testset "voltage source chain provides ground path" begin
         elems = [
             make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
@@ -695,6 +775,39 @@ end
         @test length(result) == 3
         @test nodes[n_a] == 2
         @test nodes[n_b] == 2
+    end
+end
+
+
+@testset "prune! and ground_search! reuse the same scratchpad across inputs" begin
+    n_a = nc(0, 0, HexFrame.NODE_Q_POS)
+    n_b = nc(1, 0, HexFrame.NODE_Q_POS)
+    n_c = nc(2, 0, HexFrame.NODE_Q_POS)
+    gnd = ground_node()
+    grounded = [
+        make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+        make_element(TileCoord(0, 0), 2, n_a, n_b, 1.0, CONST_RESISTOR),
+        make_element(TileCoord(1, 0), 1, n_b, gnd, 1.0, CONST_RESISTOR),
+    ]
+    floating = [
+        make_element(TileCoord(0, 0), 1, n_a, n_b, 1.0, CONST_RESISTOR),
+        make_element(TileCoord(0, 0), 2, n_b, n_a, 2.0, CONST_RESISTOR),
+    ]
+    dead = [
+        make_element(TileCoord(0, 0), 1, n_a, n_b, 1.0, CONST_RESISTOR),
+        make_element(TileCoord(0, 0), 2, n_b, n_c, 1.0, CONST_RESISTOR),
+    ]
+
+    # Reuse nodes and IDs so stale degree counts or ground roots would change the survivors
+    scratchpad = CalculatorScratchpad()
+    for input in (grounded, floating, dead, AbsoluteElement[], grounded)
+        elems = copy(input)
+        prune!(elems, scratchpad)
+        expected_pruned = input === dead ? AbsoluteElement[] : input
+        @test Set(e.id for e in elems) == Set(e.id for e in expected_pruned)
+        ground_search!(elems, scratchpad)
+        expected_grounded = input === grounded ? grounded : AbsoluteElement[]
+        @test Set(e.id for e in elems) == Set(e.id for e in expected_grounded)
     end
 end
 
@@ -825,18 +938,18 @@ end
     n_int = nc(0, 0, HexFrame.NODE_INTERNAL_1)
     gnd = NodeCoord(TileCoord(0, 0), HexFrame.GROUND)
 
-    "Run the same iterative pruning pipeline as update_map! in HexFlowCalculator"
-    function run_prune_pipeline(elements::Vector{AbsoluteElement})
-        pruned = elements
-        scratch = Set{ElementID}()
-        last_hash::UInt64 = 0
-        while last_hash != hash(pruned)
-            pruned = run_prune(pruned)
-            pruned = run_ground_search(pruned)
-            last_hash = hash(pruned)
-            clear_dangling_dependants!(pruned, scratch)
+    @testset "surviving IDs are independent of input order" begin
+        elems = [
+            make_element(TileCoord(0, 0), 1, n_a, gnd, 5.0, CONST_VOLTAGE),
+            make_element(TileCoord(0, 0), 2, n_a, gnd, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(1, 0), 1, n_a, n_b, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(2, 0), 1, n_c, n_d, 1.0, CONST_RESISTOR),
+            make_element(TileCoord(2, 0), 2, n_d, n_c, 2.0, CONST_RESISTOR),
+        ]
+        expected_ids = Set(e.id for e in elems[1:2])
+        for order in ([1, 2, 3, 4, 5], [5, 4, 3, 2, 1], [3, 5, 1, 4, 2])
+            @test Set(e.id for e in run_prune_pipeline(elems[order])) == expected_ids
         end
-        return pruned
     end
 
     @testset "simple grounded circuit survives" begin
@@ -1357,20 +1470,6 @@ end
 
 @testset "singularity cases" begin
     gnd = NodeCoord(TileCoord(0, 0), HexFrame.GROUND)
-
-    "Run the iterative pruning pipeline (mirrors HexFlowCalculator.update_map!)"
-    function run_prune_pipeline(elements::Vector{AbsoluteElement})
-        pruned = elements
-        scratch = Set{ElementID}()
-        last_hash::UInt64 = 0
-        while last_hash != hash(pruned)
-            pruned = run_prune(pruned)
-            pruned = run_ground_search(pruned)
-            last_hash = hash(pruned)
-            clear_dangling_dependants!(pruned, scratch)
-        end
-        return pruned
-    end
 
     "Run full MNA pipeline on pre-pruned elements"
     function solve_circuit(elements::Vector{AbsoluteElement})

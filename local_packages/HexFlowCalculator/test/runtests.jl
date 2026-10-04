@@ -2576,8 +2576,64 @@ end
 end
 
 # ===============================================================
+# Tests — Filtering From Primary Inputs
+# ===============================================================
+
+@testset "update_map_from_inputs! reprunes after dangling dependant removal" begin
+    tile = TileCoord(0, 0)
+    n_a = NodeCoord(tile, HexFrame.NODE_INTERNAL_1)
+    n_b = NodeCoord(TileCoord(1, 0), HexFrame.NODE_INTERNAL_1)
+    n_c = NodeCoord(TileCoord(2, 0), HexFrame.NODE_INTERNAL_1)
+    n_d = NodeCoord(TileCoord(3, 0), HexFrame.NODE_INTERNAL_1)
+    gnd = NodeCoord(tile, HexFrame.GROUND)
+    elements = [
+        AbsoluteElement(
+            connections = AbsoluteElementConnections(v1, v2), value = value, type = type,
+            id = ElementID(tile, UInt8(index)), dependent_id = ElementID(tile, UInt8(dependent_index)),
+        )
+            for (index, (v1, v2, value, type, dependent_index)) in enumerate(
+                [
+                    (n_a, gnd, 5.0, HexElements.CONST_VOLTAGE, 0),
+                    (n_a, gnd, 1.0, HexElements.CONST_RESISTOR, 0),
+                    (n_a, n_b, 1.0, HexElements.CONST_RESISTOR, 0),
+                    (n_b, gnd, 1.0, HexElements.V_DEP_VOLTAGE, 5),
+                    (n_c, n_d, 1.0, HexElements.CONST_RESISTOR, 0),
+                ]
+            )
+    ]
+
+    # The controller is pruned first; its dependant props up the attached branch until cleared
+    first_pass = copy(elements)
+    scratchpad = CalculatorScratchpad()
+    prune!(first_pass, scratchpad)
+    ground_search!(first_pass, scratchpad)
+    @test Set(e.id for e in first_pass) == Set(e.id for e in elements[1:4])
+    clear_dangling_dependants!(first_pass, scratchpad.dangling_dependant_element_id_set)
+    @test Set(e.id for e in first_pass) == Set(e.id for e in elements[1:3])
+
+    derived = DerivedMapState(primaryelements = copy(elements))
+    update_map_from_inputs!(derived, MNA_State(), scratchpad, Int64(1))
+    @test Set(e.id for e in derived.filteredelements) == Set(e.id for e in elements[1:2])
+    @test Set(keys(derived.filterednodes)) == Set((n_a,))
+    @test derived.primaryelements == elements
+end
+
+# ===============================================================
 # Tests — Reactivation Scheduler
 # ===============================================================
+
+@testset "drop_pending_coord! preserves FIFO order and the duplicate guard" begin
+    coords = [TileCoord(index, 0) for index in 1:4]
+    scheduler = HexFlowCalculator.ReactivationScheduler(pending = copy(coords), pending_set = Set(coords))
+
+    HexFlowCalculator.drop_pending_coord!(scheduler, coords[2])
+    @test scheduler.pending == coords[[1, 3, 4]]
+    @test scheduler.pending_set == Set(scheduler.pending)
+
+    HexFlowCalculator.drop_pending_coord!(scheduler, coords[2])
+    @test scheduler.pending == coords[[1, 3, 4]]
+    @test scheduler.pending_set == Set(scheduler.pending)
+end
 
 @testset "run_reactivation_trial! — singular probe stays isolated" begin
     gamemap = make_gamemap()
