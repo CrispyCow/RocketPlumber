@@ -351,17 +351,37 @@ function predict_player_position_with_manoeuvre(
     return pos
 end
 
-"Clear the current space-map selection and its cached preview state."
-function clear_spacemap_selection!(inputstate::InputState)
-    inputstate.gui_inputs[:spacemap_selected_idx] = 0
-    inputstate.gui_inputs[:spacemap_selected_iteration] = 0
-    inputstate.gui_inputs[:spacemap_prev_selected_idx] = 0
-    inputstate.gui_inputs[:spacemap_prev_selected_iteration] = 0
+"Update the selected encounter identity, invalidating its preview when it changes."
+function set_spacemap_selection!(inputstate::InputState, selected_idx::Int, selected_iteration::Int)
+    current_idx = get(inputstate.gui_inputs, :spacemap_selected_idx, 0)::Int
+    current_iteration = get(inputstate.gui_inputs, :spacemap_selected_iteration, 0)::Int
+    if selected_idx != current_idx || selected_iteration != current_iteration
+        pop!(inputstate.gui_inputs, :spacemap_delta_v, nothing)
+    end
+
+    inputstate.gui_inputs[:spacemap_selected_idx] = selected_idx
+    inputstate.gui_inputs[:spacemap_selected_iteration] = selected_iteration
     return nothing
 end
 
-"Return the selected encounter index after validating it against the live encounter list."
-function validate_spacemap_selection!(inputstate::InputState, encounter_points)::Int
+"Clear the current space-map selection and its cached preview state."
+clear_spacemap_selection!(inputstate::InputState) = set_spacemap_selection!(inputstate, 0, 0)
+
+"Return the validated selected encounter index, adopting any active manoeuvre target."
+function validate_spacemap_selection!(inputstate::InputState, gamemap::GameMap)::Int
+    encounter_points = get_encounter_points(gamemap)
+    manoeuvre = get_active_manoeuvre(gamemap)
+    if !isnothing(manoeuvre)
+        target_idx = manoeuvre.target_encounter_index
+        if target_idx < 1 || target_idx > length(encounter_points)
+            clear_spacemap_selection!(inputstate)
+            return 0
+        end
+
+        set_spacemap_selection!(inputstate, target_idx, encounter_points[target_idx].iteration)
+        return target_idx
+    end
+
     selected_idx = get!(inputstate.gui_inputs, :spacemap_selected_idx, 0)::Int
     selected_iteration = get!(inputstate.gui_inputs, :spacemap_selected_iteration, 0)::Int
 
@@ -379,18 +399,50 @@ function validate_spacemap_selection!(inputstate::InputState, encounter_points):
     return selected_idx
 end
 
-"Reset the preview delta-V slider when the selected encounter changes."
-function reset_spacemap_preview_dv!(inputstate::InputState, selected_idx::Int, selected_iteration::Int, min_dv::Float64)
-    prev_selected = get!(inputstate.gui_inputs, :spacemap_prev_selected_idx, 0)::Int
-    prev_iteration = get!(inputstate.gui_inputs, :spacemap_prev_selected_iteration, 0)::Int
+"Clear uncommitted selections outside the plot's current visible limits."
+function validate_spacemap_selection!(inputstate::InputState, gamemap::GameMap, viewport::ImPlot.ImPlotRect)::Int
+    encounter_points = get_encounter_points(gamemap)
+    selected_idx = validate_spacemap_selection!(inputstate, gamemap)
+    (selected_idx == 0 || has_active_manoeuvre(gamemap)) && return selected_idx
 
-    if selected_idx != prev_selected || selected_iteration != prev_iteration
-        inputstate.gui_inputs[:spacemap_delta_v] = Cfloat(min_dv)
-        inputstate.gui_inputs[:spacemap_prev_selected_idx] = selected_idx
-        inputstate.gui_inputs[:spacemap_prev_selected_iteration] = selected_iteration
+    position = get_encounter_position(encounter_points[selected_idx], get_time_years(gamemap)::Float64)
+    if !(viewport.X.Min <= position[1] <= viewport.X.Max && viewport.Y.Min <= position[2] <= viewport.Y.Max)
+        clear_spacemap_selection!(inputstate)
+        return 0
+    end
+
+    return selected_idx
+end
+
+"Apply an encounter or blank-space click, keeping active manoeuvre targets selected."
+function select_spacemap_encounter!(inputstate::InputState, gamemap::GameMap, selected_idx::Int)
+    if has_active_manoeuvre(gamemap)
+        validate_spacemap_selection!(inputstate, gamemap)
+        return nothing
+    end
+
+    if selected_idx > 0
+        set_spacemap_selection!(inputstate, selected_idx, get_encounter_points(gamemap)[selected_idx].iteration)
+    else
+        clear_spacemap_selection!(inputstate)
     end
 
     return nothing
+end
+
+"Return the active manoeuvre or calculate a preview for the validated current encounter."
+function resolve_spacemap_manoeuvre!(inputstate::InputState, gamemap::GameMap, selected_idx::Int)
+    selected_idx == 0 && return nothing
+    manoeuvre = get_active_manoeuvre(gamemap)
+    !isnothing(manoeuvre) && return manoeuvre
+
+    ep = get_encounter_points(gamemap)[selected_idx]
+    player_vel = get_velocity(gamemap)
+    min_dv = calculate_minimum_intercept_dv(player_vel, ep.velocity)
+    delta_v_slider = get!(inputstate.gui_inputs, :spacemap_delta_v, Cfloat(min_dv))::Cfloat
+    total_dv = max(Float64(delta_v_slider), min_dv)  # The Float32 slider may round below the minimum
+
+    return plan_intercept_manoeuvre(get_position(gamemap), player_vel, ep, get_time_years(gamemap)::Float64, total_dv)
 end
 
 "Log-scaled encounter arrow length with guaranteed minimum visibility."
@@ -915,10 +967,16 @@ function render_spacemap_active_manoeuvre_panel!(
     CImGui.Text(@sprintf("Capture Burn delta-V: %.1f", norm(manoeuvre.capture_burn_dv)))
     CImGui.Spacing()
 
-    if phase == PHASE_COAST && !time_progressing
-        if button_with_disable("Wait for Capture Burn", ImVec2(-1, 30), timewarp_status)
-            @atomic :monotonic flowcalc_ipc.shared_state.target_spacemap_time = manoeuvre.intercept_time
-        end
+    # Keep Cancel in place when waiting starts or the capture burn is reached
+    wait_status = if phase != PHASE_COAST
+        InvalidRequest("Waiting for capture is only available while coasting.")
+    elseif time_progressing
+        InvalidRequest("Time warp in progress")
+    else
+        timewarp_status
+    end
+    if button_with_disable("Wait for Capture Burn", ImVec2(-1, 30), wait_status)
+        @atomic :monotonic flowcalc_ipc.shared_state.target_spacemap_time = manoeuvre.intercept_time
     end
 
     CImGui.Spacing()
@@ -931,24 +989,19 @@ function render_spacemap_active_manoeuvre_panel!(
     return nothing
 end
 
-"Render read-only information for the selected or targeted encounter."
+"Render read-only information for the validated current encounter."
 function render_spacemap_target_info!(gamemap::GameMap, selected_idx::Int)
     encounter_points = get_encounter_points(gamemap)
     player_pos = get_position(gamemap)
     player_vel = get_velocity(gamemap)
     current_time = get_time_years(gamemap)::Float64
 
-    target_idx = selected_idx
-    if has_active_manoeuvre(gamemap)
-        target_idx = get_active_manoeuvre(gamemap).target_encounter_index
-    end
-
-    if target_idx < 1 || target_idx > length(encounter_points)
+    if selected_idx == 0
         CImGui.TextWrapped("Click an encounter point on the map to select it.")
         return nothing
     end
 
-    ep = encounter_points[target_idx]
+    ep = encounter_points[selected_idx]
     ep_pos = get_encounter_position(ep, current_time)
     distance = norm(ep_pos - player_pos)
 
@@ -976,18 +1029,14 @@ function render_spacemap_manoeuvre_planning_panel!(
     )
     selected_idx == 0 && return nothing
 
-    player_pos = get_position(gamemap)
     player_vel = get_velocity(gamemap)
     current_time = get_time_years(gamemap)::Float64
     encounter_points = get_encounter_points(gamemap)
-    selected_iteration = get(inputstate.gui_inputs, :spacemap_selected_iteration, 0)::Int
     ep = encounter_points[selected_idx]
-    min_dv = calculate_minimum_intercept_dv(player_vel, ep.velocity) + 1.0
+    min_dv = calculate_minimum_intercept_dv(player_vel, ep.velocity)
 
     CImGui.TextColored(ImVec4(0.6, 0.8, 1.0, 1.0), "Intercept Calculated")
     CImGui.Spacing()
-
-    reset_spacemap_preview_dv!(inputstate, selected_idx, selected_iteration, min_dv)
 
     delta_v_slider = get!(inputstate.gui_inputs, :spacemap_delta_v, Cfloat(min_dv))::Cfloat
     delta_v_slider = max(delta_v_slider, Cfloat(min_dv))
@@ -1000,11 +1049,8 @@ function render_spacemap_manoeuvre_planning_panel!(
     CImGui.SetNextItemWidth(-1)
     @cref CImGui.SliderFloat("##dv_slider", &delta_v_slider, slider_min, slider_max, "delta-V: %.0f")
     inputstate.gui_inputs[:spacemap_delta_v] = delta_v_slider
-    total_dv = Float64(delta_v_slider)
 
-    preview_manoeuvre = plan_intercept_manoeuvre(
-        player_pos, player_vel, ep, current_time, total_dv
-    )
+    preview_manoeuvre = resolve_spacemap_manoeuvre!(inputstate, gamemap, selected_idx)
 
     if !isnothing(preview_manoeuvre)
         time_to_intercept = preview_manoeuvre.intercept_time - current_time
@@ -1016,13 +1062,11 @@ function render_spacemap_manoeuvre_planning_panel!(
 
     button_tooltip = !can_plan ? "No manoeuvre preview available" : nothing
     if button_with_disable("Plan Manoeuvre", ImVec2(-1, 35), !can_plan; tooltip = button_tooltip)
-        if !isnothing(preview_manoeuvre)
-            modified_map = deepcopy(gamemap)
-            set_target_time!(modified_map, current_time)
-            set_active_manoeuvre!(modified_map, preview_manoeuvre)
-            enqueue_map_override!(flowcalc_ipc, modified_map)
-            @atomic :monotonic flowcalc_ipc.shared_state.target_spacemap_time = current_time
-        end
+        modified_map = deepcopy(gamemap)
+        set_target_time!(modified_map, current_time)
+        set_active_manoeuvre!(modified_map, preview_manoeuvre)
+        enqueue_map_override!(flowcalc_ipc, modified_map)
+        @atomic :monotonic flowcalc_ipc.shared_state.target_spacemap_time = current_time
     end
 
     CImGui.Spacing()
@@ -1148,7 +1192,6 @@ function render_spacemap_left_panel!(
     player_pos = get_position(gamemap)
     player_vel = get_velocity(gamemap)
     current_time = get_time_years(gamemap)::Float64
-    encounter_points = get_encounter_points(gamemap)
     has_manoeuvre = has_active_manoeuvre(gamemap)
     time_progressing = is_time_progressing(gamemap)
     show_galaxy_escape = is_galaxy_escape_unlocked(get_peak_estimated_delta_v(gamemap))
@@ -1203,7 +1246,7 @@ function render_spacemap_left_panel!(
     CImGui.Text(@sprintf("Ship delta-V: %.1f", gamestate.estimated_min_delta_v))
     CImGui.Spacing()
 
-    selected_idx = validate_spacemap_selection!(inputstate, encounter_points)
+    selected_idx = validate_spacemap_selection!(inputstate, gamemap)
 
     #= ---------- Target information section ----------- =#
     CImGui.SeparatorText("TARGET INFORMATION")
@@ -1232,37 +1275,18 @@ function render_spacemap_left_panel!(
 end
 
 "Render committed or previewed intercept trajectories on the space map."
-function render_spacemap_trajectory_previews!(
-        inputstate::InputState,
-        gamemap::GameMap,
-        total_dv::Float64,
-    )
+function render_spacemap_trajectory_previews!(inputstate::InputState, gamemap::GameMap, selected_idx::Int)
+    selected_idx == 0 && return nothing
+
     player_pos = get_position(gamemap)
     player_vel = get_velocity(gamemap)
     current_time = get_time_years(gamemap)::Float64
     encounter_points = get_encounter_points(gamemap)
     has_manoeuvre = has_active_manoeuvre(gamemap)
-    n_enc = length(encounter_points)
+    ep = encounter_points[selected_idx]
 
-    # Resolve the manoeuvre to draw: committed or preview
-    manoeuvre = nothing
-    if has_manoeuvre
-        manoeuvre = get_active_manoeuvre(gamemap)
-    else
-        selected_idx = validate_spacemap_selection!(inputstate, encounter_points)
-        if selected_idx >= 1 && selected_idx <= n_enc
-            ep = encounter_points[selected_idx]
-            manoeuvre = plan_intercept_manoeuvre(
-                player_pos, player_vel, ep, current_time, total_dv
-            )
-        end
-    end
-
+    manoeuvre = resolve_spacemap_manoeuvre!(inputstate, gamemap, selected_idx)
     isnothing(manoeuvre) && return nothing
-
-    ep_idx = manoeuvre.target_encounter_index
-    (ep_idx < 1 || ep_idx > n_enc) && return nothing
-    ep = encounter_points[ep_idx]
 
     predicted_intercept_position = predict_player_position_with_manoeuvre(
         player_pos,
@@ -1351,7 +1375,7 @@ function render_spacemap_plot_area!(
         )
 
         n_enc = length(encounter_points)
-        selected_idx = validate_spacemap_selection!(inputstate, encounter_points)
+        selected_idx = validate_spacemap_selection!(inputstate, gamemap, ImPlot.GetPlotLimits())
         if n_enc > 0
             enc_cfg = sm.encounter_config
             total_viewport_width = sm.viewport_half_width * 2.0
@@ -1360,13 +1384,37 @@ function render_spacemap_plot_area!(
             enc_xs = Vector{Float64}(undef, n_enc)
             enc_ys = Vector{Float64}(undef, n_enc)
 
+            for i in 1:n_enc
+                epos = get_encounter_position(encounter_points[i], current_time)
+                enc_xs[i] = epos[1]
+                enc_ys[i] = epos[2]
+            end
+
+            # Resolve clicks before drawing the current target
+            if ImPlot.IsPlotHovered() && CImGui.IsMouseClicked(0)
+                mouse = ImPlot.GetPlotMousePos()
+                viewport = ImPlot.GetPlotLimits()
+                best_idx = 0
+                best_dist_sq = SPACEMAP_CLICK_RADIUS_SQ
+                for i in 1:n_enc
+                    if !(viewport.X.Min <= enc_xs[i] <= viewport.X.Max && viewport.Y.Min <= enc_ys[i] <= viewport.Y.Max)
+                        continue
+                    end
+                    dx = enc_xs[i] - mouse.x
+                    dy = enc_ys[i] - mouse.y
+                    dist_sq = dx * dx + dy * dy
+                    if dist_sq < best_dist_sq
+                        best_dist_sq = dist_sq
+                        best_idx = i
+                    end
+                end
+                select_spacemap_encounter!(inputstate, gamemap, best_idx)
+                selected_idx = validate_spacemap_selection!(inputstate, gamemap, viewport)
+            end
+
             # Render velocity vector arrows
             for i in 1:n_enc
                 ep = encounter_points[i]
-                epos = get_encounter_position(ep, current_time)
-                enc_xs[i] = epos[1]
-                enc_ys[i] = epos[2]
-
                 rel_vel = ep.velocity - player_vel
                 rel_speed = norm(rel_vel)
                 arrow_len = encounter_arrow_length(
@@ -1429,40 +1477,17 @@ function render_spacemap_plot_area!(
             end
 
             # Render selected encounter highlight
-            if selected_idx >= 1 && selected_idx <= n_enc
+            if selected_idx > 0
                 ImPlot.PlotScatter(
                     "##selected",
                     Float64[enc_xs[selected_idx]], Float64[enc_ys[selected_idx]];
                     spec = ImPlot.ImPlotSpec(Marker = ImPlot.ImPlotMarker_Diamond, MarkerSize = 9.0, MarkerFillColor = ImVec4(1.0, 0.9, 0.3, 1.0)),
                 )
             end
-
-            # Click Detection
-            if ImPlot.IsPlotHovered() && CImGui.IsMouseClicked(0)
-                mouse = ImPlot.GetPlotMousePos()
-                best_idx = 0
-                best_dist_sq = SPACEMAP_CLICK_RADIUS_SQ
-                for i in 1:n_enc
-                    dx = enc_xs[i] - mouse.x
-                    dy = enc_ys[i] - mouse.y
-                    dist_sq = dx * dx + dy * dy
-                    if dist_sq < best_dist_sq
-                        best_dist_sq = dist_sq
-                        best_idx = i
-                    end
-                end
-                if best_idx > 0
-                    inputstate.gui_inputs[:spacemap_selected_idx] = best_idx
-                    inputstate.gui_inputs[:spacemap_selected_iteration] = encounter_points[best_idx].iteration
-                else
-                    clear_spacemap_selection!(inputstate)
-                end
-            end
         end
 
         # Render Trajectory
-        total_dv = Float64(get(inputstate.gui_inputs, :spacemap_delta_v, Cfloat(50.0))::Cfloat)
-        render_spacemap_trajectory_previews!(inputstate, gamemap, total_dv)
+        render_spacemap_trajectory_previews!(inputstate, gamemap, selected_idx)
 
         ImPlot.EndPlot()
     end
@@ -1531,11 +1556,12 @@ function ui_spacemap_render!(
     left_width = Float32(SPACEMAP_LEFT_PANEL_WIDTH)
     right_width = avail.x - left_width - 12.0f0
 
-    render_spacemap_left_panel!(inputstate, flowcalc_ipc, gamemap, snapshot.gamestate, left_width, avail.y)
-
-    CImGui.SameLine()
-
+    # Resolve plot limits and selection before offering planning controls
+    panel_position = CImGui.GetCursorPos()
+    CImGui.SetCursorPos(ImVec2(panel_position.x + left_width + 12.0f0, panel_position.y))
     render_spacemap_plot_area!(inputstate, gamemap, right_width, avail.y)
+    CImGui.SetCursorPos(panel_position)
+    render_spacemap_left_panel!(inputstate, flowcalc_ipc, gamemap, snapshot.gamestate, left_width, avail.y)
 
     CImGui.End()
     CImGui.PopStyleColor()

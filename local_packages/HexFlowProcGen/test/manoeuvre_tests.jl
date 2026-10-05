@@ -52,6 +52,66 @@ using StaticArrays
     end
 
 
+    @testset "minimum intercept ΔV" begin
+        player_pos = SVector(100.0, -50.0)
+        player_vel = SVector(100.0, 20.0)
+        current_time = 3.0
+
+        for (relative_vel, expected_minimum) in (
+                (SVector(0.0, 0.0), 4.0),
+                (SVector(3.0, 4.0), 9.0),
+                (SVector(80.0, 0.0), 84.0),
+                (SVector(0.0, -100.0), 105.0),
+                (SVector(600.0, 800.0), 1050.0),
+            )
+            target_vel = player_vel + relative_vel
+            @test calculate_minimum_intercept_dv(player_vel, target_vel) == expected_minimum
+
+            # Distance changes coast time, not the minimum budget or feasibility
+            for separation in (SVector(10.0, 20.0), SVector(1.0e6, -2.0e6))
+                ep = make_test_encounter_point(
+                    1;
+                    base_velocity = norm(target_vel),
+                    position = player_pos + separation,
+                    velocity = target_vel,
+                    spawn_time = current_time,
+                )
+                @test isnothing(plan_intercept_manoeuvre(player_pos, player_vel, ep, current_time, prevfloat(expected_minimum)))
+                sep, vdiff = simulate_plan(player_pos, player_vel, ep, current_time, expected_minimum)
+                @test isapprox(sep, 0.0; atol = 1.0e-6)
+                @test isapprox(vdiff, 0.0; atol = 1.0e-6)
+            end
+        end
+    end
+
+    @testset "configurable closing ΔV surplus" begin
+        player_pos = SVector(100.0, -50.0)
+        player_vel = SVector(100.0, 20.0)
+        current_time = 3.0
+
+        for (relative_vel, surplus_options, expected_minimum) in (
+                (SVector(3.0, 4.0), (min_close_delta_v = 1.0,), 6.0),
+                (SVector(3.0, 4.0), (min_close_delta_v = 12.0,), 17.0),
+                (SVector(100.0, 0.0), (min_close_delta_v = 1.0,), 105.0),
+                (SVector(20.0, 0.0), (min_close_delta_v = 1.0, min_surplus_fraction = 0.1), 22.0),
+                (SVector(3.0, 4.0), (min_close_delta_v = 0.25, min_surplus_fraction = 0.0), 5.25),
+            )
+            target_vel = player_vel + relative_vel
+            ep = make_test_encounter_point(
+                1;
+                base_velocity = norm(target_vel),
+                position = player_pos + SVector(10.0, 20.0),
+                velocity = target_vel,
+                spawn_time = current_time,
+            )
+            @test calculate_minimum_intercept_dv(player_vel, target_vel; surplus_options...) == expected_minimum
+            @test isnothing(plan_intercept_manoeuvre(player_pos, player_vel, ep, current_time, prevfloat(expected_minimum); surplus_options...))
+            sep, vdiff = simulate_plan(player_pos, player_vel, ep, current_time, expected_minimum; surplus_options...)
+            @test isapprox(sep, 0.0; atol = 1.0e-6)
+            @test isapprox(vdiff, 0.0; atol = 1.0e-6)
+        end
+    end
+
     @testset "direct intercept helpers" begin
         separation = SVector(100.0, 0.0)
         relative_vel = SVector(10.0, 0.0)
@@ -129,15 +189,15 @@ using StaticArrays
     @testset "relaxed surplus supports recovery-style replans" begin
         ep = make_test_encounter_point(
             7;
-            base_velocity = 120.0,
+            base_velocity = 200.0,
             position = SVector(330.0, 0.0),
-            velocity = SVector(120.0, 0.0),
+            velocity = SVector(200.0, 0.0),
         )
 
         player_pos = SVector(650.0, 0.0)
         player_vel = SVector(100.0, 0.0)
         current_time = 3.0
-        total_dv = 20.5
+        total_dv = 104.5
 
         @test isnothing(plan_intercept_manoeuvre(player_pos, player_vel, ep, current_time, total_dv))
 

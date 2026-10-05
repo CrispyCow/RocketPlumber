@@ -1459,15 +1459,15 @@ end
 # Manoeuvre Planning
 # ===============================================================
 
-"""
-Returns the velocity-match ΔV plus a minimum surplus fraction for closing the gap.
-"""
+"Return the velocity-match ΔV plus the greater of the absolute or proportional closing surplus."
 function calculate_minimum_intercept_dv(
         player_vel::SVector{2, Float64},
         target_vel::SVector{2, Float64};
-        min_surplus_fraction::Float64 = 0.05
+        min_surplus_fraction::Float64 = 0.05,
+        min_close_delta_v::Float64 = 4.0,
     )::Float64
-    return norm(target_vel - player_vel) * (1.0 + min_surplus_fraction)
+    velocity_match_dv = norm(target_vel - player_vel)
+    return velocity_match_dv + max(min_close_delta_v, min_surplus_fraction * velocity_match_dv)
 end
 
 "Collect the current intercept geometry between the player and an encounter point."
@@ -1604,8 +1604,8 @@ The approach burn sets the ship on a trajectory to reach the target's future pos
 
 Returns `ManoeuvreData` or `nothing` if the total ΔV is insufficient.
 
-`min_surplus_fraction` controls the minimum closing surplus required by the
-initial feasibility guard before the direct-intercept solve is attempted.
+`min_close_delta_v` and `min_surplus_fraction` set the absolute and proportional
+closing surplus; the greater is required before the direct-intercept solve is attempted.
 """
 function plan_intercept_manoeuvre(
         player_pos::SVector{2, Float64},
@@ -1614,9 +1614,10 @@ function plan_intercept_manoeuvre(
         current_time::Float64,
         total_dv::Float64;
         min_surplus_fraction::Float64 = 0.05,
+        min_close_delta_v::Float64 = 4.0,
     )::Union{Nothing, ManoeuvreData}
     # Check minimum ΔV feasibility
-    min_dv = calculate_minimum_intercept_dv(player_vel, ep.velocity; min_surplus_fraction)
+    min_dv = calculate_minimum_intercept_dv(player_vel, ep.velocity; min_surplus_fraction, min_close_delta_v)
     total_dv < min_dv && return nothing
 
     separation, relative_vel = _direct_intercept_geometry(player_pos, player_vel, ep, current_time)
