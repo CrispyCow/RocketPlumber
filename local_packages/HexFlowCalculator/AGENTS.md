@@ -54,6 +54,10 @@ derived/MNA state and publish without advancing time.
   unsynchronised side channel between the calculator and render threads.
 - Keep live mutable state confined to the calculator thread unless a type has
   an explicit synchronisation contract.
+- `create_threadsafe_consolebuffer()` retains only the latest immutable
+  `ConsoleMessage`. `console_see()` returns that message or `nothing`; each
+  `console_push(text)` replaces it with a fresh monotonic timestamp, including
+  identical repeats. Reads and writes share a lock; no message history is kept.
 
 ## Reactivation
 

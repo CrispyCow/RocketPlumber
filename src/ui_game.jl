@@ -4,7 +4,7 @@ Formatter: Runic
 =#
 
 # ===============================================================
-# UI Game Windows (Inspector, Timer, Toolbar, Properties)
+# UI Game Windows (Inspector, Timer, Notifications, Properties)
 # ===============================================================
 
 # Lightweight usings to help editor intellisense
@@ -623,15 +623,15 @@ function ui_velocity_tracker_render!(
                 column_width = CImGui.GetContentRegionAvail().x
                 normal_font_size = CImGui.GetFontSize()
                 dv_font_size = 24.0
-                CImGui.PushFont(C_NULL, dv_font_size)
+                dv_font_size > normal_font_size && CImGui.PushFont(UI_VECTOR_FONT, dv_font_size)
                 # Keep the value prominent while fitting signed values in the column
                 while dv_font_size > normal_font_size && CImGui.CalcTextSize(dv_text).x > column_width
                     CImGui.PopFont()
                     dv_font_size = max(normal_font_size, dv_font_size - 1.0)
-                    CImGui.PushFont(C_NULL, dv_font_size)
+                    dv_font_size > normal_font_size && CImGui.PushFont(UI_VECTOR_FONT, dv_font_size)
                 end
                 CImGui.TextColored(DV_COLOUR, dv_text)
-                CImGui.PopFont()
+                dv_font_size > normal_font_size && CImGui.PopFont()
 
                 CImGui.TableNextColumn()
                 _render_required_thrust_rocket!(rem_dv)
@@ -680,7 +680,7 @@ function ui_explorer_opening_wake_render!(
     CImGui.Begin("##explorer_opening_wake", C_NULL, flags)
 
     # Wake message
-    CImGui.PushFont(C_NULL, 20.0)
+    CImGui.PushFont(UI_VECTOR_FONT, 20.0)
     CImGui.PushStyleColor(CImGui.ImGuiCol_Text, ImVec4(1.0, 0.75, 0.25, 1.0))
     CImGui.Text("PROXIMITY ALERT")
     CImGui.PopStyleColor()
@@ -702,30 +702,46 @@ function ui_explorer_opening_wake_render!(
     return nothing
 end
 
-"""
-Renders the terminal toolbar at the bottom of the window.
-Must be called within ui_renderwrap.
-"""
-function ui_toolbar_render!(
-        inputstate::InputState,
+const NOTIFICATION_DURATION = 10.0
+const NOTIFICATION_FLASH_DURATION = 0.25
+
+"Render the latest notification with a brief border highlight on each trigger within ui_renderwrap."
+function ui_notifications_render!(
         winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}},
         threadsafe_console_see::Function
     )
+    message = threadsafe_console_see()
+    isnothing(message) && return nothing
+    age = Float64(time_ns()) / 1.0e9 - message.timestamp
+    age >= NOTIFICATION_DURATION && return nothing
+    flashing = age < NOTIFICATION_FLASH_DURATION
+
     win_float = to_float(winsize)
+    margin = 12.0
+    width = min(480.0, max(1.0, win_float.width - 2 * margin))
+    CImGui.SetNextWindowPos(ImVec2(margin, win_float.height - margin), CImGui.ImGuiCond_Always, ImVec2(0.0, 1.0))
+    CImGui.SetNextWindowSize(ImVec2(width, 0.0), CImGui.ImGuiCond_Always)
+    CImGui.SetNextWindowBgAlpha(0.95)
+    flags = DEFAULT_WINDOW_FLAGS | CImGui.ImGuiWindowFlags_AlwaysAutoResize |
+        CImGui.ImGuiWindowFlags_NoCollapse | CImGui.ImGuiWindowFlags_NoSavedSettings |
+        CImGui.ImGuiWindowFlags_NoScrollbar | CImGui.ImGuiWindowFlags_NoScrollWithMouse |
+        CImGui.ImGuiWindowFlags_NoInputs | CImGui.ImGuiWindowFlags_NoFocusOnAppearing
+    CImGui.PushFont(unsafe_load(CImGui.GetIO().FontDefault), 13.0)
+    flashing && CImGui.PushStyleColor(CImGui.ImGuiCol_Border, DV_COLOUR)
+    CImGui.Begin("##notifications", C_NULL, flags)
+    flashing && CImGui.PopStyleColor()
 
-    ui_window("Toolbar", (0.0, win_float.height - toolbarheight), (win_float.width, toolbarheight))
-    CImGui.Text("TERMINAL:")
-    CImGui.BeginChild("TerminalLog", (0.0, 0.0), true)
-    for message in threadsafe_console_see()
-        CImGui.TextUnformatted(message)
-    end
-    # Auto-scroll to bottom if already at bottom
-    if CImGui.GetScrollY() >= (CImGui.GetScrollMaxY() - 1.0)
-        CImGui.SetScrollHereY(1.0)
-    end
-    CImGui.EndChild()
+    CImGui.PushFont(UI_VECTOR_FONT, 20.0)
+    CImGui.TextColored(DV_COLOUR, "System Message")
+    CImGui.PopFont()
+    CImGui.Spacing()
+    CImGui.PushTextWrapPos(0.0)
 
+    CImGui.TextUnformatted(message.text)
+
+    CImGui.PopTextWrapPos()
     CImGui.End()
+    CImGui.PopFont()
     return nothing
 end
 
@@ -740,7 +756,7 @@ function ui_propertybox_render!(
     state = placement_state(inputstate)
     win_float = to_float(winsize)
 
-    ui_window("Properties", (win_float.width - propertyboxwidth, 0.0), (propertyboxwidth, win_float.height - toolbarheight))
+    ui_window("Properties", (win_float.width - propertyboxwidth, 0.0), (propertyboxwidth, win_float.height))
 
     # Display mode description
     CImGui.Text("PROPERTIES:")
@@ -1022,7 +1038,7 @@ function render_galaxy_escape_discovery!(inputstate::InputState)
     minimum_delta_v = first(GALAXY_ESCAPE_TIER_DELTA_V)
     requirement = @sprintf("Requires %.0f delta-V", minimum_delta_v)
 
-    CImGui.PushFont(C_NULL, 20.0)
+    CImGui.PushFont(UI_VECTOR_FONT, 20.0)
     CImGui.PushStyleColor(CImGui.ImGuiCol_Text, GALAXY_ESCAPE_BUTTON_TEXT_COLOUR)
     CImGui.PushStyleColor(CImGui.ImGuiCol_Button, GALAXY_ESCAPE_BUTTON_COLOUR)
     CImGui.PushStyleColor(CImGui.ImGuiCol_ButtonHovered, GALAXY_ESCAPE_BUTTON_HOVERED_COLOUR)
@@ -1153,7 +1169,7 @@ function render_spacemap_left_panel!(
     CImGui.SeparatorText("TIME")
 
     CImGui.Text("Current Time:")
-    CImGui.PushFont(C_NULL, 24.0)
+    CImGui.PushFont(UI_VECTOR_FONT, 24.0)
     time_colour = time_progressing ? ImVec4(1.0, 0.65, 0.1, 1.0) : ImVec4(0.7, 0.9, 1.0, 1.0)
     CImGui.TextColored(time_colour, @sprintf("%.3f years", current_time))
     CImGui.PopFont()

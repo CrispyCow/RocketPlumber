@@ -98,7 +98,7 @@ function setup_flowcalc_ipc(initial_snapshot::FlowCalculatorSnapshot)::FlowCalcu
     shared_state = FlowCalculatorSharedState()
     command_queue = create_command_queue(32)
     publish_snapshot, get_snapshot = create_snapshot_storage(initial_snapshot)
-    console_push, console_see = create_threadsafe_consolebuffer(50)
+    console_push, console_see = create_threadsafe_consolebuffer()
 
     return FlowCalculatorIPC(
         shared_state,
@@ -234,7 +234,6 @@ function ui_rendering!(
 
         if !inputstate.spacemap_active
             ui_velocity_tracker_render!(snapshot.gamestate, snapshot.gamemap, inputstate, flowcalc_ipc)
-            ui_toolbar_render!(inputstate, GLFW.GetWindowSize(window), flowcalc_ipc.console_see)
             ui_propertybox_render!(inputstate, snapshot.gamemap, snapshot.derived, snapshot.mna, GLFW.GetWindowSize(window), flowcalc_ipc)
             ui_action_popup_render!(inputstate, viewstate, flowcalc_ipc)
             ui_dev_utils_menu_render!(
@@ -252,6 +251,7 @@ function ui_rendering!(
         end
 
         ui_explorer_opening_wake_render!(snapshot.gamemap, inputstate, GLFW.GetWindowSize(window))
+        ui_notifications_render!(GLFW.GetWindowSize(window), flowcalc_ipc.console_see)
     end
     return nothing
 end

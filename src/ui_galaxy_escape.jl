@@ -63,7 +63,7 @@ end
 
 "Render one centred line at a chosen font size and colour."
 function _render_victory_centred_text(text::AbstractString, font_size::Real, colour::ImVec4)
-    CImGui.PushFont(C_NULL, font_size)
+    CImGui.PushFont(UI_VECTOR_FONT, font_size)
     text_width = CImGui.CalcTextSize(text).x
     available_width = CImGui.GetContentRegionAvail().x
     CImGui.SetCursorPosX(CImGui.GetCursorPosX() + max(0.0f0, (available_width - text_width) * 0.5f0))
@@ -282,7 +282,7 @@ function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputSta
     CImGui.PopStyleVar(2)
 
     CImGui.Dummy(ImVec2(0.0, 14.0))
-    CImGui.PushFont(C_NULL, 23.0)
+    CImGui.PushFont(UI_VECTOR_FONT, 23.0)
     CImGui.TextColored(GALAXY_ESCAPE_VICTORY_ACCENT, "STATISTICS")
     CImGui.PopFont()
     CImGui.Separator()

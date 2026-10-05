@@ -32,11 +32,21 @@ end
 "Global storage for the ImPlot context pointer, managed by `ui_setup` and `ui_teardown`."
 const _implot_ctx = Ref{Any}(nothing)
 
+"Embedded vector font for explicitly sized UI text, owned by the ImGui context."
+global UI_VECTOR_FONT::Ptr{CImGui.ImFont} = C_NULL
+
 "Perform one-time CImGui and ImPlot context and backend setup."
 function ui_setup(window::GLFW.Window)
     # Create shared UI contexts
     CImGui.set_backend(:GlfwOpenGL3)
     ctx = CImGui.CreateContext()
+
+    # Keep bitmap text crisp at the default size; use the vector font for explicit sizes
+    io = CImGui.GetIO()
+    fonts = unsafe_load(io.Fonts)
+    io.FontDefault = CImGui.AddFontDefaultBitmap(fonts)
+    global UI_VECTOR_FONT = CImGui.AddFontDefaultVector(fonts)
+
     _implot_ctx[] = ImPlot.CreateContext()
     ImPlot.SetImGuiContext(ctx)
     CImGui.StyleColorsDark()
@@ -59,6 +69,7 @@ function ui_teardown()
         _implot_ctx[] = nothing
     end
     CImGui.DestroyContext()
+    global UI_VECTOR_FONT = C_NULL
     return nothing
 end
 

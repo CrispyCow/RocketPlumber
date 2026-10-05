@@ -79,6 +79,12 @@ new mutation, add a command rather than bypassing that boundary.
 - Shader and render-program changes belong in `HexFlowRendering` or
   `RenderEngine`, not in the UI files.
 
+## CImGui UI
+
+- Normal UI text uses the default embedded ProggyClean bitmap font at 13 px; do not push a font for normal-sized text.
+- Text rendered at an explicit non-default size should use `CImGui.PushFont(UI_VECTOR_FONT, size)` so the embedded scalable ProggyForever font is used.
+- Do not use `CImGui.PushFont(C_NULL, size)` to scale the default bitmap font.
+
 ## Verification
 
 For application integration or gameplay changes, run:

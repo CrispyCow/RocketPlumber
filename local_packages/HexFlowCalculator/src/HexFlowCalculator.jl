@@ -14,7 +14,7 @@ using FlowEngine, FlowMap, HexComponentsAPI, HexFlowControl
 using HexFlowProcGen
 
 # Type exports - Data Structures
-export FlowCalculatorSnapshot, FlowCalculatorSharedState, FlowCalculatorIPC, TimingState
+export FlowCalculatorSnapshot, FlowCalculatorSharedState, FlowCalculatorIPC, TimingState, ConsoleMessage
 
 # Type exports - Commands
 export CommandStatus, APPLIED, REJECTED, QUEUED_FAILED, INVALID
@@ -484,39 +484,37 @@ end
 # Thread-Safe Console Buffer
 # ===============================================================
 
-"""
-Thread-safe console message buffer using closure pattern.
-Returns `(push_function, see_function)` for console access.
-"""
-function create_threadsafe_consolebuffer(capacity::Int)
-    if capacity < 1
-        error("Invalid console buffer capacity (must be at least 1)")
-    end
+"Console text with its monotonic creation time in seconds, independent of simulation time."
+struct ConsoleMessage
+    text::String
+    timestamp::Float64
+end
 
-    local msg_buffer = String[]
+"""
+Thread-safe storage for the latest console message, replacing it on every trigger.
+Returns `(push_function, see_function)`; reads return `nothing` before the first message.
+"""
+function create_threadsafe_consolebuffer()
+    local latest_message = Ref{Union{Nothing, ConsoleMessage}}(nothing)
     local console_lock = ReentrantLock()
 
-    "Thread-safe push: appends a timestamped message, evicting the oldest if over capacity."
+    "Replace the latest message with a fresh timestamp, including identical repeats."
     function push_message(msg::String)
         lock(console_lock) do
-            timestamp = Dates.format(now(), "HH:MM:SS")
-            stamped_msg = "[$timestamp]: $msg"
-            push!(msg_buffer, stamped_msg)
-            if length(msg_buffer) > capacity
-                popfirst!(msg_buffer)
-            end
+            timestamp = Float64(time_ns()) / 1.0e9
+            latest_message[] = ConsoleMessage(msg, timestamp)
         end
         return nothing
     end
 
-    "Thread-safe read: returns a shallow copy of the message buffer."
-    function see_messages()
+    "Read the latest immutable message under the same lock as writers."
+    function see_message()
         return lock(console_lock) do
-            return copy(msg_buffer)
+            return latest_message[]
         end
     end
 
-    return push_message, see_messages
+    return push_message, see_message
 end
 
 # ===============================================================

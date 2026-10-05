@@ -519,7 +519,7 @@ function make_test_ipc(
         publish_snapshot = (args...) -> nothing,
         get_snapshot = () -> FlowCalculatorSnapshot(),
         console_push = console_push,
-        console_see = () -> String[],
+        console_see = () -> nothing,
     )
 end
 
@@ -1897,7 +1897,7 @@ end
             publish_snapshot = publish_snapshot,
             get_snapshot = get_snapshot,
             console_push = silent_console,
-            console_see = () -> String[],
+            console_see = () -> nothing,
         )
 
         HexFlowCalculator.step_flowcalc_sim!(
@@ -1926,7 +1926,7 @@ end
             publish_snapshot = publish_snapshot,
             get_snapshot = get_snapshot,
             console_push = silent_console,
-            console_see = () -> String[],
+            console_see = () -> nothing,
         )
         new_surface = TileCoord(1, 0)
         command = create_add_ship_surface_command(command_queue, new_surface)
@@ -2056,35 +2056,57 @@ end
 # ===============================================================
 
 @testset "create_threadsafe_consolebuffer" begin
-    push_msg, see_msgs = create_threadsafe_consolebuffer(5)
+    push_msg, see_msg = create_threadsafe_consolebuffer()
 
     # Initially empty
-    @test isempty(see_msgs())
+    @test isnothing(see_msg())
 
     # Push and see
+    before_push = Float64(time_ns()) / 1.0e9
     push_msg("hello")
-    msgs = see_msgs()
-    @test length(msgs) == 1
-    @test contains(msgs[1], "hello")
+    after_push = Float64(time_ns()) / 1.0e9
+    message = see_msg()
+    @test message.text == "hello"
 
-    # Messages get timestamped
-    @test contains(msgs[1], ":")  # timestamp format HH:MM:SS contains colons
+    # Timing is stored separately from player-visible text
+    @test before_push <= message.timestamp <= after_push
 
-    # Ring buffer wraps at capacity
+    # Each push replaces the latest message; earlier reads remain detached
     for i in 1:10
         push_msg("msg $i")
     end
-    msgs2 = see_msgs()
-    @test length(msgs2) == 5  # buffer capacity is 5
+    latest = see_msg()
+    @test latest.text == "msg 10"
+    @test latest.timestamp > message.timestamp
+    @test message.text == "hello"
 
-    # see_messages returns a copy — mutating it doesn't affect buffer
-    msgs3 = see_msgs()
-    empty!(msgs3)
-    @test length(see_msgs()) == 5
+    # Identical repeats restart both the display lifetime and border flash
+    sleep(0.001)
+    before_repeat = Float64(time_ns()) / 1.0e9
+    push_msg("msg 10")
+    after_repeat = Float64(time_ns()) / 1.0e9
+    repeated = see_msg()
+    @test repeated.text == latest.text
+    @test before_repeat <= repeated.timestamp <= after_repeat
+    @test repeated.timestamp > latest.timestamp
 end
 
-@testset "create_threadsafe_consolebuffer — invalid length" begin
-    @test_throws Exception create_threadsafe_consolebuffer(0)
+@testset "create_threadsafe_consolebuffer — concurrent access" begin
+    push_msg, see_msg = create_threadsafe_consolebuffer()
+    expected_messages = Set("msg $i" for i in 1:100)
+    before_pushes = Float64(time_ns()) / 1.0e9
+    @sync for i in 1:100
+        Threads.@spawn begin
+            push_msg("msg $i")
+            message = see_msg()
+            @test message.text in expected_messages
+            @test before_pushes <= message.timestamp <= Float64(time_ns()) / 1.0e9
+        end
+    end
+
+    @test see_msg().text in expected_messages
+    push_msg("final")
+    @test see_msg().text == "final"
 end
 
 # ===============================================================

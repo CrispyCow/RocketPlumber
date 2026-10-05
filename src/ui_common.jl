@@ -16,7 +16,6 @@ using HexFlowCalculator
 
 #= ---------- UI Layout Constants ---------- =#
 
-const toolbarheight = 200.0
 const propertyboxwidth = 350.0
 
 #= ---------- Window Configuration ---------- =#

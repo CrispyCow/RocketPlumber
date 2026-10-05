@@ -8,7 +8,7 @@ ENV["JULIA_GLFW_PLATFORM"] = "null"
 using RocketPlumber
 using FlowMap: GameMap, ShipState, set_surface_tile!
 using HexFrame: TileCoord, VertexCoord, Q_POS
-using HexFlowCalculator: FlowCalculatorSnapshot
+using HexFlowCalculator: FlowCalculatorSnapshot, ConsoleMessage
 using HexFlowControl: InputState, PlacementReadyState, PlacementPipeChainState,
     PlacementDeleteState, PlacementTileState, PlacementSurfaceEditState,
     placement_state, set_placement_state!, editor_capabilities_enabled
@@ -22,6 +22,23 @@ using RocketPlumber: TimelapseRecorder, timelapse_frame_count, capture_timelapse
     set_timelapse_enabled!, maybe_capture_timelapse!, snapshot_timelapse_history
 
 include(joinpath(@__DIR__, "smoke", "SmokeTestSupport.jl"))
+
+@testset "Console notifications" begin
+    ipc = RocketPlumber.setup_flowcalc_ipc(FlowCalculatorSnapshot())
+    winsize = (width = Int32(800), height = Int32(600))
+    @test isnothing(ipc.console_see())
+    @test isnothing(RocketPlumber.ui_notifications_render!(winsize, ipc.console_see))
+
+    # Existing IPC producers need only supply the message text
+    ipc.console_push("hello")
+    @test ipc.console_see().text == "hello"
+    ipc.console_push("latest")
+    @test ipc.console_see().text == "latest"
+
+    # Expired notifications return before any CImGui calls, even without a UI context
+    expired = ConsoleMessage("expired", Float64(time_ns()) / 1.0e9 - RocketPlumber.NOTIFICATION_DURATION)
+    @test isnothing(RocketPlumber.ui_notifications_render!(winsize, () -> expired))
+end
 
 @testset "Launch and smoke arguments" begin
     @test RocketPlumber.parse_launch_args(String[]) == (telemetry = false,)
