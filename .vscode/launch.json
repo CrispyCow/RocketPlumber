@@ -3,13 +3,12 @@
     "configurations": [
         {
             "type": "julia",
-            "name": "Launch RocketPlumber REPL (2 default + 1 interactive, 1+1 GC)",
+            "name": "Launch RocketPlumber REPL (2 default + 1 interactive)",
             "request": "launch",
             "program": "${workspaceFolder}/scripts/repl_launch.jl",
             "env": {
                 "JULIA_PROJECT": "${workspaceFolder}/dev",
-                "JULIA_NUM_THREADS": "2,1",
-                "JULIA_NUM_GC_THREADS": "1,1"
+                "JULIA_NUM_THREADS": "2,1"
             },
             "cwd": "${workspaceFolder}"
         }

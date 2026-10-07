@@ -1,7 +1,7 @@
 # This gets created by CImGui but is not required across instances
 imgui.ini
 
-# Build outputs (timestamped build directories)
+# Distribution build outputs
 build/outputs/
 
 # Recorded captures

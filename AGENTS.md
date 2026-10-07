@@ -118,6 +118,8 @@ file's formatter policy and keep adjacent cleanup small and directly useful.
   Revise. Use it for interactive development; local packages remain path
   dependencies rather than workspace members. Standalone tools may own separate
   environments.
+- `build/` is a workspace project for build-only JuliaC. `build/build.jl`
+  produces a relocatable distribution in ignored `build/outputs/RocketPlumber/`.
 
 See the nested guides for package responsibilities and area-specific
 invariants. Keep detailed type and function inventories next to the code they
@@ -152,13 +154,17 @@ julia tools/run_all_package_tests.jl --list
 julia tools/run_all_package_tests.jl
 
 # Scripted full-application smoke test
-julia --project=. --threads=2,1 --gcthreads=1,1 scripts/smoke_test.jl
+julia --project=. --threads=2,1 scripts/smoke_test.jl
 
 # Interactive development launch
-julia --project=dev --threads=2,1 --gcthreads=1,1 scripts/repl_launch.jl
+julia --project=dev --threads=2,1 scripts/repl_launch.jl
 
 # Production entry point
-julia --project=. --threads=2,1 --gcthreads=1,1 -m RocketPlumber
+julia --project=. --threads=2,1 -m RocketPlumber
+
+# Distribution build (precompilation runs inside the script's GLFW null scope)
+julia --project=build -e 'using Pkg; Pkg.instantiate(; allow_autoprecomp = false)'
+julia --project=build build/build.jl
 ```
 
 Choose verification proportional to the change: start with the affected
@@ -170,6 +176,20 @@ The GitHub Actions test workflow runs the all-package test sweep for pull
 requests targeting `main`. It does not run the graphical smoke test or separate
 tool tests. Report exactly which local checks were run and which
 display-dependent checks were not run.
+
+The separate, manually triggered Distribution builds workflow compiles Windows
+and Linux candidate ZIPs and uploads them to private draft GitHub Releases in
+`RocketPlumberPrivate`. Each full run/attempt gets a unique draft targeting the
+selected source commit; individual job reruns reuse that draft. Drafts remain
+in place after failures. The workflow does not run graphical checks.
+Distribution compilation uses substantial memory; run only one local build at
+a time and monitor available RAM when verifying it. Distribution jobs use Avrea
+8-vCPU, 32 GB Linux and Windows runners; release preparation and PR tests use
+standard GitHub runners. The shared build script budgets six image-compilation
+threads and leaves build worker, GC and BLAS thread counts at Julia's defaults
+unless configured by the caller.
+Package precompilation stays serial to avoid multiplying compiler pools and
+memory usage. These defaults target both CI and 8-core, 32 GB development machines.
 
 All game launch paths need a display/OpenGL context and at least two default
 Julia worker threads. The smoke test opens a real window and is not headless.

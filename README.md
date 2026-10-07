@@ -84,6 +84,19 @@ julia --project=dev --threads=2,1 --gcthreads=1,1 scripts/repl_launch.jl
 The repository root is the `RocketPlumber` Julia package. `src/RocketPlumber.jl` is the single application source assembly point, and `using RocketPlumber` loads it without launching the game. Call `RocketPlumber.launch()` to start the normal game. The package owns the production `@main(args)` and PackageCompiler `julia_main()` entry points. The `dev/` workspace project supplies Revise for development only. Runtime shaders and the texture atlas are source-controlled in `HexFlowRendering` and accessed through `RelocatableFolders` paths.
 With two default worker threads plus one interactive main thread, the FlowCalculator runs away from the main OpenGL loop without reserving an unnecessary third default worker.
 
+#### Building a distribution
+
+The `build/` workspace project contains JuliaC as a build-only dependency. From the repository root, set it up and build a relocatable distribution:
+
+```bash
+julia --project=build -e 'using Pkg; Pkg.instantiate(; allow_autoprecomp = false)'
+julia --project=build build/build.jl
+```
+
+The bundle is written to `build/outputs/RocketPlumber/`, replacing previous build outputs. Compilation uses GLFW's null backend for headless machines. The build script targets 8-core, 32 GB machines with six image-compilation threads. Packages precompile one at a time so their compiler pools do not compete for CPU and memory. Build worker, GC and BLAS thread counts use Julia's defaults unless configured by the caller. The executable embeds two default worker threads plus one interactive thread and selects the normal graphical backend at runtime. These are initial concurrency settings, rather than a benchmarked optimum.
+
+The manually triggered **Distribution builds** GitHub Actions workflow builds Windows and Linux candidate ZIPs on Avrea's 8-vCPU, 32 GB runners and uploads them to a private draft Release in `RocketPlumberPrivate`. The release-preparation job uses a standard GitHub runner. Each full run/attempt creates a draft targeting the selected source commit; drafts remain available even if a platform fails. Rerunning individual failed jobs uploads to the existing draft. Pull-request tests remain in the separate **Tests** workflow.
+
 #### Using the REPL and Revise
 
 If you are serious about making changes to the code I would recommend using the REPL for your development. The best source for this is [the Julia manual section on it](https://docs.julialang.org/en/v1/stdlib/REPL/), but I'll give a TL;DR:
@@ -135,7 +148,7 @@ Development is likely to move pretty slowly as this is a hobby project. To get i
 ---
 ## Navigating the Codebase
 
-The root is the `RocketPlumber` application package. Its `src/RocketPlumber.jl` file owns source assembly, while `RocketPlumber.launch()` owns normal startup. The `dev/` project is a member of the root Julia workspace and provides development-only dependencies such as Revise. Local reusable packages remain under `/local_packages` as path dependencies, rather than workspace members.
+The root is the `RocketPlumber` application package. Its `src/RocketPlumber.jl` file owns source assembly, while `RocketPlumber.launch()` owns normal startup. The `dev/` and `build/` projects are members of the root Julia workspace, supplying development-only dependencies such as Revise and build-only JuliaC respectively. Local reusable packages remain under `/local_packages` as path dependencies, rather than workspace members.
 
 Application integration and local development packages live under `/src` and `/local_packages`, respectively. The package boundary keeps reusable code in local packages and application startup, UI, rendering, and persistence coordination in RocketPlumber.
 

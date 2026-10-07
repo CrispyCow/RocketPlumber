@@ -2,9 +2,9 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Run RocketPlumber (2 default + 1 interactive, 1+1 GC)",
+            "label": "Run RocketPlumber (2 default + 1 interactive)",
             "type": "shell",
-            "command": "julia --threads=2,1 --gcthreads=1,1 --project=dev scripts/repl_launch.jl",
+            "command": "julia --threads=2,1 --project=dev scripts/repl_launch.jl",
             "presentation": {
                 "reveal": "always"
             },

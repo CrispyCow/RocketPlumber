@@ -2,8 +2,14 @@ name = "RocketPlumber"
 uuid = "49293a16-84b5-4c04-b023-19c4eddda1c7"
 version = "0.1.0"
 
-[workspace]
-projects = ["dev"]
+[compat]
+CImGui = "9"
+ImPlot = "0.8"
+LinearAlgebra = "1.13"
+PrecompileTools = "1.3.4"
+Printf = "1.11.0"
+TimerOutputs = "1.2"
+julia = "1.13"
 
 [deps]
 Accessors = "7d9f7c33-5ae7-4f3b-8dc6-eff91059b697"
@@ -53,40 +59,78 @@ StructArrays = "09ab397b-f2b6-538f-b94a-2f83cf4a842a"
 StructEquality = "6ec83bb0-ed9f-11e9-3b4c-2b04cb4e219c"
 TimerOutputs = "a759f4b9-e2f1-59dc-863e-4aeb61b1ea8f"
 
-[sources]
-FlowEngine = {path = "local_packages/FlowEngine"}
-FlowMap = {path = "local_packages/FlowMap"}
-HexComponentsAPI = {path = "local_packages/components/HexComponentsAPI"}
-HexElements = {path = "local_packages/HexElements"}
-HexFlowBasicComponents = {path = "local_packages/components/HexFlowBasicComponents"}
-HexFlowBasicPipes = {path = "local_packages/components/HexFlowBasicPipes"}
-HexFlowCalculator = {path = "local_packages/HexFlowCalculator"}
-HexFlowControl = {path = "local_packages/HexFlowControl"}
-HexFlowLearningSystem = {path = "local_packages/HexFlowLearningSystem"}
-HexFlowNozzleComponents = {path = "local_packages/components/HexFlowNozzleComponents"}
-HexFlowPersistence = {path = "local_packages/HexFlowPersistence"}
-HexFlowProcGen = {path = "local_packages/HexFlowProcGen"}
-HexFlowPumpComponents = {path = "local_packages/components/HexFlowPumpComponents"}
-HexFlowRendering = {path = "local_packages/HexFlowRendering"}
-HexFlowSwitchComponents = {path = "local_packages/components/HexFlowSwitchComponents"}
-HexFlowTankComponents = {path = "local_packages/components/HexFlowTankComponents"}
-HexFlowTelemetry = {path = "local_packages/HexFlowTelemetry"}
-HexFluids = {path = "local_packages/HexFluids"}
-HexFrame = {path = "local_packages/HexFrame"}
-RenderEngine = {path = "local_packages/RenderEngine"}
-SquirrelNoise = {path = "local_packages/SquirrelNoise"}
-
-[compat]
-CImGui = "9"
-ImPlot = "0.8"
-LinearAlgebra = "1.13"
-PrecompileTools = "1.3.4"
-Printf = "1.11.0"
-TimerOutputs = "1.2"
-julia = "1.13"
-
 [extras]
+GlfwOpenGLBackend = "d9f2f4be-b8ff-536a-8d91-3e9112099104"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[preferences.GlfwOpenGLBackend]
+precompile_workload = false
+
+[sources.FlowEngine]
+path = "local_packages/FlowEngine"
+
+[sources.FlowMap]
+path = "local_packages/FlowMap"
+
+[sources.HexComponentsAPI]
+path = "local_packages/components/HexComponentsAPI"
+
+[sources.HexElements]
+path = "local_packages/HexElements"
+
+[sources.HexFlowBasicComponents]
+path = "local_packages/components/HexFlowBasicComponents"
+
+[sources.HexFlowBasicPipes]
+path = "local_packages/components/HexFlowBasicPipes"
+
+[sources.HexFlowCalculator]
+path = "local_packages/HexFlowCalculator"
+
+[sources.HexFlowControl]
+path = "local_packages/HexFlowControl"
+
+[sources.HexFlowLearningSystem]
+path = "local_packages/HexFlowLearningSystem"
+
+[sources.HexFlowNozzleComponents]
+path = "local_packages/components/HexFlowNozzleComponents"
+
+[sources.HexFlowPersistence]
+path = "local_packages/HexFlowPersistence"
+
+[sources.HexFlowProcGen]
+path = "local_packages/HexFlowProcGen"
+
+[sources.HexFlowPumpComponents]
+path = "local_packages/components/HexFlowPumpComponents"
+
+[sources.HexFlowRendering]
+path = "local_packages/HexFlowRendering"
+
+[sources.HexFlowSwitchComponents]
+path = "local_packages/components/HexFlowSwitchComponents"
+
+[sources.HexFlowTankComponents]
+path = "local_packages/components/HexFlowTankComponents"
+
+[sources.HexFlowTelemetry]
+path = "local_packages/HexFlowTelemetry"
+
+[sources.HexFluids]
+path = "local_packages/HexFluids"
+
+[sources.HexFrame]
+path = "local_packages/HexFrame"
+
+[sources.RenderEngine]
+path = "local_packages/RenderEngine"
+
+[sources.SquirrelNoise]
+path = "local_packages/SquirrelNoise"
 
 [targets]
 test = ["Test"]
+
+[workspace]
+projects = ["dev", "build"]

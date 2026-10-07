@@ -42,7 +42,9 @@ launching, input, UI, rendering, persistence, and game-session flow.
 ## Thread And State Boundaries
 
 - The main thread owns GLFW events, OpenGL, CImGui, input, and rendering. The
-  calculator thread owns authoritative simulation mutation.
+  calculator thread owns authoritative simulation mutation. Keep Julia's
+  normal I/O-loop scheduling and yield between rendered frames so it can
+  service pending tasks and timer wake-ups.
 - Send gameplay changes through `MapEditCommand` constructors and
   `try_enqueue_command!`. Do not mutate the live `GameMap` from UI, input, or
   render code.
@@ -90,7 +92,7 @@ new mutation, add a command rather than bypassing that boundary.
 For application integration or gameplay changes, run:
 
 ```shell
-julia --project=. --threads=2,1 --gcthreads=1,1 scripts/smoke_test.jl
+julia --project=. --threads=2,1 scripts/smoke_test.jl
 ```
 
 This opens a real window and needs a working display/OpenGL context and the

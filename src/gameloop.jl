@@ -388,7 +388,9 @@ function enter_gameloop(
         initial_active_tutorial_id::Union{Nothing, Symbol} = nothing,
         frame_hook::Union{Nothing, Function} = nothing,
     )::GameLoopResult
+
     # Initialise session state
+    expected_render_thread_id = Threads.threadid()
     ui_loadingscreen_render(window, "Instantiating game state")
     attach_glfw_callbacks!(window)
     g_inputstate, g_viewstate = init_input_viewstates(window)
@@ -433,6 +435,12 @@ function enter_gameloop(
     ui_loadingscreen_render(window, "Entering main loop")
 
     while isnothing(g_inputstate.exit_reason) && !GLFW.WindowShouldClose(window)
+        # Guard against the render loop changing threads, which can cause GLFW/OpenGL issues
+        current_render_thread_id = Threads.threadid()
+        if current_render_thread_id != expected_render_thread_id
+            @warn "Render loop changed Julia threads" expected_render_thread_id current_render_thread_id maxlog = 1
+        end
+
         g_viewstate.frame_count += 1
         updatefps(window, g_inputstate.is_recording ? "(RECORDING)" : "")
         @timeit render_loop_timer "Get Snapshot" g_snapshot::FlowCalculatorSnapshot = g_flowcalc_ipc.get_snapshot()
@@ -510,6 +518,9 @@ function enter_gameloop(
         end
 
         handle_diagnostics(render_loop_diagnostic_config, g_viewstate.frame_count)
+
+        # Let Julia service pending tasks and timer wake-ups between frames.
+        yield()
     end
 
     # Materialise the session result

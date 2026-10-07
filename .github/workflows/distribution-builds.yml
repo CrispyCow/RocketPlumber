@@ -1,0 +1,91 @@
+name: Distribution builds
+
+on:
+  # Optional release_tag: blank creates a disposable candidate draft;
+  # non-empty creates a draft intended to become a real release.
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Blank: temporary distribution-<run-id>-<attempt> candidate draft. Set e.g. v0.1.0: draft using that exact tag, intended for later publication as the real release.'
+        type: string
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  # Always creates a draft; never publishes automatically. For a real release:
+  # run with the intended tag, wait for both assets, inspect/edit the draft,
+  # then manually publish that same draft.
+  # Rerun individual failed build jobs; uploads use --clobber. Another complete
+  # run with the same real tag is not the retry path and may fail if it exists.
+  prepare-release:
+    runs-on: ubuntu-latest
+    # Expose the selected tag so Windows and Linux upload to the same draft.
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - name: Create draft release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_REF: ${{ github.ref }}
+          SOURCE_SHA: ${{ github.sha }}
+          REQUESTED_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [ -n "$REQUESTED_RELEASE_TAG" ]; then
+            tag="$REQUESTED_RELEASE_TAG"
+          else
+            tag="distribution-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          fi
+          cat > release-notes.md <<EOF
+          Rocket Plumber Windows/Linux distribution candidates.
+
+          Source ref: ${SOURCE_REF}
+          Source SHA: ${SOURCE_SHA}
+          Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          Run attempt: ${GITHUB_RUN_ATTEMPT}
+          EOF
+          gh release create "$tag" --draft --target "$SOURCE_SHA" \
+            --title "Distribution candidates: ${SOURCE_REF} (${GITHUB_RUN_ID}, attempt ${GITHUB_RUN_ATTEMPT})" \
+            --notes-file release-notes.md
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare-release
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [avrea-ubuntu-latest-8-vcpu, avrea-windows-2025-8-vcpu]
+    # Both build runners provide 8 vCPUs and 32 GB RAM.
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1.13'
+      - name: Instantiate build environment
+        run: julia --project=build -e 'using Pkg; Pkg.instantiate(; allow_autoprecomp = false)'
+      - name: Build distribution
+        run: julia --project=build build/build.jl
+      - name: Archive Linux distribution
+        if: runner.os == 'Linux'
+        working-directory: build/outputs
+        run: tar -czf RocketPlumber-Linux.tar.gz RocketPlumber
+      - name: Archive Windows distribution
+        if: runner.os == 'Windows'
+        working-directory: build/outputs
+        run: Compress-Archive -Path RocketPlumber -DestinationPath RocketPlumber-Windows.zip
+      # Upload each platform archive directly to the draft prepared above.
+      - name: Upload distribution to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
+        run: gh release upload "$env:RELEASE_TAG" "build/outputs/RocketPlumber-${{ runner.os }}.${{ runner.os == 'Linux' && 'tar.gz' || 'zip' }}" --clobber
+        shell: pwsh

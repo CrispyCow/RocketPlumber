@@ -7,25 +7,16 @@ Formatter: Runic
 # Initial Setup
 # ===============================================================
 
-# Keep the I/O scheduler clear of blocking OpenGL loops, once per process
-const _initialise_io_thread = Base.OncePerProcess{Nothing}(
-    () -> begin
-        Base.Experimental.make_io_thread()
-        return nothing
-    end
-)
-
-"Check the Julia thread count and move I/O scheduling to a separate thread."
+"Check the Julia thread count required by the calculator."
 function configure_threads()
     # Inspect available thread pools
     default_threads = Threads.nthreads(:default)
     interactive_threads = Threads.nthreads(:interactive)
     @info "Julia threads available: default=$(default_threads), interactive=$(interactive_threads)"
     if default_threads < 2
-        @warn "Only $(default_threads) default thread(s) available. Consider starting Julia with --threads=2,1 --gcthreads=1,1 for proper FlowCalculator operation"
+        @warn "Only $(default_threads) default thread(s) available. Consider starting Julia with --threads=2,1 for proper FlowCalculator operation"
     end
 
-    _initialise_io_thread()
     return nothing
 end
 
