@@ -82,7 +82,7 @@ end
 "Load and plan the saved time lapse before starting the graphical runtime."
 function _run_with_persistence(options::ExportOptions)::Int
     println("Loading time-lapse save: $(options.input)")
-    bundle = Persistence.HexFlowPersistence.loadmap_bundle_strict(options.input)
+    bundle = Persistence.HexFlowPersistence.loadmap_bundle(options.input)
     timeline = assemble_timeline(bundle, options)
     cameras = build_camera_schedule(timeline.frames, options)
     schedule = build_frame_schedule(length(timeline.frames), options)

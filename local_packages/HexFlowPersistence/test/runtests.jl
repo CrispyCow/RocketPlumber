@@ -1,5 +1,5 @@
 #=
-Scope: Save-file round trips and historical JLD2 migration tests
+Scope: Save-file round trips and authoritative-map validation
 Formatter: Runic
 =#
 
@@ -15,9 +15,6 @@ using HexFlowBasicPipes: ScrapPipeBehav
 using HexFlowProcGen
 using StaticArrays
 using JLD2
-import JLD2: rconvert
-
-struct PersistenceTestComponent <: ComponentBehavior end
 
 "Build a galaxy map with position and velocity for persistence tests."
 function make_galaxy_escape_ready_map(; velocity::SVector{2, Float64} = SVector(10.0, 0.0), time_years::Float64 = 0.0)::GameMap
@@ -28,31 +25,6 @@ function make_galaxy_escape_ready_map(; velocity::SVector{2, Float64} = SVector(
     return gamemap
 end
 
-@testset "historical structure upgrades" begin
-    component = PersistenceTestComponent()
-    placed_component = rconvert(PlacedComponent, (component = component,))
-    @test placed_component.component === component
-    @test placed_component.rotation == HexFrame.Q_POS
-    @test placed_component.ship == :primary
-    @test_throws ErrorException rconvert(PlacedComponent, NamedTuple())
-
-    pipe = ScrapPipeBehav()
-    placed_pipe = rconvert(PlacedPipe, (pipe = pipe,))
-    @test placed_pipe.pipe === pipe
-    @test placed_pipe.ship == :primary
-    @test_throws ErrorException rconvert(PlacedPipe, NamedTuple())
-
-    @test rconvert(ShipState, NamedTuple()) isa ShipState
-    @test rconvert(SpaceMapEmpty, NamedTuple()) isa SpaceMapEmpty
-    @test rconvert(LearningProgress, NamedTuple()) isa LearningProgress
-    @test rconvert(SandboxLearningState, NamedTuple()) isa SandboxLearningState
-    @test rconvert(TutorialState, NamedTuple()) isa TutorialState
-    @test rconvert(ManoeuvreData, NamedTuple()) isa ManoeuvreData
-    @test rconvert(EncounterPoint, (index = 1, base_velocity = 2.0)) isa EncounterPoint
-    @test rconvert(SpaceMapState, NamedTuple()) isa SpaceMapState
-    @test rconvert(EncounterSystemConfig, NamedTuple()) isa EncounterSystemConfig
-end
-
 @testset "built-in pipe reconstruction" begin
     gamemap = GameMap()
     pipe_coord = first(get_side_pipes(TileCoord(0, 0)))
@@ -60,8 +32,8 @@ end
 
     mktempdir() do directory
         path = joinpath(directory, "built_in_pipe.jld2")
-        savemap(gamemap, path)
-        loaded_map = loadmap_strict(path)
+        savemap(gamemap, path; game_version = v"0.1.0")
+        loaded_map = loadmap(path)
         @test loaded_map.pipe_behaviors[pipe_coord].pipe isa ScrapPipeBehav
     end
 end
@@ -81,7 +53,7 @@ end
 
     mktempdir() do directory
         path = joinpath(directory, "built_in_behaviours.jld2")
-        savemap(gamemap, path)
+        savemap(gamemap, path; game_version = v"0.1.0")
         @test isfile(path)
 
         child_script = joinpath(@__DIR__, "fresh_process_load.jl")
@@ -91,40 +63,39 @@ end
     end
 end
 
-@testset "PlaythroughStatistics persistence" begin
-    old_layout = (
-        components = Dict{TileCoord, PlacedComponent}(),
-        pipe_behaviors = Dict{PipeCoord, PlacedPipe}(),
-        surface_shiptags = Dict{TileCoord, Symbol}(),
-        ships = Dict{Symbol, ShipState}(),
-        space_map = SpaceMapEmpty(),
-        learning_system = NoLearningSystem(),
+@testset "crash-dump payload persistence" begin
+    gamemap = GameMap()
+    increment_simulated_ticks!(gamemap)
+    payload = (
+        stored_gamemap = gamemap,
+        pending_command_diagnostics = NamedTuple[(type = :AddShipSurfaceCommand, id = UInt64(1), coord = TileCoord(1, 0))],
+        node_voltages = Dict(NodeCoord(TileCoord(0, 0), HexFrame.NODE_INTERNAL_1) => 12.0),
+        vsource_currents = Dict(HexComponentsAPI.HexElements.ElementID(TileCoord(0, 0), 1) => 0.5),
+        exception_message = "calculator test failure",
+        exception_backtrace = "calculator test failure\nStacktrace:\n [1] test crash site",
     )
-    old_map = rconvert(FlowMap.GameMap, old_layout)
-    @test get_recorded_play_time_seconds(old_map) == 0.0
-    @test get_simulated_ticks(old_map) == 0
-    @test get_total_delta_v(old_map) == 0.0
-    @test get_peak_thrust(old_map) == 0.0
-    @test get_peak_estimated_delta_v(old_map) == 0.0
-    @test isempty(get_playthrough_statistics(old_map).completed_encounters)
 
-    partial_statistics = rconvert(FlowMap.PlaythroughStatistics, (total_delta_v = 2.5, peak_estimated_delta_v = 1700.0))
-    @test get_recorded_play_time_seconds(partial_statistics) == 0.0
-    @test get_total_delta_v(partial_statistics) == 2.5
-    @test get_peak_estimated_delta_v(partial_statistics) == 1700.0
-    @test get_simulated_ticks(partial_statistics) == 0
-    @test typeof(partial_statistics.completed_encounters) == Dict{EncounterClass, Int64}
-    for invalid_peak in (-1.0, Inf, NaN)
-        @test_throws ArgumentError rconvert(
-            FlowMap.PlaythroughStatistics,
-            (peak_estimated_delta_v = invalid_peak,),
-        )
+    mktempdir() do directory
+        dump_directory = joinpath(directory, "maps")
+        path = HexFlowPersistence.write_crash_dump(payload; game_version = v"0.1.0-dev", directory = dump_directory)
+        @test dirname(path) == dump_directory
+        @test occursin(r"^crash_\d{8}_\d{6}\.jld2$", basename(path))
+        @test isfile(path)
+        dump = JLD2.load(path)
+        @test dump["game_version"] == "0.1.0-dev"
+        @test HexFlowPersistence.load_game_version(path) == "0.1.0-dev"
+        @test only(dump["pending_command_diagnostics"]) == only(payload.pending_command_diagnostics)
+        @test dump["exception_message"] == "calculator test failure"
+        @test occursin("test crash site", dump["exception_backtrace"])
+        @test get_simulated_ticks(loadmap(path)) == 1
+
+        blocked_directory = joinpath(directory, "file")
+        write(blocked_directory, "blocks directory creation")
+        @test_throws Exception HexFlowPersistence.write_crash_dump(payload; game_version = v"0.1.0-dev", directory = blocked_directory)
     end
+end
 
-    typemap = HexFlowPersistence._build_map_typemap()
-    @test haskey(typemap, "FlowMap.PlaythroughStatistics")
-    @test haskey(typemap, "FlowMap.GalaxyEscapeSpaceMap")
-
+@testset "PlaythroughStatistics persistence" begin
     gamemap = GameMap()
     set_recorded_play_time_seconds!(gamemap, 12.0)
     for _ in 1:4
@@ -138,7 +109,7 @@ end
 
     mktempdir() do directory
         path = joinpath(directory, "statistics.jld2")
-        savemap(gamemap, path)
+        savemap(gamemap, path; game_version = v"0.1.0")
         loaded_map = loadmap(path)
 
         @test get_recorded_play_time_seconds(loaded_map) == 12.0
@@ -165,37 +136,9 @@ end
     gamemap = GameMap(space_map = escape_map)
     record_peak_estimated_delta_v!(gamemap, 2100.0)
 
-    reconstructed = rconvert(
-        FlowMap.GalaxyEscapeSpaceMap, (
-            velocity = SVector(130.0, 2.0),
-            starting_velocity_x = 100.0,
-            departure_time_years = 7.0,
-        )
-    )
-    @test reconstructed == GalaxyEscapeSpaceMap(
-        velocity = SVector(130.0, 2.0), starting_velocity_x = 100.0, departure_time_years = 7.0,
-        pre_escape_map = GameMap(),
-    )
-    @test !can_abort_galaxy_escape(reconstructed)
-    @test_throws ErrorException rconvert(
-        FlowMap.GalaxyEscapeSpaceMap, (
-            starting_velocity_x = 100.0, departure_time_years = 7.0,
-        )
-    )
-    @test_throws ArgumentError rconvert(
-        FlowMap.GalaxyEscapeSpaceMap, (
-            velocity = SVector(Inf, 0.0), starting_velocity_x = 100.0, departure_time_years = 7.0,
-        )
-    )
-    @test_throws ArgumentError rconvert(
-        FlowMap.GalaxyEscapeSpaceMap, (
-            velocity = SVector(130.0, 0.0), starting_velocity_x = 100.0, departure_time_years = -1.0,
-        )
-    )
-
     mktempdir() do directory
         path = joinpath(directory, "galaxy_escape.jld2")
-        savemap(gamemap, path)
+        savemap(gamemap, path; game_version = v"0.1.0")
         loaded_map = loadmap(path)
 
         @test loaded_map.space_map isa GalaxyEscapeSpaceMap
@@ -230,7 +173,7 @@ end
 
     mktempdir() do directory
         map_only_path = joinpath(directory, "map_only.jld2")
-        savemap(gamemap, map_only_path)
+        savemap(gamemap, map_only_path; game_version = v"0.1.0")
         map_only = loadmap_bundle(map_only_path)
         @test map_only.gamemap isa GameMap
         @test isnothing(map_only.timelapse)
@@ -238,20 +181,21 @@ end
             haskey(file, "stored_timelapse")
         end
         @test loadmap(map_only_path) isa GameMap
+        @test HexFlowPersistence.load_game_version(map_only_path) == "0.1.0"
 
         bundled_path = joinpath(directory, "bundled.jld2")
-        savemap(GameMapBundle(gamemap, history), bundled_path)
+        savemap(GameMapBundle(gamemap, history), bundled_path; game_version = v"0.1.0")
+        @test HexFlowPersistence.load_game_version(bundled_path) == "0.1.0"
         bundled = loadmap_bundle(bundled_path)
         @test bundled.gamemap isa GameMap
         @test bundled.timelapse isa TimelapseHistory
         loaded_history = bundled.timelapse::TimelapseHistory
-        @test loaded_history.format_version == TIMELAPSE_FORMAT_VERSION
         @test length(loaded_history.frames) == 2
         @test get_simulated_ticks(loaded_history.frames[1]) == 1
         @test get_simulated_ticks(loaded_history.frames[2]) == 2
 
         empty_path = joinpath(directory, "empty_history.jld2")
-        savemap(GameMapBundle(gamemap, TimelapseHistory()), empty_path)
+        savemap(GameMapBundle(gamemap, TimelapseHistory()), empty_path; game_version = v"0.1.0")
         empty_bundle = loadmap_bundle(empty_path)
         @test empty_bundle.timelapse isa TimelapseHistory
         @test isempty(empty_bundle.timelapse.frames)
@@ -261,96 +205,78 @@ end
         malformed_bundle = @test_logs (:warn, r"invalid type") loadmap_bundle(malformed_path)
         @test malformed_bundle.gamemap isa GameMap
         @test isnothing(malformed_bundle.timelapse)
-
-        unsupported_path = joinpath(directory, "unsupported_history.jld2")
-        unsupported = TimelapseHistory(format_version = UInt16(1))
-        JLD2.jldsave(unsupported_path; stored_gamemap = gamemap, stored_timelapse = unsupported)
-        unsupported_bundle = @test_logs (:warn, r"unsupported.*format version") loadmap_bundle(unsupported_path)
-        @test unsupported_bundle.gamemap isa GameMap
-        @test isnothing(unsupported_bundle.timelapse)
-
-        @test_throws ArgumentError savemap(GameMapBundle(gamemap, unsupported), joinpath(directory, "unsupported_save.jld2"))
     end
 end
 
-@testset "historical Main time-lapse migration" begin
-    # This fixture records Main.TimelapseHistory and must not be regenerated with current types.
-    legacy_path = joinpath(@__DIR__, "fixtures", "pre_migration_bundle.jld2")
-    legacy_bundle = loadmap_bundle_strict(legacy_path)
+@testset "informational game version metadata" begin
+    gamemap = GameMap()
+    increment_simulated_ticks!(gamemap)
 
-    @test legacy_bundle.gamemap isa GameMap
-    @test legacy_bundle.timelapse isa TimelapseHistory
-    @test length(legacy_bundle.timelapse.frames) == 1
-    @test only(legacy_bundle.timelapse.frames) isa GameMap
+    mktempdir() do directory
+        path = joinpath(directory, "versioned.jld2")
+        savemap(gamemap, path; game_version = v"0.1.0-dev")
+        @test HexFlowPersistence.load_game_version(path) == "0.1.0-dev"
 
-    typemap = HexFlowPersistence._build_map_typemap()
-    @test haskey(typemap, "Main.TimelapseHistory")
-    @test !haskey(typemap, "RocketPlumber.TimelapseHistory")
+        legacy_path = joinpath(directory, "unversioned.jld2")
+        JLD2.jldsave(legacy_path; stored_gamemap = gamemap)
+        @test isnothing(HexFlowPersistence.load_game_version(legacy_path))
+        @test get_simulated_ticks(loadmap(legacy_path)) == 1
+    end
 end
 
-@testset "strict and forgiving loading" begin
+@testset "optional history interruptions propagate" begin
+    mktempdir() do directory
+        path = joinpath(directory, "interrupted_history.jld2")
+        savemap(GameMapBundle(GameMap(), TimelapseHistory()), path; game_version = v"0.1.0")
+
+        # Inject cancellation in a separate process so other load tests keep the real reader.
+        child_code = """
+        using Test, HexFlowPersistence, JLD2
+        @eval HexFlowPersistence _stored_timelapse(::JLD2.JLDFile) = throw(InterruptException())
+        @test_throws InterruptException loadmap_bundle(only(ARGS))
+        """
+        package_dir = dirname(@__DIR__)
+        command = `$(Base.julia_cmd()) --startup-file=no --history-file=no --project=$(package_dir) -e $(child_code) $(path)`
+        @test success(command)
+    end
+end
+
+@testset "authoritative map validation" begin
     mktempdir() do directory
         missing_path = joinpath(directory, "missing.jld2")
-        @test_throws Exception loadmap_strict(missing_path)
-        @test_throws Exception loadmap_bundle_strict(missing_path)
-        @test get_simulated_ticks(loadmap(missing_path)) == 0
-        @test get_simulated_ticks(loadmap_bundle(missing_path).gamemap) == 0
-
         absent_map_path = joinpath(directory, "absent_map.jld2")
         JLD2.jldsave(absent_map_path; other_key = 1)
-        @test_throws Exception loadmap_strict(absent_map_path)
-        @test_throws Exception loadmap_bundle_strict(absent_map_path)
-
         invalid_map_path = joinpath(directory, "invalid_map.jld2")
         JLD2.jldsave(invalid_map_path; stored_gamemap = "invalid")
-        @test_throws Exception loadmap_strict(invalid_map_path)
-        @test_throws Exception loadmap_bundle_strict(invalid_map_path)
-        @test get_simulated_ticks(loadmap(invalid_map_path)) == 0
-        @test get_simulated_ticks(loadmap_bundle(invalid_map_path).gamemap) == 0
+        corrupt_path = joinpath(directory, "corrupt.jld2")
+        write(corrupt_path, "not JLD2 data")
+
+        for path in (missing_path, absent_map_path, invalid_map_path, corrupt_path)
+            @test_throws Exception loadmap(path)
+            @test_throws Exception loadmap_bundle(path)
+        end
 
         gamemap = GameMap()
         increment_simulated_ticks!(gamemap)
-        map_only_path = joinpath(directory, "map_only.jld2")
-        savemap(gamemap, map_only_path)
-        @test loadmap_strict(map_only_path) isa GameMap
-        @test isnothing(loadmap_bundle_strict(map_only_path).timelapse)
-        JLD2.jldopen(map_only_path, "r") do file
-            @test haskey(file, "stored_gamemap")
-            @test !haskey(file, "stored_timelapse")
-        end
-
-        history = TimelapseHistory(frames = [gamemap])
-        bundle_path = joinpath(directory, "bundle.jld2")
-        savemap(GameMapBundle(gamemap, history), bundle_path)
-        @test loadmap_bundle_strict(bundle_path).timelapse isa TimelapseHistory
-        JLD2.jldopen(bundle_path, "r") do file
-            @test haskey(file, "stored_gamemap")
-            @test haskey(file, "stored_timelapse")
-        end
-
         malformed_path = joinpath(directory, "malformed_history.jld2")
         JLD2.jldsave(malformed_path; stored_gamemap = gamemap, stored_timelapse = "invalid")
-        @test get_simulated_ticks(loadmap_strict(malformed_path)) == 1
-        @test_throws Exception loadmap_bundle_strict(malformed_path)
+        @test get_simulated_ticks(loadmap(malformed_path)) == 1
         malformed_bundle = @test_logs (:warn, r"invalid type") loadmap_bundle(malformed_path)
         @test get_simulated_ticks(malformed_bundle.gamemap) == 1
         @test isnothing(malformed_bundle.timelapse)
 
         null_history_path = joinpath(directory, "null_history.jld2")
         JLD2.jldsave(null_history_path; stored_gamemap = gamemap, stored_timelapse = nothing)
-        @test get_simulated_ticks(loadmap_strict(null_history_path)) == 1
-        @test_throws Exception loadmap_bundle_strict(null_history_path)
         null_history_bundle = loadmap_bundle(null_history_path)
         @test get_simulated_ticks(null_history_bundle.gamemap) == 1
         @test isnothing(null_history_bundle.timelapse)
+    end
+end
 
-        unsupported_path = joinpath(directory, "unsupported_history.jld2")
-        unsupported = TimelapseHistory(format_version = UInt16(1))
-        JLD2.jldsave(unsupported_path; stored_gamemap = gamemap, stored_timelapse = unsupported)
-        @test get_simulated_ticks(loadmap_strict(unsupported_path)) == 1
-        @test_throws Exception loadmap_bundle_strict(unsupported_path)
-        unsupported_bundle = @test_logs (:warn, r"unsupported.*format version") loadmap_bundle(unsupported_path)
-        @test get_simulated_ticks(unsupported_bundle.gamemap) == 1
-        @test isnothing(unsupported_bundle.timelapse)
+@testset "save failures propagate" begin
+    mktempdir() do directory
+        path = joinpath(directory, "missing_directory", "map.jld2")
+        @test_throws Exception savemap(GameMap(), path; game_version = v"0.1.0")
+        @test_throws Exception savemap(GameMapBundle(GameMap(), TimelapseHistory()), path; game_version = v"0.1.0")
     end
 end

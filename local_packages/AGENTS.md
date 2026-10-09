@@ -24,8 +24,8 @@ package updater refreshes package-root workspaces.
   propagation, region temperatures, sparse MNA construction, and solving.
 - `HexFlowProcGen`: deterministic ship/encounter generation, encounter space
   maps, and manoeuvre planning.
-- `HexFlowPersistence`: persisted time-lapse types, game-map save/load, and
-  historical save migrations.
+- `HexFlowPersistence`: persisted time-lapse types, game-map save/load,
+  crash-dump writing, and release save migrations.
 - `HexFlowCalculator`: authoritative simulation loop, command transactions,
   reactivation trials, snapshots, and calculator IPC.
 - `HexFlowLearningSystem`: tutorial definitions, runtime learning state, and

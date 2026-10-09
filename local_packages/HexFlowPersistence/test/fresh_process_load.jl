@@ -11,7 +11,7 @@ isdefined(Main, :HexFlowBasicComponents) && error("a concrete component package 
 isdefined(Main, :HexFlowBasicPipes) && error("a concrete pipe package was imported into Main")
 isdefined(Main, :GLFW) && error("GLFW was imported into Main")
 
-gamemap = loadmap_strict(only(ARGS))
+gamemap = loadmap(only(ARGS))
 frame = HexFlowPersistence.HexFrame
 flow_map = HexFlowPersistence.FlowMap
 component_coord = frame.TileCoord(2, -1)

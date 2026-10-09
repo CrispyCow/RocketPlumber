@@ -19,7 +19,7 @@ end
 "Load a saved map through the persistence package without fallback."
 function load_game_map(map_input::String)::GameMap
     map_path = resolve_map_path(map_input)
-    return HexFlowPersistence.loadmap_strict(map_path)
+    return HexFlowPersistence.loadmap(map_path)
 end
 
 format_coord(coord::TileCoord) = "TileCoord($(Int(coord.q)), $(Int(coord.r)))"

@@ -17,11 +17,9 @@ using .TimelapseExportTool
     @test !isdefined(TimelapseExportTool.Persistence, :HexFlowPersistence)
 end
 
-struct TestTimelapseHistory
-    format_version::UInt16
+@kwdef struct TestTimelapseHistory
     frames::Vector{GameMap}
 end
-TestTimelapseHistory(; frames::Vector{GameMap}) = TestTimelapseHistory(UInt16(2), frames)
 
 struct TestMapBundle
     gamemap::GameMap
@@ -262,4 +260,25 @@ end
     @test [animation_tick(map, frame, 15) for frame in 0:3] == [120, 124, 128, 132]
 end
 
-println("Time-lapse exporter pure tests passed")
+# Concrete behaviour registration has a transitive GLFW dependency; these tests use no window.
+ENV["JULIA_GLFW_PLATFORM"] = "null"
+TimelapseExportTool.load_persistence!()
+
+@testset "Saved history validation before rendering" begin
+    persistence = TimelapseExportTool.Persistence.HexFlowPersistence
+
+    mktempdir() do directory
+        gamemap = map_with_tiles([TileCoord(0, 0)])
+        map_only_path = joinpath(directory, "map_only.jld2")
+        persistence.savemap(gamemap, map_only_path; game_version = v"0.1.0")
+        @test_throws ValidationError TimelapseExportTool._run_with_persistence(parse_cli([map_only_path, "--inspect"]))
+
+        valid_path = joinpath(directory, "history.jld2")
+        history = persistence.TimelapseHistory(frames = [gamemap])
+        persistence.savemap(persistence.GameMapBundle(gamemap, history), valid_path; game_version = v"0.1.0")
+        @test TimelapseExportTool._run_with_persistence(parse_cli([valid_path, "--inspect"])) == 0
+        @test !isdefined(TimelapseExportTool.Runtime, :GLFW)
+    end
+end
+
+println("Time-lapse exporter tests passed")

@@ -59,6 +59,17 @@ derived/MNA state and publish without advancing time.
   `console_push(text)` replaces it with a fresh monotonic timestamp, including
   identical repeats. Reads and writes share a lock; no message history is kept.
 
+## Crash Diagnostics
+
+- `flowcalculator_loop!` accepts an optional `crash_dump_writer` callback. It
+  captures persistence-neutral diagnostics: the live map, solver outputs, pending
+  `command_diagnostic` summaries, and error text. The writer runs synchronously
+  on the calculator thread before shutdown; runtime command objects are not saved.
+- Writers must not mutate or retain the borrowed state. File-format and path
+  policy belong to the application-supplied writer, not this package.
+- Without a writer, crashes still log the original error and request shutdown.
+  Writer failures must not prevent that shutdown.
+
 ## Reactivation
 
 - A queued component probe extends the primary solve inputs speculatively; it

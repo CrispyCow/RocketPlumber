@@ -19,7 +19,7 @@ end
 
 function load_game_map(map_input::String)::GameMap
     map_path = resolve_map_path(map_input)
-    return HexFlowPersistence.loadmap_strict(map_path)
+    return HexFlowPersistence.loadmap(map_path)
 end
 
 function validate_generator_name(generator_file::String)::Symbol

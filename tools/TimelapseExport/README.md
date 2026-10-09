@@ -2,7 +2,7 @@
 
 ***NOTE: This tool was fully AI-generated and has not been manually reviewed or tested thoroughly, but its base functionality seems to work***
 
-This repository-local command exports schema-version-2 Rocket Plumber
+This repository-local command exports Rocket Plumber
 time-lapse saves as ship-world-only H.264 MP4 or palette-optimised animated
 GIF. It does not start the game loop, calculator thread, CImGui, or any game UI.
 

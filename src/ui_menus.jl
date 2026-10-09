@@ -39,7 +39,7 @@ const _particle_accel_editor_state = Dict{Symbol, Any}(:input_value => 0.0)
 
 "Render the pause menu when active, including escape recovery when a departure checkpoint exists."
 function ui_pause_menu_render!(
-        inputstate::InputState, timelapse_recorder::TimelapseRecorder,
+        inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, timelapse_recorder::TimelapseRecorder,
         snapshot::FlowCalculatorSnapshot, window::GLFW.Window,
         learning_state::Union{Nothing, LearningSystemState} = nothing; session_timing::PlaySessionTiming
     )
@@ -89,7 +89,13 @@ function ui_pause_menu_render!(
         if CImGui.Button(save_label, (button_width, button_height))
             save_path = save_file(absolute(Path(joinpath(dirname(@__FILE__), "..", "maps"))); filterlist = "jld2")
             if !isnothing(save_path)
-                save_current_map(timelapse_recorder, snapshot, session_timing, learning_state, "$save_path")
+                try
+                    save_current_map(timelapse_recorder, snapshot, session_timing, learning_state, string(save_path))
+                catch e
+                    e isa InterruptException && rethrow()
+                    @warn "Map save failed" path = string(save_path) exception = (e, catch_backtrace())
+                    flowcalc_ipc.console_push("Saving failed. See the terminal log for details.")
+                end
             end
         end
         CImGui.Dummy((0.0, 10.0))
@@ -439,9 +445,14 @@ function ui_dev_utils_menu_render!(
                     if !isnothing(centroid)
                         offset_ship!(blueprint, TileCoord(-round_to_tile(centroid)))
                     end
-                    new_gm = GameMap(blueprint)
-                    savemap(new_gm, "$save_path")
-                    @info "Exported ship :$(selected) to $(save_path)"
+                    try
+                        save_game(GameMap(blueprint), string(save_path))
+                        @info "Exported ship :$(selected) to $(save_path)"
+                    catch e
+                        e isa InterruptException && rethrow()
+                        @warn "Ship export failed" path = string(save_path) ship = selected exception = (e, catch_backtrace())
+                        flowcalc_ipc.console_push("Saving failed. See the terminal log for details.")
+                    end
                 end
             end
             CImGui.TreePop()

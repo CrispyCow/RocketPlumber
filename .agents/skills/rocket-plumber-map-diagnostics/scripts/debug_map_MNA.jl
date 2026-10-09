@@ -16,7 +16,7 @@ using HexFlowNozzleComponents, HexFlowPumpComponents, HexFlowBasicPipes
 using HexFlowPersistence
 
 function load_saved_map(path::String)::GameMap
-    return HexFlowPersistence.loadmap_strict(path)
+    return HexFlowPersistence.loadmap(path)
 end
 
 component_type_name(comp) = replace(string(typeof(comp)), r"^.*\." => "")

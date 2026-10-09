@@ -308,7 +308,7 @@ function print_help()
 Usage:
   julia --project=. tools/TimelapseExport/export.jl INPUT --output OUTPUT [options]
 
-Exports schema-version-2 construction history as H.264 MP4 (default) or a
+Exports construction history as H.264 MP4 (default) or a
 palette-optimised animated GIF. The exporter uses a hidden GLFW OpenGL context,
 so a working display server and OpenGL driver are required; it is not fully
 headless. MP4 is recommended for normal use.

@@ -22,7 +22,6 @@ using JLD2
 
 using HexFrame, HexElements, HexFluids, HexFlowTelemetry
 using HexComponentsAPI, FlowEngine, FlowMap, HexFlowProcGen
-using HexFlowControl, HexFlowCalculator
 using SquirrelNoise
 using HexFlowBasicComponents, HexFlowTankComponents, HexFlowSwitchComponents
 using HexFlowNozzleComponents, HexFlowPumpComponents
@@ -125,15 +124,6 @@ function component_state_summary(comp)::String
     return isempty(parts) ? "" : "  " * join(parts, "  ")
 end
 
-"Use the calculator's current command diagnostics, retaining the click site it omits."
-function command_summary(cmd::MapEditCommand)::String
-    diagnostic = HexFlowCalculator.command_diagnostic(cmd)
-    if cmd isa ClickTileCommand
-        diagnostic = merge(diagnostic, (unrotated_clicksite = cmd.unrotated_clicksite,))
-    end
-    return string(diagnostic)
-end
-
 function print_dump_metadata(opts::InspectOptions)
     file = jldopen(opts.dump_path, "r")
     try
@@ -144,6 +134,10 @@ function print_dump_metadata(opts::InspectOptions)
         println("Keys:")
         for key in sort!(collect(String.(keys(file))))
             println("  - $key")
+        end
+
+        if haskey(file, "game_version")
+            println("Game version: $(file["game_version"])")
         end
 
         if haskey(file, "exception_message")
@@ -162,12 +156,14 @@ function print_dump_metadata(opts::InspectOptions)
         map_present = haskey(file, "stored_gamemap")
         println(map_present ? "\nStored map: present" : "\nStored map: absent (this file may be an older or partial dump)")
 
-        if haskey(file, "pending_commands")
-            commands = file["pending_commands"]
-            println("\nPending commands: $(length(commands))")
-            for (i, cmd) in enumerate(commands)
-                println("  [$i] $(command_summary(cmd))")
+        if haskey(file, "pending_command_diagnostics")
+            diagnostics = file["pending_command_diagnostics"]
+            println("\nPending command diagnostics: $(length(diagnostics))")
+            for (i, diagnostic) in enumerate(diagnostics)
+                println("  [$i] $diagnostic")
             end
+        else
+            println("\nPending command diagnostics: unavailable")
         end
 
         if haskey(file, "node_voltages")
@@ -274,7 +270,7 @@ function main(args::Vector{String})::Int
         return 0
     end
 
-    gamemap = HexFlowPersistence.loadmap_strict(opts.dump_path)
+    gamemap = HexFlowPersistence.loadmap(opts.dump_path)
     print_map_summary(gamemap)
     print_valve_summary(gamemap)
     print_reactivation_candidates(gamemap)

@@ -36,7 +36,7 @@ using PrecompileTools: @setup_workload, @compile_workload
         # compile save and load of the gamemaps
         mktempdir() do directory
             save_path = joinpath(directory, "precompile_map.jld2")
-            savemap(GameMapBundle(gamemap), save_path)
+            save_game(gamemap, save_path)
             @assert isfile(save_path)
             loaded_bundle = loadmap_bundle(save_path)
             @assert length(loaded_bundle.gamemap.ships) == length(gamemap.ships)

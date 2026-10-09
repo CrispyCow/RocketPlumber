@@ -1882,6 +1882,74 @@ end
 end
 
 # ===============================================================
+# Tests — Crash Diagnostics
+# ===============================================================
+
+@testset "_capture_crash_dump!" begin
+    gamemap = make_gamemap()
+    coord = TileCoord(1, 0)
+    mna_state = MNA_State()
+    mna_state.node_voltages[NodeCoord(coord, HexFrame.NODE_INTERNAL_1)] = 12.0
+    mna_state.vsource_currents[ElementID(coord, 1)] = 0.5
+    command_queue = create_command_queue(4)
+    response_channel = Channel{CommandStatus}(1)
+    clicksite = CartesianCoord(0.25, -0.5)
+    command = create_click_tile_command(command_queue, coord, clicksite; response_channel)
+    @test try_enqueue_command!(command_queue, command)
+
+    exception = ErrorException("calculator test failure")
+    trace_str = "calculator test failure\nStacktrace:\n [1] test crash site"
+    payload = HexFlowCalculator._capture_crash_dump!(command_queue, gamemap, mna_state, exception, trace_str)
+    @test !isready(command_queue.command_channel)
+    diagnostic = only(payload.pending_command_diagnostics)
+    @test diagnostic isa NamedTuple
+    @test diagnostic == (
+        type = :ClickTileCommand, id = command.id, coord = coord,
+        unrotated_clicksite = clicksite,
+    )
+    @test !hasproperty(diagnostic, :response_channel)
+    @test payload.stored_gamemap === gamemap
+    @test payload.node_voltages === mna_state.node_voltages
+    @test payload.vsource_currents === mna_state.vsource_currents
+    @test payload.exception_message == "calculator test failure"
+    @test payload.exception_backtrace == trace_str
+end
+
+@testset "flowcalculator_loop! contains crash-writer failure" begin
+    snapshot = FlowCalculatorSnapshot(gamemap = make_gamemap())
+    exception = ErrorException("test publication failure")
+    writer_exception = ErrorException("test writer failure")
+    console_messages, console_push = make_log_console()
+    ipc = FlowCalculatorIPC(
+        shared_state = FlowCalculatorSharedState(),
+        command_queue = create_command_queue(),
+        publish_snapshot = (args...) -> throw(exception),
+        get_snapshot = () -> snapshot,
+        console_push = console_push,
+        console_see = () -> nothing,
+    )
+    calculator_thread = Threads.threadid()
+    writer = payload -> begin
+        @test Threads.threadid() == calculator_thread
+        throw(writer_exception)
+    end
+
+    logger = Test.TestLogger(min_level = Base.CoreLogging.Info)
+    redirect_stderr(devnull) do
+        Base.CoreLogging.with_logger(logger) do
+            flowcalculator_loop!(ipc, snapshot; crash_dump_writer = writer)
+        end
+    end
+
+    @test @atomic ipc.shared_state.should_exit
+    crash_log = only(filter(log -> log.message == "FlowCalculator loop exception", logger.logs))
+    @test crash_log.kwargs[:exception][1] === exception
+    dump_log = only(filter(log -> log.message == "Failed to write crash dump", logger.logs))
+    @test dump_log.kwargs[:exception][1] === writer_exception
+    @test only(console_messages) == "FlowCalculator loop crashed; see terminal log for details"
+end
+
+# ===============================================================
 # Tests — Snapshot Storage
 # ===============================================================
 

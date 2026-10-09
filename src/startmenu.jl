@@ -67,6 +67,7 @@ end
     menu_inputs::Dict{Symbol, Any} = Dict{Symbol, Any}()
     last_keystates::Dict{GLFW.Key, Bool} = Dict{GLFW.Key, Bool}()
     selected_tutorial_id::Union{Nothing, Symbol} = nothing
+    load_error::String = ""
     sandbox_entries::Vector{LearningEntry} = sort(get_sandbox_learning_entries(); by = entry -> entry.priority)
 end
 
@@ -88,7 +89,11 @@ const MENU_BACK_BUTTON_H = 30.0
 
 "Render the initial start-menu page."
 function render_page_initial!(state::StartMenuState, box_w::Float64, button_width::Float64, button_height::Float64)
-    CImGui.Dummy((0.0, 20.0))
+    if isempty(state.load_error)
+        CImGui.Dummy((0.0, 20.0))
+    else
+        CImGui.TextWrapped(state.load_error)
+    end
 
     CImGui.SetCursorPosX((box_w - button_width) / 2)
     if CImGui.Button("Launch Teaser", (button_width, button_height))
@@ -362,6 +367,18 @@ function next_session(session::SandboxSession, result::GameLoopResult)::Union{No
     return nothing
 end
 
+"Load a selected map with optional history, leaving the player in the menu on map failure."
+function _load_map_session!(state::StartMenuState, save_path::String)::Union{Nothing, MapSession}
+    try
+        return MapSession(loadmap_bundle(save_path))
+    catch e
+        e isa InterruptException && rethrow()
+        @warn "Selected save could not be loaded." path = save_path exception = (e, catch_backtrace())
+        state.load_error = "Could not load the selected save. Please choose another file."
+        return nothing
+    end
+end
+
 "Create the initial session for a start-menu action."
 function _create_session_for_action(state::StartMenuState, action::StartMenuAction, window::GLFW.Window)::Union{Nothing, GameSession}
     if action == ACTION_NEW_BLANK_MAP
@@ -378,7 +395,7 @@ function _create_session_for_action(state::StartMenuState, action::StartMenuActi
         isnothing(file_path) && return nothing
 
         @info "Selected file: $file_path"
-        return MapSession(loadmap_bundle("$file_path"))
+        return _load_map_session!(state, string(file_path))
 
     elseif action == ACTION_START_EXPLORER
         seed = UInt32(get(state.menu_inputs, :explorer_seed, UInt32(42)))
@@ -424,6 +441,7 @@ function handle_start_menu_action!(state::StartMenuState, window::GLFW.Window)
     action = state.action
 
     action == ACTION_NONE && return nothing
+    state.load_error = ""
     state.page = PAGE_INITIAL
 
     session = _create_session_for_action(state, action, window)

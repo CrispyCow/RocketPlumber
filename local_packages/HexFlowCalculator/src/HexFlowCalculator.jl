@@ -6,7 +6,7 @@ Formatter: Runic
 module HexFlowCalculator
 
 # Packages
-using Base.Threads, Dates, LinearAlgebra, StructEquality
+using Base.Threads, LinearAlgebra, StructEquality
 using TimerOutputs, StaticArrays
 # Custom Packages
 using HexFrame, HexElements, HexFluids, HexFlowTelemetry
@@ -975,7 +975,10 @@ command_diagnostic(command::DeleteElementsCommand) = (
     type = nameof(typeof(command)), id = command.id,
     component_count = length(command.component_coords), pipe_count = length(command.pipe_coords),
 )
-command_diagnostic(command::ClickTileCommand) = (type = nameof(typeof(command)), id = command.id, coord = command.coord)
+command_diagnostic(command::ClickTileCommand) = (
+    type = nameof(typeof(command)), id = command.id, coord = command.coord,
+    unrotated_clicksite = command.unrotated_clicksite,
+)
 function command_diagnostic(command::DoActionCommand)
     target_count = length(command.component_coords)
     context = (type = nameof(typeof(command)), id = command.id, action_id = command.action_id, target_count)
@@ -1669,38 +1672,30 @@ function run_reactivation_trial!(
     return false  # queue was empty
 end
 
-#= ---------- Crash Dump Persistence ----------- =#
+#= ---------- Crash Dump Capture ----------- =#
 
 """
-Persist a crash dump for the FlowCalculator loop. Returns the file path written.
+Capture the authoritative state and error details for a synchronous crash-dump writer.
 
-Drains the pending `MapEditCommand` channel into a Vector so the queue contents are
-captured (subsequent ticks would not see them, but the loop is exiting anyway).
+Drains pending commands into persistence-neutral diagnostic summaries as the loop
+exits. The payload borrows the live map and solver dictionaries; the writer must
+read them on the calculator thread without mutating or retaining them.
 """
-function _write_crash_dump(
-        gamemap::GameMap, mna_state::MNA_State,
-        command_queue::CommandQueue, exception, trace_str::String
-    )::String
-    pending_commands = MapEditCommand[]
+function _capture_crash_dump!(command_queue::CommandQueue, gamemap::GameMap, mna_state::MNA_State, exception, trace_str::String)
+    pending_command_diagnostics = NamedTuple[]
     while isready(command_queue.command_channel)
-        push!(pending_commands, take!(command_queue.command_channel))
+        command = take!(command_queue.command_channel)
+        push!(pending_command_diagnostics, command_diagnostic(command))
     end
 
-    timestamp = Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
-    crashpath = joinpath("maps", "crash_$(timestamp).jld2")
-    mkpath(dirname(crashpath))
-
-    jldsave(
-        crashpath;
+    return (
         stored_gamemap = gamemap,
-        pending_commands = pending_commands,
+        pending_command_diagnostics = pending_command_diagnostics,
         node_voltages = mna_state.node_voltages,
         vsource_currents = mna_state.vsource_currents,
         exception_message = sprint(showerror, exception),
         exception_backtrace = trace_str,
     )
-
-    return crashpath
 end
 
 # ===============================================================
@@ -2288,10 +2283,18 @@ function step_flowcalc_sim!(
     return nothing
 end
 
-"Main FlowCalculator loop: runs deterministic game simulation on a fixed timestep."
+"""
+Run deterministic game simulation on a fixed timestep.
+
+An optional `crash_dump_writer(payload)` runs synchronously on the calculator
+thread after a loop failure and returns the written path. Its payload contains
+`stored_gamemap`, `pending_command_diagnostics`, `node_voltages`, `vsource_currents`,
+`exception_message`, and `exception_backtrace`. Writer failures are logged before
+orderly shutdown. Without a writer, failures are reported only to the log and console.
+"""
 function flowcalculator_loop!(
-        ipc::FlowCalculatorIPC,
-        initial_snapshot::FlowCalculatorSnapshot
+        ipc::FlowCalculatorIPC, initial_snapshot::FlowCalculatorSnapshot;
+        crash_dump_writer = nothing
     )
     # Unpack IPC elements
     shared_state = ipc.shared_state
@@ -2361,19 +2364,19 @@ function flowcalculator_loop!(
             threadsafe_console_push("FlowCalculator loop crashed; see terminal log for details")
 
             # Print full backtrace to stderr for terminal visibility
-            ios = IOBuffer()
-            showerror(ios, e, bt)
-            trace_str = String(take!(ios))
+            trace_str = sprint(showerror, e, bt)
             println(stderr, trace_str)
 
-            # Persist a crash dump for post-mortem replay. Wrapped in its own try/catch so a
-            # write failure cannot mask the underlying exception.
-            try
-                crashpath = _write_crash_dump(gamemap, mna_state, command_queue, e, trace_str)
-                @info "Crash dump written to $crashpath"
-                threadsafe_console_push("Crash dump: $crashpath")
-            catch dump_err
-                @error "Failed to write crash dump" exception = (dump_err, catch_backtrace())
+            # Keep dump failures from masking the original exception
+            if !isnothing(crash_dump_writer)
+                try
+                    payload = _capture_crash_dump!(command_queue, gamemap, mna_state, e, trace_str)
+                    crashpath = crash_dump_writer(payload)
+                    @info "Crash dump written to $crashpath"
+                    threadsafe_console_push("Crash dump: $crashpath")
+                catch dump_err
+                    @error "Failed to write crash dump" exception = (dump_err, catch_backtrace())
+                end
             end
 
             # Request orderly shutdown so the error is visible and the main thread can react

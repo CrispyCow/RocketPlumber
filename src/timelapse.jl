@@ -29,10 +29,6 @@ function TimelapseRecorder(
         history::Union{Nothing, TimelapseHistory} = nothing;
         now::Real = _monotonic_time_seconds(),
     )
-    if !isnothing(history) && history.format_version != TIMELAPSE_FORMAT_VERSION
-        throw(ArgumentError("unsupported time-lapse format version $(history.format_version)"))
-    end
-
     current_time = Float64(now)
     enabled = !isnothing(history)
     next_capture_time = enabled ? current_time + TIMELAPSE_CAPTURE_INTERVAL_SECONDS : Inf
@@ -54,7 +50,7 @@ end
 function snapshot_timelapse_history(recorder::TimelapseRecorder)::Union{Nothing, TimelapseHistory}
     history = recorder.history
     isnothing(history) && return nothing
-    return TimelapseHistory(format_version = history.format_version, frames = copy(history.frames))
+    return TimelapseHistory(frames = copy(history.frames))
 end
 
 "Return the number of retained frames, including zero for an uninitialised recorder."

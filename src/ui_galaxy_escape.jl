@@ -203,7 +203,7 @@ end
 #= ---------- Final Flight Report ---------- =#
 
 "Render the exclusive final flight report shown after a galaxy escape is completed."
-function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputState, timelapse_recorder::TimelapseRecorder, window::GLFW.Window)
+function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, timelapse_recorder::TimelapseRecorder, window::GLFW.Window)
     # Full-screen backdrop
     winsize = to_float(GLFW.GetWindowSize(window))
     CImGui.AddRectFilledMultiColor(
@@ -307,7 +307,13 @@ function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputSta
     if CImGui.Button("Save Pre-Escape Map", ImVec2(-1, action_button_height))
         save_path = save_file(absolute(Path(joinpath(dirname(@__FILE__), "..", "maps"))); filterlist = "jld2")
         if !isnothing(save_path)
-            save_pre_escape_map(timelapse_recorder, gamemap, "$save_path")
+            try
+                save_pre_escape_map(timelapse_recorder, gamemap, string(save_path))
+            catch e
+                e isa InterruptException && rethrow()
+                @warn "Pre-escape map save failed" path = string(save_path) exception = (e, catch_backtrace())
+                flowcalc_ipc.console_push("Saving failed. See the terminal log for details.")
+            end
         end
     end
 

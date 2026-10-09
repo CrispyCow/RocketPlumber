@@ -215,7 +215,8 @@ function ui_rendering!(
     )
     if !isnothing(completed_gamemap)
         ui_renderwrap() do
-            ui_galaxy_escape_victory_render!(completed_gamemap, inputstate, timelapse_recorder, window)
+            ui_galaxy_escape_victory_render!(completed_gamemap, inputstate, flowcalc_ipc, timelapse_recorder, window)
+            ui_notifications_render!(GLFW.GetWindowSize(window), flowcalc_ipc.console_see)
         end
         return nothing
     end
@@ -243,7 +244,7 @@ function ui_rendering!(
             )
         end
 
-        ui_pause_menu_render!(inputstate, timelapse_recorder, snapshot, window, learning_state; session_timing = session_timing)
+        ui_pause_menu_render!(inputstate, flowcalc_ipc, timelapse_recorder, snapshot, window, learning_state; session_timing = session_timing)
         ui_spacemap_render!(inputstate, flowcalc_ipc, snapshot, GLFW.GetWindowSize(window), max_view_bounds)
 
         if !isnothing(learning_state)
@@ -274,7 +275,18 @@ function cleanup!(flowcalc_ipc::FlowCalculatorIPC, flowcalc_task::Task, globjmap
     return nothing
 end
 
-# (Map loading/saving and JLD2 serialisation are in HexFlowPersistence)
+# Application persistence
+
+"Save a map or bundle with the Rocket Plumber version from root package metadata."
+function save_game(map::Union{GameMap, GameMapBundle}, save_path::String)
+    HexFlowPersistence.savemap(map, save_path; game_version = Base.pkgversion(@__MODULE__))
+    return nothing
+end
+
+"Write calculator crash diagnostics with the root package version."
+function write_game_crash_dump(payload::NamedTuple)
+    return HexFlowPersistence.write_crash_dump(payload; game_version = Base.pkgversion(@__MODULE__))
+end
 
 # Map-source dispatch
 
@@ -368,7 +380,7 @@ function save_current_map(
     if !is_galaxy_escape_active(snapshot.gamemap)
         capture_timelapse_frame!(recorder, snapshot.gamemap; snapshot_timestamp = snapshot.timestamp)
     end
-    savemap(GameMapBundle(gamemap_to_save, snapshot_timelapse_history(recorder)), save_path)
+    save_game(GameMapBundle(gamemap_to_save, snapshot_timelapse_history(recorder)), save_path)
     return nothing
 end
 
@@ -376,7 +388,7 @@ end
 function save_pre_escape_map(recorder::TimelapseRecorder, gamemap::GameMap, save_path::String)
     pre_escape_map = get_pre_escape_map(gamemap)::GameMap
     capture_timelapse_frame!(recorder, pre_escape_map)
-    savemap(GameMapBundle(pre_escape_map, snapshot_timelapse_history(recorder)), save_path)
+    save_game(GameMapBundle(pre_escape_map, snapshot_timelapse_history(recorder)), save_path)
     return nothing
 end
 
@@ -428,7 +440,10 @@ function enter_gameloop(
     g_recording = RecordingState()
 
     ui_loadingscreen_render(window, "Starting FlowCalculator")
-    g_flowcalc_task = Threads.@spawn flowcalculator_loop!(g_flowcalc_ipc, deepcopy(initial_snapshot))
+    g_flowcalc_task = Threads.@spawn flowcalculator_loop!(
+        g_flowcalc_ipc, deepcopy(initial_snapshot);
+        crash_dump_writer = write_game_crash_dump,
+    )
     @info "FlowCalculator task spawned: $(g_flowcalc_task)"
 
     # MAIN LOOP

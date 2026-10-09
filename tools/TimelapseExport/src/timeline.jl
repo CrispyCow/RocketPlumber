@@ -55,8 +55,7 @@ end
 "Assemble history frames and apply current-map policy and conservative adjacent deduplication."
 function assemble_timeline(bundle, options::ExportOptions)::TimelinePlan
     history = getproperty(bundle, :timelapse)
-    isnothing(history) && throw(ValidationError("Input contains no valid schema-version-2 time-lapse."))
-    history.format_version == UInt16(2) || throw(ValidationError("unsupported time-lapse schema version $(history.format_version); expected 2"))
+    isnothing(history) && throw(ValidationError("Input contains no valid time-lapse."))
 
     candidates = _history_entries(history)
     current_map = getproperty(bundle, :gamemap)
@@ -116,7 +115,6 @@ function print_inspection(options::ExportOptions, bundle, timeline::TimelinePlan
     history = bundle.timelapse
     println("Inspection report")
     println("Input: $(options.input)")
-    println("Schema version: $(history.format_version)")
     println("History frame count: $(length(history.frames))")
     println("Current map appended: $(timeline.current_appended) ($(timeline.current_note))")
     println("Candidate keyframes: $(length(timeline.candidates))")

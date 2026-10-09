@@ -60,10 +60,16 @@ new mutation, add a command rather than bypassing that boundary.
 
 ## Persistence
 
-- When a persisted type changes shape, package, or meaning, review the typemap
-  and `rconvert` reconstruction in `HexFlowPersistence/src/migrations.jl`
-  under `local_packages/`, and test an older save when one is available.
-- Struct field defaults are not a substitute for JLD2 migration logic.
+- The game session supplies `write_game_crash_dump` through the calculator loop's
+  `crash_dump_writer` keyword. It adds the root package version and delegates
+  timestamp/path/JLD2 writing to `HexFlowPersistence` synchronously before shutdown.
+- Route application saves through `save_game` in `gameloop.jl`; it passes the
+  root package version from `Base.pkgversion` to `HexFlowPersistence.savemap`.
+  Save failures propagate through these wrappers; interactive UI actions catch
+  them, warn with the path/backtrace, and use `flowcalc_ipc.console_push` to notify
+  the player. Start-menu loading likewise catches authoritative map errors.
+  These interactive boundaries propagate interrupts; calculator crash-dump writer
+  failures remain contained so shutdown proceeds.
 - Keep `GameMap` and saved domain types independent of UI/OpenGL state.
 - Demo maps are Julia generators under `demo_maps/`; keep tutorial registration
   in `tutorials.jl` aligned when adding, removing, or renaming one.
