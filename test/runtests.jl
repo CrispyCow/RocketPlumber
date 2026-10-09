@@ -362,19 +362,37 @@ end
 end
 
 @testset "Launch and smoke arguments" begin
-    @test RocketPlumber.parse_launch_args(String[]) == (telemetry = false,)
-    @test RocketPlumber.parse_launch_args(["--telemetry"]) == (telemetry = true,)
-    @test_throws ArgumentError RocketPlumber.parse_launch_args(["--unknown"])
-    @test_throws ArgumentError RocketPlumber.parse_launch_args(["--duration", "60"])
+    for (args, options) in (
+            (String[], (telemetry = false, gc_log = false)),
+            (["--telemetry"], (telemetry = true, gc_log = false)),
+            (["--gc-log"], (telemetry = false, gc_log = true)),
+            (["--telemetry", "--gc-log"], (telemetry = true, gc_log = true)),
+            (["--gc-log", "--telemetry"], (telemetry = true, gc_log = true)),
+        )
+        @test RocketPlumber.parse_launch_args(args) == options
+        @test SmokeTestSupport.parse_smoke_args(args) == (; options..., duration = 20.0)
+    end
 
-    @test SmokeTestSupport.parse_smoke_args(String[]) == (telemetry = false, duration = 20.0)
-    @test SmokeTestSupport.parse_smoke_args(["--telemetry", "--duration", "60"]) == (telemetry = true, duration = 60.0)
-    @test SmokeTestSupport.parse_smoke_args(["--duration", "21.5", "--telemetry"]) == (telemetry = true, duration = 21.5)
+    for args in (["--unknown"], ["--gc-log", "--unknown"], ["--duration", "60"])
+        @test_throws ArgumentError RocketPlumber.parse_launch_args(args)
+    end
+
+    for (args, options) in (
+            (["--telemetry", "--duration", "60"], (telemetry = true, gc_log = false, duration = 60.0)),
+            (["--duration", "21.5", "--telemetry"], (telemetry = true, gc_log = false, duration = 21.5)),
+            (["--gc-log", "--duration", "60"], (telemetry = false, gc_log = true, duration = 60.0)),
+            (["--telemetry", "--duration", "21.5", "--gc-log"], (telemetry = true, gc_log = true, duration = 21.5)),
+            (["--gc-log", "--duration", "60", "--telemetry"], (telemetry = true, gc_log = true, duration = 60.0)),
+        )
+        @test SmokeTestSupport.parse_smoke_args(args) == options
+    end
+
     @test SmokeTestSupport.smoke_exit_tick(20.0) == 1200
     @test SmokeTestSupport.smoke_exit_tick(60.0) == 3600
     @test SmokeTestSupport.smoke_exit_tick(20.01) == 1201
     for args in (["--duration"], ["--duration", "bad"], ["--duration", "19.9"], ["--duration", "NaN"], ["--duration", "Inf"], ["--unknown"])
         @test_throws ArgumentError SmokeTestSupport.parse_smoke_args(args)
+        @test_throws ArgumentError SmokeTestSupport.parse_smoke_args(vcat(["--gc-log"], args))
     end
 end
 

@@ -17,8 +17,9 @@ launching, input, UI, rendering, persistence, and game-session flow.
   smoke-only definitions are not part of normal package assembly.
 - `RocketPlumber.jl` owns the JuliaC `@main(args)` and PackageCompiler
   `julia_main()::Cint` entry points. Both call `launch()` through one startup
-  path. `parse_launch_args` handles `--telemetry`, and `launch(; telemetry)`
-  starts telemetry before the loops and saves its report on normal shutdown.
+  path. `parse_launch_args` handles `--telemetry` and `--gc-log`;
+  `launch(; telemetry, gc_log)` configures both before opening the window and
+  saves telemetry on normal shutdown. Both flags are independent and opt-in.
   Session cleanup collects partial intervals after waiting for the calculator.
   Runtime resources are owned by `HexFlowRendering`.
 - `initial_window_setup.jl`, `startmenu.jl`, and `gameloop.jl` own application

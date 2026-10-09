@@ -210,15 +210,18 @@ end
 
 #= ---------- Arguments and duration ----------- =#
 
-"Parse telemetry and a smoke duration of at least twenty simulated seconds."
+"Parse telemetry, GC logging, and a smoke duration of at least twenty simulated seconds."
 function parse_smoke_args(args::Vector{String})
     telemetry = false
+    gc_log = false
     duration = 20.0
     index = 1
     while index <= length(args)
         arg = args[index]
         if arg == "--telemetry"
             telemetry = true
+        elseif arg == "--gc-log"
+            gc_log = true
         elseif arg == "--duration"
             index += 1
             index <= length(args) || throw(ArgumentError("--duration requires seconds"))
@@ -231,7 +234,7 @@ function parse_smoke_args(args::Vector{String})
         index += 1
     end
     smoke_exit_tick(duration)  # Validate before opening a window
-    return (; telemetry, duration)
+    return (; telemetry, gc_log, duration)
 end
 
 "Convert a smoke duration to an exit tick without truncating the scripted workload."
@@ -245,9 +248,10 @@ end
 include("fixture.jl")
 
 "Run the graphical smoke test against the application's teaser map."
-function run_smoke_test(; telemetry::Bool = false, duration::Float64 = 20.0)::Bool
+function run_smoke_test(; telemetry::Bool = false, gc_log::Bool = false, duration::Float64 = 20.0)::Bool
     exit_tick = smoke_exit_tick(duration)
     GLFW.GetPlatform() == GLFW.PLATFORM_NULL && throw(ArgumentError("Graphical startup requires a display"))
+    GC.enable_logging(gc_log)
     configure_threads()
     start_telemetry!(telemetry)
     window = start_window()

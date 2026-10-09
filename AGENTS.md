@@ -167,15 +167,11 @@ julia --project=build -e 'using Pkg; Pkg.instantiate(; allow_autoprecomp = false
 julia --project=build build/build.jl
 ```
 
-Choose verification proportional to the change: start with the affected
-package suite, then use the application smoke test for integration or gameplay
-changes. The all-package runner includes the root `RocketPlumber` test suite and
-packages under `local_packages/`, not the separate `tools/TimelapseExport` suite.
-
-The GitHub Actions test workflow runs the all-package test sweep for pull
-requests targeting `main`. It does not run the graphical smoke test or separate
-tool tests. Report exactly which local checks were run and which
-display-dependent checks were not run.
+Start verification with the affected package suite; use the application smoke
+test for integration or gameplay changes. The all-package runner and PR CI
+targeting `main` cover the root package and `local_packages/`, excluding the
+graphical smoke test and separate tool suites such as `tools/TimelapseExport`.
+Report exactly which local checks ran and which display-dependent checks did not.
 
 The separate, manually triggered Distribution builds workflow compiles Windows
 and Linux candidate ZIPs and uploads them to private draft GitHub Releases in
@@ -191,18 +187,16 @@ unless configured by the caller.
 Package precompilation stays serial to avoid multiplying compiler pools and
 memory usage. These defaults target both CI and 8-core, 32 GB development machines.
 
-All game launch paths need a display/OpenGL context and at least two default
-Julia worker threads. The smoke test opens a real window and is not headless.
-Its script runs for 1200 simulation ticks (about twenty seconds at 60 UPS); a
-warmed graphical run took about half a minute including startup and teardown.
-Fresh compilation or a slower machine may take longer.
+All launch paths need a display/OpenGL context and at least two default Julia
+worker threads. The graphical smoke test runs for 1200 simulation ticks
+(twenty seconds at 60 UPS), taking about half a minute when warm; compilation
+or a slower machine may take longer.
 Runtime shaders and the texture atlas are source-controlled inside
 `HexFlowRendering`. The TexturePacker inputs remain under
 `tools/TexturePacker/textures/`.
 
-All three launch paths accept `--telemetry` to enable periodic TimerOutputs
-tables and a cumulative shutdown report under ignored `logs/telemetry/`.
-Telemetry is disabled by default; the first periodic sample per stream is
-printed as warm-up and excluded from the cumulative report. The smoke launcher
-also accepts `--duration <seconds>` (at least 20, default 20) to move its final
-exit marker without changing the scripted action ticks.
+All launch paths accept independent, opt-in flags: `--gc-log` prints Julia's
+native GC logs; `--telemetry` prints periodic TimerOutputs tables and saves a
+cumulative shutdown report under ignored `logs/telemetry/`, excluding each
+stream's first (warm-up) sample. Smoke-only `--duration <seconds>` (default and
+minimum 20) moves the exit marker without changing scripted action ticks.

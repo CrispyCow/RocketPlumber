@@ -51,17 +51,18 @@ include("startmenu.jl")
 
 export launch
 
-"Parse the application's optional telemetry flag without adding a CLI dependency."
+"Parse the application's optional telemetry and GC logging flags."
 function parse_launch_args(args::Vector{String})
     for arg in args
-        arg == "--telemetry" || throw(ArgumentError("Unrecognised argument: $arg"))
+        arg in ("--telemetry", "--gc-log") || throw(ArgumentError("Unrecognised argument: $arg"))
     end
-    return (telemetry = "--telemetry" in args,)
+    return (telemetry = "--telemetry" in args, gc_log = "--gc-log" in args)
 end
 
 "Configure runtime threading, open the game window, and enter the start menu."
-function launch(; telemetry::Bool = false)
+function launch(; telemetry::Bool = false, gc_log::Bool = false)
     GLFW.GetPlatform() == GLFW.PLATFORM_NULL && throw(ArgumentError("Graphical startup requires a display"))
+    GC.enable_logging(gc_log)
     configure_threads()
     start_telemetry!(telemetry)
     window = start_window()
