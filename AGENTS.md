@@ -127,6 +127,10 @@ describe rather than expanding this file.
 
 ## Cross-Cutting Invariants
 
+- Maintain `CHANGELOG.md` under `Unreleased` for notable player-facing differences
+  from the latest release; describe player-visible behaviour rather than implementation.
+- Revise or remove unreleased entries when later work supersedes them. Internal
+  or insignificant changes need no entry.
 - The main thread owns GLFW, OpenGL, CImGui, rendering, and input. The
   background calculator thread owns authoritative simulation mutation.
 - UI and input code send `MapEditCommand` values through
