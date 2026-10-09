@@ -742,6 +742,8 @@ function ui_explorer_opening_wake_render!(
     CImGui.Spacing()
     CImGui.TextWrapped("Complete the capture burn to match velocity and establish contact.")
     CImGui.Spacing()
+    CImGui.TextWrapped("Use the LEARNING HELPER to find more guidance!")
+    CImGui.Spacing()
 
     # Centred acknowledgement
     button_width = 140.0
@@ -811,7 +813,9 @@ function ui_propertybox_render!(
     ui_window("Properties", (win_float.width - propertyboxwidth, 0.0), (propertyboxwidth, win_float.height))
 
     # Display mode description
+    CImGui.PushFont(UI_VECTOR_FONT, 18.0)
     CImGui.Text("PROPERTIES:")
+    CImGui.PopFont()
     state_description = placement_state_description(state)
     if !isnothing(state_description)
         CImGui.Text(state_description)
@@ -1202,7 +1206,9 @@ function render_spacemap_left_panel!(
     CImGui.BeginChild("spacemap_main_panel", ImVec2(0.0, main_panel_height), true)
 
     #= ---------- Header ----------- =#
+    CImGui.PushFont(UI_VECTOR_FONT, 18.0)
     CImGui.TextColored(ImVec4(0.7, 0.9, 1.0, 1.0), "SPACE MAP")
+    CImGui.PopFont()
     CImGui.SameLine(left_width - 80.0)
     if CImGui.Button("Close [M]")
         inputstate.spacemap_active = false

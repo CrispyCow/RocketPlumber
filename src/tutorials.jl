@@ -160,8 +160,9 @@ function get_entry_basic_controls()::LearningEntry
                 Basic Controls:\n
                 - MIDDLE MOUSE CLICK and drag to pan the view, or press the WASD keys.\n
                 - SCROLL WHEEL or Q/E keys to zoom in and out.\n
-                - CLICK and DRAG to move components and pipes.\n
+                - CLICK, HOLD and DRAG to move components and pipes.\n
                 - CLICK A NODE to start placing or deleting scrap pipes.\n
+                - ESC to open the pause menu, or to exit modes like pipe placement.\n
                 - RIGHT-CLICK on components to access their actions, including an action to delete them.\n
                 - SHIFT + CLICK to select multiple components at once."
             ),
@@ -202,7 +203,8 @@ function get_entry_basic_controls()::LearningEntry
                             text = tutorial_dedent(
                                 "You need to connect the tank to the nozzle with pipes to start producing thrust!\n
                                 CLICK A NODE to start placing scrap pipes. There's always plenty of scrap lying around to make these. \
-                                Move the cursor in the desired direction, then click to place it."
+                                Move the cursor in the desired direction, then click to place it.\n
+                                You can press ESC to cancel pipe placement."
                             ),
                             step_blocker = function(inputs::LearningInputs)
                                 norm(inputs.gamestate.thrust) > 0.0 && return nothing
@@ -558,13 +560,29 @@ function get_entry_space_map_intro()::LearningEntry
                 TutorialStep(
                     heading = "PLANNING A MANOEUVRE",
                     text = tutorial_dedent(
-                        "Now let's plan your first real manoeuvre! Select an object from the map with a relatively small velocity vector. Adjust the delta V slider as you please. \
+                        "Now let's plan your first real manoeuvre! Select a fuel cache from the map with a relatively small velocity vector. Adjust the delta V slider as you please. \
                         Ensure you have enough delta V to complete the manoeuvre, and then press the 'Plan Manoeuvre' button to proceed!\n
                         Now you know how to plan your movements in the space map. Look for the 'Manoeuvre Execution' tutorial to learn how to actually complete it!"
                     ),
                     step_blocker = function(inputs::LearningInputs)
-                        has_active_manoeuvre(inputs.gamemap) && return nothing
-                        return "Plan a manoeuvre by selecting a target and pressing 'Plan Manoeuvre'."
+                        manoeuvre = get_active_manoeuvre(inputs.gamemap)
+                        encounter_points = get_encounter_points(inputs.gamemap)
+                        target_idx = isnothing(manoeuvre) ? get(inputs.inputstate.gui_inputs, :spacemap_selected_idx, 0) : manoeuvre.target_encounter_index
+                        delta_v = isnothing(manoeuvre) ? get(inputs.inputstate.gui_inputs, :spacemap_delta_v, 0.0) :
+                            norm(manoeuvre.approach_burn_dv) + norm(manoeuvre.capture_burn_dv)
+                        cancel_prompt = isnothing(manoeuvre) ? "" : "Cancel this manoeuvre and plan a new one. "
+
+                        if !(target_idx isa Integer && 1 <= target_idx <= length(encounter_points))
+                            return "$(cancel_prompt)Select a fuel cache on the space map before planning a manoeuvre."
+                        end
+                        if encounter_points[target_idx].encounter_class != ENCOUNTER_FUEL_CACHE
+                            return "$(cancel_prompt)Select a fuel cache as your manoeuvre target."
+                        end
+                        if delta_v > 0.75 * inputs.gamestate.estimated_min_delta_v
+                            return "$(cancel_prompt)The manoeuvre must use no more than 75% of your estimated ship delta-V."
+                        end
+
+                        return isnothing(manoeuvre) ? "Plan a manoeuvre to the selected fuel cache by pressing 'Plan Manoeuvre'." : nothing
                     end,
                 ),
             ],

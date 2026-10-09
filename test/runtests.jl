@@ -7,6 +7,8 @@ ENV["JULIA_GLFW_PLATFORM"] = "null"
 
 using Test, LinearAlgebra, StaticArrays
 import ImPlot, RocketPlumber
+using FlowEngine: DerivedMapState
+using HexFlowLearningSystem: LearningInputs
 using RocketPlumber: TimelapseRecorder, timelapse_frame_count, capture_timelapse_frame!,
     set_timelapse_enabled!, maybe_capture_timelapse!, snapshot_timelapse_history
 
@@ -259,6 +261,87 @@ end
         @test RocketPlumber.validate_spacemap_selection!(inputstate, gamemap, viewport) == 0
         @test !haskey(inputstate.gui_inputs, :spacemap_delta_v)
     end
+end
+
+@testset "Space Map tutorial manoeuvre planning" begin
+    steps = RocketPlumber.get_entry_space_map_intro().definition.steps
+    objects_step = only(filter(step -> step.heading == "OBJECTS IN SPACE", steps))
+    planning_step = only(filter(step -> step.heading == "PLANNING A MANOEUVRE", steps))
+    blocker = planning_step.step_blocker
+    gamemap = GameMap(
+        space_map = SpaceMapState(
+            encounter_config = EncounterSystemConfig(),
+            encounter_points = [
+                EncounterPoint(index = index, base_velocity = 0.0, encounter_class = encounter_class)
+                    for (index, encounter_class) in enumerate((ENCOUNTER_SHIP, ENCOUNTER_FUEL_CACHE, ENCOUNTER_SCRAP))
+            ],
+        )
+    )
+    inputs = LearningInputs(
+        gamemap = gamemap,
+        derivedmapstate = DerivedMapState(),
+        gamestate = GameState(estimated_min_delta_v = 100.0),
+        inputstate = InputState(),
+        viewstate = ViewState(),
+        flowcalc_shared_state = FlowCalculatorSharedState(),
+    )
+    gui_inputs = inputs.inputstate.gui_inputs
+
+    @test occursin("Select a fuel cache", planning_step.text)
+    @test !occursin("75%", planning_step.text)
+    no_target = blocker(inputs)
+    @test occursin("Select a fuel cache", no_target)
+    for selected_idx in (0, -1, 4, "invalid")
+        gui_inputs[:spacemap_selected_idx] = selected_idx
+        @test blocker(inputs) == no_target
+    end
+
+    for selected_idx in (1, 3)
+        gui_inputs[:spacemap_selected_idx] = selected_idx
+        @test isnothing(objects_step.step_blocker(inputs))
+        @test blocker(inputs) == "Select a fuel cache as your manoeuvre target."
+    end
+
+    gui_inputs[:spacemap_selected_idx] = 2
+    @test blocker(inputs) == "Plan a manoeuvre to the selected fuel cache by pressing 'Plan Manoeuvre'."
+    for delta_v in (74.0f0, 75.0f0)
+        gui_inputs[:spacemap_delta_v] = delta_v
+        @test blocker(inputs) == "Plan a manoeuvre to the selected fuel cache by pressing 'Plan Manoeuvre'."
+    end
+    gui_inputs[:spacemap_delta_v] = 76.0f0
+    excessive_preview = blocker(inputs)
+    @test occursin("no more than 75% of your estimated ship delta-V", excessive_preview)
+
+    # Validate committed targets and both planned burns, regardless of the preview
+    gui_inputs[:spacemap_delta_v] = 1.0f0
+    for target_idx in (0, 4, 1, 3, 2)
+        set_active_manoeuvre!(
+            gamemap, ManoeuvreData(
+                target_encounter_index = target_idx,
+                approach_burn_dv = SVector(30.0, 40.0),
+                capture_burn_dv = SVector(-15.0, -20.0),
+            )
+        )
+        message = blocker(inputs)
+        if target_idx == 2
+            @test isnothing(message) # Exactly 75% is allowed
+        else
+            @test occursin("Cancel this manoeuvre", message)
+            @test occursin("fuel cache", message)
+        end
+    end
+
+    gui_inputs[:spacemap_selected_idx] = 0
+    gui_inputs[:spacemap_delta_v] = 1000.0f0
+    @test isnothing(blocker(inputs))
+    inputs.gamestate.estimated_min_delta_v = 99.0
+    excessive_plan = blocker(inputs)
+    @test occursin("no more than 75% of your estimated ship delta-V", excessive_plan)
+    @test occursin("Cancel this manoeuvre", excessive_plan)
+    @test occursin("plan a new one", excessive_plan)
+
+    clear_active_manoeuvre!(gamemap)
+    @test blocker(inputs) == no_target
 end
 
 @testset "Console notifications" begin

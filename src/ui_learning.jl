@@ -139,7 +139,9 @@ function _render_learning_helper!(state::LearningSystemState, inputstate::InputS
         (LEARNING_HELPER_WIDTH, LEARNING_HELPER_MAX_HEIGHT),
     )
 
-    CImGui.Begin("Learning Helper", C_NULL, flags)
+    CImGui.PushFont(UI_VECTOR_FONT, 18.0)
+    CImGui.Begin("LEARNING HELPER###Learning Helper", C_NULL, flags)
+    CImGui.PopFont()
 
     helper_pos = CImGui.GetWindowPos()
     state.current_helper_pos = (helper_pos.x, helper_pos.y)

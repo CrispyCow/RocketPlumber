@@ -15,15 +15,23 @@
   </p>
 </div>
 
+Rocket Plumber is a WIP rocket engine and space ship simulation game, using circuit simulation maths for its fluid system!
+
+Follow the guidance in [Get The Game](#get-the-game) to download an executable, or run the game from source.
+
+Once in-game, have a look at the 'Teaser' to get a feel for what's possible, then start a new 'Explorer Mode' game to get into the real gameplay.
+
+If you like the project and want to stay up to date then join the [mailing list](https://rocketplumbergame.com/mailing-list/)!
+
 ---
 ## Table of contents
-- [Table of contents](#table-of-contents)
 - [About The Project](#about-the-project)
-- [Getting Started](#getting-started)
+- [Get The Game](#get-the-game)
   - [Self-Contained Executables (The easy way!)](#self-contained-executables-the-easy-way)
   - [Running From Source (The hard way)](#running-from-source-the-hard-way)
     - [Launching from the terminal](#launching-from-the-terminal)
     - [Using the REPL and Revise](#using-the-repl-and-revise)
+    - [Tests](#tests)
 - [Future Plans](#future-plans)
 - [Navigating the Codebase](#navigating-the-codebase)
   - [Execution Loops](#execution-loops)
@@ -38,9 +46,9 @@
 ---
 ## About The Project
 
-**Welcome to Rocket Plumber!** This is a spaceship and rocket engine plumbing simulation game, in the very early stages of development. Currently I have the fluid mechanics implemented, along with a few of the components needed to build basic engines and get your ship moving. The gameplay is less developed, but some core parts of the game-loop are there in the game's "Explorer Mode", where you fire your engines to perform manoeuvres in space and encounter randomly generated ships. You must salvage parts and fuel from these ships to keep yourself moving, and the further and faster you go the better rocket parts you will find! There is also a learning system with both in-game and sandbox tutorials to make the game more accessible. 
+**Welcome to Rocket Plumber!** This is a spaceship and rocket engine plumbing simulation game, under active development. Currently I have the fluid mechanics implemented, along with enough components to build basic engines and get your ship moving. The gameplay is lacking in depth but its core is there in the game's "Explorer Mode", where you fire your engines to perform manoeuvres in space and encounter randomly generated ships. You must salvage parts and fuel from these ships to keep yourself moving, and the further and faster you go the better rocket parts you will find! Eventually you will build your ship up enough to be able to perform one massive burn to escape the galaxy and win the game! There is also a learning system with both in-game and sandbox tutorials to make the game more accessible. 
 
-**Note:** the game is VERY far from being done and polished. There are currently no victory or loss conditions (unless you run out of fuel), and there are no threats or goals driving you to explore and improve. There is only the bare-minimum amount of engine and fuel types. The UI is also still a work in progress, with a lot of internal debug info still being displayed. These are all things I want to work on in the future, but hopefully what's already here is enough to be interesting and give you an idea of where this game could go!
+**Note:** the game is VERY far from being done and polished. There are currently no loss conditions (unless you run out of fuel), and the galaxy escape win condition is really only there to give you a goal to work towards. There is also only a small subset of engine and fuel types I would like to have one day. The UI is very much still a work in progress, with a lot of internal debug info still being displayed. These are all things I want to work on in the future, but hopefully what's already here is enough to be interesting and give you an idea of where this game could go!
 
 I started this project more just to experiment with an idea I had for how you could implement a fluid system for a game. The setting (plumbing up rocket engines on a space ship) was just an interesting way to exercise this system. I am making these public releases to motivate me to clean things up, and to help direct the game towards something as fun and interesting as possible!
 
@@ -48,17 +56,19 @@ The core of the simulation is a detailed fluid flow model, based on a circuit an
 
 The whole demo was written in Julia, as it's a language I enjoy programming in. It has good linear algebra support, which was handy for the actual circuit simulation as the algorithm I used boils down to constructing and solving a big matrix. It's high level enough I can get things done quickly, but there's room to dig in and optimise for the parts of the code that need to run fast. The demo is displayed with a simple 2D sprite-based renderer built on OpenGL (through the `ModernGL.jl` bindings), with the UI built with `CImGui.jl`.
 
-If you are looking for a full game I'd wait a bit, but if any of this sounds interesting I encourage you to download an executable and play around! Or if you're really keen even have a dig through the source code!
+If you are looking for a finished game I'd wait a bit, but if any of this sounds interesting I encourage you to download an executable and play around! Or if you're really keen even have a dig through the source code!
 
 ---
-## Getting Started
+## Get The Game
 ### Self-Contained Executables (The easy way!)
 
-If you are just interested in playing around, **I have built some stand-alone 'app' executables that can just be downloaded and run**. You will find those in the release assets on the right-hand side of the repository. Just download the one for your operating system, there are Windows and Linux builds! The game runs fine in macOS on x86 Macs too and I have made builds for it in the past, but Apple's malware prevention makes it pretty much impossible to run it on a different computer so until I can sort out certificates if you are on Mac you will have to run from source.
+If you are just interested in playing around, **I have built some stand-alone 'app' executables that can just be downloaded and run**. You will find those in the [release assets](../../releases) on the right-hand side of the repository. Just download the one for your operating system, there are Windows and Linux builds! The game runs fine in macOS on x86 Macs too and I have made builds for it in the past, but Apple's malware prevention makes it pretty much impossible to run it on a different computer so until I can sort out certificates if you are on Mac you will have to run from source.
 
 **A bit of technical detail on the app executables you don't actually need:**
 
 Julia is a JIT compiled language, and generally you are supposed to have Julia installed to run Julia code. I have produced these executables using tools that effectively package my code with a Julia environment to run it, so the executables are a bit larger than I would like (although there's a lot of ongoing work in this space I haven't fully leveraged). Due to some pre-compilation baked into this process, the demo ends up loading and running better in this format than loading from source!
+
+There is a JuliaC script included in the repo under `build/` which I use to create executables, and a GitHub Actions distribution workflow that uses 32GB 8-core actions runners from Avrea to run the compilations and put the results into a draft release.
 
 ### Running From Source (The hard way)
 **Note:** I have written this to be more friendly towards those unfamiliar with Julia, so a lot of these steps are not particularly specific to this project. If you have issues or you want more details, there are more generic introductions you might find useful ([like this](https://docs.julialang.org/en/v1/manual/getting-started/)), or ask your AI of choice!
@@ -72,30 +82,16 @@ To run the game from source you will need:
 Once you have these run this command from the root folder to set up the required external dependencies (you only have to do this once):
 
 ```bash
-julia --project=dev -e 'using Pkg; Pkg.instantiate()'
+julia --project=. -e 'using Pkg; Pkg.instantiate()'
 ```
 
 From here you are ready to run! Start the demo with this command:
 
 ```bash
-julia --project=dev --threads=2,1 --gcthreads=1,1 scripts/repl_launch.jl
+julia --project=. --threads=2,1 -m RocketPlumber
 ```
 
-The repository root is the `RocketPlumber` Julia package. `src/RocketPlumber.jl` is the single application source assembly point, and `using RocketPlumber` loads it without launching the game. Call `RocketPlumber.launch()` to start the normal game. The package owns the production `@main(args)` and PackageCompiler `julia_main()` entry points. The `dev/` workspace project supplies Revise for development only. Runtime shaders and the texture atlas are source-controlled in `HexFlowRendering` and accessed through `RelocatableFolders` paths.
-With two default worker threads plus one interactive main thread, the FlowCalculator runs away from the main OpenGL loop without reserving an unnecessary third default worker.
-
-#### Building a distribution
-
-The `build/` workspace project contains JuliaC as a build-only dependency. From the repository root, set it up and build a relocatable distribution:
-
-```bash
-julia --project=build -e 'using Pkg; Pkg.instantiate(; allow_autoprecomp = false)'
-julia --project=build build/build.jl
-```
-
-The bundle is written to `build/outputs/RocketPlumber/`, replacing previous build outputs. Compilation uses GLFW's null backend for headless machines. The build script targets 8-core, 32 GB machines with six image-compilation threads. Packages precompile one at a time so their compiler pools do not compete for CPU and memory. Build worker, GC and BLAS thread counts use Julia's defaults unless configured by the caller. The executable embeds two default worker threads plus one interactive thread and selects the normal graphical backend at runtime. These are initial concurrency settings, rather than a benchmarked optimum.
-
-The manually triggered **Distribution builds** GitHub Actions workflow builds Windows and Linux candidate ZIPs on Avrea's 8-vCPU, 32 GB runners and uploads them to a private draft Release in `RocketPlumberPrivate`. The release-preparation job uses a standard GitHub runner. Each full run/attempt creates a draft targeting the selected source commit; drafts remain available even if a platform fails. Rerunning individual failed jobs uploads to the existing draft. Pull-request tests remain in the separate **Tests** workflow.
+The repository root is the `RocketPlumber` Julia package. `src/RocketPlumber.jl` is the single application source assembly point, and `using RocketPlumber` loads it without launching the game. Call `RocketPlumber.launch()` to start the normal game. The package owns the production `@main(args)` and PackageCompiler `julia_main()` entry points.
 
 #### Using the REPL and Revise
 
@@ -103,10 +99,10 @@ If you are serious about making changes to the code I would recommend using the 
 
 You might notice Julia seems to take a while to start up, and that the demo seems to take a while to load. This is primarily because of the way Julia works. The first time it sees a function, it JIT compiles, but for subsequent calls it uses a cache of the compiled code to speed things up. To leverage this for your development, you want to keep the Julia session running as long as you can, to minimise how often you have to recompile things. This is what the REPL does, it lets you evaluate sections of code interactively while keeping the session open!
 
-To start the REPL in the project's environment run:
+To start the REPL in the project's dev environment run:
 
 ```bash
-julia --project=dev --threads=2,1 --gcthreads=1,1
+julia --project=dev --threads=2,1
 ```
 
 Then run the package development launcher from the REPL:
@@ -121,6 +117,19 @@ On its own this isn't that useful as you would need to restart the Julia session
 
 I actually don't use the REPL much directly from the command line. I'd recommend working in VS Code with the Julia extension, where you can run scripts in the REPL just by pressing the 'run' button. This repository already includes the appropriate `.vscode` settings to ensure the REPL launches with the correct threading by default.
 
+#### Tests
+The top level package and many of the /local_packages include package scoped tests. There is a utility available to run all of these:
+
+```bash
+julia tools/run_all_package_tests.jl
+```
+
+There is also a graphical 'Smoke Test' that loads and interacts with the teaser map directly to exercise the full graphics stack
+
+```bash
+julia --project=. --threads=2,1 scripts/smoke_test.jl
+```
+
 ---
 ## Future Plans
 
@@ -131,26 +140,23 @@ A few of the core gameplay ideas that I have been following are that:
 - I want ship parts to be scavenged or bought rather than crafted, as I feel like inventory and crafting systems are a bit overdone. I like the idea that you might have to build your ship around what you get rather than exactly what you want (think what weapons you end up with on a run of FTL)
 
 And building on from this some of the next gameplay features I have been thinking about are:
-- Stores where you can buy, sell, and trade parts and fuel. This will let me do things like add valuable items to scrap ships, and give you a bit more of a reason to visit them.
+- Stores where you can buy, sell, and trade parts and fuel. This will let me do things like add valuable items to scrap ships, and give you a bit more of a reason to visit them. (I'm also envisioning the opportunity for shop arbitrage, say being able to buy some fuels cheaply at an asteroid mine, and being able to sell them for more at a more developed trading station)
 - Functional ships you can encounter that might not just let you "borrow" all their fuel.
-- Asteroids that you can extract fuel and valuable resources from, but that will require some sort of processing
-- And finally some sort of 'Adversary' which will be pursuing you, forcing continuous movement and turning spacemap time into a resource that has to be considered when you plan manoeuvres.
+- And maybe even some sort of 'Adversary' which will be pursuing you, forcing continuous movement and turning spacemap time into a resource that has to be considered when you plan manoeuvres.
 
 For the simulation I already have a list of ideas I want to add:
-- A bunch more fuel types including hypergolics, bi-propellants, and maybe even nuclear thermal engines.
-- A fluid temperature system which will drive the engine cycles, forcing you to have things like off-stoichiometric preburners for turbopumps to avoid melting turbines, and maybe even make expander or staged combustion cycles possible.
+- A bunch more fuel types including hypergolic bi-propellants.
+- Support for more advanced engine cycles, like expander cycle or closed cycle, maybe even nuclear thermal engines!
 - An electricity system, building upon the basic energy stores with multiple generation methods. These will allow electric pumps to be recharged, and open whole new possibilities.
 
 Beyond this I am still unsure what the final game will look like (and none of this is set in stone) so stay tuned! If you have any thoughts or ideas feel free to pass them on!
 
-Development is likely to move pretty slowly as this is a hobby project. To get it to this point has already taken nearly 2 years of on-off development, and the amount of energy I have to write code for fun is inconsistent as it depends on what I am up to at work. I intend to continue posting the updates to this repo, even if they are infrequent. I won't share every commit, but I plan to push out changes in large releases as it makes sense.
+Development is likely to move pretty slowly as this is a hobby project. To get it to this point has already taken over 2 years of on-off development, and the amount of energy I have to write code for fun is inconsistent as it depends on what I am up to at work. I intend to continue posting the updates to this repo, even if they are infrequent. I won't share every commit, but I plan to push out changes in large releases as it makes sense.
 
 ---
 ## Navigating the Codebase
 
 The root is the `RocketPlumber` application package. Its `src/RocketPlumber.jl` file owns source assembly, while `RocketPlumber.launch()` owns normal startup. The `dev/` and `build/` projects are members of the root Julia workspace, supplying development-only dependencies such as Revise and build-only JuliaC respectively. Local reusable packages remain under `/local_packages` as path dependencies, rather than workspace members.
-
-Application integration and local development packages live under `/src` and `/local_packages`, respectively. The package boundary keeps reusable code in local packages and application startup, UI, rendering, and persistence coordination in RocketPlumber.
 
 ### Execution Loops
 
@@ -188,7 +194,7 @@ Pipes are stored as a `PipeCoord`, which consists of the 2 `VertexCoord`s it spa
 
 These coordinate system types are all defined in `local_packages/HexFrame`. This was one of the earliest parts of the code I wrote, so there is a lot in here that is suboptimal.
 
-A set of types is also used to describe the nodes to which circuit elements can connect on which the flow physics are based. For the purposes of the circuit analysis the node can exist either on vertexes of a hexagon/tile, on a special 'internal' node for each tile, or be a connection to the global 'ground' node. These options are enumerated in a `NodePos` which exists relative to a specific tile. A `NodeCoord` on the other hand is absolute, and is defined by a `NodePos` and the `TileCoord` it is relative to. Again to avoid non-uniqueness problems a 'proper' node coordinate is defined as one where its `NodePos` is either `NODE_Q_POS`, `NODE_Q_NEG` (left and right), or the special internal or ground node.
+A set of types is also used to describe the nodes to which circuit elements can connect on which the flow physics are based. For the purposes of the circuit analysis the node can exist either on vertexes of a hexagon/tile, on a special 'internal' node for each tile, or be a connection to the global 'ground' node. These options are enumerated in a `NodePos` which exists relative to a specific tile. A `NodeCoord` on the other hand is absolute, and is defined by a `NodePos` and the `TileCoord` it is relative to. Again to avoid non-uniqueness problems a 'proper' node coordinate is defined as one where its `NodePos` is either `NODE_Q_POS`, `NODE_Q_NEG` (left and right), or the special internal or ground nodes.
 
 The circuit elements themselves are defined by their type and value, and then their connections. For elements intended to be relative to a tile (like those a component produces as it is unaware of its location on the map) they are typed as a `RelativeElement` and use 2 `NodePos`s to define a set of `RelativeElementConnections`. For elements whose position is absolute (like those used in the MNA) they are typed as an `AbsoluteElement` and use 2 `NodeCoord`s to define a set of `AbsoluteElementConnections`.
 
@@ -200,7 +206,7 @@ This is fundamentally how the simulation relates positions in the hexagonal grid
 
 First all of the circuit elements are collected into a big list from the various sources that produce them like tiles and maps. This list is then 'pruned' to remove unnecessary dead branches that don't connect to anything, by iteratively removing elements whose nodes don't connect to anything else. Elements are then further filtered by performing graph traversal from ground nodes and removing any elements unconnected to ground in any way, as these will have an undefined pressure and will not contribute to flow. Finally 'dangling dependants' are removed, which are dependant elements (like current-dependant current sources etc.) whose dependent element doesn't exist as it was filtered in a previous step. If any elements are removed in this last step, the whole process must be repeated as new dead or grounded branches could have been created.
 
-The remaining element list is used to construct the MNA matrices. I won't go into too much detail on the MNA algorithm, it's well documented by people who actually understand it ([like here](https://qucs.sourceforge.net/tech/node14.html)). The output is a system of equations represented as matrices that can be solved to determine the node voltages (the pressures) and the current (flows) through the elements.
+The remaining element list is used to construct the MNA matrices. I won't go into too much detail on the MNA algorithm, it's well documented by people who actually understand it ([like here](https://qucs.sourceforge.net/tech/node14.html)). The output is a system of equations represented as matrices that can be solved to determine the node voltages (the pressures) and the current (flows) through the elements. I am using the KLU sparse solver, which is specifically optimised for the sparsity patterns common in circuit simulation.
 
 ### The 'Component' System and its API
 
@@ -216,7 +222,7 @@ The component system makes extensive use of keyword arguments, and specifically 
 
 ### Rendering Engine and Tools
 
-Rendering for this demo is done with OpenGL in a GLFW context, but a set of wrapper types has been defined and utility functions have been defined in `local_packages/RenderEngine`. The logic in `RenderEngine` is designed to be non-specific to this demo, as a matter of good practice. If there is interest this could potentially be broken out into its own package, so other people could use it.
+Rendering for this demo is done with OpenGL in a GLFW context, but a set of wrapper types and utility functions have been defined in `local_packages/RenderEngine`. The logic in `RenderEngine` is designed to be mostly non-specific to this project, as a matter of good practice. If there is interest this could potentially be broken out into its own package, so other people could use it.
 
 Wrapper types were created for all the IDs of OpenGL objects that are normally just a `GLuint` so they can be brought into Julia's type system for type safety and dispatch. Sufficient `convert` methods are provided so no additional verbosity is needed when interacting with `ModernGL` bindings. A multiple-dispatch driven function `wglUniform` is provided for uniform binding that dispatches to the appropriate OpenGL uniform call based on the argument type.
 
