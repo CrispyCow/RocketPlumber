@@ -1,8 +1,8 @@
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.13.0"
+julia_version = "1.13.1"
 manifest_format = "2.1"
-project_hash = "115966531704bcd37ae6542df169297be257b62b"
+project_hash = "9403222f6d45d9c7f58bd9eb22ec97488b5790bc"
 
 [[deps.Artifacts]]
 uuid = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
@@ -112,10 +112,10 @@ version = "1.11.0"
 
 [[deps.StaticArrays]]
 deps = ["LinearAlgebra", "PrecompileTools", "Random", "StaticArraysCore"]
-git-tree-sha1 = "39e70e0ab5d7f89833a62ab7c79df15d4fc417c1"
+git-tree-sha1 = "de349d5585559b692f518b6d3fc7c179d64b2364"
 registries = "General"
 uuid = "90137ffa-7385-5640-81b9-e52037218182"
-version = "1.9.22"
+version = "1.9.23"
 
     [deps.StaticArrays.extensions]
     StaticArraysChainRulesCoreExt = "ChainRulesCore"

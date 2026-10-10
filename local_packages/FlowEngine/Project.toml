@@ -25,6 +25,6 @@ HexFrame = {path = "../HexFrame"}
 
 [compat]
 KLU = "0.6.0"
-SmallCollections = "0.4.1"
+SmallCollections = "0.6"
 StructEquality = "2.1.0"
 Test = "1.11.0"

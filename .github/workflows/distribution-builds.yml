@@ -68,7 +68,7 @@ jobs:
           persist-credentials: false
       - uses: julia-actions/setup-julia@v3
         with:
-          version: '1.13'
+          version: '1.13.1'
       - name: Instantiate build environment
         run: julia --project=build -e 'using Pkg; Pkg.instantiate(; allow_autoprecomp = false)'
       - name: Build distribution

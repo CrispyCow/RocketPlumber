@@ -19,7 +19,7 @@ HexFlowTelemetry = {path = "../HexFlowTelemetry"}
 [compat]
 CSyntax = "0.4.1"
 ColorTypes = "0.12.1"
-FixedPointNumbers = "0.8.5"
+FixedPointNumbers = "0.8, 0.9"
 JSON3 = "1.14.3"
 ModernGL = "1.1.8"
 StaticArrays = "1.9.14"

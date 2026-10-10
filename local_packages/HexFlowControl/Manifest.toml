@@ -1,8 +1,8 @@
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.13.0"
+julia_version = "1.13.1"
 manifest_format = "2.1"
-project_hash = "ce3682c801e133dbb2445cbbc3ab5554c4c9094a"
+project_hash = "4e508f5b5002dfa8619ab828d2c39481b678537e"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "MacroTools"]
@@ -46,10 +46,10 @@ version = "1.0.9+0"
 
 [[deps.Cairo_jll]]
 deps = ["Artifacts", "Bzip2_jll", "CompilerSupportLibraries_jll", "Fontconfig_jll", "FreeType2_jll", "Glib_jll", "JLLWrappers", "Libdl", "Pixman_jll", "Xorg_libXext_jll", "Xorg_libXrender_jll", "Zlib_jll", "libpng_jll"]
-git-tree-sha1 = "1fa950ebc3e37eccd51c6a8fe1f92f7d86263522"
+git-tree-sha1 = "7b841680738c19948120f6e4cf8d0200518bd564"
 registries = "General"
 uuid = "83423d85-b0ee-5818-9007-b63ccbeb887a"
-version = "1.18.7+0"
+version = "1.18.8+0"
 
 [[deps.Compat]]
 deps = ["TOML", "UUIDs"]
@@ -363,10 +363,10 @@ version = "1.11.0"
 
 [[deps.StaticArrays]]
 deps = ["LinearAlgebra", "PrecompileTools", "Random", "StaticArraysCore"]
-git-tree-sha1 = "39e70e0ab5d7f89833a62ab7c79df15d4fc417c1"
+git-tree-sha1 = "de349d5585559b692f518b6d3fc7c179d64b2364"
 registries = "General"
 uuid = "90137ffa-7385-5640-81b9-e52037218182"
-version = "1.9.22"
+version = "1.9.23"
 
     [deps.StaticArrays.extensions]
     StaticArraysChainRulesCoreExt = "ChainRulesCore"
@@ -543,10 +543,10 @@ version = "0.2.2+0"
 
 [[deps.libpng_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Zlib_jll"]
-git-tree-sha1 = "e51150d5ab85cee6fc36726850f0e627ad2e4aba"
+git-tree-sha1 = "1fcd6cf05d23adab0b5ffc496d020537215751dc"
 registries = "General"
 uuid = "b53b4c65-9356-5827-b1ea-8c7a1a84506f"
-version = "1.6.58+0"
+version = "1.6.59+1"
 
 [[deps.xkbcommon_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libxcb_jll", "Xorg_xkeyboard_config_jll"]
