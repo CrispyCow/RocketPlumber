@@ -12,6 +12,7 @@ using HexFrame: TileCoord
 using HexFlowProcGen: generate_encounter, generate_encounter_name
 using RocketPlumber: configure_threads, start_window, enter_gameloop, ui_teardown
 using RocketPlumber: mapgen_teasership, get_encounter_system_config
+using RocketPlumber: telemetry_dir
 
 # ===============================================================
 # Test Harness
@@ -256,7 +257,7 @@ function run_smoke_test(; telemetry::Bool = false, gc_log::Bool = false, duratio
     start_telemetry!(telemetry)
     window = start_window()
     result = run_smoke_test_fixture(window; exit_tick)
-    finish_telemetry!(; directory = joinpath(@__DIR__, "..", "..", "logs", "telemetry"))
+    finish_telemetry!(; directory = telemetry_dir())
     return result
 end
 

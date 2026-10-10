@@ -1,5 +1,5 @@
 #=
-Scope: Shared CImGui helper functions, layout constants, and small UI formatting utilities
+Scope: Shared UI helpers, map file dialogs, layout constants, and small formatting utilities
 Formatter: Runic
 =#
 
@@ -197,4 +197,36 @@ function safe_ship_display_name(name::Symbol)::String
     else
         return s
     end
+end
+
+#= ---------- Map File Dialogs ---------- =#
+
+"Normalise missing or .jld map extensions without overwriting a destination the dialog did not confirm."
+function normalise_map_save_path(path::String)::String
+    stem, extension = splitext(path)
+    isempty(extension) || lowercase(extension) == ".jld" || return path
+    destination = stem * ".jld2"
+    if ispath(destination) || islink(destination)
+        throw(ArgumentError("$destination already exists. Select the full .jld2 filename to confirm overwriting it."))
+    end
+    return destination
+end
+
+"Choose a map save path and report dialog or filename failures through the game console."
+function map_save_dialog(console_push::Function; dialog::Function = save_file)::Union{Nothing, String}
+    try
+        path = dialog(Path(maps_dir(; create = true)); filterlist = "jld2")
+        isnothing(path) && return nothing
+        return normalise_map_save_path(string(path))
+    catch e
+        e isa InterruptException && rethrow()
+        @warn "Map save dialog failed" exception = (e, catch_backtrace())
+        console_push("Saving failed: $(sprint(showerror, e))")
+        return nothing
+    end
+end
+
+"Choose a map to load, opening the dialog in an existing user maps directory."
+function map_load_dialog(; dialog::Function = pick_file)
+    return dialog(Path(maps_dir(; create = true)); filterlist = "jld2")
 end

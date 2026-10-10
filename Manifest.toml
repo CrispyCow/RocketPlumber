@@ -2,7 +2,7 @@
 
 julia_version = "1.13.0"
 manifest_format = "2.1"
-project_hash = "f90d38868dce804eba33e638184f1f56119a718d"
+project_hash = "6bb9d0296fcf518f89c7b6347edf88f25c89aa52"
 
 [[deps.ATK_jll]]
 deps = ["Artifacts", "Glib_jll", "JLLWrappers", "Libdl"]
@@ -47,6 +47,12 @@ version = "1.11.0"
 [[deps.Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 version = "1.11.0"
+
+[[deps.BaseDirs]]
+git-tree-sha1 = "8c290a1b223deaeea9aea44b235d24546da8eb98"
+registries = "General"
+uuid = "18cc8868-cbac-4acf-b575-c8ff214dc66f"
+version = "1.4.0"
 
 [[deps.BitIntegers]]
 deps = ["Random"]
@@ -1053,7 +1059,7 @@ version = "3.17.1"
     Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 
 [[deps.RocketPlumber]]
-deps = ["Accessors", "CImGui", "CSyntax", "ColorSchemes", "ColorTypes", "DataStructures", "Dates", "FFMPEG", "FilePathsBase", "FlowEngine", "FlowMap", "GLFW", "GeometryBasics", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowBasicPipes", "HexFlowCalculator", "HexFlowControl", "HexFlowLearningSystem", "HexFlowNozzleComponents", "HexFlowPersistence", "HexFlowProcGen", "HexFlowPumpComponents", "HexFlowRendering", "HexFlowSwitchComponents", "HexFlowTankComponents", "HexFlowTelemetry", "HexFluids", "HexFrame", "ImPlot", "JLD2", "LinearAlgebra", "ModernGL", "NativeFileDialog", "PNGFiles", "PrecompileTools", "Printf", "Random", "RenderEngine", "SmallCollections", "SquirrelNoise", "StaticArrays", "StructArrays", "StructEquality", "TimerOutputs"]
+deps = ["Accessors", "BaseDirs", "CImGui", "CSyntax", "ColorSchemes", "ColorTypes", "DataStructures", "Dates", "FFMPEG", "FilePathsBase", "FlowEngine", "FlowMap", "GLFW", "GeometryBasics", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowBasicPipes", "HexFlowCalculator", "HexFlowControl", "HexFlowLearningSystem", "HexFlowNozzleComponents", "HexFlowPersistence", "HexFlowProcGen", "HexFlowPumpComponents", "HexFlowRendering", "HexFlowSwitchComponents", "HexFlowTankComponents", "HexFlowTelemetry", "HexFluids", "HexFrame", "ImPlot", "JLD2", "LinearAlgebra", "ModernGL", "NativeFileDialog", "PNGFiles", "PrecompileTools", "Printf", "Random", "RenderEngine", "SmallCollections", "SquirrelNoise", "StaticArrays", "StructArrays", "StructEquality", "TimerOutputs"]
 path = "."
 uuid = "49293a16-84b5-4c04-b023-19c4eddda1c7"
 version = "0.1.0-dev"

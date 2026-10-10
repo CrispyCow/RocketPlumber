@@ -305,13 +305,13 @@ function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputSta
     action_start_y = CImGui.GetCursorPosY() + max(0.0, (CImGui.GetContentRegionAvail().y - action_group_height) / 2.0)
     CImGui.SetCursorPosY(action_start_y)
     if CImGui.Button("Save Pre-Escape Map", ImVec2(-1, action_button_height))
-        save_path = save_file(absolute(Path(joinpath(dirname(@__FILE__), "..", "maps"))); filterlist = "jld2")
+        save_path = map_save_dialog(flowcalc_ipc.console_push)
         if !isnothing(save_path)
             try
-                save_pre_escape_map(timelapse_recorder, gamemap, string(save_path))
+                save_pre_escape_map(timelapse_recorder, gamemap, save_path)
             catch e
                 e isa InterruptException && rethrow()
-                @warn "Pre-escape map save failed" path = string(save_path) exception = (e, catch_backtrace())
+                @warn "Pre-escape map save failed" path = save_path exception = (e, catch_backtrace())
                 flowcalc_ipc.console_push("Saving failed. See the terminal log for details.")
             end
         end

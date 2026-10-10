@@ -201,6 +201,6 @@ Runtime shaders and the texture atlas are source-controlled inside
 
 All launch paths accept independent, opt-in flags: `--gc-log` prints Julia's
 native GC logs; `--telemetry` prints periodic TimerOutputs tables and saves a
-cumulative shutdown report under ignored `logs/telemetry/`, excluding each
+cumulative shutdown report under Documents' `RocketPlumber-saves/logs/telemetry/`, excluding each
 stream's first (warm-up) sample. Smoke-only `--duration <seconds>` (default and
 minimum 20) moves the exit marker without changing scripted action ticks.

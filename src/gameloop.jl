@@ -285,7 +285,7 @@ end
 
 "Write calculator crash diagnostics with the root package version."
 function write_game_crash_dump(payload::NamedTuple)
-    return HexFlowPersistence.write_crash_dump(payload; game_version = Base.pkgversion(@__MODULE__))
+    return HexFlowPersistence.write_crash_dump(payload; game_version = Base.pkgversion(@__MODULE__), directory = crashes_dir())
 end
 
 # Map-source dispatch

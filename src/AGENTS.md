@@ -8,6 +8,9 @@ launching, input, UI, rendering, persistence, and game-session flow.
 
 - `RocketPlumber.jl` is the canonical application assembly point. Keep normal
   application source includes and runtime imports there.
+- `RocketPlumber.jl` resolves user output under Documents' `RocketPlumber-saves`
+  at runtime. Importing must not create these directories. `ui_common.jl` supplies
+  the shared map dialogs and save-filename handling.
 - `precompile_workload.jl` exercises a headless game-session path during root
   package precompilation, after application definitions and entry points.
 - `scripts/repl_launch.jl` is a thin development adapter that loads Revise

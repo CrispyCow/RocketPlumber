@@ -475,12 +475,17 @@ end
     end
 end
 
-@testset "application crash dumps record the root package version" begin
+@testset "Isolated application output paths" begin
     mktempdir() do directory
-        cd(directory) do
-            path = RocketPlumber.write_game_crash_dump((stored_gamemap = GameMap(),))
-            @test HexFlowPersistence.load_game_version(path) == string(Base.pkgversion(RocketPlumber))
-        end
+        documents = joinpath(directory, "Custom Documents")
+        config = mkpath(joinpath(directory, "config"))
+        workdir = mkpath(joinpath(directory, "work"))
+        write(joinpath(config, "user-dirs.dirs"), "XDG_DOCUMENTS_DIR=\"$documents\"\n")
+        script = joinpath(@__DIR__, "output_paths.jl")
+        command = `$(Base.julia_cmd()) --project=$(dirname(Base.active_project())) $script $documents $workdir`
+        # A fresh process resolves BaseDirs during runtime initialisation, before application import
+        command = addenv(command, "XDG_CONFIG_HOME" => config, "XDG_DOCUMENTS_DIR" => nothing, "JULIA_GLFW_PLATFORM" => "null")
+        @test success(pipeline(command; stdout, stderr))
     end
 end
 

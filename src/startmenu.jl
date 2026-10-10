@@ -389,9 +389,14 @@ function _create_session_for_action(state::StartMenuState, action::StartMenuActi
         return MapSession(gamemap, :editor_intro)
 
     elseif action == ACTION_LOAD_MAP
-        maps_path = Path(joinpath(dirname(@__FILE__), "..", "maps"))
-        start_dir = isdir(maps_path) ? absolute(maps_path) : Path(homedir())
-        file_path = pick_file(start_dir; filterlist = "jld2")
+        file_path = try
+            map_load_dialog()
+        catch e
+            e isa InterruptException && rethrow()
+            @warn "Map load dialog failed" exception = (e, catch_backtrace())
+            state.load_error = "Could not open the save-file dialog."
+            return nothing
+        end
         isnothing(file_path) && return nothing
 
         @info "Selected file: $file_path"

@@ -87,13 +87,13 @@ function ui_pause_menu_render!(
     if !is_sandbox
         save_label = escape_active ? "Save Escape Attempt" : "Save Map"
         if CImGui.Button(save_label, (button_width, button_height))
-            save_path = save_file(absolute(Path(joinpath(dirname(@__FILE__), "..", "maps"))); filterlist = "jld2")
+            save_path = map_save_dialog(flowcalc_ipc.console_push)
             if !isnothing(save_path)
                 try
-                    save_current_map(timelapse_recorder, snapshot, session_timing, learning_state, string(save_path))
+                    save_current_map(timelapse_recorder, snapshot, session_timing, learning_state, save_path)
                 catch e
                     e isa InterruptException && rethrow()
-                    @warn "Map save failed" path = string(save_path) exception = (e, catch_backtrace())
+                    @warn "Map save failed" path = save_path exception = (e, catch_backtrace())
                     flowcalc_ipc.console_push("Saving failed. See the terminal log for details.")
                 end
             end
@@ -438,7 +438,7 @@ function ui_dev_utils_menu_render!(
         if CImGui.TreeNode("Export Ship")
             selected, current_gamemap = _ship_selector_ui!(inputstate, flowcalc_ipc, :export_ship_index, "Ship", "No ships available"; exclude_primary = false)
             if !isnothing(selected) && CImGui.Button("Save Ship...", (button_width, button_height))
-                save_path = save_file(absolute(Path(joinpath(dirname(@__FILE__), "..", "maps"))); filterlist = "jld2")
+                save_path = map_save_dialog(flowcalc_ipc.console_push)
                 if !isnothing(save_path)
                     blueprint = get_ship_blueprint(current_gamemap, selected)
                     centroid = get_surface_centroid(current_gamemap, selected)
@@ -446,11 +446,11 @@ function ui_dev_utils_menu_render!(
                         offset_ship!(blueprint, TileCoord(-round_to_tile(centroid)))
                     end
                     try
-                        save_game(GameMap(blueprint), string(save_path))
+                        save_game(GameMap(blueprint), save_path)
                         @info "Exported ship :$(selected) to $(save_path)"
                     catch e
                         e isa InterruptException && rethrow()
-                        @warn "Ship export failed" path = string(save_path) ship = selected exception = (e, catch_backtrace())
+                        @warn "Ship export failed" path = save_path ship = selected exception = (e, catch_backtrace())
                         flowcalc_ipc.console_push("Saving failed. See the terminal log for details.")
                     end
                 end

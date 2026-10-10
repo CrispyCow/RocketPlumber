@@ -10,6 +10,7 @@ using LinearAlgebra, StaticArrays, GeometryBasics
 using ModernGL, GLFW, CSyntax.CRef
 using TimerOutputs, Accessors, Printf, CSyntax
 using FilePathsBase, NativeFileDialog, FFMPEG
+import BaseDirs
 import CImGui, CImGui.lib
 using ImPlot
 
@@ -18,6 +19,23 @@ using HexFrame, HexElements, HexFluids, HexFlowTelemetry
 using HexComponentsAPI, FlowEngine, FlowMap, RenderEngine, HexFlowProcGen
 using HexFlowControl, HexFlowCalculator, HexFlowRendering
 using SquirrelNoise, HexFlowLearningSystem, HexFlowPersistence
+
+# ===============================================================
+# Application Output Directories
+# ===============================================================
+
+"Resolve an application output directory at runtime, creating it only when requested."
+function output_dir(parts::String...; create::Bool = false)::String
+    directory = abspath(joinpath(BaseDirs.User.documents("RocketPlumber-saves"), parts...))
+    create && mkpath(directory)
+    return directory
+end
+
+maps_dir(; create::Bool = false) = output_dir("maps"; create)
+pictures_dir(; create::Bool = false) = output_dir("pictures"; create)
+videos_dir(; create::Bool = false) = output_dir("videos"; create)
+telemetry_dir(; create::Bool = false) = output_dir("logs", "telemetry"; create)
+crashes_dir(; create::Bool = false) = output_dir("logs", "crashes"; create)
 
 # ===============================================================
 # Application Assembly
@@ -67,7 +85,7 @@ function launch(; telemetry::Bool = false, gc_log::Bool = false)
     start_telemetry!(telemetry)
     window = start_window()
     enter_start_menu(window)
-    finish_telemetry!(; directory = joinpath(@__DIR__, "..", "logs", "telemetry"))
+    finish_telemetry!(; directory = telemetry_dir())
     return nothing
 end
 
