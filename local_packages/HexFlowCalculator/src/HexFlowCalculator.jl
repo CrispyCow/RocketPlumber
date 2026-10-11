@@ -11,7 +11,7 @@ using TimerOutputs, StaticArrays
 # Custom Packages
 using HexFrame, HexElements, HexFluids, HexFlowTelemetry
 using FlowEngine, FlowMap, HexComponentsAPI, HexFlowControl
-using HexFlowProcGen
+using HexFlowProcGen, TypeGroupedDicts
 
 # Type exports - Data Structures
 export FlowCalculatorSnapshot, FlowCalculatorSharedState, FlowCalculatorIPC, TimingState, ConsoleMessage
@@ -1404,11 +1404,12 @@ Scan all components for pending reactivation probe requests and enqueue new ones
 Components already in the queue are skipped (deduplication via `pending_set`).
 """
 function scan_reactivation_requests!(scheduler::ReactivationScheduler, gamemap::GameMap)
-    for (coord, comp) in gamemap.components
-        coord in scheduler.pending_set && continue
-        isnothing(get_reactivation_probe(comp)) && continue
+    foreachpair(gamemap.components) do coord, comp
+        coord in scheduler.pending_set && return nothing
+        isnothing(get_reactivation_probe(comp)) && return nothing
         push!(scheduler.pending, coord)
         push!(scheduler.pending_set, coord)
+        return nothing
     end
     return nothing
 end
@@ -1858,9 +1859,8 @@ end
 "Sum thrust from all components, integrate velocity, and track burn progress during manoeuvres."
 function handle_thrusters!(gamestate::GameState, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_State; base_ups::Float64 = BASE_UPS)
     # Sum thrust from all components globally
-    thrust = SVector{2, Float64}(0.0, 0.0)
-    for (tile, comp) in gamemap.components
-        thrust += get_thrust(comp; tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
+    thrust = mapreducepairs(+, gamemap.components; init = SVector{2, Float64}(0.0, 0.0)) do tile, comp
+        return get_thrust(comp; tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
     end
     gamestate.thrust = thrust
     thrust_magnitude = norm(thrust)

@@ -2496,6 +2496,18 @@ end
     @test norm(scaled_velocity_change) ≈ scaled_expected_delta_v
 end
 
+@testset "handle_thrusters! — sums all component buckets and ships" begin
+    gm = make_gamemap()
+    add_ship!(gm, :visitor, ShipState())
+    set_component!(gm, TileCoord(0, 0), PlacedComponent(FixedThrustCompBehav(SVector(3.0, 4.0)), Q_POS, :primary))
+    set_component!(gm, TileCoord(1, 0), PlacedComponent(FixedThrustCompBehav(SVector(-1.0, 2.0)), Q_POS, :visitor))
+    set_component!(gm, TileCoord(2, 0), PlacedComponent(MockCompBehav(), Q_POS, :primary))
+    gs = GameState()
+    handle_thrusters!(gs, gm, DerivedMapState(), MNA_State())
+    @test gs.thrust == SVector(2.0, 6.0)
+    @test gs.acceleration_ship_frame ≈ SVector(2.0, 6.0) / get_mass(gm)
+end
+
 # ===============================================================
 # Tests — Galaxy escape calculator integration
 # ===============================================================

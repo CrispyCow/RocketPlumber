@@ -6,7 +6,7 @@ Formatter: Runic
 module FlowEngine
 
 using HexFrame, HexElements, HexFluids, HexComponentsAPI
-using FlowMap
+using FlowMap, TypeGroupedDicts
 import FlowMap: collect_surface_edge_tiles!
 
 using SparseArrays, LinearAlgebra, KLU, SmallCollections, StructEquality
@@ -301,25 +301,8 @@ end
 Update behaviours of all components on the GameMap.
 """
 function update_components!(gamemap::GameMap, mna_state::MNA_State, derivedmapstate::DerivedMapState)
-    for (coord, comp) in gamemap.components
-        updated = update_flowbehav(comp; tile = coord, mna_state, derivedmapstate)
-        set_component!(gamemap, coord, updated)
-    end
-    return nothing
-end
-
-"Push active absolute elements from a PlacedComponent directly into the output vector."
-function push_mapped_elements!(out::Vector{AbsoluteElement}, tilecomp::PlacedComponent, tile::TileCoord)
-    for abs_elem in produce_abs_elements(tilecomp, tile)
-        abs_elem.active && push!(out, abs_elem)
-    end
-    return nothing
-end
-
-"Push active absolute elements from a PlacedPipe directly into the output vector."
-function push_pipe_element!(out::Vector{AbsoluteElement}, pipe::PlacedPipe, coord::PipeCoord)
-    for abs_elem in produce_abs_elements(pipe, coord)
-        abs_elem.active && push!(out, abs_elem)
+    mapvalueswithkeys!(gamemap.components) do coord, comp
+        return update_flowbehav(comp; tile = coord, mna_state, derivedmapstate)
     end
     return nothing
 end
@@ -333,14 +316,20 @@ function list_elements!(
         ship_name::Union{Symbol, Nothing} = nothing
     )
     empty!(out)
-    sizehint!(out, length(gamemap.components) * 2 + length(gamemap.pipe_behaviors))
-    for (coord, comp) in gamemap.components
-        (isnothing(ship_name) || comp.ship === ship_name) || continue
-        push_mapped_elements!(out, comp, coord)
+    sizehint!(out, length(gamemap.components) * 2 + length(gamemap.pipe_behaviors); shrink = false)
+    foreachpair(gamemap.components) do coord, comp
+        (isnothing(ship_name) || comp.ship === ship_name) || return nothing
+        for abs_elem in produce_abs_elements(comp, coord)
+            abs_elem.active && push!(out, abs_elem)
+        end
+        return nothing
     end
-    for (edge, pipe) in gamemap.pipe_behaviors
-        (isnothing(ship_name) || pipe.ship === ship_name) || continue
-        push_pipe_element!(out, pipe, edge)
+    foreachpair(gamemap.pipe_behaviors) do edge, pipe
+        (isnothing(ship_name) || pipe.ship === ship_name) || return nothing
+        for abs_elem in produce_abs_elements(pipe, edge)
+            abs_elem.active && push!(out, abs_elem)
+        end
+        return nothing
     end
     return nothing
 end
@@ -680,9 +669,10 @@ Collect all fluid declarations from the GameMap.
 """
 function list_fluid_declarations!(out::Vector{AbsFluidDecl}, gamemap::GameMap)
     empty!(out)
-    sizehint!(out, 16)
-    for (coord, comp) in gamemap.components
+    sizehint!(out, 16; shrink = false)
+    foreachpair(gamemap.components) do coord, comp
         push_mapped_declarations!(out, comp, coord)
+        return nothing
     end
     return nothing
 end

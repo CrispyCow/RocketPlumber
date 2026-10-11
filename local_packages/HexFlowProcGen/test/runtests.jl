@@ -310,6 +310,18 @@ end
 
 @testset "Delta-V estimation" begin
 
+    @testset "inventory spans concrete buckets and ships" begin
+        gm = make_origin_gamemap()
+        @test estimate_min_delta_v(gm) == 0.0
+        add_ship!(gm, :visitor, ShipState())
+        add_mock_mass_component!(gm, TileCoord(0, 0); dry_mass = 10.0, cold_gas_mass = 15.0)
+        add_mock_mass_component!(gm, TileCoord(1, 0); dry_mass = 20.0, cold_gas_mass = 25.0)
+        set_component!(gm, TileCoord(2, 0), PlacedComponent(MockCompBehav(1.0), HexFrame.Q_POS, :visitor))
+        initial_mass = get_mass(gm)
+        cold_gas_ve = something(HexFluids.lookup_fluid_exhaust_velocity(HexFluids.COLD_GAS), 0.0)
+        @test estimate_min_delta_v(gm) ≈ cold_gas_ve * log(initial_mass / (initial_mass - 40.0))
+    end
+
     @testset "returns zero without usable propellant" begin
         gm = make_origin_gamemap()
         add_mock_mass_component!(gm, TileCoord(0, 0); dry_mass = 10.0, unmodelled_mass = 40.0)

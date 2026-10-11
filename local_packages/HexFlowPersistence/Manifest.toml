@@ -269,13 +269,13 @@ uuid = "53c48c17-4a7d-5ca2-90c5-79b7896eea93"
 version = "0.8.6"
 
 [[deps.FlowEngine]]
-deps = ["FlowMap", "HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "KLU", "LinearAlgebra", "SmallCollections", "SparseArrays", "StructEquality", "Test"]
+deps = ["FlowMap", "HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "KLU", "LinearAlgebra", "SmallCollections", "SparseArrays", "StructEquality", "Test", "TypeGroupedDicts"]
 path = "../FlowEngine"
 uuid = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
 version = "0.1.0"
 
 [[deps.FlowMap]]
-deps = ["DataStructures", "HexComponentsAPI", "HexFluids", "HexFrame", "StaticArrays", "StructEquality", "Test"]
+deps = ["DataStructures", "HexComponentsAPI", "HexFluids", "HexFrame", "StaticArrays", "StructEquality", "Test", "TypeGroupedDicts"]
 path = "../FlowMap"
 uuid = "86ae9052-88d6-4179-aacc-02095df7ba41"
 version = "0.1.0"
@@ -392,7 +392,7 @@ uuid = "7cb62a29-528c-4794-9753-ba1699b41bf0"
 version = "0.1.0"
 
 [[deps.HexFlowProcGen]]
-deps = ["FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "LinearAlgebra", "Printf", "Random", "SquirrelNoise", "StaticArrays", "StructEquality"]
+deps = ["FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "LinearAlgebra", "Printf", "Random", "SquirrelNoise", "StaticArrays", "StructEquality", "TypeGroupedDicts"]
 path = "../HexFlowProcGen"
 uuid = "46cebafd-6e5b-4504-9515-23fc742129ca"
 version = "0.1.0"
@@ -404,7 +404,7 @@ uuid = "1290d7bd-b4cc-419e-8854-09761d3fc36b"
 version = "0.1.0"
 
 [[deps.HexFlowRendering]]
-deps = ["Accessors", "CSyntax", "ColorSchemes", "ColorTypes", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowControl", "HexFlowTelemetry", "HexFluids", "HexFrame", "ModernGL", "PNGFiles", "RelocatableFolders", "RenderEngine", "StaticArrays", "StructArrays", "TimerOutputs"]
+deps = ["Accessors", "CSyntax", "ColorSchemes", "ColorTypes", "FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowControl", "HexFlowTelemetry", "HexFluids", "HexFrame", "ModernGL", "PNGFiles", "RelocatableFolders", "RenderEngine", "StaticArrays", "StructArrays", "TimerOutputs", "TypeGroupedDicts"]
 path = "../HexFlowRendering"
 uuid = "4ae3e4b3-9148-4249-9c49-b5ebbd5f9e90"
 version = "0.1.0"
@@ -987,6 +987,11 @@ version = "1.2.2"
 
     [deps.TimerOutputs.weakdeps]
     FlameGraphs = "08572546-2f56-4bcf-ba4e-bab62c3a3f89"
+
+[[deps.TypeGroupedDicts]]
+path = "../TypeGroupedDicts"
+uuid = "2e7ba818-21ff-47c9-bc2b-2e96b96a0278"
+version = "0.1.0"
 
 [[deps.UUIDs]]
 deps = ["Random", "SHA"]

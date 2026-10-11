@@ -33,12 +33,17 @@ using PrecompileTools: @setup_workload, @compile_workload
         encounter_blueprint = generate_encounter(ENCOUNTER_SHIP, HexFluids.FUEL_LIQUID, 5.0, encounter_seed, class_config)
         encounter_ship_optimal_dir!(explorer_map, encounter_blueprint, generate_encounter_name(encounter_seed, ENCOUNTER_SHIP), encounter_seed)
 
-        # compile save and load of the gamemaps
+        # Compile current-format save/load of the freshly generated map
+        # Future historical migration coverage belongs in persistence tests
         mktempdir() do directory
             save_path = joinpath(directory, "precompile_map.jld2")
             save_game(gamemap, save_path)
             @assert isfile(save_path)
             loaded_bundle = loadmap_bundle(save_path)
+            @assert typeof(loaded_bundle.gamemap.components) === typeof(gamemap.components)
+            @assert typeof(loaded_bundle.gamemap.pipe_behaviors) === typeof(gamemap.pipe_behaviors)
+            @assert loaded_bundle.gamemap.components == gamemap.components
+            @assert loaded_bundle.gamemap.pipe_behaviors == gamemap.pipe_behaviors
             @assert length(loaded_bundle.gamemap.ships) == length(gamemap.ships)
         end
 

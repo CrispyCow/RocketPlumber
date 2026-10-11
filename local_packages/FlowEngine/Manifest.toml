@@ -2,7 +2,7 @@
 
 julia_version = "1.13.1"
 manifest_format = "2.1"
-project_hash = "c9fa0f0a987608bc9cb1c0cdd9de4bd62cff5f23"
+project_hash = "1645d0afd9aaf097f900d59debe471e2cc1ba584"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "MacroTools"]
@@ -106,13 +106,13 @@ uuid = "ade2ca70-3891-5945-98fb-dc099432e06a"
 version = "1.11.0"
 
 [[deps.FlowEngine]]
-deps = ["FlowMap", "HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "KLU", "LinearAlgebra", "SmallCollections", "SparseArrays", "StructEquality", "Test"]
+deps = ["FlowMap", "HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "KLU", "LinearAlgebra", "SmallCollections", "SparseArrays", "StructEquality", "Test", "TypeGroupedDicts"]
 path = "."
 uuid = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
 version = "0.1.0"
 
 [[deps.FlowMap]]
-deps = ["DataStructures", "HexComponentsAPI", "HexFluids", "HexFrame", "StaticArrays", "StructEquality", "Test"]
+deps = ["DataStructures", "HexComponentsAPI", "HexFluids", "HexFrame", "StaticArrays", "StructEquality", "Test", "TypeGroupedDicts"]
 path = "../FlowMap"
 uuid = "86ae9052-88d6-4179-aacc-02095df7ba41"
 version = "0.1.0"
@@ -301,6 +301,11 @@ version = "1.0.3"
 deps = ["InteractiveUtils", "Logging", "Random", "Serialization"]
 uuid = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 version = "1.11.0"
+
+[[deps.TypeGroupedDicts]]
+path = "../TypeGroupedDicts"
+uuid = "2e7ba818-21ff-47c9-bc2b-2e96b96a0278"
+version = "0.1.0"
 
 [[deps.UUIDs]]
 deps = ["Random", "SHA"]

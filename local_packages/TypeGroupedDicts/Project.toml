@@ -1,0 +1,10 @@
+name = "TypeGroupedDicts"
+uuid = "2e7ba818-21ff-47c9-bc2b-2e96b96a0278"
+version = "0.1.0"
+authors = ["Christos Lillis <christos.lillis@gmail.com>"]
+
+[workspace]
+projects = ["test"]
+
+[compat]
+julia = "1.13"

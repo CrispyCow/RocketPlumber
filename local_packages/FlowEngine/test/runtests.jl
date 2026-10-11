@@ -9,12 +9,9 @@ using Test
 using LinearAlgebra: SingularException
 using SparseArrays: sparse, nonzeros, rowvals, nnz
 using KLU: klu, klu!
-using HexFrame
-using HexElements
-using HexFluids
-using HexComponentsAPI
-using FlowEngine
-using FlowMap
+
+using HexFrame, HexElements, HexFluids, HexComponentsAPI
+using FlowEngine, FlowMap
 
 # Import element type constants (not exported by FlowEngine, defined in HexElements)
 using HexElements: CONST_RESISTOR, CONST_VOLTAGE, CONST_CURRENT, C_DEP_CURRENT, V_DEP_VOLTAGE
@@ -58,6 +55,10 @@ function update_flowbehav(comp::DummyCompUpdate; tile::TileCoord, mna_state::MNA
     mna_state.node_voltages[NodeCoord(tile, HexFrame.NODE_INTERNAL_1)] = derived_value === HexFluids.COLD_GAS ? 3.21 : -1.0
     return DummyCompUpdate(comp.updates + 1)
 end
+
+"Changes behaviour type during a tick, joining an existing update bucket."
+struct ChangingCompUpdate <: ComponentBehavior end
+update_flowbehav(::ChangingCompUpdate; kwargs...) = DummyCompUpdate(10)
 
 struct DummyFluidComp <: ComponentBehavior end
 function produce_rel_fluid_declarations(::DummyFluidComp)
@@ -249,6 +250,25 @@ end
     @test NodeCoord(TileCoord(5, 5), HexFrame.NODE_INTERNAL_1) in keys(ms.node_voltages)
     @test ms.node_voltages[NodeCoord(TileCoord(0, 0), HexFrame.NODE_INTERNAL_1)] ≈ 3.21
     @test ms.node_voltages[NodeCoord(TileCoord(5, 5), HexFrame.NODE_INTERNAL_1)] ≈ 3.21
+
+    @testset "Mixed behaviour replacement visits each component once" begin
+        mixed = GameMap()
+        for i in 0:5
+            behaviour = iseven(i) ? ChangingCompUpdate() : DummyCompUpdate()
+            ship = iseven(i) ? :primary : :two
+            set_component!(mixed, TileCoord(i, 0), PlacedComponent(behaviour, HexFrame.R_NEG, true, ship))
+        end
+        update_components!(mixed, MNA_State(), DerivedMapState())
+        @test count_components(mixed) == 6
+        for i in 0:5
+            placed = get_component(mixed, TileCoord(i, 0))
+            @test placed.component.updates == (iseven(i) ? 10 : 1)
+            @test placed.ship === (iseven(i) ? :primary : :two)
+            @test placed.rotation == HexFrame.R_NEG && placed.mirrored
+        end
+        update_components!(mixed, MNA_State(), DerivedMapState())
+        @test all(get_component(mixed, TileCoord(i, 0)).component.updates == (iseven(i) ? 11 : 2) for i in 0:5)
+    end
 end
 
 @testset "fluid declarations" begin

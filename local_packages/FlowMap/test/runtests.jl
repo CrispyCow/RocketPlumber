@@ -5,13 +5,10 @@ Formatter: Runic
 
 ENV["JULIA_GLFW_PLATFORM"] = "null"
 
-using Test
-using FlowMap
-using HexFrame
+using Test, StaticArrays
+
+using FlowMap, TypeGroupedDicts, HexFrame, HexComponentsAPI, HexFluids
 using HexFrame: Q_POS, Q_NEG, R_POS, R_NEG, S_POS, S_NEG, GROUND
-using HexComponentsAPI
-using HexFluids
-using StaticArrays
 
 # ===============================================================
 # Mock Implementations
@@ -23,6 +20,15 @@ HexComponentsAPI.produce_rel_elements(::MockCompBehav) = ()
 HexComponentsAPI.get_tunables(::MockCompBehav) = ()
 HexComponentsAPI.set_tunables(::MockCompBehav, ::NTuple{0, Real}) = MockCompBehav()
 HexComponentsAPI.render_base_elem!(queue, ::MockCompBehav; kwargs...) = nothing
+
+"Component with explicit structural and single-fluid masses for reduction tests."
+struct MassCompBehav{T <: Real} <: ComponentBehavior
+    dry_mass::T
+    wet_mass::T
+    fluid::FluidType
+end
+HexComponentsAPI.get_component_dry_mass(comp::MassCompBehav) = Float64(comp.dry_mass)
+HexComponentsAPI.get_component_wet_mass(comp::MassCompBehav; fluid = nothing) = isnothing(fluid) || fluid == comp.fluid ? Float64(comp.wet_mass) : 0.0
 
 "Mock component whose placement rule deliberately permits one off-surface tile."
 struct OffSurfaceCompBehav <: ComponentBehavior
@@ -90,6 +96,85 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
 
 @testset "FlowMap" begin
 
+    @testset "Grouped live stores preserve map operations" begin
+        gm = make_two_ship_map()
+        @test gm.components isa TypeGroupedDict{TileCoord, PlacedComponent}
+        @test gm.pipe_behaviors isa TypeGroupedDict{PipeCoord, PlacedPipe}
+        @test ShipBlueprint().components isa Dict
+        @test ShipBlueprint().pipe_behaviors isa Dict
+
+        # Interleave owners within each concrete behaviour bucket
+        for i in 0:7
+            coord = TileCoord(i, 0)
+            ship = iseven(i) ? :primary : :second
+            behaviour = i < 4 ? MockCompBehav() : OffSurfaceCompBehav(coord)
+            pipe = i < 4 ? MockPipeBehav() : MissingClickRadiusPipe()
+            set_component!(gm, coord, PlacedComponent(behaviour, R_NEG, true, ship))
+            set_pipe!(gm, side_pipe(coord), pipe; ship_name = ship)
+        end
+        components = Dict(pairs(get_components(gm)))
+        pipes = Dict(pairs(get_pipes(gm)))
+        @test Set(keys(gm.components)) == Set(keys(components))
+        @test Set(values(gm.pipe_behaviors)) == Set(values(pipes))
+        @test count(_ -> true, each_component_of_ship(gm, :second)) == 4
+        @test count(_ -> true, each_pipe_of_type(gm, MockPipeBehav)) == 4
+
+        # Replacements can change concrete behaviour type without changing count
+        coord = TileCoord(0, 0)
+        replacement = PlacedComponent(OffSurfaceCompBehav(coord), Q_POS, :primary)
+        set_component!(gm, coord, replacement)
+        @test get_component(gm, coord) === replacement
+        @test length(gm.components) == 8
+        set_pipe!(gm, side_pipe(coord), MissingClickRadiusPipe())
+        @test get_pipe(gm, side_pipe(coord)).pipe isa MissingClickRadiusPipe
+        @test length(gm.pipe_behaviors) == 8
+        set_component!(gm, coord, components[coord])
+        set_pipe!(gm, side_pipe(coord), pipes[side_pipe(coord)])
+
+        # Map identity ignores bucket and insertion history
+        reordered = deepcopy(gm)
+        delete_all_components!(reordered)
+        delete_all_pipes!(reordered)
+        for (key, value) in reverse(collect(components))
+            set_component!(reordered, key, value)
+        end
+        for (key, value) in reverse(collect(pipes))
+            set_pipe!(reordered, key, value)
+        end
+        @test gm == reordered
+        @test isequal(gm, reordered)
+        @test hash(gm) == hash(reordered)
+
+        offset = TileCoord(20, 0)
+        offset_ship!(gm, :second, offset)
+        for (key, value) in components
+            moved_key = value.ship === :second ? offset_by_tile(key, offset) : key
+            @test get_component(gm, moved_key) === value
+        end
+        for (key, value) in pipes
+            moved_key = value.ship === :second ? offset_by_tile(key, offset) : key
+            @test get_pipe(gm, moved_key) === value
+        end
+        swap_primary!(gm, :second)
+        @test count(_ -> true, each_component_of_ship(gm, :primary)) == 4
+        @test all(c -> c.rotation == R_NEG && c.mirrored, values(gm.components))
+        @test all(get_pipe(gm, side_pipe(TileCoord(i + 20, 0))).ship === :primary for i in 1:2:7)
+        retired_name = only(name for name in get_all_ship_names(gm) if name !== :primary)
+        remove_ship!(gm, retired_name)
+        @test length(gm.components) == length(gm.pipe_behaviors) == 4
+        @test all(c -> c.ship === :primary, values(gm.components))
+        @test all(p -> p.ship === :primary, values(gm.pipe_behaviors))
+
+        # Selective deletion must not skip entries moved by bucket compaction
+        delete_all_components!(reordered; ship_name = :second)
+        delete_all_pipes!(reordered; ship_name = :second)
+        @test Dict(reordered.components) == Dict(k => v for (k, v) in components if v.ship === :primary)
+        @test Dict(reordered.pipe_behaviors) == Dict(k => v for (k, v) in pipes if v.ship === :primary)
+        delete_all_components!(gm; ship_name = :primary)
+        delete_all_pipes!(gm; ship_name = :primary)
+        @test isempty(gm.components) && isempty(gm.pipe_behaviors)
+    end
+
     @testset "GameMap — Component Operations" begin
         gm = GameMap()
         coord = TileCoord(0, 0)
@@ -119,6 +204,16 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
         )
         set_component!(gm, batch)
         @test count_components(gm; ship_name = :primary) == 3
+
+        # Bulk import the grouped collection, including mixed concrete behaviours
+        grouped_batch = TypeGroupedDict{TileCoord, PlacedComponent}(batch)
+        grouped_batch[coord] = PlacedComponent(OffSurfaceCompBehav(coord), Q_POS, :visitor)
+        @test set_component!(gm, grouped_batch) === nothing
+        @test gm.components == grouped_batch
+        @test get_component(gm, coord).ship === :visitor
+        @test set_component!(gm, gm.components) === nothing
+        @test gm.components == grouped_batch
+        set_component!(gm, coord, comp2)
 
         # Delete
         delete_component!(gm, coord)
@@ -1555,6 +1650,21 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
         add_ship!(gm, :other, ShipState())
         set_surface_tile!(gm, TileCoord(20, 0); ship_name = :other)
         @test get_mass(gm) == 3 * get_tile_mass()  # 2 + 1 tiles
+
+        # Mixed concrete component types and ship tags contribute to global totals
+        set_component!(gm, TileCoord(0, 0), PlacedComponent(MassCompBehav(3, 7, HexFluids.COLD_GAS), Q_POS, :primary))
+        set_component!(gm, TileCoord(1, 0), PlacedComponent(MassCompBehav(5, 11, HexFluids.COLD_GAS), Q_POS, :primary))
+        set_component!(gm, TileCoord(20, 0), PlacedComponent(MassCompBehav(2.5, 4.5, HexFluids.MONOPROP_LIQUID), Q_POS, :other))
+        @test get_dry_mass(gm; mass_per_tile = 100.0) == 310.5
+        @test get_wet_mass(gm) == 22.5
+        @test get_wet_mass(gm; fluid = HexFluids.COLD_GAS) == 18.0
+        @test get_wet_mass(gm; fluid = HexFluids.MONOPROP_LIQUID) == 4.5
+        @test get_wet_mass(gm; fluid = HexFluids.FUEL_LIQUID) == 0.0
+        @test get_mass(gm; mass_per_tile = 100.0) == 333.0
+        delete_all_components!(gm; ship_name = :primary)
+        delete_all_components!(gm; ship_name = :other)
+        @test get_dry_mass(gm; mass_per_tile = 100.0) == 300.0
+        @test get_wet_mass(gm) == 0.0
     end
 
     # ===============================================================

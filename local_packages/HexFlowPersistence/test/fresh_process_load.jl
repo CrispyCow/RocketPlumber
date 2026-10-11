@@ -28,7 +28,7 @@ placed_component.rotation == frame.R_NEG || error("saved component rotation chan
 placed_component.mirrored || error("saved component mirroring changed")
 placed_component.ship == :primary || error("saved component ship changed")
 
-length(gamemap.pipe_behaviors) == 1 || error("saved pipe was not reconstructed")
+length(gamemap.pipe_behaviors) == 2 || error("saved pipe was not reconstructed")
 placed_pipe = gamemap.pipe_behaviors[pipe_coord]
 pipe = placed_pipe.pipe
 nameof(typeof(pipe)) == :ScrapPipeBehav || error("saved pipe has type $(typeof(pipe))")
@@ -43,3 +43,9 @@ chamber.state.output_temperature_k == 750.0 || error("saved chamber temperature 
 chamber.state.auto_deactivation.inactive || error("saved chamber deactivation changed")
 !ismutabletype(typeof(chamber.state)) || error("chamber state reconstructed as mutable")
 !ismutabletype(typeof(chamber.state.auto_deactivation)) || error("deactivation state reconstructed as mutable")
+
+gamemap.components isa flow_map.TypeGroupedDict{frame.TileCoord, HexFlowPersistence.PlacedComponent} || error("component store was not reconstructed")
+gamemap.pipe_behaviors isa flow_map.TypeGroupedDict{frame.PipeCoord, HexFlowPersistence.PlacedPipe} || error("pipe store was not reconstructed")
+second_pipe = gamemap.pipe_behaviors[frame.get_side_pipes(component_coord)[2]].pipe
+second_pipe isa HexFlowPersistence.HexFlowBasicPipes.BigPipeBehav || error("saved large pipe type changed")
+second_pipe.conductance == 12.5 || error("saved large pipe conductance changed")

@@ -6,7 +6,8 @@ Formatter: Runic
 module HexFlowProcGen
 
 using Random, LinearAlgebra, StaticArrays, Printf
-using HexFrame, FlowMap, SquirrelNoise, HexComponentsAPI, FlowEngine, HexFluids
+using HexFrame, FlowMap, SquirrelNoise, HexComponentsAPI
+using FlowEngine, HexFluids, TypeGroupedDicts
 using StructEquality: @struct_hash_equal
 
 # Import FlowMap functions to extend with SpaceMapState methods
@@ -1661,16 +1662,6 @@ const _BIPROP_DELTA_V_ESTIMATE_OPTIMAL_VOL_RATIO = 2.5
 const _BIPROP_DELTA_V_ESTIMATE_TEMPERATURE_K = 2000.0
 const _BIPROP_DELTA_V_ESTIMATE_NONCOMBUSTION_TEMPERATURE_K = 50.0
 
-"Mutable running totals for the conservative delta-V estimate."
-Base.@kwdef mutable struct _DeltaVInventoryTotals
-    dry_mass::Float64 = 0.0
-    total_wet_mass::Float64 = 0.0
-    cold_gas_mass::Float64 = 0.0
-    monoprop_mass::Float64 = 0.0
-    fuel_mass::Float64 = 0.0
-    oxid_mass::Float64 = 0.0
-end
-
 "Split stored bipropellant into a matched hot stage and a leftover low-temperature stage."
 function _estimate_biprop_stage_masses(
         fuel_mass::Float64,
@@ -1695,22 +1686,6 @@ function _estimate_biprop_stage_masses(
     return (matched_total_mass, leftover_mass)
 end
 
-"Accumulate one placed component's delta-V-relevant mass inventory behind a typed function barrier."
-@inline function _accumulate_delta_v_inventory!(inventory::_DeltaVInventoryTotals, comp::PlacedComponent{T}) where {T <: ComponentBehavior}
-    component = comp.component
-    inventory.dry_mass += get_component_dry_mass(component)
-
-    component_wet_mass = get_component_wet_mass(component)
-    inventory.total_wet_mass += component_wet_mass
-    component_wet_mass <= 0.0 && return nothing
-
-    inventory.cold_gas_mass += get_component_wet_mass(component; fluid = HexFluids.COLD_GAS)
-    inventory.monoprop_mass += get_component_wet_mass(component; fluid = HexFluids.MONOPROP_LIQUID)
-    inventory.fuel_mass += get_component_wet_mass(component; fluid = HexFluids.FUEL_LIQUID)
-    inventory.oxid_mass += get_component_wet_mass(component; fluid = HexFluids.OXIDISER_LIQUID)
-    return nothing
-end
-
 """
 Estimate a conservative remaining delta V for the current `GameMap`.
 
@@ -1727,9 +1702,21 @@ Returns `0.0` if the map has no usable propellant or no dry mass.
 """
 function estimate_min_delta_v(gamemap::GameMap)::Float64
     # Inventory dry mass and stored propellants
-    inventory = _DeltaVInventoryTotals(dry_mass = length(gamemap.surface_shiptags) * get_tile_mass())
-    for (_, comp) in gamemap.components
-        _accumulate_delta_v_inventory!(inventory, comp)
+    initial_inventory = (
+        dry_mass = length(gamemap.surface_shiptags) * get_tile_mass(), total_wet_mass = 0.0,
+        cold_gas_mass = 0.0, monoprop_mass = 0.0, fuel_mass = 0.0, oxid_mass = 0.0,
+    )
+    inventory = mapreducevalues((left, right) -> map(+, left, right), gamemap.components; init = initial_inventory) do comp
+        component = comp.component
+        wet_mass = get_component_wet_mass(component)
+        skip_fluid = wet_mass <= 0.0
+        return (
+            dry_mass = get_component_dry_mass(component), total_wet_mass = wet_mass,
+            cold_gas_mass = skip_fluid ? 0.0 : get_component_wet_mass(component; fluid = HexFluids.COLD_GAS),
+            monoprop_mass = skip_fluid ? 0.0 : get_component_wet_mass(component; fluid = HexFluids.MONOPROP_LIQUID),
+            fuel_mass = skip_fluid ? 0.0 : get_component_wet_mass(component; fluid = HexFluids.FUEL_LIQUID),
+            oxid_mass = skip_fluid ? 0.0 : get_component_wet_mass(component; fluid = HexFluids.OXIDISER_LIQUID),
+        )
     end
 
     inventory.dry_mass <= 0.0 && return 0.0

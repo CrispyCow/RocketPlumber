@@ -15,6 +15,10 @@ package updater refreshes package-root workspaces.
 - `HexElements`: relative and absolute circuit-element representations and
   coordinate mapping.
 - `SquirrelNoise`: deterministic hash noise and `SquirrelRNG`.
+- `TypeGroupedDicts`: standalone dictionary-like storage grouped by concrete
+  value type, with specialised traversal, reduction, and value replacement.
+  It deliberately does not subtype `AbstractDict`. Its test workspace generates
+  a local, untracked manifest; the library has no runtime dependencies.
 - `components/HexComponentsAPI`: behaviour interfaces, placed component/pipe
   wrappers, tunables, actions, validation results, and shared simulation
   constants.
@@ -55,7 +59,10 @@ packages.
   `HexFlowCalculator`.
 - A type stored beneath `GameMap` is persistence-facing even if its package has
   no JLD2 dependency. Changes to its identity or layout require review of
-  `HexFlowPersistence` migrations and appropriate historical fixtures/tests.
+  `HexFlowPersistence` migrations. Before the first release, persistence supports
+  only current-format saves; test freshly constructed current values. Once a
+  released baseline exists, add required release migrations and historical
+  regression fixtures/tests in `HexFlowPersistence`.
 - Adding an `ElementTypes` member requires matching labels/units in
   `HexElements`, plus `FlowEngine` classification, matrix stamping, solution
   extraction, and tests.

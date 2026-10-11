@@ -12,7 +12,7 @@ using StaticArrays, StructArrays, CSyntax.CRef, Accessors
 using ColorSchemes, ColorTypes
 using PNGFiles
 # Custom Packages
-using RenderEngine, HexFlowTelemetry
+using RenderEngine, HexFlowTelemetry, TypeGroupedDicts
 using HexFrame, HexFluids, HexComponentsAPI, FlowEngine, FlowMap, HexFlowControl
 import RenderEngine.uniforms_type
 import RenderEngine.get_vao_symbol
@@ -594,7 +594,7 @@ function tile_queued_render!(
     )
     isempty(gamemap.ships) && return nothing
 
-    for (coord, tilecomp) in gamemap.components
+    foreachpair(gamemap.components) do coord, tilecomp
         ship_state = get_ship_state(gamemap, tilecomp.ship)
         render_map_elem!(
             queue, tilecomp;
@@ -603,6 +603,7 @@ function tile_queued_render!(
             pos_offset = get_render_offset(ship_state),
             render_height_offset = _ship_render_height_offset(ship_state),
         )
+        return nothing
     end
     return nothing
 end
@@ -670,7 +671,7 @@ function pipe_queued_render!(
     )
     isempty(gamemap.ships) && return nothing
 
-    for (coord, pipe) in gamemap.pipe_behaviors
+    foreachpair(gamemap.pipe_behaviors) do coord, pipe
         ship_state = get_ship_state(gamemap, pipe.ship)
         render_pipe_map!(
             queue, pipe;
@@ -679,6 +680,7 @@ function pipe_queued_render!(
             pos_offset = get_render_offset(ship_state),
             render_height_offset = _ship_render_height_offset(ship_state),
         )
+        return nothing
     end
     return nothing
 end
@@ -1269,7 +1271,7 @@ function tile_particle_spawn!(
     sizehint!(prev_counts, length(manager.groups))
 
     # Pass 1: Spawn current tick's particles for all components
-    for (coord, tilecomp) in gamemap.components
+    foreachpair(gamemap.components) do coord, tilecomp
         ship_state = get_ship_state(gamemap, tilecomp.ship)
         collect_effect_particles!(
             manager, tilecomp;
@@ -1277,6 +1279,7 @@ function tile_particle_spawn!(
             gameticks = current_tick, position = coord, tile = coord,
             pos_offset = get_render_offset(ship_state)
         )
+        return nothing
     end
 
     # Pass 2: Back-fill missed ticks with pre-advanced particles (one snapshot per tick)
@@ -1289,7 +1292,7 @@ function tile_particle_spawn!(
             prev_counts[colour] = length(group.particles)
         end
 
-        for (coord, tilecomp) in gamemap.components
+        foreachpair(gamemap.components) do coord, tilecomp
             ship_state = get_ship_state(gamemap, tilecomp.ship)
             collect_effect_particles!(
                 manager, tilecomp;
@@ -1297,6 +1300,7 @@ function tile_particle_spawn!(
                 gameticks = backdate_tick, position = coord, tile = coord,
                 pos_offset = get_render_offset(ship_state)
             )
+            return nothing
         end
 
         _pre_advance_catchup_particles!(manager, prev_counts, t)

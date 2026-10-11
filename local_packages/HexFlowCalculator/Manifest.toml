@@ -2,7 +2,7 @@
 
 julia_version = "1.13.1"
 manifest_format = "2.1"
-project_hash = "3772f32b30955394b58b1648885a827bf59cfd55"
+project_hash = "09aa19439c704f6293a8948950386092afd7a9f7"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "MacroTools"]
@@ -169,13 +169,13 @@ uuid = "7b1f6079-737a-58dc-b8bc-7a2ca5c1b5ee"
 version = "1.11.0"
 
 [[deps.FlowEngine]]
-deps = ["FlowMap", "HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "KLU", "LinearAlgebra", "SmallCollections", "SparseArrays", "StructEquality", "Test"]
+deps = ["FlowMap", "HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "KLU", "LinearAlgebra", "SmallCollections", "SparseArrays", "StructEquality", "Test", "TypeGroupedDicts"]
 path = "../FlowEngine"
 uuid = "25bf5361-3117-4980-baaf-fa7b85fe0eb0"
 version = "0.1.0"
 
 [[deps.FlowMap]]
-deps = ["DataStructures", "HexComponentsAPI", "HexFluids", "HexFrame", "StaticArrays", "StructEquality", "Test"]
+deps = ["DataStructures", "HexComponentsAPI", "HexFluids", "HexFrame", "StaticArrays", "StructEquality", "Test", "TypeGroupedDicts"]
 path = "../FlowMap"
 uuid = "86ae9052-88d6-4179-aacc-02095df7ba41"
 version = "0.1.0"
@@ -256,7 +256,7 @@ uuid = "2f6a9512-4d00-40fa-a3ea-0a7372983a4b"
 version = "0.1.0"
 
 [[deps.HexFlowCalculator]]
-deps = ["FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowControl", "HexFlowProcGen", "HexFlowTelemetry", "HexFluids", "HexFrame", "LinearAlgebra", "StaticArrays", "StructEquality", "TimerOutputs"]
+deps = ["FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFlowControl", "HexFlowProcGen", "HexFlowTelemetry", "HexFluids", "HexFrame", "LinearAlgebra", "StaticArrays", "StructEquality", "TimerOutputs", "TypeGroupedDicts"]
 path = "."
 uuid = "d8e9f3a2-7b4c-4e1d-9f3a-2c5b8e7d9f1a"
 version = "0.1.0"
@@ -268,7 +268,7 @@ uuid = "c4f7b3e2-9a5d-4c8e-b1f2-3e8d9a5c7f1b"
 version = "0.1.0"
 
 [[deps.HexFlowProcGen]]
-deps = ["FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "LinearAlgebra", "Printf", "Random", "SquirrelNoise", "StaticArrays", "StructEquality"]
+deps = ["FlowEngine", "FlowMap", "HexComponentsAPI", "HexElements", "HexFluids", "HexFrame", "LinearAlgebra", "Printf", "Random", "SquirrelNoise", "StaticArrays", "StructEquality", "TypeGroupedDicts"]
 path = "../HexFlowProcGen"
 uuid = "46cebafd-6e5b-4504-9515-23fc742129ca"
 version = "0.1.0"
@@ -603,6 +603,11 @@ version = "1.2.2"
 
     [deps.TimerOutputs.weakdeps]
     FlameGraphs = "08572546-2f56-4bcf-ba4e-bab62c3a3f89"
+
+[[deps.TypeGroupedDicts]]
+path = "../TypeGroupedDicts"
+uuid = "2e7ba818-21ff-47c9-bc2b-2e96b96a0278"
+version = "0.1.0"
 
 [[deps.UUIDs]]
 deps = ["Random", "SHA"]

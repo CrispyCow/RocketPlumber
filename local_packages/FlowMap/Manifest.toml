@@ -2,7 +2,7 @@
 
 julia_version = "1.13.1"
 manifest_format = "2.1"
-project_hash = "a175edd375564788af3e4f376f804bd5b5c5d0f2"
+project_hash = "db366af7af401aeeb68e5c63581a2e14e15c3259"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "MacroTools"]
@@ -92,7 +92,7 @@ uuid = "ade2ca70-3891-5945-98fb-dc099432e06a"
 version = "1.11.0"
 
 [[deps.FlowMap]]
-deps = ["DataStructures", "HexComponentsAPI", "HexFluids", "HexFrame", "StaticArrays", "StructEquality", "Test"]
+deps = ["DataStructures", "HexComponentsAPI", "HexFluids", "HexFrame", "StaticArrays", "StructEquality", "Test", "TypeGroupedDicts"]
 path = "."
 uuid = "86ae9052-88d6-4179-aacc-02095df7ba41"
 version = "0.1.0"
@@ -249,6 +249,11 @@ version = "1.0.3"
 deps = ["InteractiveUtils", "Logging", "Random", "Serialization"]
 uuid = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 version = "1.11.0"
+
+[[deps.TypeGroupedDicts]]
+path = "../TypeGroupedDicts"
+uuid = "2e7ba818-21ff-47c9-bc2b-2e96b96a0278"
+version = "0.1.0"
 
 [[deps.UUIDs]]
 deps = ["Random", "SHA"]

@@ -5,7 +5,7 @@ Formatter: Runic
 
 module FlowMap
 
-using HexFrame, HexComponentsAPI, HexFluids
+using HexFrame, HexComponentsAPI, HexFluids, TypeGroupedDicts
 import HexComponentsAPI: placement_valid
 
 using StructEquality
@@ -401,10 +401,10 @@ end
 end
 
 
-"Top-level game map. Global component/pipe dicts tagged by ship; per-ship metadata in `ships`. Initialises with a single surface tile at (0,0) for the primary ship to enable tile placement."
+"Top-level game map. Global type-grouped component/pipe stores tagged by ship; per-ship metadata in `ships`. Initialises with a single surface tile at (0,0) for the primary ship to enable tile placement."
 @kwdef mutable struct GameMap
-    components::Dict{TileCoord, PlacedComponent} = Dict{TileCoord, PlacedComponent}()
-    pipe_behaviors::Dict{PipeCoord, PlacedPipe} = Dict{PipeCoord, PlacedPipe}()
+    components::TypeGroupedDict{TileCoord, PlacedComponent} = TypeGroupedDict{TileCoord, PlacedComponent}()
+    pipe_behaviors::TypeGroupedDict{PipeCoord, PlacedPipe} = TypeGroupedDict{PipeCoord, PlacedPipe}()
     surface_shiptags::Dict{TileCoord, Symbol} = Dict{TileCoord, Symbol}(TileCoord(0, 0) => :primary)
     ships::Dict{Symbol, ShipState} = Dict(:primary => ShipState())
     space_map::AbstractSpaceMap = SpaceMapEmpty()
@@ -676,8 +676,8 @@ function remove_ship!(gamemap::GameMap, name::Symbol)
         error("Cannot remove primary ship")
     end
     delete!(gamemap.ships, name)
-    filter!(((_, c),) -> c.ship !== name, gamemap.components)
-    filter!(((_, p),) -> p.ship !== name, gamemap.pipe_behaviors)
+    delete_all_components!(gamemap; ship_name = name)
+    delete_all_pipes!(gamemap; ship_name = name)
     filter!(((_, ship_name),) -> ship_name !== name, gamemap.surface_shiptags)
     return nothing
 end
@@ -703,8 +703,9 @@ function set_component!(gamemap::GameMap, coord::TileCoord, component::PlacedCom
     return nothing
 end
 
-"Bulk-place components. Each entry's ship tag is taken from its `PlacedComponent.ship`."
-function set_component!(gamemap::GameMap, components::AbstractDict{TileCoord, <:PlacedComponent})
+"Bulk-place a dictionary or `TypeGroupedDict` of components, preserving ship tags. Passing the map's own collection is a no-op."
+function set_component!(gamemap::GameMap, components::Union{AbstractDict{TileCoord, <:PlacedComponent}, TypeGroupedDict{TileCoord, <:PlacedComponent}})
+    components === gamemap.components && return nothing
     for (coord, comp) in components
         set_component!(gamemap, coord, comp)
     end
@@ -717,7 +718,7 @@ function delete_component!(gamemap::GameMap, coord::TileCoord)
     return nothing
 end
 
-"Return the components dict shared with the gamemap. Do not mutate; use `set_component!` / `delete_component!`, `each_component_of_ship`, or `each_component_of_type`."
+"Return the component collection shared with the gamemap. Do not mutate; use `set_component!` / `delete_component!`, `each_component_of_ship`, or `each_component_of_type`."
 get_components(gamemap::GameMap) = gamemap.components
 
 "Lazy iterator over `PlacedComponent` values belonging to `ship_name`."
@@ -756,7 +757,7 @@ function delete_pipe!(gamemap::GameMap, coord::PipeCoord)
     return nothing
 end
 
-"Return the pipe-behaviors dict shared with the gamemap. Do not mutate; use `set_pipe!` / `delete_pipe!`, `each_pipe_of_ship`, or `each_pipe_of_type`."
+"Return the pipe collection shared with the gamemap. Do not mutate; use `set_pipe!` / `delete_pipe!`, `each_pipe_of_ship`, or `each_pipe_of_type`."
 get_pipes(gamemap::GameMap) = gamemap.pipe_behaviors
 
 "Shortest distance from a point to a line segment defined by endpoints `a` and `b`."
@@ -853,7 +854,10 @@ function delete_all_components!(gamemap::GameMap; ship_name::Union{Symbol, Nothi
     if isnothing(ship_name)
         empty!(gamemap.components)
     else
-        filter!(((_, c),) -> c.ship !== ship_name, gamemap.components)
+        coords = [coord for (coord, c) in gamemap.components if c.ship === ship_name]
+        for coord in coords
+            delete!(gamemap.components, coord)
+        end
     end
     return nothing
 end
@@ -863,7 +867,10 @@ function delete_all_pipes!(gamemap::GameMap; ship_name::Union{Symbol, Nothing} =
     if isnothing(ship_name)
         empty!(gamemap.pipe_behaviors)
     else
-        filter!(((_, p),) -> p.ship !== ship_name, gamemap.pipe_behaviors)
+        coords = [coord for (coord, p) in gamemap.pipe_behaviors if p.ship === ship_name]
+        for coord in coords
+            delete!(gamemap.pipe_behaviors, coord)
+        end
     end
     return nothing
 end
@@ -1897,21 +1904,15 @@ function get_dry_mass(gamemap::GameMap; mass_per_tile::Float64 = get_tile_mass()
     tile_count = length(gamemap.surface_shiptags)
     tile_mass = tile_count * mass_per_tile
 
-    component_dry_mass = 0.0
-    for (_, comp) in gamemap.components
-        component_dry_mass += get_component_dry_mass(comp)
-    end
-
+    component_dry_mass = mapreducevalues(get_component_dry_mass, +, gamemap.components; init = 0.0)
     return tile_mass + component_dry_mass
 end
 
 "Wet mass (stored fluid) across all ships. If `fluid` is `nothing`, returns total fluid mass; if a specific FluidType, returns mass of only that fluid."
 function get_wet_mass(gamemap::GameMap; fluid::Union{FluidType, Nothing} = nothing)::Float64
-    wet_mass = 0.0
-    for (_, comp) in gamemap.components
-        wet_mass += get_component_wet_mass(comp; fluid = fluid)
+    return mapreducevalues(+, gamemap.components; init = 0.0) do comp
+        return get_component_wet_mass(comp; fluid = fluid)
     end
-    return wet_mass
 end
 
 "Total mass of all ships: dry mass (tiles + structure) + wet mass (stored fluid)."

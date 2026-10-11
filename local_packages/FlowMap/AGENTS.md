@@ -7,7 +7,8 @@ implementations.
 ## Ownership Model
 
 - `GameMap.components` and `GameMap.pipe_behaviors` are global whole-map
-  dictionaries. Component and pipe ownership is carried by
+  `TypeGroupedDict` stores. `ShipBlueprint` keeps ordinary build-time dictionaries.
+  Component and pipe ownership is carried by
   `PlacedComponent.ship` and `PlacedPipe.ship`; surface ownership is carried by
   `surface_shiptags`.
 - `ships` stores lightweight per-ship state such as docking status. It does not
@@ -15,6 +16,11 @@ implementations.
 - A default `GameMap()` contains `:primary` and one primary surface tile at
   `TileCoord(0, 0)`. A `ShipBlueprint` is a detached construction payload and
   starts with empty collections.
+- Repeated whole-map work uses `TypeGroupedDicts` traversal/replacement APIs;
+  ordinary collection iteration is read-only. Collect keys before structural removal.
+  Use `mapreducevalues` / `mapreducepairs` with an explicit `init` for scalar or
+  structured totals. The bulk `set_component!` accepts ordinary dictionaries
+  and grouped component collections, preserving each component's ship tag.
 - Use the exported component, pipe, surface, ownership, and per-ship iteration
   helpers. Direct dictionary mutation easily bypasses ownership normalisation,
   placement checks, or cleanup.
