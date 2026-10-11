@@ -236,7 +236,7 @@ function ui_rendering!(
         if !inputstate.spacemap_active
             ui_velocity_tracker_render!(snapshot.gamestate, snapshot.gamemap, inputstate, flowcalc_ipc)
             ui_propertybox_render!(inputstate, snapshot.gamemap, snapshot.derived, snapshot.mna, GLFW.GetWindowSize(window), flowcalc_ipc)
-            ui_action_popup_render!(inputstate, viewstate, flowcalc_ipc)
+            ui_action_popup_render!(inputstate, viewstate, flowcalc_ipc.command_queue, snapshot.gamemap)
             ui_dev_utils_menu_render!(
                 inputstate, flowcalc_ipc, timelapse_recorder, snapshot, viewstate,
                 GLFW.GetWindowSize(window), max_view_bounds;
@@ -458,6 +458,7 @@ function enter_gameloop(
 
         g_viewstate.frame_count += 1
         updatefps(window, g_inputstate.is_recording ? "(RECORDING)" : "")
+        # Keep this snapshot in use through all frame processing; only acquire again at the next frame.
         @timeit render_loop_timer "Get Snapshot" g_snapshot::FlowCalculatorSnapshot = g_flowcalc_ipc.get_snapshot()
 
         if !isnothing(frame_hook)

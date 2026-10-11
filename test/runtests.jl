@@ -7,7 +7,7 @@ ENV["JULIA_GLFW_PLATFORM"] = "null"
 
 using Test, LinearAlgebra, StaticArrays
 import ImPlot, RocketPlumber
-using FlowEngine: DerivedMapState
+using FlowEngine: DerivedMapState, MNA_State
 using HexFlowLearningSystem: LearningInputs
 using RocketPlumber: TimelapseRecorder, timelapse_frame_count, capture_timelapse_frame!,
     set_timelapse_enabled!, maybe_capture_timelapse!, snapshot_timelapse_history
@@ -536,19 +536,19 @@ end
     end
 end
 
-"Capture component fields recursively, checking the immutable state contract."
+"Capture component type and field values for save/load comparison."
 function component_value_tree(value)
-    # Symbols and strings have value semantics despite their runtime representation.
     value isa Union{Symbol, AbstractString} && return value
-    @test !ismutabletype(typeof(value))
     fieldcount(typeof(value)) == 0 && return value
     return (typeof(value), map(name -> component_value_tree(getfield(value, name)), fieldnames(typeof(value))))
 end
 
-@testset "shipped component behaviours are isbits" begin
-    for component in RocketPlumber.component_list
-        @testset "$(typeof(component))" begin
-            @test isbitstype(typeof(component))
+@testset "shipped component and pipe behaviours are isbits" begin
+    # isbits also guarantees immutable nested state; keep representation checks here.
+    behaviours = (RocketPlumber.component_list..., RocketPlumber.ScrapPipe, RocketPlumber.BigPipe)
+    for behaviour_type in unique(typeof.(behaviours))
+        @testset "$behaviour_type" begin
+            @test isbitstype(behaviour_type)
         end
     end
 end
@@ -653,6 +653,84 @@ end
     end
 end
 
+@testset "Ship popup actions use the current frame map" begin
+    initial_map = GameMap()
+    set_surface_tile!(initial_map, TileCoord(0, 0))
+    add_ship!(initial_map, :visitor, ShipState())
+    set_surface_tile!(initial_map, Set(TileCoord(10, r) for r in -1:1); ship_name = :visitor)
+    actions = RocketPlumber.get_ship_actions(initial_map, :visitor)
+
+    for action in actions
+        @test action.enabled
+        inputstate = InputState()
+        viewstate = ViewState()
+        command_queue = create_command_queue(1)
+        popup = ActionPopupState(
+            target = ShipPopupTarget(:visitor), world_position = CartesianCoord(0.0, 0.0),
+            actions = actions, window_title = "Ship: visitor",
+            pending_confirmation = isnothing(action.confirmation_message) ? nothing : action,
+        )
+        inputstate.action_popup = popup
+
+        # The ship has moved since the popup was opened; confirmation uses this frame's map
+        snapshot = FlowCalculatorSnapshot(gamemap = deepcopy(initial_map))
+        offset_ship!(snapshot.gamemap, :visitor, TileCoord(4, 0))
+        set_surface_tile!(snapshot.gamemap, TileCoord(1, 0))
+        source_map = deepcopy(snapshot.gamemap)
+        RocketPlumber._execute_action!(inputstate, popup, action, command_queue, snapshot.gamemap, viewstate)
+
+        @test isnothing(inputstate.action_popup)
+        @test snapshot.gamemap == source_map
+        visitor_tiles = Set(TileCoord(14, r) for r in -1:1)
+
+        if action.id === :redock
+            state = placement_state(inputstate)::PlacementRedockState
+            @test !isready(command_queue.command_channel)
+            @test state.ship_tiles == visitor_tiles
+            @test state.ship_footprint == visitor_tiles
+            @test state.original_centre == TileCoord(14, 0)
+            @test TileCoord(1, 0) in state.other_exclusion
+            @test !RocketPlumber.is_redock_preview_valid(state, TileCoord(-14, 0))
+            @test RocketPlumber.is_redock_preview_valid(state, TileCoord(0, 0))
+
+            # Cached preview geometry survives subsequent changes to the source map
+            offset_ship!(snapshot.gamemap, :visitor, TileCoord(4, 0))
+            @test state.ship_tiles == visitor_tiles
+            @test state.ship_footprint == visitor_tiles
+        else
+            command = take!(command_queue.command_channel)::MapOverrideCommand
+            @test command.new_map !== snapshot.gamemap
+            if action.id === :make_primary
+                @test !has_ship(command.new_map, :visitor)
+                @test collect_surface_tiles!(Set{TileCoord}(), command.new_map; ship_name = :primary) == visitor_tiles
+            else
+                @test get_docking_status(command.new_map, :visitor) isa DepartingDockStat
+                @test collect_surface_tiles!(Set{TileCoord}(), command.new_map; ship_name = :visitor) == visitor_tiles
+            end
+            command_tiles = copy(command.new_map.surface_shiptags)
+            offset_ship!(snapshot.gamemap, :visitor, TileCoord(4, 0))
+            @test command.new_map.surface_shiptags == command_tiles
+        end
+    end
+
+    # A closed queue leaves confirmation open and the frame map untouched
+    command_queue = create_command_queue(1)
+    close(command_queue.command_channel)
+    action = only(filter(action -> action.id === :undock, actions))
+    popup = ActionPopupState(
+        target = ShipPopupTarget(:visitor), world_position = CartesianCoord(0.0, 0.0),
+        actions = actions, window_title = "Ship: visitor", pending_confirmation = action,
+    )
+    inputstate = InputState(action_popup = popup)
+    source_map = deepcopy(initial_map)
+    @test_logs (:warn, r"Failed to enqueue map edit command") RocketPlumber._execute_action!(
+        inputstate, popup, action, command_queue, initial_map, ViewState(),
+    )
+    @test inputstate.action_popup === popup
+    @test popup.pending_confirmation === action
+    @test initial_map == source_map
+end
+
 @testset "world render queue population" begin
     gamemap = GameMap()
     set_surface_tile!(gamemap, TileCoord(0, 0))
@@ -694,7 +772,8 @@ end
     @test recorder.enabled
     @test maybe_capture_timelapse!(recorder, snapshot; now = 0.0)
     @test timelapse_frame_count(recorder) == 1
-    @test only(recorder.history.frames) === gamemap
+    @test only(recorder.history.frames) !== gamemap
+    @test only(recorder.history.frames) == gamemap
     @test !maybe_capture_timelapse!(recorder, snapshot; now = 30.0)
 
     changed_snapshot = (gamemap = GameMap(), timestamp = 2.0)
@@ -710,7 +789,7 @@ end
 
     before_disable = snapshot_timelapse_history(recorder)::TimelapseHistory
     @test before_disable.frames !== recorder.history.frames
-    @test before_disable.frames[1] === gamemap
+    @test before_disable.frames[1] === recorder.history.frames[1]
     @test capture_timelapse_frame!(recorder, GameMap(); snapshot_timestamp = 4.0)
     set_timelapse_enabled!(recorder, false; now = 110.0)
     @test !recorder.enabled
@@ -731,8 +810,149 @@ end
     @test !capture_timelapse_frame!(recorder, timestamped_map; snapshot_timestamp = 8.0)
     timestampless_map = GameMap()
     @test capture_timelapse_frame!(recorder, timestampless_map)
+    @test !capture_timelapse_frame!(recorder, timestampless_map)
     @test recorder.last_captured_snapshot_timestamp === nothing
     @test maybe_capture_timelapse!(recorder, (gamemap = GameMap(), timestamp = 8.0); now = 300.0)
+end
+
+@testset "time-lapse frames own nested mutable state" begin
+    gamemap = GameMap(learning_system = LearningProgress([:test]))
+    set_surface_tile!(gamemap, TileCoord(1, 0))
+    record_completed_encounter!(gamemap, ENCOUNTER_SHIP)
+    recorder = TimelapseRecorder(TimelapseHistory(); now = 0.0)
+    publish_snap, get_snap = create_snapshot_storage(FlowCalculatorSnapshot())
+
+    publish_snap(gamemap, DerivedMapState(), MNA_State(), GameState(), 1.0)
+    snapshot = get_snap()
+    @test capture_timelapse_frame!(recorder, snapshot.gamemap; snapshot_timestamp = snapshot.timestamp)
+    first_frame = only(recorder.history.frames)
+    @test first_frame.surface_shiptags == gamemap.surface_shiptags
+    @test first_frame.statistics == gamemap.statistics
+    @test first_frame !== snapshot.gamemap
+    @test first_frame.learning_system.tutorials[:test] !== snapshot.gamemap.learning_system.tutorials[:test]
+    @test first_frame.statistics.completed_encounters !== snapshot.gamemap.statistics.completed_encounters
+
+    # Capture another published buffer, then cycle through every slot repeatedly
+    gamemap.learning_system.tutorials[:test].unlocked_step = 3
+    record_completed_encounter!(gamemap, ENCOUNTER_SHIP)
+    delete_surface_tile!(gamemap, TileCoord(1, 0))
+    publish_snap(gamemap, DerivedMapState(), MNA_State(), GameState(), 2.0)
+    snapshot = get_snap()
+    @test capture_timelapse_frame!(recorder, snapshot.gamemap; snapshot_timestamp = snapshot.timestamp)
+    second_frame = last(recorder.history.frames)
+    @test second_frame.surface_shiptags == gamemap.surface_shiptags
+    @test second_frame.statistics == gamemap.statistics
+    @test second_frame !== snapshot.gamemap
+
+    empty!(gamemap.learning_system.tutorials)
+    empty!(gamemap.statistics.completed_encounters)
+    for timestamp in 3.0:8.0
+        publish_snap(gamemap, DerivedMapState(), MNA_State(), GameState(), timestamp)
+        get_snap()
+    end
+    @test first_frame.learning_system.tutorials[:test].unlocked_step == 1
+    @test get_encounter_count(first_frame, ENCOUNTER_SHIP) == 1
+    @test is_on_surface_tile(TileCoord(1, 0), first_frame)
+    @test second_frame.learning_system.tutorials[:test].unlocked_step == 3
+    @test get_encounter_count(second_frame, ENCOUNTER_SHIP) == 2
+    @test !is_on_surface_tile(TileCoord(1, 0), second_frame)
+end
+
+# A skipped capture must never attempt to copy the source map
+mutable struct UncopyableTimelapseLearningState <: AbstractLearningSystem end
+Base.deepcopy_internal(::UncopyableTimelapseLearningState, ::IdDict) = error("Unexpected time-lapse copy")
+
+@testset "skipped time-lapse captures avoid copying" begin
+    gamemap = GameMap(learning_system = UncopyableTimelapseLearningState())
+    @test_throws ErrorException deepcopy(gamemap)
+    snapshot = (gamemap = gamemap, timestamp = 1.0)
+    recorder = TimelapseRecorder(nothing; now = 0.0)
+    @test !capture_timelapse_frame!(recorder, gamemap)
+    @test !maybe_capture_timelapse!(recorder, snapshot; now = 0.0)
+    @test isnothing(recorder.history)
+
+    set_timelapse_enabled!(recorder, true; now = 0.0)
+    @test !maybe_capture_timelapse!(recorder, snapshot; capture_suppressed = true, now = 0.0)
+    @test timelapse_frame_count(recorder) == 0
+
+    gamemap.learning_system = NoLearningSystem()
+    @test maybe_capture_timelapse!(recorder, snapshot; now = 0.0)
+    gamemap.learning_system = UncopyableTimelapseLearningState()
+    @test !maybe_capture_timelapse!(recorder, (gamemap = gamemap, timestamp = 2.0); now = 29.0)
+    @test !capture_timelapse_frame!(recorder, gamemap; snapshot_timestamp = 1.0)
+    @test !capture_timelapse_frame!(recorder, GameMap(learning_system = UncopyableTimelapseLearningState()); snapshot_timestamp = 1.0)
+    @test !capture_timelapse_frame!(recorder, gamemap)
+    @test timelapse_frame_count(recorder) == 1
+    @test recorder.next_capture_time_seconds == 30.0
+end
+
+@testset "time-lapse source identity without timestamps" begin
+    gamemap = GameMap()
+    history = TimelapseHistory(frames = [gamemap])
+    recorder = TimelapseRecorder(history; now = 0.0)
+    @test !capture_timelapse_frame!(recorder, gamemap)
+
+    other_map = deepcopy(gamemap)
+    @test capture_timelapse_frame!(recorder, other_map)
+    increment_simulated_ticks!(other_map)
+    @test !capture_timelapse_frame!(recorder, other_map)
+    @test get_simulated_ticks(last(history.frames)) == 0
+    @test capture_timelapse_frame!(recorder, gamemap)
+    @test timelapse_frame_count(recorder) == 3
+end
+
+@testset "manual and pre-escape saves retain owned time-lapse frames" begin
+    mktempdir() do directory
+        gamemap = GameMap()
+        recorder = TimelapseRecorder(TimelapseHistory(); now = 0.0)
+        snapshot = FlowCalculatorSnapshot(gamemap = gamemap, timestamp = 1.0)
+        save_path = joinpath(directory, "manual.jld2")
+        timing = PlaySessionTiming(0.0)
+        RocketPlumber.save_current_map(recorder, snapshot, timing, nothing, save_path)
+        @test only(recorder.history.frames) !== gamemap
+        increment_simulated_ticks!(gamemap)
+        @test get_simulated_ticks(only(recorder.history.frames)) == 0
+        @test get_simulated_ticks(only(loadmap_bundle(save_path).timelapse.frames)) == 0
+
+        pre_escape_map = deepcopy(gamemap)
+        escape_map = GameMap(
+            space_map = GalaxyEscapeSpaceMap(
+                velocity = SVector(10.0, 0.0), starting_velocity_x = 10.0,
+                departure_time_years = 0.0, pre_escape_map = pre_escape_map,
+            )
+        )
+        escape_save_path = joinpath(directory, "pre_escape.jld2")
+        RocketPlumber.save_pre_escape_map(recorder, escape_map, escape_save_path)
+        RocketPlumber.save_pre_escape_map(recorder, escape_map, escape_save_path)
+        @test timelapse_frame_count(recorder) == 2
+        @test last(recorder.history.frames) !== pre_escape_map
+        increment_simulated_ticks!(escape_map)
+        @test get_simulated_ticks(pre_escape_map) == 1
+        @test get_simulated_ticks(last(recorder.history.frames)) == 1
+        saved_bundle = loadmap_bundle(escape_save_path)
+        @test get_simulated_ticks(saved_bundle.gamemap) == 1
+        @test get_simulated_ticks.(saved_bundle.timelapse.frames) == [0, 1]
+    end
+end
+
+@testset "galaxy-escape restart owns a mutable checkpoint copy" begin
+    checkpoint = GameMap(
+        space_map = SpaceMapState(encounter_config = RocketPlumber.get_encounter_system_config()),
+        learning_system = LearningProgress([:test]),
+    )
+    escape_map = GameMap(space_map = GalaxyEscapeSpaceMap(SVector(10.0, 0.0), 10.0, 0.0, checkpoint))
+    _, get_snap = create_snapshot_storage(FlowCalculatorSnapshot(gamemap = escape_map))
+    borrowed = get_snap().gamemap
+    @test get_pre_escape_map(borrowed) === checkpoint
+
+    restart = RocketPlumber.capture_galaxy_escape_restart_gamemap(borrowed, PlaySessionTiming(0.0), nothing)
+    @test restart !== checkpoint
+    @test restart.space_map isa SpaceMapState
+    restart.learning_system.tutorials[:test].unlocked_step = 9
+    increment_simulated_ticks!(restart)
+    @test checkpoint.learning_system.tutorials[:test].unlocked_step == 1
+    @test get_simulated_ticks(checkpoint) == 0
+    @test get_recorded_play_time_seconds(checkpoint) == 0.0
 end
 
 @testset "Fluid-transfer tutorial requires the transfer pump variant" begin

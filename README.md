@@ -170,13 +170,13 @@ The calculator loop is responsible for performing the heavy simulation updates. 
 
 The calculator loop is where most modifications to the map occur. User-facing code produces map edit commands and pushes them to a channel where they can be consumed by the calculator loop which validates them and applies them. There are also a small number of internal simulation paths, such as encounter spawning, that mutate the authoritative map directly from within this thread.
 
-After each iteration the calculator publishes to a triple-buffer a snapshot containing the map, derived simulation state, the output state of the MNA, and a small amount of game-state metadata. This can be accessed in a thread-safe way by the game loop. This is not an optimised approach to this, but it's simple and so far has not been a bottleneck at all.
+After each simulation update, the calculator publishes a snapshot containing the map, derived simulation state, render-relevant MNA outputs, and game-state metadata. It refills reusable storage in one of three buffers, then swaps buffer roles under a short lock. This lets the calculator publish multiple updates while the renderer keeps reading a stable snapshot. Collection storage is reused where practical; immutable component and pipe values can be shared safely, while mutable map state is copied separately.
 
 The calculator loop defaults to a target rate of 60 UPS, but this can be changed at runtime through the simulation speed controls. As before, this could slip without affecting the frame rate of the game/render loop.
 
 #### Game/Render Loop
 
-The game loop handles the rendering of the game map and the UI. You'll find it in the `src/gameloop.jl` script. It pulls a copy of the latest available snapshot of the game map and uses this for everything.
+The game loop handles the rendering of the game map and the UI. You'll find it in the `src/gameloop.jl` script. It borrows the latest available snapshot once at the start of each frame and uses it throughout rendering, UI, and input processing. The snapshot should be treated as read-only and will be stable until the next acquisition, which releases its buffer for reuse.
 
 The rendering is performed in stages to ensure correct render heights. First the background particle effects are rendered. Then all of the sprites are rendered. This is done by first collecting rendering commands from various sources into a render queue. This queue is first sorted by render height, and then by various attributes so as to minimise the required OpenGL state changes. The sorted queue is then rendered in one shot. A set of foreground particles is then rendered. Finally the UI elements are rendered with CImGui.
 
@@ -219,6 +219,10 @@ Actual components are defined in various other packages in `local_packages/compo
 ```julia
 on_click(comp::SwitchedNozzleCompBehav) = @set comp.switch = on_click(comp.switch)
 ```
+
+Components, pipes, and their nested behaviour state are immutable values. Updates return replacements, which the calculator stores back into the map.
+
+The live `GameMap` stores placed components and pipes in `TypeGroupedDict` collections. This custom data structure is heavily optimised for iteration performance, using separate dense vectors for each concrete type under the hood.
 
 The component system makes extensive use of keyword arguments, and specifically `kwargs...` which allows delegation functions to pass all keyword arguments transparently. This allows a new keyword argument to be added to a method call, and any existing implementations that don't require that argument will continue working without issue.
 

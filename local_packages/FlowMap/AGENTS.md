@@ -13,6 +13,9 @@ implementations.
   `surface_shiptags`.
 - `ships` stores lightweight per-ship state such as docking status. It does not
   own per-ship component, pipe, or surface dictionaries.
+- A galaxy-escape `pre_escape_map` checkpoint is permanently read-only after
+  creation, including all nested state. Render snapshots may share it; consumers
+  needing an independently mutable map must explicitly deep-copy it.
 - A default `GameMap()` contains `:primary` and one primary surface tile at
   `TileCoord(0, 0)`. A `ShipBlueprint` is a detached construction payload and
   starts with empty collections.

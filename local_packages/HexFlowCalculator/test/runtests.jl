@@ -2025,46 +2025,222 @@ end
     end
 end
 
-@testset "create_snapshot_storage — triple buffer" begin
-    snap = FlowCalculatorSnapshot(timestamp = 1.0)
-    publish_snap, get_snap = create_snapshot_storage(snap)
+@testset "GameMap snapshot refill — storage and nested ownership" begin
+    tile = TileCoord(0, 0)
+    other_tile = TileCoord(1, 0)
+    new_tile = TileCoord(2, 0)
+    pipe = side_pipe(tile)
+    other_pipe = side_pipe(tile, 2)
+    new_pipe = side_pipe(tile, 3)
+    src = GameMap(
+        space_map = SpaceMapState(
+            velocity = SVector(4.0, 5.0), time_years = 8.0,
+            encounter_config = _test_enc_config,
+            encounter_points = [make_trigger_test_encounter_point()],
+            active_manoeuvre = ManoeuvreData(
+                approach_burn_dv = SVector(10.0, 0.0), capture_burn_dv = SVector(-10.0, 0.0),
+                burn_remaining_dv = SVector(2.0, 0.0),
+            ),
+        ),
+        learning_system = LearningProgress([:test]),
+        statistics = PlaythroughStatistics(simulated_ticks = 34, completed_encounters = Dict(ENCOUNTER_SHIP => 2)),
+    )
+    set_surface_tile!(src, other_tile)
+    set_component!(src, tile, PlacedComponent(FixedThrustCompBehav(SVector(3.0, 4.0)), Q_POS, true, :primary))
+    set_component!(src, other_tile, PlacedComponent(MockCompBehav(), Q_POS, :primary))
+    set_pipe!(src, pipe, ImmovablePipeBehav())
+    set_pipe!(src, other_pipe, MockPipeBehav())
+    set_docking_status!(src, :primary, ApproachingDockStat(AxialCoord(1.0, 2.0), AxialCoord(0.0, 0.0), 0.1))
 
-    # Get returns seeded snapshot
-    result = get_snap()
-    @test result.timestamp == 1.0
-    @test result.gamemap isa GameMap
-    @test result.gamestate isa GameState
-    @test result.mna isa MNA_StateSnapshot
+    dest = GameMap()
+    components, pipes, surfaces = dest.components, dest.pipe_behaviors, dest.surface_shiptags
+    HexFlowCalculator.snapshot!(dest, src)
+    @test dest.components === components
+    @test dest.pipe_behaviors === pipes
+    @test dest.surface_shiptags === surfaces
+    @test dest.surface_shiptags == src.surface_shiptags
+    @test dest.ships == src.ships
+    @test dest.statistics == src.statistics
+    @test dest.components == src.components
+    @test dest.pipe_behaviors == src.pipe_behaviors
+    @test get_component(dest, tile) === get_component(src, tile)
+    @test get_pipe(dest, pipe) === get_pipe(src, pipe)
+    @test get_velocity(dest) == SVector(4.0, 5.0)
+    @test get_time_years(dest) == 8.0
+    @test dest.space_map.encounter_points[1].position == src.space_map.encounter_points[1].position
+    @test dest.space_map.encounter_config.encounter_class_configs !== src.space_map.encounter_config.encounter_class_configs
 
-    # Publish overwrites via raw state objects
-    publish_snap(GameMap(), DerivedMapState(), MNA_State(), GameState(), 42.0)
-    result2 = get_snap()
-    @test result2.timestamp == 42.0
+    # Behaviour updates replace values; mutable metadata remains independently owned
+    set_component!(src, tile, PlacedComponent(FixedThrustCompBehav(SVector(9.0, 10.0)), Q_POS, :primary))
+    get_docking_status(src, :primary).motion.current_offset = AxialCoord(9.0, 9.0)
+    src.space_map.encounter_points[1].iteration = 99
+    src.space_map.active_manoeuvre.burn_remaining_dv = SVector(99.0, 0.0)
+    src.learning_system.tutorials[:test].unlocked_step = 99
+    record_completed_encounter!(src, ENCOUNTER_SHIP)
+    @test get_component(dest, tile).component.thrust == SVector(3.0, 4.0)
+    @test get_docking_status(dest, :primary).motion.current_offset == AxialCoord(1.0, 2.0)
+    @test dest.space_map.encounter_points[1].iteration == 0
+    @test dest.space_map.active_manoeuvre.burn_remaining_dv == SVector(2.0, 0.0)
+    @test dest.learning_system.tutorials[:test].unlocked_step == 1
+    @test get_encounter_count(dest, ENCOUNTER_SHIP) == 2
 
-    # Multiple publishes — last write wins
-    publish_snap(GameMap(), DerivedMapState(), MNA_State(), GameState(), 100.0)
-    publish_snap(GameMap(), DerivedMapState(), MNA_State(), GameState(), 200.0)
-    @test get_snap().timestamp == 200.0
+    HexFlowCalculator.snapshot!(dest, src)
+    @test get_component(dest, tile).component.thrust == SVector(9.0, 10.0)
+    @test get_encounter_count(dest, ENCOUNTER_SHIP) == 3
+
+    # Refill after removals, additions and changes of concrete behaviour type
+    delete_component!(src, other_tile)
+    set_component!(src, tile, PlacedComponent(MockCompBehav(), Q_POS, :primary))
+    delete_pipe!(src, other_pipe)
+    set_pipe!(src, pipe, MockPipeBehav())
+    delete_surface_tile!(src, other_tile)
+    set_surface_tile!(src, new_tile)
+    set_component!(src, new_tile, PlacedComponent(FixedThrustCompBehav(SVector(5.0, 6.0)), Q_POS, :primary))
+    set_pipe!(src, new_pipe, ImmovablePipeBehav())
+    @test has_component(dest, other_tile)
+    @test has_pipe(dest, other_pipe)
+    @test !has_component(dest, new_tile)
+    @test !has_pipe(dest, new_pipe)
+    HexFlowCalculator.snapshot!(dest, src)
+    @test dest.components == src.components
+    @test dest.pipe_behaviors == src.pipe_behaviors
+    @test dest.surface_shiptags == src.surface_shiptags
+    @test dest.components === components
+    @test dest.pipe_behaviors === pipes
+    @test dest.surface_shiptags === surfaces
+    delete_component!(dest, tile)
+    delete_pipe!(dest, pipe)
+    @test has_component(src, tile)
+    @test has_pipe(src, pipe)
+
+    HexFlowCalculator.snapshot!(dest, GameMap())
+    @test isempty(dest.components)
+    @test isempty(dest.pipe_behaviors)
+    @test dest.space_map isa SpaceMapEmpty
+    @test dest.learning_system isa NoLearningSystem
+    @test dest.statistics == PlaythroughStatistics()
 end
 
-@testset "retained render snapshot maps survive buffer reuse" begin
-    source_map = GameMap()
-    set_recorded_play_time_seconds!(source_map, 12.0)
-    initial_snapshot = FlowCalculatorSnapshot(gamemap = source_map, timestamp = 0.0)
-    publish_snap, get_snap = create_snapshot_storage(initial_snapshot)
+@testset "create_snapshot_storage — reader ownership and repeated reuse" begin
+    source = GameMap(learning_system = LearningProgress([:test]))
+    set_component!(source, TileCoord(0, 0), PlacedComponent(MockCompBehav(), Q_POS, :primary))
+    set_pipe!(source, side_pipe(TileCoord(0, 0)), MockPipeBehav())
+    publish_snap, get_snap = create_snapshot_storage(FlowCalculatorSnapshot(gamemap = source, timestamp = 1.0))
+    reader = get_snap()
+    @test reader.timestamp == 1.0
+    @test reader.gamemap !== source
+    @test get_snap() === reader
 
-    publish_snap(source_map, DerivedMapState(), MNA_State(), GameState(), 1.0)
-    retained_map = get_snap().gamemap
-    set_recorded_play_time_seconds!(source_map, 99.0)
+    # A writer may publish repeatedly while the reader keeps its current buffer.
+    writer = Threads.@spawn begin
+        for tick in 2:4
+            source.learning_system.tutorials[:test].unlocked_step = tick
+            source.statistics.simulated_ticks = tick
+            set_surface_tile!(source, TileCoord(tick, 0))
+            set_component!(source, TileCoord(0, 0), PlacedComponent(FixedThrustCompBehav(SVector(Float64(tick), 0.0)), Q_POS, :primary))
+            set_pipe!(source, side_pipe(TileCoord(0, 0)), ImmovablePipeBehav())
+            publish_snap(source, DerivedMapState(), MNA_State(), GameState(ticks = tick), Float64(tick))
+        end
+    end
+    fetch(writer)
+    @test reader.timestamp == 1.0
+    @test reader.gamestate.ticks == 0
+    @test get_simulated_ticks(reader.gamemap) == 0
+    @test reader.gamemap.learning_system.tutorials[:test].unlocked_step == 1
+    @test count_surface_tiles(reader.gamemap) == 1
+    @test get_component(reader.gamemap, TileCoord(0, 0)).component isa MockCompBehav
+    @test get_pipe(reader.gamemap, side_pipe(TileCoord(0, 0))).pipe isa MockPipeBehav
 
-    latest_snapshot = nothing
-    for timestamp in 2.0:8.0
-        publish_snap(source_map, DerivedMapState(), MNA_State(), GameState(), timestamp)
-        latest_snapshot = get_snap()
+    reader = get_snap()
+    @test reader.timestamp == 4.0
+    @test reader.gamestate.ticks == 4
+    @test reader.gamemap.surface_shiptags == source.surface_shiptags
+    @test get_simulated_ticks(reader.gamemap) == 4
+
+    # Each of the three slots retains its map and collection objects.
+    storage = IdDict{FlowCalculatorSnapshot, Tuple}()
+    for tick in 5:10
+        source.statistics.simulated_ticks = tick
+        publish_snap(source, DerivedMapState(), MNA_State(), GameState(ticks = tick), Float64(tick))
+        reader = get_snap()
+        map = reader.gamemap
+        objects = (map, map.components, map.pipe_behaviors, map.surface_shiptags)
+        if haskey(storage, reader)
+            @test all(current === previous for (current, previous) in zip(objects, storage[reader]))
+        else
+            storage[reader] = objects
+        end
+        @test map.components == source.components
+        @test map.pipe_behaviors == source.pipe_behaviors
+        @test get_simulated_ticks(map) == tick
+    end
+    @test length(storage) == 3
+end
+
+@testset "GameMap snapshots — space-map transitions and escape checkpoint" begin
+    checkpoint = GameMap(learning_system = LearningProgress([:test]))
+    checkpoint.statistics.simulated_ticks = 42
+    source = GameMap(space_map = SpaceMapState(encounter_config = _test_enc_config))
+    dest = GameMap()
+    HexFlowCalculator.snapshot!(dest, source)
+    @test dest.space_map isa SpaceMapState
+    @test dest.space_map !== source.space_map
+
+    source.space_map = GalaxyEscapeSpaceMap(SVector(10.0, 2.0), 8.0, 5.0, checkpoint)
+    HexFlowCalculator.snapshot!(dest, source)
+    @test dest.space_map == source.space_map
+    @test dest.space_map !== source.space_map
+    @test get_pre_escape_map(dest) === checkpoint
+    set_velocity!(source, SVector(20.0, 3.0))
+    @test get_velocity(dest) == SVector(10.0, 2.0)
+
+    # Seeding an already escaping session follows the same checkpoint contract.
+    publish_snap, get_snap = create_snapshot_storage(FlowCalculatorSnapshot(gamemap = source))
+    reader = get_snap()
+    @test get_pre_escape_map(reader.gamemap) === checkpoint
+    for tick in 1:3
+        reader_velocity = get_velocity(reader.gamemap)
+        set_velocity!(source, SVector(20.0 + tick, 3.0))
+        publish_snap(source, DerivedMapState(), MNA_State(), GameState(), Float64(tick))
+        @test get_velocity(reader.gamemap) == reader_velocity
+        reader = get_snap()
+        @test get_velocity(reader.gamemap) == get_velocity(source)
+        @test get_pre_escape_map(reader.gamemap) === checkpoint
+        @test reader.gamemap.space_map !== source.space_map
     end
 
-    @test get_recorded_play_time_seconds(retained_map) == 12.0
-    @test latest_snapshot.gamemap !== retained_map
+    # Ordinary deep copies still independently own the entire checkpoint.
+    independent = deepcopy(dest)
+    independent_checkpoint = get_pre_escape_map(independent)
+    @test independent_checkpoint !== checkpoint
+    @test get_simulated_ticks(independent_checkpoint) == 42
+    increment_simulated_ticks!(independent_checkpoint)
+    independent_checkpoint.learning_system.tutorials[:test].unlocked_step = 9
+    set_velocity!(independent, SVector(99.0, 0.0))
+    @test get_velocity(dest) == SVector(10.0, 2.0)
+    @test get_simulated_ticks(checkpoint) == 42
+    @test checkpoint.learning_system.tutorials[:test].unlocked_step == 1
+
+    source.space_map = SpaceMapEmpty(velocity = SVector(7.0, 8.0))
+    source.learning_system = SandboxLearningState(tutorial_id = :test, level_index = 3)
+    HexFlowCalculator.snapshot!(dest, source)
+    @test dest.space_map isa SpaceMapEmpty
+    @test get_velocity(dest) == SVector(7.0, 8.0)
+    @test isnothing(get_pre_escape_map(dest))
+    source.learning_system.tutorial_state.unlocked_step = 5
+    @test dest.learning_system.level_index == 3
+    @test dest.learning_system.tutorial_state.unlocked_step == 1
+
+    source.space_map = SpaceMapState(encounter_config = _test_enc_config)
+    HexFlowCalculator.snapshot!(dest, source)
+    @test dest.space_map isa SpaceMapState
+    @test dest.space_map !== source.space_map
+
+    new_checkpoint = deepcopy(source)
+    source.space_map = GalaxyEscapeSpaceMap(SVector(5.0, 0.0), 5.0, 9.0, new_checkpoint)
+    HexFlowCalculator.snapshot!(dest, source)
+    @test get_pre_escape_map(dest) === new_checkpoint
+    @test dest.space_map.departure_time_years == 9.0
 end
 
 @testset "snapshot! methods" begin

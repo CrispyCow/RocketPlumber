@@ -70,6 +70,19 @@ Equality and hashing compare logical contents rather than bucket layout.
 Hashing delegates to a materialised `Dict` for compatibility using public
 interfaces; it is an allocating, cold operation.
 
+## Reusing storage with `copy!`
+
+`copy!(dest, src)` completely replaces the destination's entries and returns
+`dest`. Both collections must have the same declared key and value types.
+Copying is shallow: actual stored keys and values are shared, including mutable
+values, while the collections' storage remains independent. Self-copy is a no-op.
+
+The destination retains its existing bucket registrations, including empty
+buckets, and registers source types as needed. Bucket layouts need not match.
+Concrete key and value vectors are bulk-copied and lookup locations are rebuilt
+using destination bucket IDs. Existing vector and lookup capacity is retained;
+repeated copies of similarly sized collections avoid rebuilding storage.
+
 ## Testing
 
 From the package directory:

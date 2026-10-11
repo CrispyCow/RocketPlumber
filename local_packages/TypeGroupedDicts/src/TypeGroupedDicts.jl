@@ -219,6 +219,39 @@ function Base.empty!(collection::TypeGroupedDict)
     return collection
 end
 
+"""
+    copy!(dest::TypeGroupedDict{K,V}, src::TypeGroupedDict{K,V})
+
+Replace all entries in `dest` with a shallow copy of `src` and return `dest`.
+Stored keys and values are shared, but collection storage remains independent.
+Destination buckets and their capacity are retained for reuse, including empty
+buckets; source types are registered as needed. Self-copy is a no-op.
+"""
+function Base.copy!(dest::TypeGroupedDict{K, V}, src::TypeGroupedDict{K, V}) where {K, V}
+    dest === src && return dest
+    empty!(dest)
+    sizehint!(dest.lookup, length(src); shrink = false)
+    for bucket in src.buckets
+        _copy_bucket!(dest, bucket)
+    end
+    return dest
+end
+
+"Bulk-copy concrete storage and rebuild locations using the destination bucket ID"
+function _copy_bucket!(dest::TypeGroupedDict{K}, src::Bucket{K, T}) where {K, T}
+    bucket_id = get!(dest.type_to_bucket, T) do
+        push!(dest.buckets, _make_bucket(K, T))
+        return length(dest.buckets)
+    end
+    bucket = dest.buckets[bucket_id]::Bucket{K, T}
+    copy!(bucket.keys, src.keys)
+    copy!(bucket.values, src.values)
+    for slot in eachindex(bucket.keys)
+        dest.lookup[bucket.keys[slot]] = Location(bucket_id, slot)
+    end
+    return nothing
+end
+
 #= ---------- Ordinary read-only iteration ----------- =#
 
 Base.eltype(::Type{TypeGroupedDict{K, V}}) where {K, V} = Pair{K, V}

@@ -44,12 +44,15 @@ derived/MNA state and publish without advancing time.
 
 ## Snapshots And Shared State
 
-- Snapshot storage is triple-buffered. Publication deep-copies `gamemap`,
-  refills derived/MNA/game-state snapshot buffers, and swaps indices under a
-  short lock.
-- Returned snapshots and their maps are detached read models, but callers must
-  still treat them as read-only. A buffer slot will be reused after a later
-  swap.
+- Snapshot storage is triple-buffered. Publication refills the existing map,
+  derived/MNA/game-state buffers and swaps indices under a short lock. Grouped
+  component/pipe storage is retained and shallow-copies immutable placement and
+  behaviour values, including their immutable nested state. Other mutable map
+  state is independently copied.
+- The render thread borrows a read-only snapshot whose mutable contents remain
+  stable until its next acquisition. Copy any data retained beyond that boundary.
+  Galaxy-escape snapshots also share the permanently read-only departure
+  checkpoint; consumers needing a mutable checkpoint must explicitly copy it.
 - Access every field of `FlowCalculatorSharedState` atomically. Do not add an
   unsynchronised side channel between the calculator and render threads.
 - Keep live mutable state confined to the calculator thread unless a type has

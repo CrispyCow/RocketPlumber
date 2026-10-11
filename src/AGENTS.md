@@ -55,9 +55,13 @@ launching, input, UI, rendering, persistence, and game-session flow.
 - Send gameplay changes through `MapEditCommand` constructors and
   `try_enqueue_command!`. Do not mutate the live `GameMap` from UI, input, or
   render code.
-- Treat the latest `FlowCalculatorSnapshot` as a read-only render model. The
-  calculator publishes through triple-buffered storage; do not retain or
-  mutate snapshot internals as an alternate state channel.
+- Acquire one `FlowCalculatorSnapshot` at the start of each render frame and
+  use it, or references derived from it, throughout synchronous rendering, UI,
+  and input processing. Another acquisition can release the earlier reader
+  buffer for reuse and invalidate its references. Treat snapshot data as
+  read-only; operations that need independent ownership must copy it before
+  retaining or mutating it. The post-loop acquisition captures final session
+  state after frame processing has finished.
 - View and other presentation-only state may remain on the main thread when it
   cannot affect simulation results.
 

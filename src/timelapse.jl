@@ -19,6 +19,7 @@ mutable struct TimelapseRecorder
     history::Union{Nothing, TimelapseHistory}
     next_capture_time_seconds::Float64
     last_captured_snapshot_timestamp::Union{Nothing, Float64}
+    last_captured_source::WeakRef  # Track identity without retaining a snapshot buffer
 end
 
 "Return the monotonic wall-clock time used by recorder deadlines."
@@ -32,7 +33,8 @@ function TimelapseRecorder(
     current_time = Float64(now)
     enabled = !isnothing(history)
     next_capture_time = enabled ? current_time + TIMELAPSE_CAPTURE_INTERVAL_SECONDS : Inf
-    return TimelapseRecorder(enabled, history, next_capture_time, nothing)
+    last_source = isnothing(history) || isempty(history.frames) ? nothing : last(history.frames)
+    return TimelapseRecorder(enabled, history, next_capture_time, nothing, WeakRef(last_source))
 end
 
 "Enable or disable recording without changing the retained history."
@@ -46,7 +48,7 @@ function set_timelapse_enabled!(recorder::TimelapseRecorder, enabled::Bool; now:
     return recorder
 end
 
-"Return a shallow snapshot of a history while preserving the identity of every map."
+"Return a shallow history snapshot sharing the independently owned recorded maps."
 function snapshot_timelapse_history(recorder::TimelapseRecorder)::Union{Nothing, TimelapseHistory}
     history = recorder.history
     isnothing(history) && return nothing
@@ -59,7 +61,7 @@ timelapse_frame_count(recorder::TimelapseRecorder)::Int =
 
 #= ---------- Capture ---------- =#
 
-"Append one detached render map when recording is enabled and the frame is new."
+"Append a deep copy of the source map when recording is enabled and the frame is new."
 function capture_timelapse_frame!(
         recorder::TimelapseRecorder, gamemap::GameMap;
         snapshot_timestamp::Union{Nothing, Float64} = nothing,
@@ -72,15 +74,16 @@ function capture_timelapse_frame!(
     history = recorder.history::TimelapseHistory
 
     if isnothing(snapshot_timestamp)
-        duplicate = !isempty(history.frames) && last(history.frames) === gamemap
+        duplicate = recorder.last_captured_source.value === gamemap
         recorder.last_captured_snapshot_timestamp = nothing
         duplicate && return false
     elseif recorder.last_captured_snapshot_timestamp == snapshot_timestamp
         return false
     end
 
-    push!(history.frames, gamemap)
+    push!(history.frames, deepcopy(gamemap))
     recorder.last_captured_snapshot_timestamp = snapshot_timestamp
+    recorder.last_captured_source = WeakRef(gamemap)
     return true
 end
 

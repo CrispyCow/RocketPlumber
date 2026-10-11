@@ -1812,16 +1812,17 @@ end
 function execute_ship_action!(;
         ship_name::Symbol,
         action_id::Symbol,
-        flowcalc_ipc::FlowCalculatorIPC,
+        command_queue::CommandQueue,
+        gamemap::GameMap,
         viewstate::ViewState,
         inputstate::InputState
     )
     if action_id === :make_primary
-        current_map = deepcopy(flowcalc_ipc.get_snapshot().gamemap)
+        current_map = deepcopy(gamemap)
         success, reason = swap_primary!(current_map, ship_name)
         if success
-            cmd = create_map_override_command(flowcalc_ipc.command_queue, current_map)
-            return try_enqueue_command!(flowcalc_ipc.command_queue, cmd)
+            cmd = create_map_override_command(command_queue, current_map)
+            return try_enqueue_command!(command_queue, cmd)
         else
             snapshot_status = typeof(get_docking_status(current_map, ship_name))
             @warn "Enabled ship action failed" ship_name = ship_name action_id = action_id snapshot_status = snapshot_status reason = reason
@@ -1829,16 +1830,16 @@ function execute_ship_action!(;
         end
 
     elseif action_id === :redock
-        _enter_redock_mode!(inputstate, flowcalc_ipc, ship_name)
+        _enter_redock_mode!(inputstate, gamemap, ship_name)
         return true
 
     elseif action_id === :undock
-        current_map = deepcopy(flowcalc_ipc.get_snapshot().gamemap)
+        current_map = deepcopy(gamemap)
         max_bounds = calc_max_reachable_bounds(viewstate)
         success, reason = depart_ship!(current_map, ship_name; max_view_bounds = max_bounds)
         if success
-            cmd = create_map_override_command(flowcalc_ipc.command_queue, current_map)
-            return try_enqueue_command!(flowcalc_ipc.command_queue, cmd)
+            cmd = create_map_override_command(command_queue, current_map)
+            return try_enqueue_command!(command_queue, cmd)
         else
             snapshot_status = typeof(get_docking_status(current_map, ship_name))
             @warn "Enabled ship action failed" ship_name = ship_name action_id = action_id snapshot_status = snapshot_status reason = reason
@@ -1896,8 +1897,7 @@ function _render_redock_ghost!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
 end
 
 "Enter the interactive redock placement mode, caching docking footprints for fast per-frame validation."
-function _enter_redock_mode!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, ship_name::Symbol)
-    gamemap = flowcalc_ipc.get_snapshot().gamemap
+function _enter_redock_mode!(inputstate::InputState, gamemap::GameMap, ship_name::Symbol)
     core_tiles = collect_surface_tiles!(Set{TileCoord}(), gamemap; ship_name = ship_name)
     ship_footprint = docking_footprint_including(gamemap, ship_name)
     display_footprint = docking_footprint_including(

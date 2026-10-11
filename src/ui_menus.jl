@@ -149,23 +149,22 @@ function enqueue_map_override!(flowcalc_ipc::FlowCalculatorIPC, gamemap::GameMap
 end
 
 """
-Show a listbox of ships and return `(selected_name, gamemap)`, or
-`(nothing, gamemap)` when no ships are available (with a placeholder message).
+Show a listbox of ships and return the selected name, or `nothing` when no
+ships are available (with a placeholder message).
 Set `exclude_primary=false` to include the primary ship in the list.
 """
-function _ship_selector_ui!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, key::Symbol, label::String, empty_msg::String = "No other ships (only primary exists)"; exclude_primary::Bool = true)
-    current_gamemap = (flowcalc_ipc.get_snapshot()).gamemap
-    all_ship_names = get_all_ship_names(current_gamemap)
+function _ship_selector_ui!(inputstate::InputState, gamemap::GameMap, key::Symbol, label::String, empty_msg::String = "No other ships (only primary exists)"; exclude_primary::Bool = true)
+    all_ship_names = get_all_ship_names(gamemap)
     selectable_ships = exclude_primary ? filter(n -> n != :primary, all_ship_names) : all_ship_names
     display_names = safe_ship_display_name.(selectable_ships)
 
     if isempty(selectable_ships)
         CImGui.Text(empty_msg)
-        return nothing, current_gamemap
+        return nothing
     end
 
     idx = gui_listbox_int!(inputstate, key, label, display_names, Int32(0))
-    return selectable_ships[idx + 1], current_gamemap
+    return selectable_ships[idx + 1]
 end
 
 "Return deterministic fuel-tag options for an encounter class."
@@ -338,7 +337,7 @@ function ui_dev_utils_menu_render!(
                     "Add Velocity", ImVec2(button_width, button_height), invalid_velocity;
                     tooltip = "Velocity and resulting velocity must be finite.",
                 )
-                modified_map = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
+                modified_map = deepcopy(snapshot.gamemap)
                 adjusted_velocity = get_velocity(modified_map) + velocity_delta
                 if all(isfinite, adjusted_velocity)
                     set_velocity!(modified_map, adjusted_velocity)
@@ -354,7 +353,7 @@ function ui_dev_utils_menu_render!(
                     "Apply Loaded Encounter Config", ImVec2(button_width, button_height), !has_encounter_system;
                     tooltip = "Requires an active encounter space map. Existing encounters are preserved.",
                 )
-                modified_map = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
+                modified_map = deepcopy(snapshot.gamemap)
                 space_map = get_spacemap(modified_map)
                 if space_map isa SpaceMapState
                     replace_encounter_config!(space_map, encounter_system_config)
@@ -374,7 +373,7 @@ function ui_dev_utils_menu_render!(
             init_vel_y = gui_input_double!(inputstate, :spacemap_init_vel_y, "Initial Velocity Y", 0.0)
 
             if CImGui.Button("Initialise Space Map", (button_width, button_height))
-                modified_map = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
+                modified_map = deepcopy(snapshot.gamemap)
                 initialise_spacemap!(modified_map, spacemap_seed, encounter_system_config, SVector{2, Float64}(init_vel_x, init_vel_y))
                 if modified_map.space_map isa SpaceMapState
                     initialise_encounter_system!(modified_map.space_map)
@@ -385,7 +384,7 @@ function ui_dev_utils_menu_render!(
 
             has_space_map = !(snapshot.gamemap.space_map isa SpaceMapEmpty)
             if button_with_disable("Delete Space Map", ImVec2(button_width, button_height), !has_space_map; tooltip = "Loaded map has no space map.")
-                modified_map = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
+                modified_map = deepcopy(snapshot.gamemap)
                 modified_map.space_map = SpaceMapEmpty()
                 enqueue_map_override!(flowcalc_ipc, modified_map)
                 @info "Deleted space map"
@@ -395,9 +394,9 @@ function ui_dev_utils_menu_render!(
         end
 
         if CImGui.TreeNode("Delete Ship")
-            selected, current_gamemap = _ship_selector_ui!(inputstate, flowcalc_ipc, :delete_ship_index, "Ship", "No deletable ships (only primary exists)")
+            selected = _ship_selector_ui!(inputstate, snapshot.gamemap, :delete_ship_index, "Ship", "No deletable ships (only primary exists)")
             if !isnothing(selected) && CImGui.Button("Delete Ship", (button_width, button_height))
-                modified_map = deepcopy(current_gamemap)
+                modified_map = deepcopy(snapshot.gamemap)
                 remove_ship!(modified_map, selected)
                 enqueue_map_override!(flowcalc_ipc, modified_map)
                 @info "Deleted ship $(selected)"
@@ -406,9 +405,9 @@ function ui_dev_utils_menu_render!(
         end
 
         if CImGui.TreeNode("Depart Ship")
-            selected, current_gamemap = _ship_selector_ui!(inputstate, flowcalc_ipc, :depart_ship_index, "Ship", "No departable ships (only primary exists)")
+            selected = _ship_selector_ui!(inputstate, snapshot.gamemap, :depart_ship_index, "Ship", "No departable ships (only primary exists)")
             if !isnothing(selected) && CImGui.Button("Depart Ship", (button_width, button_height))
-                modified_map = deepcopy(current_gamemap)
+                modified_map = deepcopy(snapshot.gamemap)
                 success, reason = depart_ship!(modified_map, selected; max_view_bounds = max_view_bounds)
                 if success
                     enqueue_map_override!(flowcalc_ipc, modified_map)
@@ -421,9 +420,9 @@ function ui_dev_utils_menu_render!(
         end
 
         if CImGui.TreeNode("Swap Primary")
-            selected, current_gamemap = _ship_selector_ui!(inputstate, flowcalc_ipc, :swap_primary_index, "Ship", "No other ships to swap with")
+            selected = _ship_selector_ui!(inputstate, snapshot.gamemap, :swap_primary_index, "Ship", "No other ships to swap with")
             if !isnothing(selected) && CImGui.Button("Swap Primary", (button_width, button_height))
-                modified_map = deepcopy(current_gamemap)
+                modified_map = deepcopy(snapshot.gamemap)
                 success, reason = swap_primary!(modified_map, selected)
                 if success
                     enqueue_map_override!(flowcalc_ipc, modified_map)
@@ -436,12 +435,12 @@ function ui_dev_utils_menu_render!(
         end
 
         if CImGui.TreeNode("Export Ship")
-            selected, current_gamemap = _ship_selector_ui!(inputstate, flowcalc_ipc, :export_ship_index, "Ship", "No ships available"; exclude_primary = false)
+            selected = _ship_selector_ui!(inputstate, snapshot.gamemap, :export_ship_index, "Ship", "No ships available"; exclude_primary = false)
             if !isnothing(selected) && CImGui.Button("Save Ship...", (button_width, button_height))
                 save_path = map_save_dialog(flowcalc_ipc.console_push)
                 if !isnothing(save_path)
-                    blueprint = get_ship_blueprint(current_gamemap, selected)
-                    centroid = get_surface_centroid(current_gamemap, selected)
+                    blueprint = get_ship_blueprint(snapshot.gamemap, selected)
+                    centroid = get_surface_centroid(snapshot.gamemap, selected)
                     if !isnothing(centroid)
                         offset_ship!(blueprint, TileCoord(-round_to_tile(centroid)))
                     end
@@ -594,7 +593,7 @@ function ui_dev_utils_menu_render!(
 
             if CImGui.Button("Place Tileset")
                 selected_set = all_component_sets[tileset_selection + 1]
-                tilesetmap::GameMap = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
+                tilesetmap::GameMap = deepcopy(snapshot.gamemap)
                 success, msg = place_shipset!(tilesetmap, selected_set, seed)
 
                 enqueue_map_override!(flowcalc_ipc, tilesetmap)
@@ -608,7 +607,7 @@ function ui_dev_utils_menu_render!(
 
             if CImGui.Button("Place Big Pipes", (button_width, button_height))
                 @info "Placing Big Pipes..."
-                bigpipemap::GameMap = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
+                bigpipemap::GameMap = deepcopy(snapshot.gamemap)
                 place_random_pipes!(bigpipemap, :BigPipe_pipe, seed; pipe_density = big_pipe_density)
 
                 enqueue_map_override!(flowcalc_ipc, bigpipemap)
@@ -621,7 +620,7 @@ function ui_dev_utils_menu_render!(
 
             if CImGui.Button("Place Scrap Pipes", (button_width, button_height))
                 @info "Placing Scrap Pipes..."
-                scrappipemap::GameMap = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
+                scrappipemap::GameMap = deepcopy(snapshot.gamemap)
                 place_random_pipes!(scrappipemap, :ScrapPipe_pipe, seed; pipe_density = scrap_pipe_density)
 
                 enqueue_map_override!(flowcalc_ipc, scrappipemap)
@@ -637,7 +636,7 @@ function ui_dev_utils_menu_render!(
                 ]
 
                 @info "Placing Pipe Combo..."
-                combopipemap::GameMap = deepcopy((flowcalc_ipc.get_snapshot()).gamemap)
+                combopipemap::GameMap = deepcopy(snapshot.gamemap)
                 place_pipeset!(combopipemap, standard_pipes, seed)
 
                 enqueue_map_override!(flowcalc_ipc, combopipemap)
@@ -747,9 +746,7 @@ function ui_dev_utils_menu_render!(
         button_height = 30.0
 
         if CImGui.TreeNode("Docking Status")
-            current_gamemap = (flowcalc_ipc.get_snapshot()).gamemap
-
-            for (ship_name, ship) in current_gamemap.ships
+            for (ship_name, ship) in snapshot.gamemap.ships
                 status = get_docking_status(ship)
                 offset = get_render_offset(ship)
                 status_str = string(typeof(status).name.name)
@@ -757,7 +754,7 @@ function ui_dev_utils_menu_render!(
             end
 
             if CImGui.Button("Clear All to Connected", (button_width, button_height))
-                modified_map = deepcopy(current_gamemap)
+                modified_map = deepcopy(snapshot.gamemap)
                 clear_all_docking_statuses!(modified_map)
                 enqueue_map_override!(flowcalc_ipc, modified_map)
                 @info "Cleared all docking statuses to Connected"
@@ -776,7 +773,7 @@ end
 # ===============================================================
 
 "Render the world-anchored action popup. Handles both action list and confirmation sub-pane."
-function ui_action_popup_render!(inputstate::InputState, viewstate::ViewState, flowcalc_ipc::FlowCalculatorIPC)
+function ui_action_popup_render!(inputstate::InputState, viewstate::ViewState, command_queue::CommandQueue, gamemap::GameMap)
     popup = inputstate.action_popup
     popup === nothing && return nothing
 
@@ -794,9 +791,9 @@ function ui_action_popup_render!(inputstate::InputState, viewstate::ViewState, f
     CImGui.Begin("$(popup.window_title)##action_popup", p_open, flags)
 
     if !isnothing(popup.pending_confirmation)
-        _render_confirmation_pane!(popup, inputstate, flowcalc_ipc, viewstate, popup_width)
+        _render_confirmation_pane!(popup, inputstate, command_queue, gamemap, viewstate, popup_width)
     else
-        _render_action_list!(popup, inputstate, flowcalc_ipc, viewstate)
+        _render_action_list!(popup, inputstate, command_queue, gamemap, viewstate)
     end
 
     CImGui.End()
@@ -808,36 +805,36 @@ function ui_action_popup_render!(inputstate::InputState, viewstate::ViewState, f
 end
 
 "Render the confirmation sub-pane for an action requiring player confirmation."
-function _render_confirmation_pane!(popup::ActionPopupState, inputstate, flowcalc_ipc, viewstate, popup_width)
+function _render_confirmation_pane!(popup::ActionPopupState, inputstate::InputState, command_queue::CommandQueue, gamemap::GameMap, viewstate::ViewState, popup_width::Float64)
     action = popup.pending_confirmation
     CImGui.TextWrapped(action.confirmation_message)
     CImGui.Dummy((0.0, 4.0))
     button_width = popup_width - 16.0
     CImGui.SetCursorPosX((popup_width - button_width) / 2.0)
     return if CImGui.Button("Confirm", (button_width, 28.0))
-        _execute_action!(inputstate, popup, action, flowcalc_ipc, viewstate)
+        _execute_action!(inputstate, popup, action, command_queue, gamemap, viewstate)
     end
 end
 
 "Render the action button list, then any target-specific extras (e.g. component delete)."
-function _render_action_list!(popup::ActionPopupState, inputstate, flowcalc_ipc, viewstate)
+function _render_action_list!(popup::ActionPopupState, inputstate::InputState, command_queue::CommandQueue, gamemap::GameMap, viewstate::ViewState)
     for action in popup.actions
         if button_with_disable(action.label, ImVec2(-1, 0), !action.enabled; tooltip = action.tooltip)
             if !isnothing(action.confirmation_message)
                 popup.pending_confirmation = action
             else
-                _execute_action!(inputstate, popup, action, flowcalc_ipc, viewstate)
+                _execute_action!(inputstate, popup, action, command_queue, gamemap, viewstate)
             end
         end
     end
-    return _render_target_extras!(popup, popup.target, inputstate, flowcalc_ipc, viewstate)
+    return _render_target_extras!(popup, popup.target)
 end
 
 "Default: no extra UI elements for this popup target type."
-_render_target_extras!(popup, target::AbstractPopupTarget, inputstate, flowcalc_ipc, viewstate) = nothing
+_render_target_extras!(popup::ActionPopupState, target::AbstractPopupTarget) = nothing
 
 "Component popups get a separator and a 'Delete Component' button with confirmation."
-function _render_target_extras!(popup, target::ComponentPopupTarget, inputstate, flowcalc_ipc, viewstate)
+function _render_target_extras!(popup::ActionPopupState, target::ComponentPopupTarget)
     isempty(popup.actions) || CImGui.Separator()
     delete_action = ActionInfo(
         id = :delete_component,
@@ -854,44 +851,44 @@ end
 #= ---------- Action Execution Dispatch ----------- =#
 
 "Execute an action, dispatching on popup target type. Closes the popup after success."
-function _execute_action!(inputstate, popup::ActionPopupState, action::ActionInfo, flowcalc_ipc, viewstate)
-    result = _execute_target_action!(inputstate, popup.target, action, flowcalc_ipc, viewstate)
+function _execute_action!(inputstate::InputState, popup::ActionPopupState, action::ActionInfo, command_queue::CommandQueue, gamemap::GameMap, viewstate::ViewState)
+    result = _execute_target_action!(inputstate, popup.target, action, command_queue, gamemap, viewstate)
     result && dismiss_action_popup!(inputstate)
     return nothing
 end
 
 "Execute a component action — delete or regular DoActionCommand."
-function _execute_target_action!(inputstate, target::ComponentPopupTarget, action::ActionInfo, flowcalc_ipc, viewstate)
+function _execute_target_action!(inputstate::InputState, target::ComponentPopupTarget, action::ActionInfo, command_queue::CommandQueue, gamemap::GameMap, viewstate::ViewState)
     if action.id === :delete_component
-        cmd = create_delete_elements_command(flowcalc_ipc.command_queue, target.coord)
+        cmd = create_delete_elements_command(command_queue, target.coord)
     else
-        cmd = create_do_action_command(flowcalc_ipc.command_queue, target.coord, action.id)
+        cmd = create_do_action_command(command_queue, target.coord, action.id)
     end
-    return try_enqueue_command!(flowcalc_ipc.command_queue, cmd)
+    return try_enqueue_command!(command_queue, cmd)
 end
 
 "Execute a shared component action as one calculator transaction."
-function _execute_target_action!(inputstate, target::ElementGroupPopupTarget, action::ActionInfo, flowcalc_ipc, viewstate)
+function _execute_target_action!(inputstate::InputState, target::ElementGroupPopupTarget, action::ActionInfo, command_queue::CommandQueue, gamemap::GameMap, viewstate::ViewState)
     if action.id === :delete_component
         command = create_delete_elements_command(
-            flowcalc_ipc.command_queue, Set(target.component_coords), Set(target.pipe_coords),
+            command_queue, Set(target.component_coords), Set(target.pipe_coords),
         )
-        return try_enqueue_command!(flowcalc_ipc.command_queue, command)
+        return try_enqueue_command!(command_queue, command)
     end
-    command = create_do_action_command(flowcalc_ipc.command_queue, target.component_coords, action.id)
-    return try_enqueue_command!(flowcalc_ipc.command_queue, command)
+    command = create_do_action_command(command_queue, target.component_coords, action.id)
+    return try_enqueue_command!(command_queue, command)
 end
 
 "Execute a ship action via the ship action dispatch system."
-function _execute_target_action!(inputstate, target::ShipPopupTarget, action::ActionInfo, flowcalc_ipc, viewstate)
+function _execute_target_action!(inputstate::InputState, target::ShipPopupTarget, action::ActionInfo, command_queue::CommandQueue, gamemap::GameMap, viewstate::ViewState)
     return execute_ship_action!(
         ship_name = target.ship_name, action_id = action.id,
-        flowcalc_ipc = flowcalc_ipc, viewstate = viewstate, inputstate = inputstate
+        command_queue = command_queue, gamemap = gamemap, viewstate = viewstate, inputstate = inputstate
     )
 end
 
 "Group component popups expose one atomic deletion action."
-function _render_target_extras!(popup, target::ElementGroupPopupTarget, inputstate, flowcalc_ipc, viewstate)
+function _render_target_extras!(popup::ActionPopupState, target::ElementGroupPopupTarget)
     isempty(popup.actions) || CImGui.Separator()
     count = length(target.component_coords) + length(target.pipe_coords)
     delete_action = ActionInfo(

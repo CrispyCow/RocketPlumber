@@ -413,7 +413,14 @@ end
 end
 @struct_hash_equal GameMap
 
-"Terminal galaxy-escape map with authoritative flight state and the required pre-departure map."
+"""
+Terminal galaxy-escape map with mutable flight state and a pre-departure checkpoint.
+
+`pre_escape_map` and everything beneath it are permanently read-only after
+checkpoint creation. Render snapshots may share this reference. Consumers needing
+an independently mutable map must explicitly `deepcopy` it. Ordinary `deepcopy`
+still copies the entire checkpoint, including for saves and map transactions.
+"""
 @kwdef mutable struct GalaxyEscapeSpaceMap <: AbstractSpaceMap
     velocity::SVector{2, Float64}
     starting_velocity_x::Float64
@@ -463,7 +470,7 @@ get_last_stop_time(sm::GalaxyEscapeSpaceMap)::Float64 = sm.departure_time_years
 set_last_stop_time!(::GalaxyEscapeSpaceMap, ::Float64) = nothing
 get_encounter_points(::GalaxyEscapeSpaceMap)::Vector{EncounterPoint} = EncounterPoint[]
 
-"Return the complete map captured immediately before galaxy departure."
+"Return the permanently read-only departure checkpoint; `deepcopy` before mutation."
 get_pre_escape_map(space_map::GalaxyEscapeSpaceMap)::GameMap = space_map.pre_escape_map
 
 "Wrap a single `ShipState` as the primary ship (no components or pipes)."
@@ -1836,7 +1843,7 @@ function get_galaxy_escape_space_map(gamemap::GameMap)::Union{Nothing, GalaxyEsc
     return space_map isa GalaxyEscapeSpaceMap ? space_map : nothing
 end
 
-"Return the pre-departure map, or `nothing` outside a galaxy-escape attempt."
+"Return the read-only departure checkpoint, or `nothing` outside escape; copy before mutation."
 function get_pre_escape_map(gamemap::GameMap)::Union{Nothing, GameMap}
     space_map = get_galaxy_escape_space_map(gamemap)
     return isnothing(space_map) ? nothing : get_pre_escape_map(space_map)

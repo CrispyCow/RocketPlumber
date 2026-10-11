@@ -54,9 +54,10 @@ const DELTA_V_CACHE_TICK_DIVISOR::Int64 = 30
 """
 Snapshot of complete game state for rendering.
 
-Snapshot publication replaces each buffer's `gamemap` reference with a new
-deep-copied map. A render thread may therefore retain a published map while
-the triple-buffer slots are reused, provided it treats that map as read-only.
+The render thread borrows a read-only buffer whose mutable contents remain
+stable until its next snapshot acquisition. References into the buffer must
+not outlive that boundary without an independent copy. Galaxy-escape snapshots
+share their permanently read-only pre-departure checkpoint.
 """
 @kwdef mutable struct FlowCalculatorSnapshot
     gamemap::GameMap = GameMap()
@@ -316,7 +317,44 @@ end
 # Snapshot Refill Methods
 # ===============================================================
 
-"Refill `dest` with data from `src`, reusing existing container allocations."
+# Keep these explicit refills in step with their destination types: every field
+# must be overwritten or cleared on each publication, including empty inputs.
+# Mutable containers belong to one buffer; shallow copies require immutable
+# entries. The read-only galaxy-escape checkpoint is the shared-map exception.
+
+"""
+Refill an independently owned map, retaining grouped collection and surface storage.
+
+Grouped copies share component and pipe values: their placement wrappers,
+behaviours and all nested behaviour state are immutable. Other mutable map state
+is independently copied, except for the permanently read-only galaxy-escape
+checkpoint.
+"""
+function snapshot!(dest::GameMap, src::GameMap)
+    dest === src && return nothing
+
+    copy!(dest.components, src.components)
+    copy!(dest.pipe_behaviors, src.pipe_behaviors)
+
+    empty!(dest.surface_shiptags)
+    merge!(dest.surface_shiptags, src.surface_shiptags)
+
+    dest.ships = deepcopy(src.ships)
+    dest.space_map = snapshot_space_map(src.space_map)
+    dest.learning_system = deepcopy(src.learning_system)
+    dest.statistics = deepcopy(src.statistics)
+    return nothing
+end
+
+"Copy live space-map state for a snapshot, preserving ordinary deep-copy ownership."
+snapshot_space_map(src::AbstractSpaceMap) = deepcopy(src)
+
+"Copy escape flight state while sharing its permanently read-only checkpoint."
+function snapshot_space_map(src::GalaxyEscapeSpaceMap)
+    return GalaxyEscapeSpaceMap(src.velocity, src.starting_velocity_x, src.departure_time_years, src.pre_escape_map)
+end
+
+"Refill all derived state, retaining containers whose entries are immutable values."
 function snapshot!(dest::DerivedMapState, src::DerivedMapState)
     # Sets: empty and refill
     empty!(dest.ship_surface_edge)
@@ -417,22 +455,32 @@ Create triple-buffered snapshot storage for thread-safe IPC.
 
 Returns `(publish_snapshot!, get_snapshot)` closures. The publish closure fills
 the writer buffer in-place and swaps it into the ready slot. The get closure swaps
-the ready slot into the reader slot and returns it. The lock is held only during
-the index swaps (two integer writes), never during data copying.
+the ready slot into the reader slot and returns it. The lock is held only while
+swapping indices and updating the publication flag, never during data copying.
 
 Three buffers are needed (not two) because at >1x sim speed the background thread
 may complete multiple ticks per render frame. With only two buffers, the second tick
 would overwrite the buffer the render thread is still reading. Triple buffering
 guarantees the writer, ready, and reader slots are always distinct, so neither thread
 ever touches the other's active buffer.
+
+Use one calculator publisher and one render-thread reader. The reader borrows
+its buffer until its next acquisition; acquire once per frame and pass that
+snapshot through synchronous consumers. Copy contents before retaining them
+beyond that boundary or mutating them.
 """
 function create_snapshot_storage(initial_snapshot::FlowCalculatorSnapshot)
     # All three buffers seeded so the render thread has valid data before the first BG tick
-    buffers = (
-        deepcopy(initial_snapshot),
-        deepcopy(initial_snapshot),
-        deepcopy(initial_snapshot),
-    )
+    buffers = ntuple(3) do _
+        buffer = FlowCalculatorSnapshot(
+            derived = deepcopy(initial_snapshot.derived),
+            mna = deepcopy(initial_snapshot.mna),
+            gamestate = deepcopy(initial_snapshot.gamestate),
+            timestamp = initial_snapshot.timestamp,
+        )
+        snapshot!(buffer.gamemap, initial_snapshot.gamemap)
+        return buffer
+    end
     writer_idx = Threads.Atomic{Int}(1)
     ready_idx = Threads.Atomic{Int}(2)
     reader_idx = Threads.Atomic{Int}(3)
@@ -443,13 +491,9 @@ function create_snapshot_storage(initial_snapshot::FlowCalculatorSnapshot)
     function publish_flowcalc_snapshot!(gamemap::GameMap, derived::DerivedMapState, mna_state::MNA_State, gamestate::GameState, timestamp::Float64)
         buf = buffers[writer_idx[]]
 
-        # Replace the map reference so previously published maps remain detached and stable.
-        buf.gamemap = deepcopy(gamemap)
-        # DerivedMapState: in-place refill (all containers hold immutable values)
+        snapshot!(buf.gamemap, gamemap)
         snapshot!(buf.derived, derived)
-        # MNA_State → MNA_StateSnapshot: in-place refill of the render-relevant subset
         snapshot!(buf.mna, mna_state)
-        # GameState: field copy
         snapshot!(buf.gamestate, gamestate)
         buf.timestamp = timestamp
 

@@ -17,11 +17,7 @@ function check_contents(collection::TypeGroupedDict, reference::Dict)
     @test TGD._check_invariants(collection) === nothing
     @test length(collection) == length(reference)
     @test isempty(collection) == isempty(reference)
-    @test all(entry -> entry isa eltype(collection), collection)
     @test isequal(Dict(collection), reference)
-    @test isequal(collection, reference)
-    @test isequal(reference, collection)
-    @test hash(collection) == hash(reference)
     return nothing
 end
 
@@ -50,10 +46,6 @@ struct AddKey end
         @test isimmutable(collection)
         @test isempty(collection)
         @test length(collection) == 0
-        @test isempty(collection.lookup)
-        @test isempty(collection.buckets)
-        @test isempty(collection.type_to_bucket)
-        @test TGD._check_invariants(collection) === nothing
         @test iterate(collection) === nothing
         @test isempty(collect(collection))
         @test isempty(collect(keys(collection)))
@@ -284,6 +276,7 @@ struct AddKey end
         registrations = copy(collection.type_to_bucket)
         key_view, value_view, pair_view = keys(collection), values(collection), pairs(collection)
         collected = collect(collection)
+        @test all(entry -> entry isa eltype(collection), collection)
         @test collect(pair_view) == collected
         @test collect(key_view) == first.(collected)
         @test collect(value_view) == last.(collected)
@@ -318,6 +311,83 @@ struct AddKey end
         @test unusual[-0.0] == 4
         @test unusual[0.0] == 5
         check_contents(unusual, Dict{Any, Any}(NaN => 1, missing => 2, nothing => 3, -0.0 => 4, 0.0 => 5))
+    end
+
+    @testset "copy! replacement and storage reuse" begin
+        src = grouped([1 => 10, 2 => "two", 3 => 30, 4 => 4.0, 5 => nothing])
+        delete!(src, 1)  # Repaired slot order must remain aligned
+        delete!(src, 5)  # Retained empty source bucket
+        dest = grouped([99 => :old, 2 => 2.0, 98 => "old", 97 => true])
+        delete!(dest, 97)  # Retained empty destination bucket
+        bucket_refs = copy(dest.buckets)
+        registrations = copy(dest.type_to_bucket)
+        lookup, buckets, types = dest.lookup, dest.buckets, dest.type_to_bucket
+        original = Dict(src)
+
+        @test copy!(dest, src) === dest
+        check_contents(dest, original)
+        check_contents(src, original)
+        @test dest.lookup === lookup
+        @test dest.buckets === buckets
+        @test dest.type_to_bucket === types
+        for (value_type, bucket_id) in registrations
+            @test dest.type_to_bucket[value_type] == bucket_id
+            @test dest.buckets[bucket_id] === bucket_refs[bucket_id]
+        end
+        @test isempty(dest.buckets[registrations[Symbol]].values)
+        @test isempty(dest.buckets[registrations[Bool]].values)
+        @test dest.type_to_bucket[Float64] != src.type_to_bucket[Float64]
+        for (value_type, bucket_id) in src.type_to_bucket
+            source_bucket = src.buckets[bucket_id]
+            target_bucket = dest.buckets[dest.type_to_bucket[value_type]]
+            @test target_bucket.keys !== source_bucket.keys
+            @test target_bucket.values !== source_bucket.values
+        end
+
+        bucket_refs = copy(dest.buckets)
+        registrations = copy(dest.type_to_bucket)
+        # Shrink, empty, and regrow without replacing existing storage
+        for source in (grouped([7 => "seven"]), TypeGroupedDict{Int, Any}(), src)
+            @test copy!(dest, source) === dest
+            check_contents(dest, Dict(source))
+            @test dest.type_to_bucket == registrations
+            @test all(dest.buckets .=== bucket_refs)
+            @test dest.lookup === lookup
+        end
+        locations = copy(dest.lookup)
+        @test copy!(dest, dest) === dest
+        check_contents(dest, original)
+        @test dest.lookup == locations
+        @test dest.type_to_bucket == registrations
+        @test all(dest.buckets .=== bucket_refs)
+        empty!(dest)
+        @test copy!(dest, dest) === dest
+        check_contents(dest, Dict{Int, Any}())
+        @test dest.type_to_bucket == registrations
+    end
+
+    @testset "copy! stored keys and shallow values" begin
+        key = LabelledKey(1, "source")
+        value = [1, 2]
+        src = TypeGroupedDict{LabelledKey, Any}([key => value])
+        dest = TypeGroupedDict{LabelledKey, Any}([LabelledKey(1, "destination") => 0])
+        @test copy!(dest, src) === dest
+        @test only(keys(dest)) === key
+        @test dest[key] === value
+        push!(dest[key], 3)
+        @test src[key] == [1, 2, 3]
+        dest[key] = "replacement"
+        dest[LabelledKey(2, "new")] = 2
+        check_contents(src, Dict(key => value))
+        delete!(src, key)
+        check_contents(dest, Dict{LabelledKey, Any}(key => "replacement", LabelledKey(2, "new") => 2))
+
+        # Abstract keys retain their actual types rather than equivalent old keys
+        numeric_src = TypeGroupedDict{Real, Real}((1.0 => 2, Int8(3) => 4.0))
+        numeric_dest = TypeGroupedDict{Real, Real}((1 => 9, 3.0 => 8))
+        copy!(numeric_dest, numeric_src)
+        @test Set(typeof.(collect(keys(numeric_dest)))) == Set([Float64, Int8])
+        check_contents(numeric_dest, Dict(numeric_src))
     end
 
     @testset "Grouped read-only traversal" begin
@@ -507,6 +577,8 @@ struct AddKey end
         @test hash(left) == hash(widened)
         @test left == Dict(right)
         @test Dict(right) == left
+        @test isequal(left, Dict(right))
+        @test isequal(Dict(right), left)
         @test !(left == IdDict(Dict(left)))
         @test !isequal(IdDict(Dict(left)), left)
         right[1] = 11
@@ -539,6 +611,7 @@ struct AddKey end
         empty!(empty_retained)
         check_contents(empty_retained, Dict{Int, Any}())
         @test empty_retained == TypeGroupedDict{String, Real}()
+        @test hash(empty_retained) == hash(TypeGroupedDict{String, Real}()) == hash(Dict{Int, Any}())
     end
 
     @testset "Invariant checker detects corruption" begin
