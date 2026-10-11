@@ -101,8 +101,8 @@ function _draw_victory_star!(drawlist, centre::ImVec2, radius::Float32, earned::
     CImGui.PathStroke(
         drawlist,
         CImGui.GetColorU32(outline_colour),
-        CImGui.ImDrawFlags_Closed,
         earned ? 2.5f0 : 2.0f0,
+        CImGui.ImDrawFlags_Closed,
     )
     return nothing
 end
