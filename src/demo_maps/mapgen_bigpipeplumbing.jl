@@ -18,7 +18,6 @@ function mapgen_bigpipeplumbing()
     blueprint = ShipBlueprint()
 
     # Create multiple gas tanks
-    # Using deepcopy for identical tanks to avoid shared state
     tank_template = ThevininTankCompBehav(
         GasTankBehavFrag, 3;
         fluid = HexFluids.COLD_GAS,
@@ -28,11 +27,11 @@ function mapgen_bigpipeplumbing()
         series_conductance = 5.0
     )
 
-    # Place four separate tank instances
-    blueprint.components[TileCoord(2, -1)] = PlacedComponent(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
-    blueprint.components[TileCoord(3, -1)] = PlacedComponent(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
-    blueprint.components[TileCoord(3, -2)] = PlacedComponent(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
-    blueprint.components[TileCoord(4, -2)] = PlacedComponent(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
+    # Place four tanks sharing the immutable template
+    blueprint.components[TileCoord(2, -1)] = PlacedComponent(tank_template, HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(3, -1)] = PlacedComponent(tank_template, HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(3, -2)] = PlacedComponent(tank_template, HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(4, -2)] = PlacedComponent(tank_template, HexFrame.Q_NEG, :_blueprint)
 
     # Place a tile-based big pipe component on Q axis
     blueprint.pipe_behaviors[PipeCoord(VertexCoord(TileCoord(0, -1), HexFrame.Q_POS), VertexCoord(TileCoord(0, -1), HexFrame.Q_NEG))] = BigPipeBehav(10.0)
@@ -41,7 +40,7 @@ function mapgen_bigpipeplumbing()
     nozzle = BasicNozzleCompBehav(
         connected_node = HexFrame.NODE_Q_POS,
         throat_area = Float64(0.3f0),
-        sprite = Symbol("AllNozzles_SmallNozzle")
+        sprite_variant = SMALL_NOZZLE_SPRITE
     )
     blueprint.components[TileCoord(2, -3)] = PlacedComponent(nozzle, HexFrame.R_POS, :_blueprint)
 

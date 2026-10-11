@@ -6,6 +6,7 @@ Formatter: Runic
 ENV["JULIA_GLFW_PLATFORM"] = "null"
 
 using Test
+using Accessors
 using HexFrame
 using HexElements
 using HexFluids
@@ -15,6 +16,7 @@ using HexComponentsAPI
 using HexFlowBasicComponents
 using HexFlowNozzleComponents
 using HexFlowSwitchComponents
+using HexFlowRendering, RenderEngine, StaticArrays
 
 const TEST_TILE = TileCoord(3, -2)
 const TEST_ROTATION = HexFrame.Q_POS
@@ -45,7 +47,7 @@ function make_basic_nozzle(; limit_temperature_k::Float64 = 3000.0)
     return BasicNozzleCompBehav(
         connected_node = HexFrame.NODE_Q_POS,
         throat_area = 0.2,
-        sprite = :TestSprite,
+        sprite_variant = TINY_NOZZLE_SPRITE,
         limit_temperature_k = limit_temperature_k
     )
 end
@@ -108,7 +110,7 @@ end
     @test tunables[2].type_desc == "Temperature Limit"
 
     mna_state, derivedmapstate = make_nozzle_state(nozzle)
-    update_flowbehav!(nozzle; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = mna_state, derivedmapstate = derivedmapstate)
+    nozzle = update_flowbehav(nozzle; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = mna_state, derivedmapstate = derivedmapstate)
 
     @test is_damaged(nozzle)
     @test produce_rel_elements(nozzle)[1].active == false
@@ -122,7 +124,7 @@ end
     @test length(actions) == 1
     @test actions[1].id === :repair_component
 
-    result = do_action!(nozzle, :repair_component)
+    nozzle, result = do_action(nozzle, :repair_component)
     @test isvalidrequest(result)
     @test !is_damaged(nozzle)
 end
@@ -134,13 +136,13 @@ end
     @test !is_inactive(nozzle)
     @test produce_rel_elements(nozzle)[1].active == true
 
-    # deactivate! disables the nozzle element.
-    deactivate!(nozzle)
+    # deactivate disables the nozzle element.
+    nozzle = deactivate(nozzle)
     @test is_inactive(nozzle)
     @test produce_rel_elements(nozzle)[1].active == false
 
-    # reactivate! restores the element.
-    reactivate!(nozzle)
+    # reactivate restores the element.
+    nozzle = reactivate(nozzle)
     @test !is_inactive(nozzle)
     @test produce_rel_elements(nozzle)[1].active == true
 end
@@ -154,13 +156,13 @@ end
     mna_fwd = MNA_State()
     set_node_voltage!(mna_fwd, tile, nozzle.connected_node, 10.0; rotation = rotation)
     derivedmapstate = DerivedMapState()
-    update_flowbehav!(nozzle; tile = tile, rotation = rotation, mna_state = mna_fwd, derivedmapstate = derivedmapstate)
+    nozzle = update_flowbehav(nozzle; tile = tile, rotation = rotation, mna_state = mna_fwd, derivedmapstate = derivedmapstate)
     @test !is_inactive(nozzle)
 
     # Negative pressure beyond tolerance: nozzle deactivates.
     mna_rev = MNA_State()
     set_node_voltage!(mna_rev, tile, nozzle.connected_node, -1.0; rotation = rotation)
-    update_flowbehav!(nozzle; tile = tile, rotation = rotation, mna_state = mna_rev, derivedmapstate = derivedmapstate)
+    nozzle = update_flowbehav(nozzle; tile = tile, rotation = rotation, mna_state = mna_rev, derivedmapstate = derivedmapstate)
     @test is_inactive(nozzle)
 end
 
@@ -173,68 +175,39 @@ end
     @test isnothing(get_reactivation_probe(nozzle; tile = tile, rotation = rotation))
 
     # Deactivated (not damaged) nozzle returns a one-element probe.
-    deactivate!(nozzle)
+    nozzle = deactivate(nozzle)
     probe = get_reactivation_probe(nozzle; tile = tile, rotation = rotation)
     @test probe isa ReactivationProbe
     @test length(probe.rel_elements) == 1
     @test probe.rel_elements[1].active == true
 
     # Damaged nozzle returns no probe even when deactivated.
-    damage!(nozzle)
+    nozzle = damage(nozzle)
     @test isnothing(get_reactivation_probe(nozzle; tile = tile, rotation = rotation))
 end
 
-@testset "Nozzle classify_reactivation_probe and commit_reactivation_probe!" begin
+@testset "Nozzle classify_reactivation_probe and commit_reactivation_probe" begin
     tile = TEST_TILE
     rotation = TEST_ROTATION
 
-    # Build absolute probe element and inject a positive current via a mock derived state.
-    function make_probe_state(nozzle::NozzleBehavFrag; pressure::Float64)
-        probe_rel_elem = RelativeElement(
-            RelativeElementConnections(nozzle.connected_node, HexFrame.GROUND),
-            nozzle.throat_area^2,
-            HexElements.CONST_RESISTOR;
-            active = true
-        )
-        probe_abs_elem = map_element(probe_rel_elem, tile, 1, rotation)
-        input_node = map_element(nozzle.connected_node, tile, rotation)
-        mna_state = MNA_State()
-        mna_state.node_voltages[input_node] = pressure
-        derivedmapstate = DerivedMapState(
-            filteredelements = [probe_abs_elem],
-            filterednodes = list_nodes([probe_abs_elem])
-        )
-        return mna_state, derivedmapstate
+    active = NozzleBehavFrag(HexFrame.NODE_Q_POS, 0.2)
+    inactive = deactivate(active)
+    for (pressure, expected) in ((5.0, PROBE_USEFUL), (-5.0, PROBE_HARMFUL), (0.0, PROBE_NEUTRAL))
+        @testset "Probe pressure $pressure" begin
+            # The speculative solve includes the active element while the live nozzle remains inactive
+            mna, derived = make_nozzle_state(active; pressure = pressure)
+            @test classify_reactivation_probe(inactive; tile = tile, rotation = rotation, derivedmapstate = derived, mna_state = mna) === expected
+            @test is_inactive(inactive)
+            if expected === PROBE_USEFUL
+                committed = commit_reactivation_probe(inactive; tile = tile, rotation = rotation, derivedmapstate = derived, mna_state = mna)
+                @test !is_inactive(committed)
+            end
+        end
     end
 
-    # Positive probe current → useful, then commit reactivates.
-    nozzle_accept = NozzleBehavFrag(HexFrame.NODE_Q_POS, 0.2)
-    deactivate!(nozzle_accept)
-    mna_pos, dm_pos = make_probe_state(nozzle_accept; pressure = 5.0)
-    @test classify_reactivation_probe(nozzle_accept; tile = tile, rotation = rotation, derivedmapstate = dm_pos, mna_state = mna_pos) === PROBE_USEFUL
-    @test is_inactive(nozzle_accept)
-    commit_reactivation_probe!(nozzle_accept; tile = tile, rotation = rotation, derivedmapstate = dm_pos, mna_state = mna_pos)
-    @test !is_inactive(nozzle_accept)
-
-    # Negative probe current → harmful; state unchanged.
-    nozzle_reject = NozzleBehavFrag(HexFrame.NODE_Q_POS, 0.2)
-    deactivate!(nozzle_reject)
-    mna_neg, dm_neg = make_probe_state(nozzle_reject; pressure = -5.0)
-    @test classify_reactivation_probe(nozzle_reject; tile = tile, rotation = rotation, derivedmapstate = dm_neg, mna_state = mna_neg) === PROBE_HARMFUL
-    @test is_inactive(nozzle_reject)
-
-    # Zero (neutral) probe current → neutral.
-    nozzle_neutral = NozzleBehavFrag(HexFrame.NODE_Q_POS, 0.2)
-    deactivate!(nozzle_neutral)
-    mna_zero, dm_zero = make_probe_state(nozzle_neutral; pressure = 0.0)
-    @test classify_reactivation_probe(nozzle_neutral; tile = tile, rotation = rotation, derivedmapstate = dm_zero, mna_state = mna_zero) === PROBE_NEUTRAL
-    @test is_inactive(nozzle_neutral)
-
     # Pruned element (not in filteredelements) → neutral.
-    nozzle_pruned = NozzleBehavFrag(HexFrame.NODE_Q_POS, 0.2)
-    deactivate!(nozzle_pruned)
-    @test classify_reactivation_probe(nozzle_pruned; tile = tile, rotation = rotation, derivedmapstate = DerivedMapState(), mna_state = MNA_State()) === PROBE_NEUTRAL
-    @test is_inactive(nozzle_pruned)
+    @test classify_reactivation_probe(inactive; tile = tile, rotation = rotation, derivedmapstate = DerivedMapState(), mna_state = MNA_State()) === PROBE_NEUTRAL
+    @test is_inactive(inactive)
 end
 
 @testset "Nozzle thrust temperature scaling" begin
@@ -266,7 +239,7 @@ end
 @testset "Component temperature API delegation" begin
     basic = make_basic_nozzle()
     basic_mna_state, basic_derivedmapstate = make_nozzle_state(basic.nozzle; temperature_k = 975.0)
-    update_flowbehav!(basic; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = basic_mna_state, derivedmapstate = basic_derivedmapstate)
+    basic = update_flowbehav(basic; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = basic_mna_state, derivedmapstate = basic_derivedmapstate)
 
     @test get_component_temperature(basic) === get_component_temperature(basic.nozzle)
 
@@ -275,7 +248,7 @@ end
 
     switched = make_switched_nozzle()
     switched_mna_state, switched_derivedmapstate = make_nozzle_state(switched.nozzle; temperature_k = 925.0)
-    update_flowbehav!(switched; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = switched_mna_state, derivedmapstate = switched_derivedmapstate)
+    switched = update_flowbehav(switched; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = switched_mna_state, derivedmapstate = switched_derivedmapstate)
 
     @test get_component_temperature(switched) === get_component_temperature(switched.nozzle)
     @test get_component_temperature(DecompChamberCompBehav()) === nothing
@@ -306,8 +279,8 @@ end
     @test tuned.switch.switch.min_conductance ≈ 0.1
 
     # Clicking an auto-deactivated switched nozzle always toggles the switch.
-    deactivate!(comp.nozzle)
-    on_click!(comp)
+    comp = @set comp.nozzle = deactivate(comp.nozzle)
+    comp = on_click(comp)
     @test comp.switch.switch.state.target_conductance ≈ comp.switch.switch.max_conductance
     @test is_inactive(comp.nozzle)  # deactivation state unchanged by click
 
@@ -322,7 +295,7 @@ end
     action_ids = Set(action.id for action in get_actions(basic))
     @test :unstall ∉ action_ids
     # No click action expected either.
-    on_click!(basic)  # should be a no-op, not error
+    basic = on_click(basic)  # should be a no-op, not error
 end
 
 @testset "Decomposition chamber tunables" begin
@@ -348,7 +321,7 @@ end
     @test comp.fuel_conductance == 0.4
     @test comp.oxid_conductance == 1.0
     @test comp.r_optimal == 2.5
-    @test comp.state.output_temperature_state == HexFlowNozzleComponents.BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K
+    @test comp.state.output_temperature_k == HexFlowNozzleComponents.BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K
     @test !is_inactive(comp.state.auto_deactivation)
 end
 
@@ -431,10 +404,10 @@ end
     derivedmapstate.nodeactualfluids[output_node] = HexFluids.BIPROP_EXHAUST
 
     # Update flow behaviour and check temperature curve peak
-    update_flowbehav!(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
+    comp = update_flowbehav(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
 
     # At 2.5:1 flow ratio, the temperature should be at peak (2300K)
-    @test comp.state.output_temperature_state ≈ 2300.0 atol = 1.0e-6
+    @test comp.state.output_temperature_k ≈ 2300.0 atol = 1.0e-6
 end
 
 @testset "Bipropellant combustion chamber backflow deactivation" begin
@@ -449,18 +422,18 @@ end
     mna_state.vsource_currents[ElementID(tile, 1)] = -0.05  # Negative fuel current
     mna_state.vsource_currents[ElementID(tile, 2)] = 0.0
 
-    update_flowbehav!(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
+    comp = update_flowbehav(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
     @test is_inactive(comp.state.auto_deactivation)
-    @test comp.state.output_temperature_state == HexFlowNozzleComponents.BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K
+    @test comp.state.output_temperature_k == HexFlowNozzleComponents.BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K
 
     # Reset and test oxidiser backflow
     comp = BipropChamberCompBehav()
     mna_state.vsource_currents[ElementID(tile, 1)] = 0.0
     mna_state.vsource_currents[ElementID(tile, 2)] = -0.05  # Negative oxid current
 
-    update_flowbehav!(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
+    comp = update_flowbehav(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
     @test is_inactive(comp.state.auto_deactivation)
-    @test comp.state.output_temperature_state == HexFlowNozzleComponents.BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K
+    @test comp.state.output_temperature_k == HexFlowNozzleComponents.BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K
 end
 
 @testset "Bipropellant combustion chamber non-combustion floor" begin
@@ -473,20 +446,20 @@ end
     fuel_only_mna_state = MNA_State()
     fuel_only_mna_state.vsource_currents[ElementID(tile, 1)] = 10.0
     fuel_only_mna_state.vsource_currents[ElementID(tile, 2)] = 0.0
-    update_flowbehav!(fuel_only; rotation = rotation, tile = tile, mna_state = fuel_only_mna_state, derivedmapstate = derivedmapstate)
-    @test fuel_only.state.output_temperature_state == expected_temperature
+    fuel_only = update_flowbehav(fuel_only; rotation = rotation, tile = tile, mna_state = fuel_only_mna_state, derivedmapstate = derivedmapstate)
+    @test fuel_only.state.output_temperature_k == expected_temperature
 
     oxid_only = BipropChamberCompBehav()
     oxid_only_mna_state = MNA_State()
     oxid_only_mna_state.vsource_currents[ElementID(tile, 1)] = 0.0
     oxid_only_mna_state.vsource_currents[ElementID(tile, 2)] = 10.0
-    update_flowbehav!(oxid_only; rotation = rotation, tile = tile, mna_state = oxid_only_mna_state, derivedmapstate = derivedmapstate)
-    @test oxid_only.state.output_temperature_state == expected_temperature
+    oxid_only = update_flowbehav(oxid_only; rotation = rotation, tile = tile, mna_state = oxid_only_mna_state, derivedmapstate = derivedmapstate)
+    @test oxid_only.state.output_temperature_k == expected_temperature
 
     zero_flow = BipropChamberCompBehav()
     zero_flow_mna_state = MNA_State()
-    update_flowbehav!(zero_flow; rotation = rotation, tile = tile, mna_state = zero_flow_mna_state, derivedmapstate = derivedmapstate)
-    @test zero_flow.state.output_temperature_state == expected_temperature
+    zero_flow = update_flowbehav(zero_flow; rotation = rotation, tile = tile, mna_state = zero_flow_mna_state, derivedmapstate = derivedmapstate)
+    @test zero_flow.state.output_temperature_k == expected_temperature
 end
 
 @testset "Bipropellant combustion chamber temperature curve" begin
@@ -502,24 +475,24 @@ end
     mna_state.vsource_currents[ElementID(tile, 1)] = 10.0
     mna_state.vsource_currents[ElementID(tile, 2)] = 25.0  # 2.5x flow
 
-    update_flowbehav!(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
-    temp_at_optimal = comp.state.output_temperature_state
+    comp = update_flowbehav(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
+    temp_at_optimal = comp.state.output_temperature_k
 
     # Lean mixture (1.25:1)
     comp = BipropChamberCompBehav()
     mna_state.vsource_currents[ElementID(tile, 1)] = 20.0
     mna_state.vsource_currents[ElementID(tile, 2)] = 25.0  # Only 1.25x flow
 
-    update_flowbehav!(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
-    temp_lean = comp.state.output_temperature_state
+    comp = update_flowbehav(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
+    temp_lean = comp.state.output_temperature_k
 
     # Rich mixture (5.0:1)
     comp = BipropChamberCompBehav()
     mna_state.vsource_currents[ElementID(tile, 1)] = 10.0
     mna_state.vsource_currents[ElementID(tile, 2)] = 50.0  # 5x flow
 
-    update_flowbehav!(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
-    temp_rich = comp.state.output_temperature_state
+    comp = update_flowbehav(comp; rotation = rotation, tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
+    temp_rich = comp.state.output_temperature_k
 
     # Peak should be at optimal, with falloff on either side
     @test temp_at_optimal > temp_lean
@@ -545,12 +518,212 @@ end
     mna_state_rich.vsource_currents[ElementID(tile, 1)] = 10.0
     mna_state_rich.vsource_currents[ElementID(tile, 2)] = 50.0
 
-    update_flowbehav!(comp_lean; rotation = rotation, tile = tile, mna_state = mna_state_lean, derivedmapstate = derivedmapstate)
-    update_flowbehav!(comp_rich; rotation = rotation, tile = tile, mna_state = mna_state_rich, derivedmapstate = derivedmapstate)
+    comp_lean = update_flowbehav(comp_lean; rotation = rotation, tile = tile, mna_state = mna_state_lean, derivedmapstate = derivedmapstate)
+    comp_rich = update_flowbehav(comp_rich; rotation = rotation, tile = tile, mna_state = mna_state_rich, derivedmapstate = derivedmapstate)
 
     # Both off-design conditions should produce lower temperature than optimal
-    @test comp_lean.state.output_temperature_state < 2200.0
-    @test comp_rich.state.output_temperature_state < 2200.0
+    @test comp_lean.state.output_temperature_k < 2200.0
+    @test comp_rich.state.output_temperature_k < 2200.0
     # Rich should be lower than lean (exponential falloff is steeper on high-ratio side)
-    @test comp_rich.state.output_temperature_state < comp_lean.state.output_temperature_state
+    @test comp_rich.state.output_temperature_k < comp_lean.state.output_temperature_k
+end
+
+@testset "Nozzle fragment replacements preserve originals" begin
+    original = NozzleBehavFrag(HexFrame.NODE_Q_POS, 0.2)
+    inactive = deactivate(original)
+    damaged = damage(inactive)
+    repaired = undamage(damaged)
+    active = reactivate(repaired)
+
+    @test !is_inactive(original)
+    @test !is_damaged(original)
+    @test is_inactive(inactive)
+    @test !is_damaged(inactive)
+    @test is_inactive(damaged)
+    @test is_damaged(damaged)
+    @test is_inactive(repaired)
+    @test !is_damaged(repaired)
+    @test !is_inactive(active)
+    @test !is_damaged(active)
+    for replacement in (inactive, damaged, repaired, active)
+        @test replacement.connected_node == original.connected_node
+        @test replacement.throat_area == original.throat_area
+        @test get_component_temperature(replacement) == get_component_temperature(original)
+        @test get_tunables(replacement) == get_tunables(original)
+    end
+end
+
+@testset "Nozzle component replacement composition and actions" begin
+    for original in (make_basic_nozzle(; limit_temperature_k = 301.0), make_switched_nozzle(; limit_temperature_k = 301.0))
+        temperature_before = get_component_temperature(original)
+        mna, derived = make_nozzle_state(original.nozzle)
+        updated = update_flowbehav(original; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = mna, derivedmapstate = derived)
+        @test is_damaged(updated.nozzle)
+        @test get_component_temperature(updated) > temperature_before
+        @test !is_damaged(original.nozzle)
+        @test get_component_temperature(original) == temperature_before
+        @test updated.nozzle.connected_node == original.nozzle.connected_node
+        @test get_tunables(updated) == get_tunables(original)
+
+        repaired, result = do_action(updated, :repair_component)
+        @test isvalidrequest(result)
+        @test unwrap(result) == "Component repaired"
+        @test !is_damaged(repaired.nozzle)
+        @test is_damaged(updated.nozzle)
+        @test get_component_temperature(repaired) == get_component_temperature(updated)
+
+        unchanged, rejected = do_action(original, :repair_component)
+        @test !isvalidrequest(rejected)
+        @test reason(rejected) == "Component is not currently damaged"
+        @test !is_damaged(unchanged.nozzle)
+        @test get_component_temperature(unchanged) == temperature_before
+        @test get_tunables(unchanged) == get_tunables(original)
+        @test_throws ArgumentError do_action(original, :unsupported_action)
+    end
+
+    original = make_switched_nozzle()
+    clicked = on_click(original)
+    @test original.switch.switch.state.target_conductance == original.switch.switch.min_conductance
+    @test clicked.switch.switch.state.target_conductance == clicked.switch.switch.max_conductance
+    @test get_component_temperature(clicked) == get_component_temperature(original)
+    @test !is_inactive(clicked.nozzle)
+
+    opened, result = do_action(original, :open_valve)
+    @test isvalidrequest(result)
+    @test opened.switch.switch.state.target_conductance == opened.switch.switch.max_conductance
+    @test original.switch.switch.state.target_conductance == original.switch.switch.min_conductance
+    closed, result = do_action(opened, :close_valve)
+    @test isvalidrequest(result)
+    @test closed.switch.switch.state.target_conductance == closed.switch.switch.min_conductance
+    @test opened.switch.switch.state.target_conductance == opened.switch.switch.max_conductance
+
+    mna, derived = make_nozzle_state(clicked.nozzle)
+    stepped = update_flowbehav(clicked; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = mna, derivedmapstate = derived)
+    @test stepped.switch.switch.state.current_conductance > clicked.switch.switch.state.current_conductance
+    @test get_component_temperature(stepped) > get_component_temperature(clicked)
+    @test original.switch.switch.state.current_conductance == original.switch.switch.min_conductance
+end
+
+@testset "Nozzle placed replacements preserve placement" begin
+    original = PlacedComponent(make_switched_nozzle(; limit_temperature_k = 301.0), HexFrame.R_POS, true, :test_ship)
+    mna, derived = make_nozzle_state(original.component.nozzle; rotation = original.rotation)
+    clicked = on_click(original)
+    updated = update_flowbehav(clicked; tile = TEST_TILE, mna_state = mna, derivedmapstate = derived)
+    repaired, accepted = do_action(updated, :repair_component)
+    unchanged, rejected = do_action(original, :repair_component)
+    inactive = @set original.component.nozzle = deactivate(original.component.nozzle)
+    reactivated = commit_reactivation_probe(inactive)
+
+    @test isvalidrequest(accepted)
+    @test !isvalidrequest(rejected)
+    @test is_damaged(updated.component.nozzle)
+    @test !is_damaged(repaired.component.nozzle)
+    @test !is_damaged(original.component.nozzle)
+    @test !is_damaged(unchanged.component.nozzle)
+    @test is_inactive(inactive.component.nozzle)
+    @test !is_inactive(reactivated.component.nozzle)
+    @test original.component.switch.switch.state.target_conductance == original.component.switch.switch.min_conductance
+    @test clicked.component.switch.switch.state.target_conductance == clicked.component.switch.switch.max_conductance
+    for replacement in (clicked, updated, repaired, unchanged, inactive, reactivated)
+        @test replacement.rotation == original.rotation
+        @test replacement.mirrored == original.mirrored
+        @test replacement.ship == original.ship
+        @test get_tunables(replacement) == get_tunables(original)
+    end
+end
+
+@testset "Biprop chamber state replacements and probes" begin
+    original = BipropChamberCompBehav()
+    @test !ismutabletype(typeof(original.state))
+    mna = MNA_State()
+    derived = DerivedMapState()
+    mna.vsource_currents[ElementID(TEST_TILE, 1)] = 10.0
+    mna.vsource_currents[ElementID(TEST_TILE, 2)] = 25.0
+    hot = update_flowbehav(original; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = mna, derivedmapstate = derived)
+    @test hot.state.output_temperature_k ≈ 2300.0
+    @test original.state.output_temperature_k == HexFlowNozzleComponents.BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K
+    @test !is_inactive(original.state.auto_deactivation)
+
+    mna.vsource_currents[ElementID(TEST_TILE, 1)] = -0.05
+    inactive = update_flowbehav(hot; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = mna, derivedmapstate = derived)
+    @test is_inactive(inactive.state.auto_deactivation)
+    @test inactive.state.output_temperature_k == HexFlowNozzleComponents.BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K
+    @test !is_inactive(hot.state.auto_deactivation)
+    @test hot.state.output_temperature_k ≈ 2300.0
+    @test all(!elem.active for elem in produce_rel_elements(inactive))
+    probe = get_reactivation_probe(inactive)
+    @test probe isa ReactivationProbe
+    @test all(elem.active for elem in probe.rel_elements)
+    @test classify_reactivation_probe(inactive; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = mna, derivedmapstate = derived) == PROBE_HARMFUL
+    @test classify_reactivation_probe(inactive; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = MNA_State(), derivedmapstate = derived) == PROBE_NEUTRAL
+    mna.vsource_currents[ElementID(TEST_TILE, 1)] = 10.0
+    @test classify_reactivation_probe(inactive; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = mna, derivedmapstate = derived) == PROBE_USEFUL
+    @test is_inactive(inactive.state.auto_deactivation)
+
+    placed = PlacedComponent(inactive, HexFrame.S_POS, true, :test_ship)
+    reactivated = commit_reactivation_probe(placed)
+    @test is_inactive(placed.component.state.auto_deactivation)
+    @test !is_inactive(reactivated.component.state.auto_deactivation)
+    @test reactivated.component.state.output_temperature_k == inactive.state.output_temperature_k
+    @test get_tunables(reactivated) == get_tunables(original)
+    @test reactivated.rotation == placed.rotation
+    @test reactivated.mirrored == placed.mirrored
+    @test reactivated.ship == placed.ship
+
+    # An inactive hot state is cooled without changing the input value
+    inactive_hot = @set hot.state = deactivate(hot.state)
+    cooled = update_flowbehav(inactive_hot; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = mna, derivedmapstate = derived)
+    @test cooled.state.output_temperature_k == HexFlowNozzleComponents.BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K
+    @test inactive_hot.state.output_temperature_k ≈ 2300.0
+    @test is_inactive(cooled.state.auto_deactivation)
+end
+
+@testset "Chamber tunables preserve deactivation and temperature state" begin
+    biprop = BipropChamberCompBehav(fuel_conductance = 0.4, oxid_conductance = 1.0, r_optimal = 2.5)
+    biprop = @set biprop.state.output_temperature_k = 2300.0
+    biprop = @set biprop.state.auto_deactivation = deactivate(biprop.state.auto_deactivation)
+    tuned_biprop = set_tunables(biprop, (0.3, 0.9, 2.7))
+    @test tuned_biprop.state == biprop.state
+    @test tuned_biprop.fuel_conductance == 0.3
+    @test biprop.fuel_conductance == 0.4
+end
+
+@testset "Basic nozzle sprite variants are independent of throat area" begin
+    glmap = GLObjectMap()
+    glmap.textures[:TestAtlas] = RenderEngine.GLtexData(GLtexID(0), UInt32(0), UInt(256), UInt(256))
+    variants = (
+        (TINY_NOZZLE_SPRITE, :AllNozzles_TinyNozzle),
+        (SMALL_NOZZLE_SPRITE, :AllNozzles_SmallNozzle),
+        (MEDIUM_NOZZLE_SPRITE, :AllNozzles_MediumNozzle),
+    )
+    for (index, (variant, sprite)) in enumerate(variants)
+        glmap.sprites[sprite] = GLspriteData(:TestAtlas, SVector(0.1f0, 0.1f0), SVector(0.1f0 * index, 0.0f0), SVector(256.0f0, 256.0f0), SVector(256.0f0, 256.0f0), SVector(0.0f0, 0.0f0))
+        for area in (0.13, 2.7)
+            component = BasicNozzleCompBehav(connected_node = HexFrame.NODE_Q_POS, throat_area = area, sprite_variant = variant)
+            @test typeof(component) === BasicNozzleCompBehav
+            @test isbitstype(typeof(component))
+            @test HexFlowNozzleComponents.nozzle_sprite(component) === sprite
+            @test component.nozzle.throat_area == area
+            tuned = set_tunables(component, (0.73, 3000.0, 2.0, 5.0))
+            @test tuned.sprite_variant === variant
+            @test tuned.nozzle.throat_area == 0.73
+            @test HexFlowNozzleComponents.nozzle_sprite(tuned) === sprite
+
+            queue = SpriteRenderCommand[]
+            offset = AxialCoord(0.2, 0.3)
+            expected = render_basic_tile(glmap, sprite, TEST_ROTATION, TEST_TILE; pos_offset = offset, scale = 0.5, transparency = 0.7, draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC + 200))
+            render_base_elem!(queue, component; glmap = glmap, position = TEST_TILE, rotation = TEST_ROTATION, pos_offset = offset, scale = 0.5, transparency = 0.7, render_height_offset = 200)
+            @test only(queue) == expected
+            empty!(queue)
+            render_map_elem!(queue, component; glmap = glmap, position = TEST_TILE, rotation = TEST_ROTATION, pos_offset = offset, scale = 0.5, transparency = 0.7, render_height_offset = 200)
+            @test first(queue) == expected
+        end
+    end
+end
+
+@testset "Basic nozzle rejects unhandled sprite variants" begin
+    # Simulate a future enum member without extending the production enum.
+    unknown = reinterpret(NozzleSpriteVariant, typemax(UInt8))
+    component = BasicNozzleCompBehav(make_basic_nozzle().nozzle, unknown)
+    @test_throws ArgumentError HexFlowNozzleComponents.nozzle_sprite(component)
 end

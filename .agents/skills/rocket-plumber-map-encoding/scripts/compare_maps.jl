@@ -214,57 +214,6 @@ function compare_declarations(original::GameMap, generated::GameMap; tolerance::
     return missing, remaining, length(original_declarations), length(generated_declarations)
 end
 
-function is_traversable(value)
-    return !(value === nothing || value isa Number || value isa Symbol || value isa AbstractString || value isa Char || value isa Type || value isa Function)
-end
-
-function walk_aliases!(value, placement, local_ids::Set{UInt}, locations::Dict{UInt, Vector{String}})
-    is_traversable(value) || return nothing
-    if ismutabletype(typeof(value))
-        identity = objectid(value)
-        identity in local_ids && return nothing
-        push!(local_ids, identity)
-        references = get!(locations, identity, String[])
-        placement in references || push!(references, placement)
-    end
-    if value isa AbstractArray
-        for item in value
-            walk_aliases!(item, placement, local_ids, locations)
-        end
-    elseif value isa AbstractDict
-        for (key, item) in value
-            walk_aliases!(key, placement, local_ids, locations)
-            walk_aliases!(item, placement, local_ids, locations)
-        end
-    elseif value isa AbstractSet
-        for item in value
-            walk_aliases!(item, placement, local_ids, locations)
-        end
-    elseif isstructtype(typeof(value))
-        for field in fieldnames(typeof(value))
-            walk_aliases!(getfield(value, field), placement, local_ids, locations)
-        end
-    end
-    return nothing
-end
-
-function alias_warnings(gamemap::GameMap)
-    locations = Dict{UInt, Vector{String}}()
-    for (coord, placed) in gamemap.components
-        walk_aliases!(placed.component, "component :$(placed.ship) $coord", Set{UInt}(), locations)
-    end
-    for (coord, placed) in gamemap.pipe_behaviors
-        walk_aliases!(placed.pipe, "pipe :$(placed.ship) $coord", Set{UInt}(), locations)
-    end
-    warnings = String[]
-    for (identity, references) in locations
-        length(references) > 1 || continue
-        push!(warnings, "mutable object $identity shared by " * join(references, ", "))
-    end
-    sort!(warnings)
-    return warnings
-end
-
 function compare_maps(original::GameMap, generated::GameMap; tolerance::Float64 = COMPARISON_TOLERANCE)
     original_ships = Set(keys(original.ships))
     generated_ships = Set(keys(generated.ships))
@@ -273,8 +222,6 @@ function compare_maps(original::GameMap, generated::GameMap; tolerance::Float64 
     generated_surfaces = surface_entries(generated)
     missing_elements, extra_elements, original_element_count, generated_element_count = compare_elements(original, generated; tolerance)
     missing_declarations, extra_declarations, original_declaration_count, generated_declaration_count = compare_declarations(original, generated; tolerance)
-    source_aliases = alias_warnings(original)
-    generated_aliases = alias_warnings(generated)
     return Dict{String, Any}(
         "ship_names_match" => original_ships == generated_ships,
         "original_ships" => sort!(collect(original_ships); by = string),
@@ -301,8 +248,6 @@ function compare_maps(original::GameMap, generated::GameMap; tolerance::Float64 
         "generated_declaration_count" => generated_declaration_count,
         "missing_declarations" => missing_declarations,
         "extra_declarations" => extra_declarations,
-        "generated_aliases" => generated_aliases,
-        "source_aliases" => source_aliases,
     )
 end
 
@@ -320,8 +265,6 @@ function print_comparison_results(results::Dict{String, Any})
     println("  Surfaces: $(results["original_surface_count"]) original, $(results["generated_surface_count"]) generated — $(results["surface_match"] ? "PASS" : "FAIL")")
     println("  Circuit elements: $(results["original_element_count"]) original, $(results["generated_element_count"]) generated — $(results["elements_match"] ? "PASS" : "FAIL")")
     println("  Fluid declarations: $(results["original_declaration_count"]) original, $(results["generated_declaration_count"]) generated — $(results["declarations_match"] ? "PASS" : "FAIL")")
-    println("  Generated mutable sharing: $(isempty(results["generated_aliases"]) ? "PASS" : "FAIL")")
-    isempty(results["source_aliases"]) || println("  Warning: source map shares mutable state across placements ($(length(results["source_aliases"])) object(s))")
 
     for (title, values) in (("Placement mismatches", results["placement_mismatches"]), ("Missing surfaces", results["missing_surfaces"]), ("Extra surfaces", results["extra_surfaces"]))
         isempty(values) && continue
@@ -342,8 +285,6 @@ function print_comparison_results(results::Dict{String, Any})
     for (title, values) in (
             ("Missing fluid declarations", results["missing_declarations"]),
             ("Extra fluid declarations", results["extra_declarations"]),
-            ("Generated alias failures", results["generated_aliases"]),
-            ("Source alias warnings", results["source_aliases"]),
         )
         isempty(values) && continue
         println("\n$title:")
@@ -373,8 +314,7 @@ function compare_map_files(original_map_input::String, generator_file::String)
         results["component_count_match"] && results["pipe_count_match"] &&
         isempty(results["placement_mismatches"]) && results["surface_match"] &&
         isempty(results["missing_surfaces"]) && isempty(results["extra_surfaces"]) &&
-        results["elements_match"] && results["declarations_match"] &&
-        isempty(results["generated_aliases"])
+        results["elements_match"] && results["declarations_match"]
     print_comparison_results(results)
     return results
 end

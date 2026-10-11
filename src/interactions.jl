@@ -160,7 +160,7 @@ function new_tile_placement_state(component_index::Int = 1)::PlacementTileState
     checkbounds(component_list, component_index)
     return PlacementTileState(
         component_index = component_index,
-        pendingcomponent = deepcopy(component_list[component_index]),
+        pendingcomponent = component_list[component_index],
     )
 end
 
@@ -174,7 +174,7 @@ end
 function cycle_tile_component!(state::PlacementTileState, step::Int)
     index = mod1(state.component_index + step, length(component_list))
     state.component_index = index
-    state.pendingcomponent = deepcopy(component_list[index])
+    state.pendingcomponent = component_list[index]
     return nothing
 end
 

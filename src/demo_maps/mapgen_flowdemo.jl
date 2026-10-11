@@ -23,20 +23,20 @@ function mapgen_flowdemo()
     )
     for tile in (
             TileCoord(7, -4), TileCoord(7, -3), TileCoord(8, -5), TileCoord(8, -4),
-            TileCoord(8, -3), TileCoord(9, -5), TileCoord(9, -4)
+            TileCoord(8, -3), TileCoord(9, -5), TileCoord(9, -4),
         )
         blueprint.components[tile] =
-            PlacedComponent(deepcopy(tank_template), HexFrame.R_NEG, :_blueprint)
+            PlacedComponent(tank_template, HexFrame.R_NEG, :_blueprint)
     end
 
     nozzle_template = BasicNozzleCompBehav(
         connected_node = HexFrame.NODE_Q_POS,
         throat_area = 1.0,
-        sprite = :AllNozzles_MediumNozzle,
+        sprite_variant = MEDIUM_NOZZLE_SPRITE,
     )
     for tile in (TileCoord(-4, -2), TileCoord(-4, 2), TileCoord(-4, 6))
         blueprint.components[tile] =
-            PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_POS, :_blueprint)
+            PlacedComponent(nozzle_template, HexFrame.Q_POS, :_blueprint)
     end
 
     # Pipe network; each endpoint is copied from the saved map.

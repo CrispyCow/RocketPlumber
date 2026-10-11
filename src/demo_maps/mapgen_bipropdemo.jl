@@ -18,11 +18,11 @@ function mapgen_bipropdemo()
     nozzle_template = BasicNozzleCompBehav(
         connected_node = HexFrame.NODE_Q_POS,
         throat_area = 0.2,
-        sprite = :AllNozzles_TinyNozzle,
+        sprite_variant = TINY_NOZZLE_SPRITE,
     )
-    blueprint.components[TileCoord(-4, 1)] = PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(-4, 2)] = PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(-4, 3)] = PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(-4, 1)] = PlacedComponent(nozzle_template, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(-4, 2)] = PlacedComponent(nozzle_template, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(-4, 3)] = PlacedComponent(nozzle_template, HexFrame.Q_POS, :_blueprint)
 
     blueprint.components[TileCoord(-2, 1)] = PlacedComponent(
         BipropChamberCompBehav(fuel_conductance = 0.4, oxid_conductance = 1.0),
@@ -34,7 +34,7 @@ function mapgen_bipropdemo()
     # Adjustable valve on the fuel side; on/off valve on the oxidiser side.
     blueprint.components[TileCoord(-1, -1)] = PlacedComponent(
         StandardValveCompBehav(
-            SteppedSwitchBehavFrag, TinyValve;
+            SteppedSwitchBehavFrag, TINY_VALVE;
             max_conductance = 1.0,
             min_conductance = 0.0,
             growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
@@ -46,7 +46,7 @@ function mapgen_bipropdemo()
     # Oxidiser valve has a reduced max conductance of 0.5.
     blueprint.components[TileCoord(-1, 2)] = PlacedComponent(
         StandardValveCompBehav(
-            BoolSwitchBehavFrag, TinyValve;
+            BoolSwitchBehavFrag, TINY_VALVE;
             max_conductance = 0.5,
             min_conductance = 0.0,
             growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
@@ -70,9 +70,9 @@ function mapgen_bipropdemo()
         HexFluids.COLD_GAS,
         NoRotationBehavFrag(),
     )
-    blueprint.components[TileCoord(0, -2)] = PlacedComponent(deepcopy(fuel_tank_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(0, -1)] = PlacedComponent(deepcopy(fuel_tank_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(1, -2)] = PlacedComponent(deepcopy(fuel_tank_template), HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(0, -2)] = PlacedComponent(fuel_tank_template, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(0, -1)] = PlacedComponent(fuel_tank_template, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(1, -2)] = PlacedComponent(fuel_tank_template, HexFrame.Q_POS, :_blueprint)
 
     # === Oxidiser pressure-fed tanks ===
     oxid_tank_template = PressureFedTankCompBehav(
@@ -89,18 +89,18 @@ function mapgen_bipropdemo()
         HexFluids.COLD_GAS,
         NoRotationBehavFrag(),
     )
-    blueprint.components[TileCoord(0, 1)] = PlacedComponent(deepcopy(oxid_tank_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(0, 2)] = PlacedComponent(deepcopy(oxid_tank_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(0, 3)] = PlacedComponent(deepcopy(oxid_tank_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(1, 0)] = PlacedComponent(deepcopy(oxid_tank_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(1, 1)] = PlacedComponent(deepcopy(oxid_tank_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(1, 2)] = PlacedComponent(deepcopy(oxid_tank_template), HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(0, 1)] = PlacedComponent(oxid_tank_template, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(0, 2)] = PlacedComponent(oxid_tank_template, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(0, 3)] = PlacedComponent(oxid_tank_template, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(1, 0)] = PlacedComponent(oxid_tank_template, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(1, 1)] = PlacedComponent(oxid_tank_template, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(1, 2)] = PlacedComponent(oxid_tank_template, HexFrame.Q_POS, :_blueprint)
 
     # === Cold-gas pressurant control and tanks ===
     # On/off valve separating the gas tank ring from the pressure-fed tanks.
     blueprint.components[TileCoord(3, -2)] = PlacedComponent(
         StandardValveCompBehav(
-            BoolSwitchBehavFrag, TinyValve;
+            BoolSwitchBehavFrag, TINY_VALVE;
             max_conductance = 1.0,
             min_conductance = 0.0,
             growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
@@ -117,13 +117,13 @@ function mapgen_bipropdemo()
         initial_charge = 40.0 / (HexFluids.lookup_fluid_density(HexFluids.COLD_GAS)::Float64),
         series_conductance = 5.0,
     )
-    blueprint.components[TileCoord(3, -4)] = PlacedComponent(deepcopy(gas_tank_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(3, -3)] = PlacedComponent(deepcopy(gas_tank_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(3, -1)] = PlacedComponent(deepcopy(gas_tank_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(3, 0)] = PlacedComponent(deepcopy(gas_tank_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(4, -4)] = PlacedComponent(deepcopy(gas_tank_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(4, -3)] = PlacedComponent(deepcopy(gas_tank_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(4, -1)] = PlacedComponent(deepcopy(gas_tank_template), HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(3, -4)] = PlacedComponent(gas_tank_template, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(3, -3)] = PlacedComponent(gas_tank_template, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(3, -1)] = PlacedComponent(gas_tank_template, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(3, 0)] = PlacedComponent(gas_tank_template, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(4, -4)] = PlacedComponent(gas_tank_template, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(4, -3)] = PlacedComponent(gas_tank_template, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(4, -1)] = PlacedComponent(gas_tank_template, HexFrame.Q_POS, :_blueprint)
 
     # === Pipes ===
 

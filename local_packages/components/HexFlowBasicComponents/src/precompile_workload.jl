@@ -8,7 +8,7 @@ using StaticArrays: SVector
 
 @setup_workload begin
     # The persistence fixture is the repository's concrete BasicCompBehav use
-    basic = BasicCompBehav(elems = BasicElemBehavFrag(), sprite = PlainSpriteBehavFrag(:PrecompileBasic))
+    basic = BasicCompBehav(elems = BasicElemBehavFrag(), sprite = :PrecompileBasic)
     placed = PlacedComponent(basic, HexFrame.Q_POS, :PrecompileShip)
     tile = TileCoord(2, -1)
 
@@ -25,11 +25,16 @@ using StaticArrays: SVector
     queue = HexFlowRendering.SpriteRenderCommand[]
 
     @compile_workload begin
+        placed = update_flowbehav(placed)
+        placed = on_click(placed)
+        placed = commit_reactivation_probe(placed)
+        overheat = update_overheat_state(OverheatLimitBehavFrag(400.0, 1.0, 0.0); fluid_temperature_k = 900.0, mass_flow_rate = 1.0, dt = 1.0)
+        overheat, result = do_action(overheat, :repair_component)
         produce_rel_elements(basic)
         produce_rel_elements(placed)
         produce_abs_elements(placed, tile)
         get_tunables(placed)
-        set_tunables(placed, ())
+        placed = set_tunables(placed, ())
         get_component_mass(placed)
         map_rotation(placed, HexFrame.S_POS)
         can_be_moved(placed)

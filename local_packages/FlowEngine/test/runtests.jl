@@ -27,7 +27,7 @@ using HexElements: CONST_RESISTOR, CONST_VOLTAGE, CONST_CURRENT, C_DEP_CURRENT, 
 struct TestPipe <: PipeBehavior end
 struct MultiElementPipe <: PipeBehavior end
 struct InactiveElementPipe <: PipeBehavior end
-import HexComponentsAPI: get_conductance, get_pipe_tunables, set_pipe_tunables, render_pipe_base!, get_pipe_click_radius, produce_abs_elements, update_flowbehav!, produce_rel_fluid_declarations
+import HexComponentsAPI: get_conductance, get_pipe_tunables, set_pipe_tunables, render_pipe_base!, get_pipe_click_radius, produce_abs_elements, update_flowbehav, produce_rel_fluid_declarations
 
 get_conductance(::TestPipe) = 1.0
 get_pipe_tunables(::TestPipe) = ()
@@ -49,11 +49,14 @@ set_pipe_tunables(::InactiveElementPipe, tunables) = InactiveElementPipe()
 get_pipe_click_radius(::InactiveElementPipe) = 0.1
 render_pipe_base!(queue::AbstractVector, behav::InactiveElementPipe; kwargs...) = nothing
 
-struct DummyCompUpdate <: ComponentBehavior end
-function update_flowbehav!(::DummyCompUpdate; tile::TileCoord, mna_state::MNA_State, derivedmapstate::DerivedMapState, kwargs...)
+struct DummyCompUpdate <: ComponentBehavior
+    updates::Int
+end
+DummyCompUpdate() = DummyCompUpdate(0)
+function update_flowbehav(comp::DummyCompUpdate; tile::TileCoord, mna_state::MNA_State, derivedmapstate::DerivedMapState, kwargs...)
     derived_value = get(derivedmapstate.nodeactualfluids, NodeCoord(tile, HexFrame.NODE_INTERNAL_1), nothing)
     mna_state.node_voltages[NodeCoord(tile, HexFrame.NODE_INTERNAL_1)] = derived_value === HexFluids.COLD_GAS ? 3.21 : -1.0
-    return nothing
+    return DummyCompUpdate(comp.updates + 1)
 end
 
 struct DummyFluidComp <: ComponentBehavior end
@@ -224,7 +227,7 @@ end
 end
 
 @testset "update_components!" begin
-    # Per-GameMap: calls update_flowbehav! on all ships
+    # Per-GameMap: calls update_flowbehav on all ships
     gm = GameMap()
     set_component!(gm, TileCoord(0, 0), PlacedComponent(DummyCompUpdate(), HexFrame.Q_POS, :primary))
     sec = ShipState()
@@ -237,7 +240,11 @@ end
             NodeCoord(TileCoord(5, 5), HexFrame.NODE_INTERNAL_1) => HexFluids.COLD_GAS,
         )
     )
+    original = get_component(gm, TileCoord(0, 0))
     update_components!(gm, ms, derived)
+    @test original.component.updates == 0
+    @test get_component(gm, TileCoord(0, 0)).component.updates == 1
+    @test get_component(gm, TileCoord(5, 5)).component.updates == 1
     @test NodeCoord(TileCoord(0, 0), HexFrame.NODE_INTERNAL_1) in keys(ms.node_voltages)
     @test NodeCoord(TileCoord(5, 5), HexFrame.NODE_INTERNAL_1) in keys(ms.node_voltages)
     @test ms.node_voltages[NodeCoord(TileCoord(0, 0), HexFrame.NODE_INTERNAL_1)] ≈ 3.21

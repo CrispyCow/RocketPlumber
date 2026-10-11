@@ -17,12 +17,12 @@ flow_map = HexFlowPersistence.FlowMap
 component_coord = frame.TileCoord(2, -1)
 pipe_coord = first(frame.get_side_pipes(component_coord))
 
-length(gamemap.components) == 1 || error("saved component was not reconstructed")
+length(gamemap.components) == 2 || error("saved component was not reconstructed")
 placed_component = gamemap.components[component_coord]
 component = placed_component.component
 nameof(typeof(component)) == :BasicCompBehav || error("saved component has type $(typeof(component))")
 nameof(parentmodule(typeof(component))) == :HexFlowBasicComponents || error("saved component came from the wrong module")
-component.sprite.sprite == :test_persistence || error("saved component state changed")
+HexFlowPersistence.HexFlowBasicComponents.basic_sprite(component) == :test_persistence || error("saved component state changed")
 isempty(component.elems.elements) || error("saved component elements changed")
 placed_component.rotation == frame.R_NEG || error("saved component rotation changed")
 placed_component.mirrored || error("saved component mirroring changed")
@@ -36,3 +36,10 @@ nameof(parentmodule(typeof(pipe))) == :HexFlowBasicPipes || error("saved pipe ca
 pipe.conductance == 7.5 || error("saved pipe conductance changed")
 placed_pipe.ship == :primary || error("saved pipe ship changed")
 flow_map.get_simulated_ticks(gamemap) == 1 || error("saved map statistics changed")
+
+chamber = gamemap.components[frame.TileCoord(3, -1)].component
+nameof(typeof(chamber)) == :BipropChamberCompBehav || error("saved chamber type changed")
+chamber.state.output_temperature_k == 750.0 || error("saved chamber temperature changed")
+chamber.state.auto_deactivation.inactive || error("saved chamber deactivation changed")
+!ismutabletype(typeof(chamber.state)) || error("chamber state reconstructed as mutable")
+!ismutabletype(typeof(chamber.state.auto_deactivation)) || error("deactivation state reconstructed as mutable")

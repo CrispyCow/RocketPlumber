@@ -42,19 +42,19 @@ const BasicBipropChamber = BipropChamberCompBehav(
 const TinyNozzle = BasicNozzleCompBehav(
     connected_node = HexFrame.NODE_Q_POS,
     throat_area = 0.2,
-    sprite = Symbol("AllNozzles_TinyNozzle")
+    sprite_variant = TINY_NOZZLE_SPRITE
 )
 
 const SmallNozzle = BasicNozzleCompBehav(
     connected_node = HexFrame.NODE_Q_POS,
     throat_area = 0.5,
-    sprite = Symbol("AllNozzles_SmallNozzle")
+    sprite_variant = SMALL_NOZZLE_SPRITE
 )
 
 const MediumNozzle = BasicNozzleCompBehav(
     connected_node = HexFrame.NODE_Q_POS,
     throat_area = 1.5,
-    sprite = Symbol("AllNozzles_MediumNozzle")
+    sprite_variant = MEDIUM_NOZZLE_SPRITE
 )
 
 const SwitchedTinyNozzle = SwitchedNozzleCompBehav(
@@ -74,7 +74,7 @@ const TurboPump = TurboPumpCompBehav(
 )
 
 const ElecTurboPump = ElectricPumpCompBehav(
-    ElectricTurboPump;
+    ELECTRIC_TURBO_PUMP;
     pump_voltage = 50.0,
     max_energy = 100000.0,
     initial_energy = 100000.0,
@@ -84,7 +84,7 @@ const ElecTurboPump = ElectricPumpCompBehav(
 )
 
 const ElecTransferPump = ElectricPumpCompBehav(
-    ElectricTransferPump;
+    ELECTRIC_TRANSFER_PUMP;
     pump_voltage = 5.0,
     max_energy = 150000.0,
     initial_energy = 150000.0,
@@ -149,7 +149,7 @@ const PressureFedLiquidTank = PressureFedTankCompBehav(
 #= ---------- Valves ---------- =#
 
 const LargeAdjValve = StandardValveCompBehav(
-    SteppedSwitchBehavFrag, LargeValve;
+    SteppedSwitchBehavFrag, LARGE_VALVE;
     max_conductance = 4.0,
     min_conductance = 0.0,
     growth_factor = calculate_growth_factor(4.0, 0.0, 2.0 / BASE_UPS),
@@ -157,7 +157,7 @@ const LargeAdjValve = StandardValveCompBehav(
 )
 
 const TinyAdjValve = StandardValveCompBehav(
-    SteppedSwitchBehavFrag, TinyValve;
+    SteppedSwitchBehavFrag, TINY_VALVE;
     max_conductance = 1.0,
     min_conductance = 0.0,
     growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
@@ -165,14 +165,14 @@ const TinyAdjValve = StandardValveCompBehav(
 )
 
 const LargeOnOffValve = StandardValveCompBehav(
-    BoolSwitchBehavFrag, LargeValve;
+    BoolSwitchBehavFrag, LARGE_VALVE;
     max_conductance = 4.0,
     min_conductance = 0.0,
     growth_factor = calculate_growth_factor(4.0, 0.0, 2.0 / BASE_UPS)
 )
 
 const TinyOnOffValve = StandardValveCompBehav(
-    BoolSwitchBehavFrag, TinyValve;
+    BoolSwitchBehavFrag, TINY_VALVE;
     max_conductance = 1.0,
     min_conductance = 0.0,
     growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS)
@@ -221,7 +221,7 @@ function roll_component(::Val{:TinyNozzle_comp}, point, seed)
     return BasicNozzleCompBehav(
         connected_node = HexFrame.NODE_Q_POS,
         throat_area = pick_from_range(0.15, 0.25, point, seed),
-        sprite = :AllNozzles_TinyNozzle
+        sprite_variant = TINY_NOZZLE_SPRITE
     )
 end
 
@@ -229,7 +229,7 @@ function roll_component(::Val{:SmallNozzle_comp}, point, seed)
     return BasicNozzleCompBehav(
         connected_node = HexFrame.NODE_Q_POS,
         throat_area = pick_from_range(0.4, 0.6, point, seed),
-        sprite = :AllNozzles_SmallNozzle
+        sprite_variant = SMALL_NOZZLE_SPRITE
     )
 end
 
@@ -237,7 +237,7 @@ function roll_component(::Val{:MediumNozzle_comp}, point, seed)
     return BasicNozzleCompBehav(
         connected_node = HexFrame.NODE_Q_POS,
         throat_area = pick_from_range(1.3, 1.7, point, seed),
-        sprite = :AllNozzles_MediumNozzle
+        sprite_variant = MEDIUM_NOZZLE_SPRITE
     )
 end
 
@@ -269,7 +269,7 @@ function roll_component(::Val{:ElecTurboPump_comp}, point, seed)
     energy = pick_from_range(200000.0, 500000.0, point, seed)
     max_c = pick_from_range(0.5, 2.0, point, seed)
     return ElectricPumpCompBehav(
-        ElectricTurboPump;
+        ELECTRIC_TURBO_PUMP;
         pump_voltage = pick_from_range(20.0, 50.0, point, seed),
         max_energy = energy,
         initial_energy = energy,
@@ -283,7 +283,7 @@ function roll_component(::Val{:ElecTransferPump_comp}, point, seed)
     energy = pick_from_range(150000.0, 200000.0, point, seed)
     max_c = pick_from_range(0.3, 1.0, point, seed)
     return ElectricPumpCompBehav(
-        ElectricTransferPump;
+        ELECTRIC_TRANSFER_PUMP;
         pump_voltage = 5.0,
         max_energy = energy,
         initial_energy = energy,
@@ -417,7 +417,7 @@ end
 
 function roll_component(::Val{:LargeAdjValve_comp}, point, seed)
     return StandardValveCompBehav(
-        SteppedSwitchBehavFrag, LargeValve;
+        SteppedSwitchBehavFrag, LARGE_VALVE;
         max_conductance = 2.0,
         growth_factor = calculate_growth_factor(
             2.0, 0.0,
@@ -429,7 +429,7 @@ end
 
 function roll_component(::Val{:TinyAdjValve_comp}, point, seed)
     return StandardValveCompBehav(
-        SteppedSwitchBehavFrag, TinyValve;
+        SteppedSwitchBehavFrag, TINY_VALVE;
         max_conductance = 2.0,
         growth_factor = calculate_growth_factor(
             2.0, 0.0,
@@ -441,7 +441,7 @@ end
 
 function roll_component(::Val{:LargeOnOffValve_comp}, point, seed)
     return StandardValveCompBehav(
-        BoolSwitchBehavFrag, LargeValve;
+        BoolSwitchBehavFrag, LARGE_VALVE;
         max_conductance = 2.0,
         growth_factor = calculate_growth_factor(
             2.0, 0.0,
@@ -452,7 +452,7 @@ end
 
 function roll_component(::Val{:TinyOnOffValve_comp}, point, seed)
     return StandardValveCompBehav(
-        BoolSwitchBehavFrag, TinyValve;
+        BoolSwitchBehavFrag, TINY_VALVE;
         max_conductance = 2.0,
         growth_factor = calculate_growth_factor(
             2.0, 0.0,

@@ -302,7 +302,8 @@ Update behaviours of all components on the GameMap.
 """
 function update_components!(gamemap::GameMap, mna_state::MNA_State, derivedmapstate::DerivedMapState)
     for (coord, comp) in gamemap.components
-        update_flowbehav!(comp; tile = coord, mna_state, derivedmapstate)
+        updated = update_flowbehav(comp; tile = coord, mna_state, derivedmapstate)
+        set_component!(gamemap, coord, updated)
     end
     return nothing
 end

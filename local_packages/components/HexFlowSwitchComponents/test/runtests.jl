@@ -121,15 +121,15 @@ end
         @test sw3.state.current_conductance ≈ 0.1
     end
 
-    @testset "update_flowbehav! — exponential convergence" begin
+    @testset "update_flowbehav — exponential convergence" begin
         # Increasing from zero → jumps to the global practical minimum
         sw = make_switch(target_conductance = 2.0)
-        update_flowbehav!(sw)
+        sw = update_flowbehav(sw)
         @test sw.state.current_conductance ≈ HexFlowSwitchComponents.MIN_PRACTICAL_CONDUCTANCE
 
         # Continue increasing → exponential growth, doesn't overshoot
         prev = sw.state.current_conductance
-        update_flowbehav!(sw)
+        sw = update_flowbehav(sw)
         @test sw.state.current_conductance > prev
         @test sw.state.current_conductance ≤ 2.0
 
@@ -138,7 +138,7 @@ end
             target_conductance = 0.0,
             current_conductance = 1.5
         )
-        update_flowbehav!(sw_dec)
+        sw_dec = update_flowbehav(sw_dec)
         @test sw_dec.state.current_conductance < 1.5
 
         # Decreasing snaps to min when close
@@ -146,7 +146,7 @@ end
             target_conductance = 0.0,
             current_conductance = HexFlowSwitchComponents.MIN_PRACTICAL_CONDUCTANCE * 0.05
         )
-        update_flowbehav!(sw_near_min)
+        sw_near_min = update_flowbehav(sw_near_min)
         @test sw_near_min.state.current_conductance ≈ 0.0
 
         # Already at target → no change
@@ -154,7 +154,7 @@ end
             target_conductance = 1.0,
             current_conductance = 1.0
         )
-        update_flowbehav!(sw_at_target)
+        sw_at_target = update_flowbehav(sw_at_target)
         @test sw_at_target.state.current_conductance ≈ 1.0
 
         # max ≈ min → snaps to target immediately
@@ -164,7 +164,7 @@ end
             target_conductance = 1.0,
             current_conductance = 1.0
         )
-        update_flowbehav!(sw_narrow)
+        sw_narrow = update_flowbehav(sw_narrow)
         @test sw_narrow.state.current_conductance ≈ 1.0
     end
 end
@@ -232,25 +232,25 @@ end
         sw2 = set_tunables(bsw, (3.0, 0.0, 1.5))
         @test sw2.switch.max_conductance ≈ 3.0
 
-        # update_flowbehav! delegates
+        # update_flowbehav delegates
         bsw_update = make_bool_switch(target_conductance = 2.0)
-        update_flowbehav!(bsw_update)
+        bsw_update = update_flowbehav(bsw_update)
         @test bsw_update.switch.state.current_conductance > 0.0
     end
 
-    @testset "on_click! toggle" begin
+    @testset "on_click toggle" begin
         # At min → opens
         bsw = make_bool_switch()
-        on_click!(bsw)
+        bsw = on_click(bsw)
         @test bsw.switch.state.target_conductance ≈ 2.0
 
         # At max → closes
         bsw2 = make_bool_switch(target_conductance = 2.0, current_conductance = 2.0)
-        on_click!(bsw2)
+        bsw2 = on_click(bsw2)
         @test bsw2.switch.state.target_conductance ≈ 0.0
     end
 
-    @testset "get_actions / do_action!" begin
+    @testset "get_actions / do_action" begin
         bsw = make_bool_switch()
         actions = get_actions(bsw)
         @test length(actions) == 2
@@ -265,13 +265,13 @@ end
         @test open_action.enabled == true
         @test close_action.enabled == false
 
-        # do_action! open
-        result = do_action!(bsw, :open_valve)
+        # do_action open
+        bsw, result = do_action(bsw, :open_valve)
         @test isvalidrequest(result)
         @test bsw.switch.state.target_conductance ≈ 2.0
 
-        # do_action! close
-        result = do_action!(bsw, :close_valve)
+        # do_action close
+        bsw, result = do_action(bsw, :close_valve)
         @test isvalidrequest(result)
         @test bsw.switch.state.target_conductance ≈ 0.0
     end
@@ -288,7 +288,7 @@ end
         @test elements[1].type === CONST_RESISTOR
         @test elements[1].value ≈ 1.0
 
-        update_flowbehav!(ssw)
+        ssw = update_flowbehav(ssw)
         @test ssw.switch.state.current_conductance ≈ 1.0
     end
 
@@ -304,34 +304,34 @@ end
         @test new_ssw.percentage_step_size ≈ 0.1
     end
 
-    @testset "step_conductance_up! / step_conductance_down!" begin
+    @testset "step_conductance_up / step_conductance_down" begin
         ssw = make_stepped_switch(percentage_step_size = 0.25)
 
         # Step up from zero
-        step_conductance_up!(ssw)
+        ssw = step_conductance_up(ssw)
         target_1 = ssw.switch.state.target_conductance
         @test target_1 > 0.0
 
         # Step up again
-        step_conductance_up!(ssw)
+        ssw = step_conductance_up(ssw)
         target_2 = ssw.switch.state.target_conductance
         @test target_2 > target_1
 
         # Step down
-        step_conductance_down!(ssw)
+        ssw = step_conductance_down(ssw)
         target_3 = ssw.switch.state.target_conductance
         @test target_3 < target_2
         @test target_3 ≈ target_1  # Should return to prev step
 
         # Clamped at max
         for _ in 1:20
-            step_conductance_up!(ssw)
+            ssw = step_conductance_up(ssw)
         end
         @test ssw.switch.state.target_conductance ≈ 2.0
 
         # Clamped at min
         for _ in 1:20
-            step_conductance_down!(ssw)
+            ssw = step_conductance_down(ssw)
         end
         @test ssw.switch.state.target_conductance ≈ 0.0
     end
@@ -348,13 +348,13 @@ end
         @test open_action.enabled == false
     end
 
-    @testset "do_action!" begin
+    @testset "do_action" begin
         ssw = make_stepped_switch()
-        result = do_action!(ssw, :step_valve_open)
+        ssw, result = do_action(ssw, :step_valve_open)
         @test isvalidrequest(result)
         @test ssw.switch.state.target_conductance > 0.0
 
-        result = do_action!(ssw, :step_valve_close)
+        ssw, result = do_action(ssw, :step_valve_close)
         @test isvalidrequest(result)
         @test ssw.switch.state.target_conductance ≈ 0.0
     end
@@ -364,9 +364,9 @@ end
 # StandardValveCompBehav -- Adjustable Large
 # ===============================================================
 
-@testset "StandardValveCompBehav{SteppedSwitchBehavFrag, LargeValve}" begin
+@testset "StandardValveCompBehav{SteppedSwitchBehavFrag} with LARGE_VALVE" begin
     valve = StandardValveCompBehav(
-        SteppedSwitchBehavFrag, LargeValve;
+        SteppedSwitchBehavFrag, LARGE_VALVE;
         max_conductance = 2.0,
         growth_factor = calculate_growth_factor(2.0, 0.0, 1.25 / 60.0),
         percentage_step_size = 0.05
@@ -392,36 +392,36 @@ end
         @test isempty(produce_rel_fluid_declarations(valve))
     end
 
-    @testset "on_click! dispatches step up/down" begin
-        on_click!(valve; relative_clicksite = (y = 0.5,))
+    @testset "on_click dispatches step up/down" begin
+        valve = on_click(valve; relative_clicksite = (y = 0.5,))
         @test valve.switch.switch.state.target_conductance > 0.0
 
         target_after_up = valve.switch.switch.state.target_conductance
 
-        on_click!(valve; relative_clicksite = (y = -0.5,))
+        valve = on_click(valve; relative_clicksite = (y = -0.5,))
         @test valve.switch.switch.state.target_conductance < target_after_up
 
         # Click at zero -- no-op
         prev = valve.switch.switch.state.target_conductance
-        on_click!(valve; relative_clicksite = (y = 0.0,))
+        valve = on_click(valve; relative_clicksite = (y = 0.0,))
         @test valve.switch.switch.state.target_conductance ≈ prev
     end
 
-    @testset "update_flowbehav! convergence" begin
+    @testset "update_flowbehav convergence" begin
         v = StandardValveCompBehav(
-            SteppedSwitchBehavFrag, LargeValve;
+            SteppedSwitchBehavFrag, LARGE_VALVE;
             max_conductance = 2.0,
             growth_factor = calculate_growth_factor(2.0, 0.0, 1.25 / 60.0),
             percentage_step_size = 0.05,
             target_conductance = 2.0
         )
         for _ in 1:500
-            update_flowbehav!(v)
+            v = update_flowbehav(v)
         end
         @test v.switch.switch.state.current_conductance ≈ 2.0
     end
 
-    @testset "get_actions / do_action!" begin
+    @testset "get_actions / do_action" begin
         actions = get_actions(valve)
         @test length(actions) == 2
         action_ids = Set(a.id for a in actions)
@@ -442,9 +442,9 @@ end
 # StandardValveCompBehav -- Adjustable Tiny
 # ===============================================================
 
-@testset "StandardValveCompBehav{SteppedSwitchBehavFrag, TinyValve}" begin
+@testset "StandardValveCompBehav{SteppedSwitchBehavFrag} with TINY_VALVE" begin
     valve = StandardValveCompBehav(
-        SteppedSwitchBehavFrag, TinyValve;
+        SteppedSwitchBehavFrag, TINY_VALVE;
         max_conductance = 2.0,
         growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / 60.0),
         percentage_step_size = 0.05
@@ -481,9 +481,9 @@ end
 # StandardValveCompBehav -- On/Off Large
 # ===============================================================
 
-@testset "StandardValveCompBehav{BoolSwitchBehavFrag, LargeValve}" begin
+@testset "StandardValveCompBehav{BoolSwitchBehavFrag} with LARGE_VALVE" begin
     valve = StandardValveCompBehav(
-        BoolSwitchBehavFrag, LargeValve;
+        BoolSwitchBehavFrag, LARGE_VALVE;
         max_conductance = 2.0,
         growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / 60.0)
     )
@@ -507,24 +507,24 @@ end
         @test isempty(produce_rel_fluid_declarations(valve))
     end
 
-    @testset "on_click! dispatches open/close" begin
+    @testset "on_click dispatches open/close" begin
         # Click above horizontal -- opens
-        on_click!(valve; relative_clicksite = (y = 0.5,))
+        valve = on_click(valve; relative_clicksite = (y = 0.5,))
         @test valve.switch.switch.state.target_conductance ≈ 2.0
 
         # Click below horizontal -- closes
-        on_click!(valve; relative_clicksite = (y = -0.5,))
+        valve = on_click(valve; relative_clicksite = (y = -0.5,))
         @test valve.switch.switch.state.target_conductance ≈ 0.0
 
         # Click at zero -- no-op
-        on_click!(valve; relative_clicksite = (y = 0.5,))  # open first
+        valve = on_click(valve; relative_clicksite = (y = 0.5,))  # open first
         prev = valve.switch.switch.state.target_conductance
-        on_click!(valve; relative_clicksite = (y = 0.0,))
+        valve = on_click(valve; relative_clicksite = (y = 0.0,))
         @test valve.switch.switch.state.target_conductance ≈ prev
     end
 
-    @testset "get_actions / do_action!" begin
-        do_action!(valve, :close_valve)
+    @testset "get_actions / do_action" begin
+        valve, _ = do_action(valve, :close_valve)
         actions = get_actions(valve)
         @test length(actions) == 2
         action_ids = Set(a.id for a in actions)
@@ -545,9 +545,9 @@ end
 # StandardValveCompBehav -- On/Off Tiny
 # ===============================================================
 
-@testset "StandardValveCompBehav{BoolSwitchBehavFrag, TinyValve}" begin
+@testset "StandardValveCompBehav{BoolSwitchBehavFrag} with TINY_VALVE" begin
     valve = StandardValveCompBehav(
-        BoolSwitchBehavFrag, TinyValve;
+        BoolSwitchBehavFrag, TINY_VALVE;
         max_conductance = 2.0,
         growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / 60.0)
     )
@@ -589,7 +589,7 @@ end
     sw = make_switch(growth_factor = gf, target_conductance = 2.0)
     ticks = 0
     while sw.state.current_conductance < 1.99 && ticks < 500
-        update_flowbehav!(sw)
+        sw = update_flowbehav(sw)
         ticks += 1
     end
     @test sw.state.current_conductance ≈ 2.0 atol = 0.02
@@ -597,4 +597,104 @@ end
 
     # Edge: very small change_rate → error
     @test_throws ErrorException calculate_growth_factor(2.0, 0.0, 1.0e-10)
+end
+
+@testset "Switch replacement values and composition" begin
+    original = make_switch(target_conductance = 2.0)
+    advanced = update_flowbehav(original)
+    @test !ismutabletype(typeof(original.state))
+    @test original.state.current_conductance == 0.0
+    @test advanced.state.current_conductance > 0.0
+    @test advanced.state.target_conductance == original.state.target_conductance
+    @test advanced.connection == original.connection
+    @test advanced.max_conductance == original.max_conductance
+    @test advanced.min_conductance == original.min_conductance
+    @test advanced.growth_factor == original.growth_factor
+
+    retargeted = HexFlowSwitchComponents.set_target_conductance(original, 1.0)
+    @test retargeted.state.target_conductance == 1.0
+    @test original.state.target_conductance == 2.0
+    @test retargeted.state.current_conductance == original.state.current_conductance
+    @test_throws ErrorException HexFlowSwitchComponents.set_target_conductance(original, 3.0)
+
+    boolean = make_bool_switch(connection = INTERNAL_CONNECTION)
+    opened = set_target_conductance_to_max(boolean)
+    closed = set_target_conductance_to_min(opened)
+    @test boolean.switch.state.target_conductance == 0.0
+    @test opened.switch.state.target_conductance == 2.0
+    @test closed.switch.state.target_conductance == 0.0
+    @test opened.switch.connection == INTERNAL_CONNECTION
+    clicked = on_click(boolean)
+    updated_boolean = update_flowbehav(clicked)
+    @test clicked.switch.state.current_conductance == 0.0
+    @test updated_boolean.switch.state.current_conductance > 0.0
+    @test boolean.switch.state.target_conductance == 0.0
+    @test_throws ArgumentError do_action(boolean, :unsupported)
+
+    stepped = make_stepped_switch(connection = INTERNAL_CONNECTION, percentage_step_size = 0.25)
+    incremented = step_conductance_up(stepped)
+    decremented = step_conductance_down(incremented)
+    @test get_target_percentage(stepped) == 0.0
+    @test get_target_percentage(incremented) ≈ 0.25
+    @test get_target_percentage(decremented) == 0.0
+    @test incremented.percentage_step_size == stepped.percentage_step_size
+    @test incremented.switch.connection == stepped.switch.connection
+    @test_throws ArgumentError do_action(stepped, :unsupported)
+
+    for switch_type in (BoolSwitchBehavFrag, SteppedSwitchBehavFrag), valve_size in (LARGE_VALVE, TINY_VALVE)
+        valve = StandardValveCompBehav(switch_type, valve_size; max_conductance = 2.0, growth_factor = 1.5)
+        placed = PlacedComponent(valve, HexFrame.R_POS, true, :ValueSemanticsShip)
+        action_id = switch_type === BoolSwitchBehavFrag ? :open_valve : :step_valve_open
+        opened_placed, result = do_action(placed, action_id)
+        @test isvalidrequest(result)
+        @test get_target_percentage(placed.component.switch) == 0.0
+        @test get_target_percentage(opened_placed.component.switch) > 0.0
+
+        advanced_placed = update_flowbehav(opened_placed)
+        @test get_switch_percentage(opened_placed.component.switch) == 0.0
+        @test advanced_placed.component.switch.switch.state.current_conductance > 0.0
+        for replacement in (opened_placed, advanced_placed)
+            @test typeof(replacement.component) === typeof(valve)
+            @test replacement.component.size === valve_size
+            @test replacement.rotation == placed.rotation
+            @test replacement.mirrored == placed.mirrored
+            @test replacement.ship == placed.ship
+        end
+
+        clicked_valve = on_click(valve; relative_clicksite = (y = 0.5,))
+        @test clicked_valve.size === valve_size
+        @test get_target_percentage(clicked_valve.switch) > 0.0
+        @test get_target_percentage(valve.switch) == 0.0
+        @test get_target_percentage(on_click(valve).switch) == 0.0
+        @test_throws ArgumentError do_action(valve, :unsupported)
+
+        tunables = switch_type === BoolSwitchBehavFrag ? (3.0, 0.0, 1.6) : (3.0, 0.0, 1.6, 0.1)
+        tuned = set_tunables(valve, tunables)
+        @test tuned.size === valve_size
+        @test typeof(tuned) === StandardValveCompBehav{switch_type}
+        @test isbitstype(typeof(tuned))
+        expected_travel = valve_size === LARGE_VALVE ? 100.0f0 : 25.0f0
+        @test HexFlowSwitchComponents.valve_travel_px(valve) === expected_travel
+    end
+end
+
+@testset "Valve size values share switch behaviour types" begin
+    for switch_type in (BoolSwitchBehavFrag, SteppedSwitchBehavFrag)
+        tiny = StandardValveCompBehav(switch_type, TINY_VALVE; max_conductance = 2.0, growth_factor = 1.5)
+        large = StandardValveCompBehav(switch_type, LARGE_VALVE; max_conductance = 2.0, growth_factor = 1.5)
+        @test typeof(tiny) === typeof(large) === StandardValveCompBehav{switch_type}
+    end
+    @test StandardValveCompBehav{BoolSwitchBehavFrag} !== StandardValveCompBehav{SteppedSwitchBehavFrag}
+end
+
+@testset "Valve helpers reject unhandled sizes" begin
+    # Simulate a future enum member without extending the production enum.
+    unknown = reinterpret(ValveSize, typemax(UInt8))
+    helpers = (HexFlowSwitchComponents.fluidmask_sprite, HexFlowSwitchComponents.valvebody_sprite, HexFlowSwitchComponents.static_sprite, HexFlowSwitchComponents.valve_travel_px)
+    for switch_type in (BoolSwitchBehavFrag, SteppedSwitchBehavFrag)
+        component = StandardValveCompBehav(switch_type, unknown; max_conductance = 2.0, growth_factor = 1.5)
+        for helper in helpers
+            @test_throws ArgumentError helper(component)
+        end
+    end
 end

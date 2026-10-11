@@ -239,7 +239,7 @@ function audit_sample(
     for placed_component in values(blueprint.components)
         component = placed_component.component
         tank_count += component isa ThevininTankCompBehav
-        transfer_pump_count += component isa ElectricPumpCompBehav{ElectricTransferPump}
+        transfer_pump_count += component isa ElectricPumpCompBehav && component.variant === ELECTRIC_TRANSFER_PUMP
         for (index, fluid) in pairs(AUDIT_FLUIDS)
             wet_masses[index] += get_component_wet_mass(component; fluid)
         end

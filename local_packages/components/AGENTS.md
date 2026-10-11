@@ -2,8 +2,10 @@
 
 This tree contains the neutral component API and the concrete tile/pipe
 behaviour packages. Concrete behaviours use fragment composition: reusable
-parts end in `BehavFrag`, complete tile behaviours in `CompBehav`, and pipe
-behaviours in `PipeBehav`.
+behaviour units end in `BehavFrag`, complete tile behaviours in `CompBehav`,
+and pipe behaviours in `PipeBehav`. `*State` names immutable runtime-evolving
+support data. Semantic methods or trivial API getters do not make a state type
+a behaviour fragment; ordinary configuration/domain types need neither suffix.
 
 ## Package Map
 
@@ -62,6 +64,18 @@ Use Australian English in project-owned prose and headings (`behaviour`,
 `colour`, `standardised`). Preserve established identifiers and external API
 names such as `ComponentBehavior` exactly.
 
+## Component Representation
+
+Shipped component behaviours in `RocketPlumber.component_list` must be isbits
+values. Basic-nozzle sprite choice, valve physical size, and electric-pump
+rendering variant are small enum fields, inspected by the existing named sprite
+helpers. Variant helpers explicitly check every enum member and throw for
+unhandled values. Stepped/boolean switching, gas/liquid storage, and tuple layout remain
+type distinctions. Optional stored-fluid identity uses a concrete fluid value
+and presence flag, exposed through `get_stored_fluid` as a fluid or `nothing`.
+The generic, non-production `BasicCompBehav{N, SPRITE}` stores
+its descriptive sprite symbol in its type, with keyword construction supported.
+
 ## Behaviour Contracts
 
 - Implement every mandatory method for a new concrete behaviour and rely on an
@@ -77,10 +91,25 @@ names such as `ComponentBehavior` exactly.
   render methods so docking animation and layer ordering remain correct.
 - Override dry and wet mass hooks separately for stored-fluid components;
   generic ship mass calculations combine them.
-- `get_actions` describes supported UI actions. `do_action!` returns a request
-  result for expected state rejection and throws for an unsupported action ID.
-- Reactivation classification must be pure. Mutate behaviour state only in
-  `commit_reactivation_probe!` after the calculator accepts a useful probe.
+- All state beneath a `ComponentBehavior` is immutable. `update_flowbehav`,
+  `on_click`, and lower-level state helpers return replacements; parent fragments
+  incorporate child replacements, and map-owning callers store the placed value
+  with `set_component!`. No-op transitions return their input.
+- Pipe behaviours and their nested state are immutable values; `set_pipe_tunables`
+  returns replacements. Shipped pipes are isbits, but this is not an API requirement.
+  `PlacedComponent` and `PlacedPipe` are immutable placement/ownership wrappers;
+  replacements preserve their metadata and are explicitly stored at the mutable
+  `GameMap` boundary. Shared behaviour values need no defensive copies.
+- Tunables expose placement-editor values, also shown read-only in the runtime
+  inspector. They may include configuration and selected runtime/initial state.
+  `set_tunables` returns a replacement reflecting supplied values; placed setters
+  preserve placement metadata.
+- `get_actions` describes supported UI actions. `do_action` returns
+  `(updated_behaviour, result)`. Expected rejection returns the unchanged input
+  and an invalid request; unsupported action IDs throw.
+- Reactivation classification must be pure. `commit_reactivation_probe` returns
+  a replacement only after the calculator accepts a useful probe. The calculator
+  stores that replacement explicitly.
 
 ## Precompile Workloads
 

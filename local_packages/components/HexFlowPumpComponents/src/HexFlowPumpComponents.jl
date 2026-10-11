@@ -12,6 +12,7 @@ Exported concrete `ComponentBehavior` implementations:
 """
 module HexFlowPumpComponents
 
+using Accessors: @set
 using ColorSchemes, StaticArrays
 using FlowEngine, FlowMap, HexElements, HexFluids, HexFrame
 using HexComponentsAPI, HexFlowBasicComponents, HexFlowSwitchComponents
@@ -20,14 +21,15 @@ using HexFlowRendering, RenderEngine
 # `ComponentBehavior` mandatory methods
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # `ComponentBehavior` optional methods
-import HexComponentsAPI: on_click!, update_flowbehav!, render_map_elem!, get_actions, do_action!, produce_rel_fluid_declarations, map_mirroring, get_component_temperature
+import HexComponentsAPI: on_click, update_flowbehav, render_map_elem!, get_actions, do_action, produce_rel_fluid_declarations, map_mirroring, get_component_temperature
 # Reactivation probe interface
-import HexComponentsAPI: get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe!
+import HexComponentsAPI: get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe
 
 # Behaviour Fragment Exports
-export PumpBehavFrag, RotorStateBehavFrag, DelayedDriveBehavFrag
+export PumpBehavFrag
 # Support Type Exports
-export ElectricTurboPump, ElectricTransferPump
+export Rotor, RotorState, DelayedDrive, DelayedDriveState, EnergyStore, EnergyStoreState
+export ElectricPumpVariant, ELECTRIC_TURBO_PUMP, ELECTRIC_TRANSFER_PUMP
 # Concrete Component Behaviour Exports
 export TurboPumpCompBehav, ElectricPumpCompBehav
 
@@ -74,99 +76,104 @@ function set_tunables(p::PumpBehavFrag, tunables::NTuple{1, T})::PumpBehavFrag w
     return PumpBehavFrag(vals[1])
 end
 
-#= ---------- EnergyStoreBehavFrag ----------- =#
+#= ---------- EnergyStore ----------- =#
 
-"Encapsulates an energy storage system with current energy state and maximum capacity."
-struct EnergyStoreBehavFrag
-    stored_energy::FloatStateBehavFrag
+"Immutable runtime energy in a pump's store."
+struct EnergyStoreState
+    stored_energy::Float64
+end
+
+"Energy capacity and its runtime store; the pump supplies component API behaviour."
+struct EnergyStore
+    state::EnergyStoreState
     max_energy::Float64
 end
 
-get_current_energy(frag::EnergyStoreBehavFrag)::Float64 = getstate(frag.stored_energy)
+get_current_energy(store::EnergyStore)::Float64 = store.state.stored_energy
+get_max_energy(store::EnergyStore)::Float64 = store.max_energy
 
-get_max_energy(frag::EnergyStoreBehavFrag)::Float64 = frag.max_energy
-
-"Changes energy by delta, clamped between [0, max_energy]."
-function update_energy!(frag::EnergyStoreBehavFrag, delta_energy::Float64)
-    setstate!(frag.stored_energy, clamp(getstate(frag.stored_energy) + delta_energy, 0.0, get_max_energy(frag)))
-    return nothing
+"Change stored energy by a delta, clamped to the configured capacity."
+function update_energy(store::EnergyStore, delta_energy::Float64)
+    return @set store.state.stored_energy = clamp(get_current_energy(store) + delta_energy, 0.0, get_max_energy(store))
 end
 
-#= ---------- RotorStateBehavFrag ----------- =#
+#= ---------- Rotor ----------- =#
 
-"""Encapsulates rotor RPM state and inertial tuning for pump spin-up and spin-down.
+"Immutable runtime rotor speed; overspeed may exceed the rated RPM."
+struct RotorState
+    rpm::Float64
+end
 
-For a Turbo Pump, `max_rpm` is the rated RPM used to cap pump output. Stored RPM
-may exceed the rated value during an overspeed event."""
-struct RotorStateBehavFrag
-    rpm::FloatStateBehavFrag
+"Rotor configuration and speed used by pump dynamics; the pump supplies component API behaviour."
+struct Rotor
+    state::RotorState
     max_rpm::Float64
     rotor_inertia::Float64
     friction_coefficient::Float64
 
-    function RotorStateBehavFrag(rpm::FloatStateBehavFrag, max_rpm::Float64, rotor_inertia::Float64, friction_coefficient::Float64)
-        # clamp above zero to prevent weird edge cases with negative or zero values
+    function Rotor(state::RotorState, max_rpm::Float64, rotor_inertia::Float64, friction_coefficient::Float64)
         friction_coefficient = max(friction_coefficient, 1.0e-6)
         rotor_inertia = max(rotor_inertia, 1.0e-6)
         max_rpm = max(max_rpm, 1.0e-6)
-        setstate!(rpm, max(getstate(rpm), 0.0))
-
-        return new(rpm, max_rpm, rotor_inertia, friction_coefficient)
+        state = @set state.rpm = max(state.rpm, 0.0)
+        return new(state, max_rpm, rotor_inertia, friction_coefficient)
     end
 end
 
-"Construct a rotor fragment with a clamped initial RPM value."
-function RotorStateBehavFrag(; current_rpm::Real = 0.0, max_rpm::Real, rotor_inertia::Real, friction_coefficient::Real)
+"Construct a rotor with initial RPM clamped to its rating."
+function Rotor(; current_rpm::Real = 0.0, max_rpm::Real, rotor_inertia::Real, friction_coefficient::Real)
     max_rpm_f = Float64(max_rpm)
-    rpm_state = FloatStateBehavFrag(clamp(Float64(current_rpm), 0.0, max_rpm_f))
-    return RotorStateBehavFrag(rpm_state, max_rpm_f, Float64(rotor_inertia), Float64(friction_coefficient))
+    state = RotorState(clamp(Float64(current_rpm), 0.0, max_rpm_f))
+    return Rotor(state, max_rpm_f, Float64(rotor_inertia), Float64(friction_coefficient))
 end
 
-get_current_rpm(frag::RotorStateBehavFrag)::Float64 = getstate(frag.rpm)
+get_current_rpm(rotor::Rotor)::Float64 = rotor.state.rpm
 
-"Gets the current rotor RPM as a clamped 0-1 fraction of rated RPM."
-get_rpm_fraction(frag::RotorStateBehavFrag)::Float64 = clamp(get_current_rpm(frag) / frag.max_rpm, 0.0, 1.0)
+"Return rotor speed as a clamped fraction of rated RPM."
+get_rpm_fraction(rotor::Rotor)::Float64 = clamp(get_current_rpm(rotor) / rotor.max_rpm, 0.0, 1.0)
 
-"Changes RPM by delta, clamped at zero."
-function update_rpm!(frag::RotorStateBehavFrag, delta_rpm::Float64)
-    setstate!(frag.rpm, max(get_current_rpm(frag) + delta_rpm, 0.0))
-    return nothing
+"Change RPM by a delta, clamped at zero."
+function update_rpm(rotor::Rotor, delta_rpm::Float64)
+    return @set rotor.state.rpm = max(get_current_rpm(rotor) + delta_rpm, 0.0)
 end
 
-#= ---------- DelayedDriveBehavFrag ----------- =#
+#= ---------- DelayedDrive ----------- =#
 
-"Stores turbine-drive power and follows a target through a first-order delay."
-struct DelayedDriveBehavFrag
-    power::FloatStateBehavFrag
+"Immutable runtime filtered turbine-drive power."
+struct DelayedDriveState
+    power::Float64
+end
+
+"First-order drive delay configuration and filtered power used by pump dynamics."
+struct DelayedDrive
+    state::DelayedDriveState
     time_constant::Float64
 
-    function DelayedDriveBehavFrag(power::FloatStateBehavFrag, time_constant::Real)
-        setstate!(power, max(getstate(power), 0.0))
-        return new(power, max(Float64(time_constant), 1.0 / BASE_UPS))
+    function DelayedDrive(state::DelayedDriveState, time_constant::Real)
+        state = @set state.power = max(state.power, 0.0)
+        return new(state, max(Float64(time_constant), 1.0 / BASE_UPS))
     end
 end
 
-"Rebuild a delayed-drive fragment around an existing mutable power state."
-DelayedDriveBehavFrag(power::FloatStateBehavFrag; time_constant::Real = 1.0) = DelayedDriveBehavFrag(power, time_constant)
+"Rebuild a delayed drive around existing power state."
+DelayedDrive(state::DelayedDriveState; time_constant::Real = 1.0) = DelayedDrive(state, time_constant)
 
-"Construct a delayed-drive fragment with clamped initial power and time constant."
-function DelayedDriveBehavFrag(; current_power::Real = 0.0, time_constant::Real = 1.0)
-    return DelayedDriveBehavFrag(FloatStateBehavFrag(Float64(current_power)), time_constant)
+"Construct a delayed drive with clamped initial power and time constant."
+function DelayedDrive(; current_power::Real = 0.0, time_constant::Real = 1.0)
+    return DelayedDrive(DelayedDriveState(Float64(current_power)), time_constant)
 end
 
-"Gets the currently filtered turbine-drive power."
-get_delayed_drive_power(frag::DelayedDriveBehavFrag)::Float64 = getstate(frag.power)
+get_delayed_drive_power(drive::DelayedDrive)::Float64 = drive.state.power
 
-"Gets the diagnostic energy represented by the delayed-drive state."
-get_stored_drive_energy(frag::DelayedDriveBehavFrag)::Float64 = frag.time_constant * get_delayed_drive_power(frag)
+"Return the diagnostic energy represented by the delayed drive."
+get_stored_drive_energy(drive::DelayedDrive)::Float64 = drive.time_constant * get_delayed_drive_power(drive)
 
-"Moves delayed drive exponentially towards a non-negative raw-power target."
-function update_delayed_drive!(frag::DelayedDriveBehavFrag, raw_drive_power::Real; dt::Real = 1.0 / BASE_UPS)
-    current_power = get_delayed_drive_power(frag)
+"Move delayed drive exponentially towards a non-negative raw-power target."
+function update_delayed_drive(drive::DelayedDrive, raw_drive_power::Real; dt::Real = 1.0 / BASE_UPS)
+    current_power = get_delayed_drive_power(drive)
     target_power = max(Float64(raw_drive_power), 0.0)
-    alpha = -expm1(-Float64(dt) / frag.time_constant)
-    setstate!(frag.power, max(current_power + alpha * (target_power - current_power), 0.0))
-    return nothing
+    alpha = -expm1(-Float64(dt) / drive.time_constant)
+    return @set drive.state.power = max(current_power + alpha * (target_power - current_power), 0.0)
 end
 
 # Turbopump tuning, thresholds, and palette
@@ -230,9 +237,9 @@ struct TurboPumpCompBehav <: ComponentBehavior
     series_conductance::Float64       # pump-side Thévenin series conductance
     max_turbine_conductance::Float64  # turbine conductance at 0 RPM (drops to 0 at runaway RPM)
     cycle_efficiency::Float64         # turbine energy conversion factor (0–1)
-    delayed_drive::DelayedDriveBehavFrag  # filtered turbine-drive power
-    rotor::RotorStateBehavFrag        # RPM state, inertia, viscous drag, rated RPM
-    deactivation::AutoDeactivationBehavFrag  # auto-deactivation state (replaces manual stall)
+    delayed_drive::DelayedDrive      # filtered turbine-drive power
+    rotor::Rotor                     # rotor configuration and runtime speed
+    deactivation::AutoDeactivationState  # auto-deactivation state (replaces manual stall)
     overheat::OverheatLimitBehavFrag  # turbine thermal state and persistent damage
 end
 
@@ -247,23 +254,23 @@ function TurboPumpCompBehav(;
         friction_coefficient::Real = 0.002,
         current_delayed_drive_power::Real = 0.0,
         drive_time_constant::Real = 1.25,
-        deactivation::AutoDeactivationBehavFrag = AutoDeactivationBehavFrag(),
+        deactivation::AutoDeactivationState = AutoDeactivationState(),
         limit_temperature_k::Float64 = 1500.0,
         thermal_mass::Float64 = 2.0,
         heat_loss_factor::Float64 = 0.05
     )
-    rotor = RotorStateBehavFrag(
+    rotor = Rotor(
         current_rpm = current_rpm,
         max_rpm = max_rpm,
         rotor_inertia = rotor_inertia,
         friction_coefficient = friction_coefficient
     )
-    delayed_drive = DelayedDriveBehavFrag(current_power = current_delayed_drive_power, time_constant = drive_time_constant)
+    delayed_drive = DelayedDrive(current_power = current_delayed_drive_power, time_constant = drive_time_constant)
     overheat = OverheatLimitBehavFrag(
         limit_temperature_k,
         thermal_mass,
         heat_loss_factor;
-        temperature = ComponentTemperatureBehavFrag(),
+        temperature = ComponentTemperatureState(),
         damage = DamageStateBehavFrag()
     )
     return TurboPumpCompBehav(
@@ -373,10 +380,10 @@ end
 
 function set_tunables(comp::TurboPumpCompBehav, tunables::NTuple{13, T})::TurboPumpCompBehav where {T <: Real}
     vals = Float64.(tunables)
-    newrotor = RotorStateBehavFrag(comp.rotor.rpm, vals[5], vals[6], vals[7])
-    newdrive = DelayedDriveBehavFrag(comp.delayed_drive.power, vals[10])
+    newrotor = Rotor(RotorState(vals[4]), vals[5], vals[6], vals[7])
+    newdrive = DelayedDrive(DelayedDriveState(vals[9]), vals[10])
     newoverheat = set_tunables(comp.overheat, (vals[11], vals[12], vals[13]))
-    comp = TurboPumpCompBehav(
+    return TurboPumpCompBehav(
         vals[1],
         max(vals[2], 0.0),
         max(vals[3], 0.0),
@@ -386,9 +393,6 @@ function set_tunables(comp::TurboPumpCompBehav, tunables::NTuple{13, T})::TurboP
         comp.deactivation,
         newoverheat
     )
-    setstate!(comp.rotor.rpm, max(vals[4], 0.0))
-    setstate!(comp.delayed_drive.power, max(vals[9], 0.0))
-    return comp
 end
 
 function produce_rel_fluid_declarations(::TurboPumpCompBehav)
@@ -402,10 +406,13 @@ end
 map_mirroring(::TurboPumpCompBehav, mirrored::Bool) = mirrored
 
 # Auto-deactivation requires no manual reset on click.
-on_click!(comp::TurboPumpCompBehav; kwargs...) = nothing
+on_click(comp::TurboPumpCompBehav; kwargs...) = comp
 get_component_temperature(comp::TurboPumpCompBehav; kwargs...) = get_component_temperature(comp.overheat)
 get_actions(comp::TurboPumpCompBehav; kwargs...) = get_actions(comp.overheat; kwargs...)
-do_action!(comp::TurboPumpCompBehav, action_id::Symbol; kwargs...) = do_action!(comp.overheat, action_id; kwargs...)
+function do_action(comp::TurboPumpCompBehav, action_id::Symbol; kwargs...)
+    updated_overheat, result = do_action(comp.overheat, action_id; kwargs...)
+    return (@set comp.overheat = updated_overheat), result
+end
 
 """
 Update delayed turbine drive, rotor RPM, thermal state, and harmful-flow deactivation.
@@ -414,7 +421,7 @@ Turbine drive is filtered before rotor power is integrated against pump load and
 shaft drag; reverse turbine flow deactivates the pump, while overspeed damages it
 at the failure threshold.
 """
-function update_flowbehav!(comp::TurboPumpCompBehav; mna_state::MNA_State, tile::TileCoord, rotation::HexAxis, mirrored::Bool = false, derivedmapstate::DerivedMapState, kwargs...)
+function update_flowbehav(comp::TurboPumpCompBehav; mna_state::MNA_State, tile::TileCoord, rotation::HexAxis, mirrored::Bool = false, derivedmapstate::DerivedMapState, kwargs...)
     applied_inertia = comp.rotor.rotor_inertia * TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
     shaft_drag = turbopump_shaft_drag(comp.rotor.friction_coefficient, get_current_rpm(comp.rotor))
     s_pos_node = map_element(HexFrame.NODE_S_POS, tile, rotation, mirrored)
@@ -433,7 +440,7 @@ function update_flowbehav!(comp::TurboPumpCompBehav; mna_state::MNA_State, tile:
 
         # Deactivate when reverse flow through the turbine sink exceeds tolerance.
         if turbine_current < -pump_probe_tol
-            deactivate!(comp.deactivation)
+            comp = @set comp.deactivation = deactivate(comp.deactivation)
         else
             # Forward turbine current only contributes to power; reverse current is allowed but yields no energy.
             turbine_current_forward = max(turbine_current, 0.0)
@@ -454,22 +461,24 @@ function update_flowbehav!(comp::TurboPumpCompBehav; mna_state::MNA_State, tile:
         end
     end
 
-    update_delayed_drive!(comp.delayed_drive, raw_drive_power)
+    comp = @set comp.delayed_drive = update_delayed_drive(comp.delayed_drive, raw_drive_power)
     net_shaft_power = get_delayed_drive_power(comp.delayed_drive) - pump_power - shaft_drag
     delta_rpm = net_shaft_power / (applied_inertia * BASE_UPS)
-    update_rpm!(comp.rotor, delta_rpm)
+    comp = @set comp.rotor = update_rpm(comp.rotor, delta_rpm)
     if net_shaft_power <= 0.0 && get_current_rpm(comp.rotor) < TURBOPUMP_STOP_RPM_THRESHOLD
-        setstate!(comp.rotor.rpm, 0.0)
+        comp = @set comp.rotor.state.rpm = 0.0
     end
-    get_current_rpm(comp.rotor) >= get_failure_rpm(comp) && damage!(comp.overheat)
+    if get_current_rpm(comp.rotor) >= get_failure_rpm(comp)
+        comp = @set comp.overheat = damage(comp.overheat)
+    end
 
-    update_overheat_state!(
+    updated_overheat = update_overheat_state(
         comp.overheat;
         fluid_temperature_k = fluid_temperature_k,
         mass_flow_rate = mass_flow_rate
     )
 
-    return nothing
+    return @set comp.overheat = updated_overheat
 end
 
 """Return a three-element probe matching `produce_rel_elements` for the speculative reactivation
@@ -520,9 +529,8 @@ function classify_reactivation_probe(comp::TurboPumpCompBehav; tile::TileCoord, 
 end
 
 "Reactivate the pump after the scheduler accepts a useful speculative probe."
-function commit_reactivation_probe!(comp::TurboPumpCompBehav; kwargs...)
-    reactivate!(comp.deactivation)
-    return nothing
+function commit_reactivation_probe(comp::TurboPumpCompBehav; kwargs...)
+    return @set comp.deactivation = reactivate(comp.deactivation)
 end
 
 function render_base_elem!(queue::Vector{<:RenderCommand}, comp::TurboPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, mirrored::Bool = false, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
@@ -610,29 +618,34 @@ end
 
 #= ---------- ElectricPumpCompBehav ----------- =#
 
-"Abstract type used to label specific ElectricPumpCompBehav types with a type parameter for dispatch traits."
-abstract type ElectricPumpType end
+"Electric-pump rendering variant; pumping behaviour is shared."
+@enum ElectricPumpVariant::UInt8 begin
+    ELECTRIC_TURBO_PUMP
+    ELECTRIC_TRANSFER_PUMP
+end
 
 "Pump component consisting of a Thévenin pump driven by electrical power from an internal energy store."
-struct ElectricPumpCompBehav{T <: ElectricPumpType} <: ComponentBehavior
+struct ElectricPumpCompBehav <: ComponentBehavior
+    variant::ElectricPumpVariant
     pump::PumpBehavFrag
-    energy::EnergyStoreBehavFrag
+    energy::EnergyStore
     switch::BoolSwitchBehavFrag
 end
+
 function ElectricPumpCompBehav(
-        ::Type{T};
+        variant::ElectricPumpVariant;
         pump_voltage::Float64,
         max_energy::Float64,
         initial_energy::Float64,
         max_conductance::Float64,
         min_conductance::Float64,
         growth_factor::Float64
-    ) where {T <: ElectricPumpType}
+    )
     @assert initial_energy ≤ max_energy "Initial energy ($initial_energy) exceeds max energy ($max_energy) for ElectricPumpCompBehav"
 
     pumpfrag = PumpBehavFrag(pump_voltage)
-    energystate = FloatStateBehavFrag(initial_energy)
-    energyfrag = EnergyStoreBehavFrag(energystate, max_energy)
+    energystate = EnergyStoreState(initial_energy)
+    energy_store = EnergyStore(energystate, max_energy)
 
     # Switch connecting internal to Q_NEG (replacing old series resistor position)
     switch_connection = RelativeElementConnections(HexFrame.NODE_INTERNAL_1, HexFrame.NODE_Q_NEG)
@@ -645,7 +658,7 @@ function ElectricPumpCompBehav(
         current_conductance = min_conductance
     )
 
-    return ElectricPumpCompBehav{T}(pumpfrag, energyfrag, switchfrag)
+    return ElectricPumpCompBehav(variant, pumpfrag, energy_store, switchfrag)
 end
 
 function produce_rel_elements(comp::ElectricPumpCompBehav)::NTuple{2, RelativeElement}
@@ -670,16 +683,11 @@ end
 
 function set_tunables(comp::ElectricPumpCompBehav, tunables::NTuple{5, T})::ElectricPumpCompBehav where {T <: Real}
     vals = Float64.(tunables)
-    # Preserve parametric type T for ElectricPumpCompBehav{T} to avoid calling default constructor without type parameter
-    curtype = typeof(comp)
     newpump = set_tunables(comp.pump, (vals[1],))
-    newenergy = EnergyStoreBehavFrag(comp.energy.stored_energy, vals[3])
+    newenergy = EnergyStore(EnergyStoreState(clamp(vals[2], 0.0, vals[3])), vals[3])
     switch_tun = get_tunables(comp.switch)
     newswitch = set_tunables(comp.switch, (vals[4], vals[5], switch_tun[3].current_val))
-    comp = curtype(newpump, newenergy, newswitch)
-    # Set current energy to the specified value, clamped to [0, max]
-    setstate!(comp.energy.stored_energy, clamp(vals[2], 0.0, vals[3]))
-    return comp
+    return ElectricPumpCompBehav(comp.variant, newpump, newenergy, newswitch)
 end
 
 function produce_rel_fluid_declarations(::ElectricPumpCompBehav)
@@ -690,9 +698,9 @@ function produce_rel_fluid_declarations(::ElectricPumpCompBehav)
 end
 
 "Updates switch behaviour and consumes energy proportional to pump flow rate."
-function update_flowbehav!(comp::ElectricPumpCompBehav; mna_state::MNA_State, tile::TileCoord, kwargs...)
+function update_flowbehav(comp::ElectricPumpCompBehav; mna_state::MNA_State, tile::TileCoord, kwargs...)
     # Delegate to switch for its behaviour update
-    update_flowbehav!(comp.switch; kwargs...)
+    comp = @set comp.switch = update_flowbehav(comp.switch; kwargs...)
 
     # Consume energy proportional to flow rate when pump is running
     has_energy = get_current_energy(comp.energy) > 0.0
@@ -700,21 +708,21 @@ function update_flowbehav!(comp::ElectricPumpCompBehav; mna_state::MNA_State, ti
         pump_current = get(mna_state.vsource_currents, ElementID(tile, pump_element_index), 0.0)
         flow_rate = abs(pump_current)
         energy_used = flow_rate * comp.pump.pump_voltage
-        update_energy!(comp.energy, -energy_used)
+        comp = @set comp.energy = update_energy(comp.energy, -energy_used)
     else
         # Automatically switch off the pump when energy runs out
-        set_target_conductance_to_min!(comp.switch)
+        comp = @set comp.switch = set_target_conductance_to_min(comp.switch)
     end
 
-    return nothing
+    return comp
 end
 
-function on_click!(comp::ElectricPumpCompBehav; kwargs...)
+function on_click(comp::ElectricPumpCompBehav; kwargs...)
     has_energy = get_current_energy(comp.energy) > 0.0
     if has_energy
-        on_click!(comp.switch)
+        return @set comp.switch = on_click(comp.switch)
     end
-    return nothing
+    return comp
 end
 
 function get_actions(comp::ElectricPumpCompBehav; kwargs...)
@@ -749,31 +757,62 @@ function get_actions(comp::ElectricPumpCompBehav; kwargs...)
     return Tuple(rewritten)
 end
 
-function do_action!(comp::ElectricPumpCompBehav, action_id::Symbol; kwargs...)
+function do_action(comp::ElectricPumpCompBehav, action_id::Symbol; kwargs...)
     if action_id === :pump_on
-        return do_action!(comp.switch, :open_valve)
+        updated_switch, result = do_action(comp.switch, :open_valve)
     elseif action_id === :pump_off
-        return do_action!(comp.switch, :close_valve)
+        updated_switch, result = do_action(comp.switch, :close_valve)
+    else
+        throw(ArgumentError("Action :$(action_id) not recognised by ElectricPumpCompBehav"))
     end
-    throw(ArgumentError("Action :$(action_id) not recognised by ElectricPumpCompBehav"))
+    return (@set comp.switch = updated_switch), result
 end
 
 # Electric-pump render traits
-"Rendering trait type for electric turbopump variant"
-struct ElectricTurboPump <: ElectricPumpType end
-chargemask_sprite(::ElectricPumpCompBehav{ElectricTurboPump}) = :ElectroPump1_chargemask
-fluidmask_sprite(::ElectricPumpCompBehav{ElectricTurboPump}) = nothing
-static_sprite(::ElectricPumpCompBehav{ElectricTurboPump}) = :ElectroPump1_static
-vibrating_sprite(::ElectricPumpCompBehav{ElectricTurboPump}) = :ElectroPump1_vibe
-rotor_sprite(::ElectricPumpCompBehav{ElectricTurboPump}) = :ElectroPump1_rotor
+function chargemask_sprite(comp::ElectricPumpCompBehav)
+    if comp.variant === ELECTRIC_TURBO_PUMP
+        return :ElectroPump1_chargemask
+    elseif comp.variant === ELECTRIC_TRANSFER_PUMP
+        return :ElectroTransferPump_chargemask
+    end
+    throw(ArgumentError("Unhandled electric-pump variant: $(comp.variant)"))
+end
 
-"Rendering trait type for electric transfer pump variant"
-struct ElectricTransferPump <: ElectricPumpType end
-chargemask_sprite(::ElectricPumpCompBehav{ElectricTransferPump}) = :ElectroTransferPump_chargemask
-fluidmask_sprite(::ElectricPumpCompBehav{ElectricTransferPump}) = :ElectroTransferPump_fluidmask
-static_sprite(::ElectricPumpCompBehav{ElectricTransferPump}) = :ElectroTransferPump_static
-vibrating_sprite(::ElectricPumpCompBehav{ElectricTransferPump}) = nothing
-rotor_sprite(::ElectricPumpCompBehav{ElectricTransferPump}) = :ElectroTransferPump_rotor
+function fluidmask_sprite(comp::ElectricPumpCompBehav)
+    if comp.variant === ELECTRIC_TURBO_PUMP
+        return nothing
+    elseif comp.variant === ELECTRIC_TRANSFER_PUMP
+        return :ElectroTransferPump_fluidmask
+    end
+    throw(ArgumentError("Unhandled electric-pump variant: $(comp.variant)"))
+end
+
+function static_sprite(comp::ElectricPumpCompBehav)
+    if comp.variant === ELECTRIC_TURBO_PUMP
+        return :ElectroPump1_static
+    elseif comp.variant === ELECTRIC_TRANSFER_PUMP
+        return :ElectroTransferPump_static
+    end
+    throw(ArgumentError("Unhandled electric-pump variant: $(comp.variant)"))
+end
+
+function vibrating_sprite(comp::ElectricPumpCompBehav)
+    if comp.variant === ELECTRIC_TURBO_PUMP
+        return :ElectroPump1_vibe
+    elseif comp.variant === ELECTRIC_TRANSFER_PUMP
+        return nothing
+    end
+    throw(ArgumentError("Unhandled electric-pump variant: $(comp.variant)"))
+end
+
+function rotor_sprite(comp::ElectricPumpCompBehav)
+    if comp.variant === ELECTRIC_TURBO_PUMP
+        return :ElectroPump1_rotor
+    elseif comp.variant === ELECTRIC_TRANSFER_PUMP
+        return :ElectroTransferPump_rotor
+    end
+    throw(ArgumentError("Unhandled electric-pump variant: $(comp.variant)"))
+end
 
 # Electric-pump render helpers
 function render_static!(queue::Vector{<:RenderCommand}, comp::ElectricPumpCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, fluid::Union{FluidType, Nothing} = nothing, gameticks::Int64 = 0, temperature::Float64 = HexFluids.THERMAL_AMBIENT_TEMPERATURE_K, charge_bar_colour::ColourType = (c = get(ColorSchemes.summer, 0.0); ColourType(c.r, c.g, c.b, 1.0)), pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0)

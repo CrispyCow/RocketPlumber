@@ -18,7 +18,7 @@ using HexFlowProcGen
 using HexFluids
 using StaticArrays
 using LinearAlgebra
-import HexComponentsAPI: get_actions, do_action!, placement_valid
+import HexComponentsAPI: get_actions, do_action, placement_valid
 
 "Minimal encounter config for tests that only need a SpaceMapState."
 const _test_enc_config = EncounterSystemConfig()
@@ -108,9 +108,9 @@ HexComponentsAPI.produce_rel_elements(::DerivedStateCompBehav) = ()
 HexComponentsAPI.get_tunables(::DerivedStateCompBehav) = ()
 HexComponentsAPI.set_tunables(::DerivedStateCompBehav, ::NTuple{0, Real}) = DerivedStateCompBehav()
 HexComponentsAPI.render_base_elem!(queue, ::DerivedStateCompBehav; kwargs...) = nothing
-function HexComponentsAPI.update_flowbehav!(::DerivedStateCompBehav; tile::TileCoord, derivedmapstate::DerivedMapState, kwargs...)
+function HexComponentsAPI.update_flowbehav(comp::DerivedStateCompBehav; tile::TileCoord, derivedmapstate::DerivedMapState, kwargs...)
     derivedmapstate.nodeactualfluids[NodeCoord(tile, HexFrame.NODE_INTERNAL_1)] = HexFluids.COLD_GAS
-    return nothing
+    return comp
 end
 
 """Minimal mock pipe for command-processing tests."""
@@ -143,7 +143,7 @@ HexComponentsAPI.get_tunables(::GroundedAnchorCompBehav) = ()
 HexComponentsAPI.set_tunables(::GroundedAnchorCompBehav, ::NTuple{0, Real}) = GroundedAnchorCompBehav()
 HexComponentsAPI.render_base_elem!(queue, ::GroundedAnchorCompBehav; kwargs...) = nothing
 
-mutable struct SingularProbeCompBehav <: ComponentBehavior
+struct SingularProbeCompBehav <: ComponentBehavior
     accepted::Bool
 end
 HexComponentsAPI.produce_rel_elements(::SingularProbeCompBehav) = ()
@@ -162,12 +162,9 @@ end
 function HexComponentsAPI.classify_reactivation_probe(comp::SingularProbeCompBehav; kwargs...)
     return PROBE_USEFUL
 end
-function HexComponentsAPI.commit_reactivation_probe!(comp::SingularProbeCompBehav; kwargs...)
-    comp.accepted = true
-    return nothing
-end
+HexComponentsAPI.commit_reactivation_probe(::SingularProbeCompBehav; kwargs...) = SingularProbeCompBehav(true)
 
-mutable struct BootstrapProbeCompBehav <: ComponentBehavior
+struct BootstrapProbeCompBehav <: ComponentBehavior
     charge::Float64
     probe_voltage::Float64
     accepted::Bool
@@ -212,25 +209,21 @@ function HexComponentsAPI.classify_reactivation_probe(
     return !isnothing(current) && abs(current) > 1.0e-9 ? PROBE_USEFUL : PROBE_NEUTRAL
 end
 
-function HexComponentsAPI.commit_reactivation_probe!(comp::BootstrapProbeCompBehav; kwargs...)
-    comp.accepted = true
-    comp.force_active = true
-    return nothing
+function HexComponentsAPI.commit_reactivation_probe(comp::BootstrapProbeCompBehav; kwargs...)
+    return BootstrapProbeCompBehav(comp.charge, comp.probe_voltage, true, true)
 end
 
-function HexComponentsAPI.update_flowbehav!(comp::BootstrapProbeCompBehav; tile::TileCoord, mna_state::MNA_State, kwargs...)
+function HexComponentsAPI.update_flowbehav(comp::BootstrapProbeCompBehav; tile::TileCoord, mna_state::MNA_State, kwargs...)
     vsource_id = ElementID(tile, 1)
-    if !haskey(mna_state.vsources, vsource_id)
-        comp.force_active = false
-        return nothing
+    charge = comp.charge
+    if haskey(mna_state.vsources, vsource_id)
+        current = get(mna_state.vsource_currents, vsource_id, 0.0)
+        charge += abs(current) / BASE_UPS
     end
-    current = get(mna_state.vsource_currents, vsource_id, 0.0)
-    comp.charge += abs(current) / BASE_UPS
-    comp.force_active = false
-    return nothing
+    return BootstrapProbeCompBehav(charge, comp.probe_voltage, comp.accepted, false)
 end
 
-mutable struct GroupedNeutralProbeCompBehav <: ComponentBehavior
+struct GroupedNeutralProbeCompBehav <: ComponentBehavior
     required_probe_count::Int
     committed::Bool
     active::Bool
@@ -271,13 +264,11 @@ function HexComponentsAPI.classify_reactivation_probe(comp::GroupedNeutralProbeC
     return length(derivedmapstate.primaryelements) >= comp.required_probe_count ? PROBE_USEFUL : PROBE_NEUTRAL
 end
 
-function HexComponentsAPI.commit_reactivation_probe!(comp::GroupedNeutralProbeCompBehav; kwargs...)
-    comp.committed = true
-    comp.active = true
-    return nothing
+function HexComponentsAPI.commit_reactivation_probe(comp::GroupedNeutralProbeCompBehav; kwargs...)
+    return GroupedNeutralProbeCompBehav(comp.required_probe_count, true, true, comp.always_neutral)
 end
 
-mutable struct HarmfulGroupedProbeCompBehav <: ComponentBehavior
+struct HarmfulGroupedProbeCompBehav <: ComponentBehavior
     committed::Bool
 end
 
@@ -298,17 +289,14 @@ function HexComponentsAPI.get_reactivation_probe(::HarmfulGroupedProbeCompBehav;
     )
 end
 HexComponentsAPI.classify_reactivation_probe(::HarmfulGroupedProbeCompBehav; kwargs...) = PROBE_HARMFUL
-function HexComponentsAPI.commit_reactivation_probe!(comp::HarmfulGroupedProbeCompBehav; kwargs...)
-    comp.committed = true
-    return nothing
-end
+HexComponentsAPI.commit_reactivation_probe(::HarmfulGroupedProbeCompBehav; kwargs...) = HarmfulGroupedProbeCompBehav(true)
 
 #= ---------- Additional Mock for DoActionCommand ----------- =#
 
 # external counter for action execution
 const action_count = Ref(0)
 
-mutable struct ActionCompBehav <: ComponentBehavior end
+struct ActionCompBehav <: ComponentBehavior end
 HexComponentsAPI.produce_rel_elements(::ActionCompBehav) = ()
 HexComponentsAPI.get_tunables(::ActionCompBehav) = ()
 HexComponentsAPI.set_tunables(::ActionCompBehav, ::NTuple{0, Real}) = ActionCompBehav()
@@ -316,29 +304,30 @@ HexComponentsAPI.render_base_elem!(queue, ::ActionCompBehav; kwargs...) = nothin
 function get_actions(comp::ActionCompBehav; kwargs...)
     return (ActionInfo(id = :flip, label = "Flip", enabled = true, tooltip = "Flip state"),)
 end
-function do_action!(comp::ActionCompBehav, action_id::Symbol; kwargs...)
+function do_action(comp::ActionCompBehav, action_id::Symbol; kwargs...)
     if action_id === :flip
         action_count[] += 1
-        return ValidRequestResult("Flipped")
+        return comp, ValidRequestResult("Flipped")
     end
     throw(ArgumentError("Unknown action"))
 end
 
-mutable struct StatefulActionCompBehav <: ComponentBehavior
+struct StatefulActionCompBehav <: ComponentBehavior
     activations::Int
 end
 HexComponentsAPI.produce_rel_elements(::StatefulActionCompBehav) = ()
 HexComponentsAPI.get_tunables(::StatefulActionCompBehav) = ()
 HexComponentsAPI.set_tunables(comp::StatefulActionCompBehav, ::NTuple{0, Real}) = comp
 HexComponentsAPI.render_base_elem!(queue, ::StatefulActionCompBehav; kwargs...) = nothing
+HexComponentsAPI.on_click(comp::StatefulActionCompBehav; kwargs...) = StatefulActionCompBehav(comp.activations + 1)
+HexComponentsAPI.map_mirroring(::StatefulActionCompBehav, mirrored::Bool) = mirrored
 HexComponentsAPI.get_actions(::StatefulActionCompBehav; kwargs...) =
     (ActionInfo(id = :activate, label = "Activate", enabled = true, tooltip = "Activate action"),)
-function HexComponentsAPI.do_action!(comp::StatefulActionCompBehav, ::Symbol; kwargs...)
-    comp.activations += 1
-    return ValidRequestResult("Activated")
+function HexComponentsAPI.do_action(comp::StatefulActionCompBehav, ::Symbol; kwargs...)
+    return StatefulActionCompBehav(comp.activations + 1), ValidRequestResult("Activated")
 end
 
-mutable struct ActionValidationFailCompBehav <: ComponentBehavior
+struct ActionValidationFailCompBehav <: ComponentBehavior
     activations::Int
 end
 HexComponentsAPI.produce_rel_elements(::ActionValidationFailCompBehav) = ()
@@ -347,11 +336,10 @@ HexComponentsAPI.set_tunables(comp::ActionValidationFailCompBehav, ::NTuple{0, R
 HexComponentsAPI.render_base_elem!(queue, ::ActionValidationFailCompBehav; kwargs...) = nothing
 HexComponentsAPI.get_actions(::ActionValidationFailCompBehav; kwargs...) =
     (ActionInfo(id = :activate, label = "Activate", enabled = true, tooltip = "Activate action"),)
-function HexComponentsAPI.do_action!(comp::ActionValidationFailCompBehav, ::Symbol; kwargs...)
-    comp.activations += 1
-    return ValidRequestResult("Activated")
+function HexComponentsAPI.do_action(comp::ActionValidationFailCompBehav, ::Symbol; kwargs...)
+    return ActionValidationFailCompBehav(comp.activations + 1), ValidRequestResult("Activated")
 end
-HexComponentsAPI.update_flowbehav!(::ActionValidationFailCompBehav; kwargs...) = error("candidate validation failed")
+HexComponentsAPI.update_flowbehav(::ActionValidationFailCompBehav; kwargs...) = error("candidate validation failed")
 
 "Test-only expected candidate validation failure for exercising the warning policy."
 struct ExpectedCandidateValidationError <: ExpectedMapValidationError end
@@ -366,7 +354,7 @@ HexComponentsAPI.set_tunables(
     ::ExpectedValidationFailCompBehav, ::NTuple{0, Real},
 ) = ExpectedValidationFailCompBehav()
 HexComponentsAPI.render_base_elem!(queue, ::ExpectedValidationFailCompBehav; kwargs...) = nothing
-HexComponentsAPI.update_flowbehav!(::ExpectedValidationFailCompBehav; kwargs...) = throw(ExpectedCandidateValidationError())
+HexComponentsAPI.update_flowbehav(::ExpectedValidationFailCompBehav; kwargs...) = throw(ExpectedCandidateValidationError())
 
 struct ThrowingActionCompBehav <: ComponentBehavior end
 HexComponentsAPI.produce_rel_elements(::ThrowingActionCompBehav) = ()
@@ -375,7 +363,7 @@ HexComponentsAPI.set_tunables(::ThrowingActionCompBehav, ::NTuple{0, Real}) = Th
 HexComponentsAPI.render_base_elem!(queue, ::ThrowingActionCompBehav; kwargs...) = nothing
 HexComponentsAPI.get_actions(::ThrowingActionCompBehav; kwargs...) =
     (ActionInfo(id = :activate, label = "Activate", enabled = true, tooltip = "Activate action"),)
-HexComponentsAPI.do_action!(::ThrowingActionCompBehav, ::Symbol; kwargs...) = error("action execution failed")
+HexComponentsAPI.do_action(::ThrowingActionCompBehav, ::Symbol; kwargs...) = error("action execution failed")
 function placement_valid(comp::ActionCompBehav, coord::TileCoord, gamemap::GameMap; kwargs...)
     return ValidRequest()
 end
@@ -389,19 +377,16 @@ HexComponentsAPI.set_tunables(comp::ResultActionCompBehav, ::NTuple{0, Real}) = 
 HexComponentsAPI.render_base_elem!(queue, ::ResultActionCompBehav; kwargs...) = nothing
 HexComponentsAPI.get_actions(::ResultActionCompBehav; kwargs...) =
     (ActionInfo(id = :run, label = "Run", enabled = true, tooltip = "Run action"),)
-HexComponentsAPI.do_action!(comp::ResultActionCompBehav, ::Symbol; kwargs...) = comp.result
+HexComponentsAPI.do_action(comp::ResultActionCompBehav, ::Symbol; kwargs...) = (comp, comp.result)
 
-mutable struct ValidationMutationCompBehav <: ComponentBehavior
+struct ValidationMutationCompBehav <: ComponentBehavior
     updates::Int
 end
 HexComponentsAPI.produce_rel_elements(::ValidationMutationCompBehav) = ()
 HexComponentsAPI.get_tunables(::ValidationMutationCompBehav) = ()
 HexComponentsAPI.set_tunables(comp::ValidationMutationCompBehav, ::NTuple{0, Real}) = comp
 HexComponentsAPI.render_base_elem!(queue, ::ValidationMutationCompBehav; kwargs...) = nothing
-function HexComponentsAPI.update_flowbehav!(comp::ValidationMutationCompBehav; kwargs...)
-    comp.updates += 1
-    return nothing
-end
+HexComponentsAPI.update_flowbehav(comp::ValidationMutationCompBehav; kwargs...) = ValidationMutationCompBehav(comp.updates + 1)
 
 struct RotationSensitiveCompBehav{N} <: ComponentBehavior
     valid_rotations::NTuple{N, HexAxis}
@@ -483,9 +468,9 @@ HexComponentsAPI.produce_rel_elements(::DestinationInvalidCompBehav) = ()
 HexComponentsAPI.get_tunables(::DestinationInvalidCompBehav) = ()
 HexComponentsAPI.set_tunables(comp::DestinationInvalidCompBehav, ::NTuple{0, Real}) = comp
 HexComponentsAPI.render_base_elem!(queue, ::DestinationInvalidCompBehav; kwargs...) = nothing
-function HexComponentsAPI.update_flowbehav!(comp::DestinationInvalidCompBehav; tile::TileCoord, kwargs...)
+function HexComponentsAPI.update_flowbehav(comp::DestinationInvalidCompBehav; tile::TileCoord, kwargs...)
     tile == comp.invalid_coord && error("Invalid destination reached")
-    return nothing
+    return comp
 end
 
 #= ---------- Test Helpers ----------- =#
@@ -1364,7 +1349,8 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
 
         # sanity check: manual invocation should work
         wrapped = get_component(gamemap, coord)
-        do_action!(wrapped, :flip)
+        wrapped, result = do_action(wrapped, :flip)
+        @test isvalidrequest(result)
         @test action_count[] == 1
         # reset for command test
         action_count[] = 0
@@ -1558,7 +1544,28 @@ surface_rect_tiles(qmin::Int, rmin::Int, qmax::Int, rmax::Int) = Set(TileCoord(q
         cmd = create_click_tile_command(cq, coord, CartesianCoord(0.0, 0.0))
         logs = process_and_log!(cmd, gamemap)
 
-        # MockCompBehav.on_click! does nothing, so no error expected
+        # MockCompBehav.on_click does nothing, so no error expected
+        @test isempty(logs)
+    end
+
+    @testset "ClickTileCommand — commits a replacement with placement metadata" begin
+        gamemap = make_two_ship_map()
+        coord = TileCoord(20, 0)
+        other_coord = TileCoord(0, 0)
+        behaviour = StatefulActionCompBehav(0)
+        for destination in (coord, other_coord)
+            @test isempty(process_and_log!(create_set_tile_command(cq, destination, behaviour, HexFrame.R_NEG, true), gamemap))
+        end
+        original = get_component(gamemap, coord)
+        logs = process_and_log!(create_click_tile_command(cq, coord, CartesianCoord(0.0, 0.0)), gamemap)
+        updated = get_component(gamemap, coord)
+        @test updated.component.activations == 1
+        @test original.component.activations == 0
+        @test behaviour.activations == 0
+        @test get_component(gamemap, other_coord).component.activations == 0
+        @test get_component(gamemap, other_coord).ship === :primary
+        @test (updated.rotation, updated.mirrored, updated.ship) == (original.rotation, original.mirrored, original.ship)
+        @test (original.rotation, original.mirrored, original.ship) == (HexFrame.R_NEG, true, :asteroid)
         @test isempty(logs)
     end
 
@@ -1730,8 +1737,10 @@ end
         set_component!(gm, TileCoord(0, 0), PlacedComponent(StatefulActionCompBehav(0), Q_POS, :primary))
         set_component!(gm, TileCoord(1, 0), PlacedComponent(StatefulActionCompBehav(0), Q_POS, :primary))
 
+        original = get_component(gm, TileCoord(0, 0))
         logs = process_and_log!(create_do_action_command(cq, [TileCoord(0, 0), TileCoord(1, 0)], :activate), gm)
 
+        @test original.component.activations == 0
         @test get_component(gm, TileCoord(0, 0)).component.activations == 1
         @test get_component(gm, TileCoord(1, 0)).component.activations == 1
         @test logs == ["Activated for 2 selected components"]
@@ -2785,11 +2794,13 @@ end
 
     @test isempty(live_derived.primaryelements)
     @test HexFlowCalculator.run_reactivation_trial!(scheduler, gamemap, live_derived, live_mna, live_scratchpad, Int64(1))
-    @test probe_comp.accepted
+    @test get_component(gamemap, probe_tile).component.accepted
+    @test !probe_comp.accepted
     @test haskey(live_mna.vsource_currents, ElementID(probe_tile, 1))
 
     update_components!(gamemap, live_mna, live_derived)
-    @test probe_comp.charge > 0.0
+    @test get_component(gamemap, probe_tile).component.charge > 0.0
+    @test probe_comp.charge == 0.0
 
     collect_primary_map_inputs!(gamemap, live_derived)
     solve_from_inputs!(live_derived, live_mna, live_scratchpad, Int64(2))
@@ -2825,8 +2836,11 @@ end
     push!(scheduler.pending_set, peer_tile)
 
     @test HexFlowCalculator.run_reactivation_trial!(scheduler, gamemap, live_derived, live_mna, live_scratchpad, Int64(2))
-    @test anchor_comp.committed
-    @test peer_comp.committed
+    @test get_component(gamemap, anchor_tile).component.committed
+    @test !anchor_comp.committed
+    @test get_component(gamemap, peer_tile).component.committed
+    @test !peer_comp.committed
+    @test !get_component(gamemap, neutral_tile).component.committed
     @test neutral_tile in scheduler.neutral_registry
     @test !(anchor_tile in scheduler.neutral_registry)
     @test !(peer_tile in scheduler.neutral_registry)
@@ -2859,7 +2873,9 @@ end
 
     @test HexFlowCalculator.run_reactivation_trial!(scheduler, gamemap, live_derived, live_mna, live_scratchpad, Int64(2))
     @test !anchor_comp.committed
+    @test !get_component(gamemap, anchor_tile).component.committed
     @test !harmful_comp.committed
+    @test !get_component(gamemap, harmful_tile).component.committed
     @test !(harmful_tile in scheduler.neutral_registry)
     @test anchor_tile in scheduler.neutral_registry
 end

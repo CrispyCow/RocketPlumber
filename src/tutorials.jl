@@ -802,7 +802,7 @@ end
 function get_entry_fluid_transfer()::LearningEntry
     return LearningEntry(
         id = :fluid_transfer,
-        trigger = inputs -> has_component_type(inputs.gamemap, ElectricPumpCompBehav{ElectricTransferPump}),
+        trigger = inputs -> any(placed -> placed.component.variant === ELECTRIC_TRANSFER_PUMP, each_component_of_type(inputs.gamemap, ElectricPumpCompBehav)),
         priority = 800,
         definition = SandboxTutorialDef(
             title = "Moving liquid with transfer pumps",
@@ -837,7 +837,8 @@ function get_entry_fluid_transfer()::LearningEntry
                             ),
                             step_blocker = function(inputs::LearningInputs)
                                 # The transfer pump must be moved from the debris hulk onto the tanker, with its output facing left toward the primary ship.
-                                pump_in_place = any(each_component_of_type(inputs.gamemap, ElectricPumpCompBehav{ElectricTransferPump})) do placed_component
+                                pump_in_place = any(each_component_of_type(inputs.gamemap, ElectricPumpCompBehav)) do placed_component
+                                    placed_component.component.variant === ELECTRIC_TRANSFER_PUMP || return false
                                     ship_name = placed_component.ship
                                     ship_name === :primary && return false
 

@@ -10,7 +10,7 @@ function _precompile_nozzle_glmap()
     glmap = GLObjectMap()
     glmap.textures[:PrecompileAtlas] = RenderEngine.GLtexData(RenderEngine.GLtexID(0), UInt32(0), UInt(1024), UInt(1024))
     sprites = (
-        :PrecompileNozzle, :AllNozzles_SwitchedTinyNozzle_bkg, :AllNozzles_SwitchedTinyNozzle_valve,
+        :AllNozzles_TinyNozzle, :AllNozzles_SwitchedTinyNozzle_bkg, :AllNozzles_SwitchedTinyNozzle_valve,
         :AllNozzles_SwitchedTinyNozzle_fluidmask, :DecompChamber1_gas_fluidmask, :DecompChamber1_frame,
         :CombustionChamber1_gas_fluidmask, :CombustionChamber1_frame,
         (:DecompChamber1_liquid_fluidmask_1, :DecompChamber1_liquid_fluidmask_2, :DecompChamber1_liquid_fluidmask_3, :DecompChamber1_liquid_fluidmask_4)...,
@@ -26,7 +26,7 @@ end
 @setup_workload begin
     tile = TileCoord(3, -2)
     rotation = HexFrame.Q_POS
-    basic = BasicNozzleCompBehav(connected_node = HexFrame.NODE_Q_POS, throat_area = 0.2, sprite = :PrecompileNozzle)
+    basic = BasicNozzleCompBehav(connected_node = HexFrame.NODE_Q_POS, throat_area = 0.2, sprite_variant = TINY_NOZZLE_SPRITE)
     switched = SwitchedNozzleCompBehav(throat_area = 0.2, connected_node = HexFrame.NODE_Q_POS, max_conductance = 2.0, min_conductance = 0.0, growth_factor = calculate_growth_factor(2.0, 0.0, 6.0 / BASE_UPS))
     decomp = DecompChamberCompBehav()
     biprop = BipropChamberCompBehav()
@@ -68,18 +68,21 @@ end
             get_component_mass(component)
             render_base_elem!(queue, component; glmap = glmap, position = tile, gameticks = 1, pos_offset = AxialCoord(0.0, 0.0), render_height_offset = Int32(0))
         end
-        set_tunables(placed[1], (0.2, 3000.0, 2.0, 5.0))
-        set_tunables(placed[2], (0.2, 400.0, 1.0, 0.3, 2.0, 0.0, 1.0))
-        set_tunables(placed[3], (800.0,))
-        set_tunables(placed[4], (0.4, 1.0, 2.5))
+        placed = @set placed[1] = set_tunables(placed[1], (0.2, 3000.0, 2.0, 5.0))
+        placed = @set placed[2] = set_tunables(placed[2], (0.2, 400.0, 1.0, 0.3, 2.0, 0.0, 1.0))
+        placed = @set placed[3] = set_tunables(placed[3], (800.0,))
+        placed = @set placed[4] = set_tunables(placed[4], (0.4, 1.0, 2.5))
         placement_valid(placed[1], tile, gamemap)
         placement_valid(placed[2], tile, gamemap)
         get_actions(placed[1])
         get_actions(placed[2])
-        on_click!(placed[2]; unrotated_clicksite = CartesianCoord(0.0, 0.5))
-        do_action!(placed[2], :open_valve)
-        do_action!(placed[1], :repair_component)
-        do_action!(placed[2], :repair_component)
+        placed = @set placed[2] = on_click(placed[2]; unrotated_clicksite = CartesianCoord(0.0, 0.5))
+        updated, result = do_action(placed[2], :open_valve)
+        placed = @set placed[2] = updated
+        updated, result = do_action(placed[1], :repair_component)
+        placed = @set placed[1] = updated
+        updated, result = do_action(placed[2], :repair_component)
+        placed = @set placed[2] = updated
         get_component_temperature(placed[1])
         get_component_temperature(placed[2])
         get_thrust(placed[1]; tile = tile, mna_state = mna, derivedmapstate = derived)
@@ -87,17 +90,17 @@ end
         collect_effect_particles!(manager, placed[1]; tile = tile, derivedmapstate = derived, mna_state = snapshot, gameticks = 1, pos_offset = AxialCoord(0.0, 0.0))
         collect_effect_particles!(manager, placed[2]; tile = tile, derivedmapstate = derived, mna_state = snapshot, gameticks = 1, pos_offset = AxialCoord(0.0, 0.0))
         map_mirroring(placed[4], true)
-        update_flowbehav!(placed[1]; tile = tile, mna_state = mna, derivedmapstate = derived)
-        update_flowbehav!(placed[2]; tile = tile, mna_state = mna, derivedmapstate = derived)
-        update_flowbehav!(placed[4]; tile = tile, mna_state = mna, derivedmapstate = derived)
+        placed = @set placed[1] = update_flowbehav(placed[1]; tile = tile, mna_state = mna, derivedmapstate = derived)
+        placed = @set placed[2] = update_flowbehav(placed[2]; tile = tile, mna_state = mna, derivedmapstate = derived)
+        placed = @set placed[4] = update_flowbehav(placed[4]; tile = tile, mna_state = mna, derivedmapstate = derived)
         for component in placed
             render_map_elem!(queue, component; glmap = glmap, position = tile, derivedmapstate = derived, mna_state = snapshot, gameticks = 1, pos_offset = AxialCoord(0.0, 0.0), render_height_offset = Int32(0))
         end
 
         # The live update deactivates a chamber on reverse flow; probes run on inactive states
-        deactivate!(basic.nozzle)
-        deactivate!(switched.nozzle)
-        deactivate!(biprop.state.auto_deactivation)
+        placed = @set placed[1].component.nozzle = deactivate(placed[1].component.nozzle)
+        placed = @set placed[2].component.nozzle = deactivate(placed[2].component.nozzle)
+        placed = @set placed[4].component.state = deactivate(placed[4].component.state)
         basic_probe = get_reactivation_probe(placed[1])
         switched_probe = get_reactivation_probe(placed[2])
         biprop_probe = get_reactivation_probe(placed[4])
@@ -106,11 +109,11 @@ end
             push!(derived.filteredelements, abs_element)
             mna.node_voltages[abs_element.connections.v1] = 100.0
             classify_reactivation_probe(component; tile = tile, derivedmapstate = derived, mna_state = mna)
-            commit_reactivation_probe!(component; tile = tile, derivedmapstate = derived, mna_state = mna)
+            component = commit_reactivation_probe(component; tile = tile, derivedmapstate = derived, mna_state = mna)
         end
         get_reactivation_probe(placed[4])
         classify_reactivation_probe(placed[4]; tile = tile, derivedmapstate = derived, mna_state = mna)
-        commit_reactivation_probe!(placed[4]; tile = tile, derivedmapstate = derived, mna_state = mna)
+        placed = @set placed[4] = commit_reactivation_probe(placed[4]; tile = tile, derivedmapstate = derived, mna_state = mna)
         produce_rel_elements(placed[4])
     end
 end

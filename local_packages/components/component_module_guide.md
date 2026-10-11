@@ -82,9 +82,9 @@ using HexFlowRendering, RenderEngine
 # `ComponentBehavior` mandatory methods
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # `ComponentBehavior` optional methods
-import HexComponentsAPI: produce_rel_fluid_declarations, update_flowbehav!, render_map_elem!, on_click!, placement_valid
+import HexComponentsAPI: produce_rel_fluid_declarations, update_flowbehav, render_map_elem!, on_click, placement_valid
 # Behaviour fragment interfaces
-import HexFlowBasicComponents: stall!, unstall!
+import HexFlowBasicComponents: stall, unstall
 
 # Behaviour Fragment Exports
 export FragmentType1, FragmentType2
@@ -191,11 +191,11 @@ semantic role rather than a vertically hanging list of names:
 # `ComponentBehavior` mandatory methods
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # `ComponentBehavior` optional methods
-import HexComponentsAPI: produce_rel_fluid_declarations, update_flowbehav!, render_map_elem!, placement_valid, get_actions, do_action!
+import HexComponentsAPI: produce_rel_fluid_declarations, update_flowbehav, render_map_elem!, placement_valid, get_actions, do_action
 # Reactivation probe interface
-import HexComponentsAPI: get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe!
+import HexComponentsAPI: get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe
 # Behaviour fragment interfaces
-import HexFlowBasicComponents: deactivate!, reactivate!, is_inactive
+import HexFlowBasicComponents: deactivate, reactivate, is_inactive
 ```
 
 Do not add decorative `# === Imports ===` or `# === Exports ===` headings; the
@@ -222,7 +222,17 @@ export MyCompBehav, MyOtherCompBehav
 
 Follow consistent naming patterns:
 
-- **Behaviour fragments**: `*BehavFrag` (e.g., `NozzleBehavFrag`, `TankBehavFrag`)
+- **Behaviour fragments**: `*BehavFrag` means a reusable composable unit providing
+  a meaningful subset of component behaviour or API functionality (e.g.,
+  `NozzleBehavFrag`, `DamageStateBehavFrag`). Nesting alone does not qualify.
+- **Runtime state**: `*State` means immutable data expected to evolve during
+  simulation (e.g., `SwitchState`, `ComponentTemperatureState`). State types are
+  support types even when they have semantic transitions or trivial API getters.
+- **Configuration/domain support**: ordinary names such as `Rotor` identify
+  structures that are neither behaviour fragments nor runtime-state holders.
+  Keep fixed parameters separate from related runtime values in a `state` field
+  where this clarifies their boundary. State-only semantic fragments may hold a
+  direct value, such as `DamageStateBehavFrag.damaged`.
 - **Tile components**: `*CompBehav` (e.g., `BasicNozzleCompBehav`, `TurboPumpCompBehav`)
 - **Pipe behaviours**: `*PipeBehav` (e.g., `ScrapPipeBehav`, `BigPipeBehav`)
 
@@ -273,7 +283,7 @@ Use inline comments for field-level documentation:
 ```julia
 struct MyFragment
     max_value::Float64  # Maximum allowed value
-    state::MyState      # Mutable state tracker
+    state::MyState      # Immutable state value
 end
 ```
 
@@ -290,7 +300,7 @@ produce_rel_elements(behav::MyComp)::NTuple{N, RelativeElement}
 # Return tuple of TunableProps for UI
 get_tunables(behav::MyComp)::NTuple{N, TunableProps}
 
-# Return new component with updated tunable values
+# Return replacement reflecting the supplied editor values
 set_tunables(behav::MyComp, tunables::NTuple{N, Real})::MyComp
 
 # Push RenderCommands to the queue for base (static) rendering.
@@ -309,11 +319,11 @@ render_map_elem!(queue::AbstractVector, behav::MyComp; glmap, rotation, position
 # Fluid sources, type rules, and constraint rules (default: empty tuple)
 produce_rel_fluid_declarations(behav)::Tuple
 
-# Per-tick update logic (default: no-op)
-update_flowbehav!(behav; kwargs...)
+# Per-tick update returns a replacement (default: unchanged input)
+update_flowbehav(behav; kwargs...)
 
-# Click handling (default: no-op)
-on_click!(behav; kwargs...)
+# Click handling returns a replacement (default: unchanged input)
+on_click(behav; kwargs...)
 
 # Thrust calculation (default: zero vector)
 get_thrust(behav; tile, rotation, mna_state, derivedmapstate, kwargs...)::SVector{2, Float64}
@@ -334,10 +344,10 @@ get_component_mass(behav; kwargs...)::Float64
 get_actions(behav; kwargs...)
 
 # Execute a right-click action.
-do_action!(behav, action_id::Symbol; kwargs...)::RequestResult{String}
+updated_behav, result = do_action(behav, action_id::Symbol; kwargs...)
 
-# Successful action: ValidRequestResult("message")
-# Action no longer applies because component state changed: InvalidRequest("reason")
+# Successful action: (updated_behav, ValidRequestResult("message"))
+# Expected rejection: (behav, InvalidRequest("reason"))
 # Unsupported action IDs must throw ArgumentError.
 
 # Rotation mapping (default: identity)
@@ -366,10 +376,16 @@ Notes:
   implement the wet-mass hook rather than overriding `get_component_mass`
   directly.
 - The action popup UI and calculator action command path use `get_actions` and
-  `do_action!`, so interactive components should expose actions through those
+  `do_action`, so interactive components should expose actions through those
   hooks rather than bespoke UI logic. The calculator logs exceptions for
   unsupported action IDs as programming failures; they are not player-facing
   action rejections.
+
+`get_tunables` exposes values available to the placement editor and shown
+read-only in the runtime inspector. These may include fixed configuration and
+selected runtime/initial state, such as tank contents or pump speed.
+`set_tunables` returns a replacement reflecting the supplied values.
+`PlacedComponent` setters retain rotation, mirroring and ship ownership.
 
 ## PipeBehavior Interface
 
@@ -429,16 +445,16 @@ related definitions make another order clearer. Do not export them.
 
 ```julia
 get_thrust(comp::MyComp; kwargs...) = get_thrust(comp.nozzle; kwargs...)
-update_flowbehav!(comp::MyComp; kwargs...) = update_flowbehav!(comp.fragment; kwargs...)
+update_flowbehav(comp::MyComp; kwargs...) = @set comp.fragment = update_flowbehav(comp.fragment; kwargs...)
 ```
 
 **Extracting parameters** (only when the function needs them directly):
 
 ```julia
-function update_flowbehav!(tank::TankBehavFrag; tile::TileCoord, mna_state::MNA_State, kwargs...)
+function update_flowbehav(tank::TankBehavFrag; tile::TileCoord, mna_state::MNA_State, kwargs...)
     element_id = ElementID(tile, tank_vsource_element_index)
-    # ... use tile and mna_state directly
-    return nothing
+    # ... use tile and mna_state to calculate updated_charge
+    return @set tank.charge = updated_charge
 end
 ```
 
@@ -550,30 +566,40 @@ Use `@set` macro for immutable updates:
 set_tunables(comp::MyComp, tunables) = @set comp.fragment = set_tunables(comp.fragment, tunables)
 ```
 
-### Mutable State
+### Immutable State
 
-When components need mutable state, use a separate mutable struct:
+All state beneath a `ComponentBehavior` is immutable. Keep state holders and
+fragment composition, with transitions at the lowest layer that owns the rules:
 
 ```julia
-mutable struct MyState
+struct MyState
     value::Float64
     counter::Int
 end
 
 struct MyFragment
     config::Float64
-    state::MyState  # mutable state holder
+    state::MyState
+end
+
+advance(state::MyState) = @set state.counter += 1
+
+function update_flowbehav(frag::MyFragment; kwargs...)
+    return @set frag.state = advance(frag.state)
 end
 ```
 
-Access state fields directly:
+Callers propagate replacements through enclosing fragments and `PlacedComponent`.
+The mutable map boundary stores them with `set_component!`; a discarded return
+value discards the state change. Transition names omit `!`, while operations
+that mutate maps, rendering queues or particle managers retain it.
 
-```julia
-function update_flowbehav!(frag::MyFragment; kwargs...)
-    frag.state.counter += 1  # mutate in place
-    return nothing
-end
-```
+`do_action` returns `(updated_behaviour, result)`. Successful actions carry a
+valid request result, expected rejections carry the unchanged input and an
+invalid result, and unsupported IDs throw. Reactivation classification remains
+pure; `commit_reactivation_probe` returns the replacement that the calculator
+stores after accepting a useful probe. Existing calculator transactions handle
+rejection and rollback on disposable working maps.
 
 ## Fragment Composition Pattern
 
@@ -618,12 +644,12 @@ Benefits:
 6. **Use delegation**: Forward to fragments, don't reimplement
 7. **Follow naming**: `*BehavFrag`, `*CompBehav`, `*PipeBehav` patterns
 8. **Document types**: Struct docstrings explain purpose and behaviour
-9. **Preserve immutability**: Use `@set` for updates, mutable structs only for state
+9. **Preserve immutability**: Use replacement transitions and immutable state throughout component fragments
 10. **Preserve render offsets**: If you override `render_base_elem!`,
     `render_map_elem!`, `render_pipe_base!`, or `render_pipe_map!`, thread
     `pos_offset` through every helper and delegate call
 11. **Use the mass hooks deliberately**: Override `get_component_dry_mass` and `get_component_wet_mass` when the component contributes structural or stored-fluid mass
-12. **Use action hooks for interactions**: Expose right-click actions through `get_actions` and `do_action!` instead of inventing ad-hoc UI paths
+12. **Use action hooks for interactions**: Expose right-click actions through `get_actions` and `do_action` instead of inventing ad-hoc UI paths
 13. **Maintain precompile coverage**: Add supported concrete specialisations and materially new API paths to the package workload
 
 ## Example: Simple Component

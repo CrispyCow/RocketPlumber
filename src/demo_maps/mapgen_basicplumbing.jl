@@ -30,7 +30,7 @@ function mapgen_basicplumbing()
     nozzle = BasicNozzleCompBehav(
         connected_node = HexFrame.NODE_Q_POS,
         throat_area = Float64(0.3f0),
-        sprite = Symbol("AllNozzles_SmallNozzle")
+        sprite_variant = SMALL_NOZZLE_SPRITE
     )
 
     # Place components on blueprint

@@ -11,7 +11,7 @@ Run every command from the repository root with the root Julia project. The comp
 
 ## Required resources
 
-Before writing or changing a generator, read [references/reconstruction-guide.md](references/reconstruction-guide.md) completely. It contains the current constructor, ownership, placement, aliasing, multi-ship, and cleanup rules that are easy to miss from encoder output alone.
+Before writing or changing a generator, read [references/reconstruction-guide.md](references/reconstruction-guide.md) completely. It contains the current constructor, ownership, placement, immutable values, multi-ship, and cleanup rules that are easy to miss from encoder output alone.
 
 Before interpreting comparator output or declaring success, read [references/validation.md](references/validation.md) completely. It defines what the comparator proves, what it deliberately omits, and how to diagnose failures.
 
@@ -37,7 +37,7 @@ The scripts are normal command-line programs; inspect their source only when mai
      ```
 
    The output filename determines the generated function name. Treat direct output as a faithful starting point, not maintainable final source.
-4. Put the final `mapgen_*` function in the appropriate project location, normally `src/demo_maps/`. Use current public constructors, meaningful grouping, terse comments, and independent state for every stateful placement.
+4. Put the final `mapgen_*` function in the appropriate project location, normally `src/demo_maps/`. Use current public constructors, meaningful grouping, terse comments, and all saved runtime values. Immutable component and pipe templates may be reused directly across placements.
 5. Before final validation, add the standard formatter header to the final MapGen file, with an accurate, stable `Scope:` describing that specific map, then run Runic on the file:
 
    ```julia
@@ -68,7 +68,7 @@ The work is complete only when:
 - the save loads without fallback or partial-load ambiguity;
 - the generator is maintainable and follows current project conventions;
 - ship, component, pipe, and surface ownership is preserved;
-- mutable component state is not shared across placements;
+- saved component and pipe runtime values are preserved in immutable behaviours;
 - the comparator exits successfully and every printed comparison category passes;
 - omitted runtime state has been reviewed separately where relevant; and
 - the source save is not committed merely as a conversion by-product unless it is intentionally a fixture or asset.

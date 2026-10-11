@@ -90,7 +90,7 @@ function print_activation_states(gamemap::GameMap)
         end
         if comp isa HexFlowTankComponents.PressureFedTankCompBehav
             tank = comp.tank
-            push!(flags, "liquid=$(tank.liquid_state.charge) gas=$(tank.gas_state.charge) liquid_sealed=$(HexFlowTankComponents.liquid_is_sealed(tank)) gas_sealed=$(HexFlowTankComponents.gas_is_sealed(tank)) stored=$(tank.stored_liquid.fluid)")
+            push!(flags, "liquid=$(tank.liquid_state.charge) gas=$(tank.gas_state.charge) liquid_sealed=$(HexFlowTankComponents.liquid_is_sealed(tank)) gas_sealed=$(HexFlowTankComponents.gas_is_sealed(tank)) stored=$(HexFlowTankComponents.get_stored_fluid(tank.stored_liquid))")
         elseif comp isa HexFlowTankComponents.ThevininTankCompBehav
             tank = comp.tank.tank
             push!(flags, "charge=$(tank.state.charge) sealed=$(HexFlowTankComponents.is_sealed(tank))")

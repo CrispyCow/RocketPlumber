@@ -1,6 +1,6 @@
 # Map Reconstruction Guide
 
-This guide covers the domain knowledge needed to turn a saved JLD2 `GameMap` into maintainable Julia source. Map reconstruction crosses persistence, component constructors, mutable behaviour state, ship ownership, placement rules, and circuit/fluid generation. A generator can look structurally convincing while still being wrong.
+This guide covers the domain knowledge needed to turn a saved JLD2 `GameMap` into maintainable Julia source. Map reconstruction crosses persistence, component constructors, immutable behaviour state, ship ownership, placement rules, and circuit/fluid generation. A generator can look structurally convincing while still being wrong.
 
 ## Contents
 
@@ -9,7 +9,7 @@ This guide covers the domain knowledge needed to turn a saved JLD2 `GameMap` int
 - [Choose manual authoring or a generated draft](#choose-manual-authoring-or-a-generated-draft)
 - [Verify current constructors](#verify-current-constructors)
 - [Build a single-ship map](#build-a-single-ship-map)
-- [Keep stateful placements independent](#keep-stateful-placements-independent)
+- [Reuse immutable behaviour values](#reuse-immutable-behaviour-values)
 - [Respect placement and ownership](#respect-placement-and-ownership)
 - [Build multi-ship maps](#build-multi-ship-maps)
 - [Clean up generated source](#clean-up-generated-source)
@@ -88,7 +88,6 @@ Prefer manual authoring for small tutorial/showcase maps or when the saved repre
 Current references include:
 
 - `src/demo_maps/mapgen_basicplumbing.jl` for a small single-ship map;
-- `src/demo_maps/mapgen_bigpipeplumbing.jl` for repeated stateful components using a template plus `deepcopy`;
 - `src/demo_maps/mapgen_pressurefedintro.jl` for liquid and pressure-fed tank construction;
 - `src/demo_maps/mapgen_liquidtransfer.jl` for multiple ships; and
 - `src/demo_maps/mapgen_teasership.jl` for a large, grouped map.
@@ -108,7 +107,7 @@ A bare `.jl` filename is placed under `src/demo_maps/`; a path with a directory 
 
 Direct output serialises stored component and pipe behaviours with `repr`. It favours reconstruction fidelity over readability and may expose internal fragments. Compare the untouched draft first. Then replace internal construction with verified public constructors, consolidate repetition safely, and compare after each semantic edit.
 
-Do not choose between manual and direct authoring by a rigid component count. Consider the number of distinct constructors, mutable states, ownership groups, and whether direct output will remain understandable after cleanup.
+Do not choose between manual and direct authoring by a rigid component count. Consider the number of distinct constructors, runtime values, ownership groups, and whether direct output will remain understandable after cleanup.
 
 ## Verify current constructors
 
@@ -194,7 +193,7 @@ Omitting `initial_liquid_fluid` with positive charge leaves the stored liquid id
 
 ### Pumps, valves, and other stateful wrappers
 
-Pumps and valves commonly combine immutable outer wrappers with mutable energy, rotor, delayed-drive, switch, temperature, stall, or damage state. Matching public constructor arguments may not reproduce a save captured after interaction or simulation. Inspect the stored representation and current package tests; use explicit current constructors plus deliberate state construction only when needed.
+Pumps and valves carry immutable energy, rotor, delayed-drive, switch, temperature, stall, or damage values. Matching public constructor arguments may not reproduce a save captured after interaction or simulation. Inspect the stored representation and current package tests; use explicit current constructors plus deliberate state construction only when needed.
 
 ### Pipe examples
 
@@ -252,11 +251,9 @@ blueprint.pipe_behaviors[pipe_coord] = ScrapPipeBehav()
 
 `PipeCoord` canonicalises endpoints and rejects invalid geometry. Valid built-in render spans include side, short-diagonal, and long-diagonal spans. Copy endpoints exactly from the listing unless the design is intentionally changing; visually similar spans are not equivalent.
 
-## Keep stateful placements independent
+## Reuse immutable behaviour values
 
-Many behaviours are immutable outer structs containing mutable nested state. Reusing one instance can make interaction with one tile mutate another tile.
-
-This is unsafe:
+All state beneath `ComponentBehavior` and shipped pipe behaviours is immutable. State-changing operations return replacement values, which callers propagate and store at the mutable `GameMap` boundary. Component and pipe templates, including application constants, may be reused directly across placements:
 
 ```julia
 blueprint.components[TileCoord(1, 0)] =
@@ -265,18 +262,7 @@ blueprint.components[TileCoord(1, -1)] =
     PlacedComponent(nozzle_template, HexFrame.Q_NEG, :_blueprint)
 ```
 
-Use fresh construction or a verified template plus `deepcopy`:
-
-```julia
-blueprint.components[TileCoord(1, 0)] =
-    PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_NEG, :_blueprint)
-blueprint.components[TileCoord(1, -1)] =
-    PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_NEG, :_blueprint)
-```
-
-Apply the same rule to stateful application constants. Treat constants as reference configurations, not reusable placement objects. Stateless isbits pipe behaviours may be shared safely, but fresh pipe constructors are usually clearer.
-
-The comparator recursively looks through immutable wrappers for mutable nested objects and rejects generated placements that share them. This is a backstop; author independent state intentionally.
+Reuse a template only where its complete value matches the saved placement. Immutability does not remove runtime state: preserve charge, energy, temperature, fluid identity, switch state, damage, and activation values even when they differ from constructor defaults. Construct the appropriate replacement value for placements whose saved state differs.
 
 ## Respect placement and ownership
 
@@ -342,7 +328,7 @@ First compare the untouched generated draft. Once it passes:
 3. Replace internal fragment representations with current public constructors only after verifying equivalence.
 4. Add brief comments for non-obvious topology or constructor choices.
 5. Preserve saved constructor arguments and state during the first cleanup pass.
-6. Consolidate repeated stateful components with a template plus `deepcopy`, never one shared instance.
+6. Consolidate repeated components or pipes with identical saved values by reusing an immutable template directly.
 7. Replace an emitted constructor with an application constant only when type, tunables, full stored state, elements, and fluid declarations match.
 8. Re-run the comparator after each semantic batch.
 
@@ -371,7 +357,7 @@ Do not commit the source JLD2 save merely as a conversion by-product unless it i
 - The generator filename and top-level function name match exactly.
 - Every manually expressed constructor was checked against current source and tests.
 - Component stored state, including fluid identity and interaction/simulation state, is preserved.
-- Stateful placements own distinct mutable state.
+- All saved component and pipe runtime values are preserved; identical immutable templates may be reused.
 - Component rotation, mirroring, ownership, and pipe coordinates match.
 - Surface coordinates and ownership match, including intentional off-surface nozzles.
 - Multi-ship coordinates do not collide and `:primary` is constructed first.

@@ -58,15 +58,15 @@ function mapgen_liquidtransfer()
             TileCoord(0, 0),
             TileCoord(1, 0),
         )
-        primary_blueprint.components[coord] = PlacedComponent(deepcopy(empty_liquid_tank_template), HexFrame.Q_POS, :_blueprint)
+        primary_blueprint.components[coord] = PlacedComponent(empty_liquid_tank_template, HexFrame.Q_POS, :_blueprint)
     end
 
     for coord in (TileCoord(-3, 2), TileCoord(-3, 1), TileCoord(-4, 2))
-        primary_blueprint.components[coord] = PlacedComponent(deepcopy(gas_tank_template), HexFrame.S_POS, :_blueprint)
+        primary_blueprint.components[coord] = PlacedComponent(gas_tank_template, HexFrame.S_POS, :_blueprint)
     end
 
     for coord in (TileCoord(-4, 3), TileCoord(-4, 1))
-        primary_blueprint.components[coord] = PlacedComponent(deepcopy(nozzle_template), HexFrame.Q_POS, :_blueprint)
+        primary_blueprint.components[coord] = PlacedComponent(nozzle_template, HexFrame.Q_POS, :_blueprint)
     end
 
     union!(
@@ -101,7 +101,7 @@ function mapgen_liquidtransfer()
             TileCoord(6, -5),
             TileCoord(6, -7),
         )
-        tanker_blueprint.components[coord] = PlacedComponent(deepcopy(full_liquid_tank_template), HexFrame.Q_POS, :_blueprint)
+        tanker_blueprint.components[coord] = PlacedComponent(full_liquid_tank_template, HexFrame.Q_POS, :_blueprint)
     end
 
     union!(
@@ -126,7 +126,7 @@ function mapgen_liquidtransfer()
     pump_holder_blueprint = ShipBlueprint()
     pump_holder_blueprint.components[TileCoord(-1, -4)] = PlacedComponent(
         ElectricPumpCompBehav(
-            ElectricTransferPump;
+            ELECTRIC_TRANSFER_PUMP;
             pump_voltage = 2.0,
             max_energy = 50000.0,
             initial_energy = 50000.0,

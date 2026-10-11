@@ -7,7 +7,6 @@ The comparator checks whether a trusted generator reconstructs the saved map's c
 - [Run the comparator](#run-the-comparator)
 - [What a pass proves](#what-a-pass-proves)
 - [Deliberate limitations](#deliberate-limitations)
-- [Aliasing checks](#aliasing-checks)
 - [Failure diagnosis](#failure-diagnosis)
 - [Validation checklist](#validation-checklist)
 
@@ -33,17 +32,18 @@ Within a numeric tolerance of `1e-6`, the comparator requires:
 - the exact set of ship names;
 - component coordinates and ownership;
 - component concrete type, rotation, and mirroring;
-- recursively compared stored component fields, including nested mutable state;
+- recursively compared stored component fields, including immutable nested runtime values;
 - current values exposed by component tunables;
 - pipe coordinates, ownership, concrete type, stored fields, and tunables;
 - surface coordinates and ownership;
 - the order-independent multiset of all component/pipe circuit elements, including active state, element IDs, dependant IDs, endpoints, types, and values;
-- the order-independent multiset of mapped component fluid declarations; and
-- no mutable object reachable from a generated component or pipe behaviour shared across multiple placements.
+- the order-independent multiset of mapped component fluid declarations.
 
 Types, symbols, booleans, coordinates, ownership tags, rotations, mirroring, element activity, connections, and IDs are exact. Floating-point stored fields, tunables, element values, and declaration values use the tolerance.
 
 The recursive stored-state comparison is intentionally stronger than comparing only constructor-facing tunables. It catches state such as charge, seal/switch state, stored liquid identity, energy, rotor state, temperature, damage, stall/autodeactivation state, and constructor-derived thermal values when present in the current component representation.
+
+Component and shipped pipe behaviour graphs are immutable by contract, so identical templates may be reused directly across placements. The comparator checks their complete saved values; runtime state must still be reconstructed.
 
 Elements and declarations are compared as multisets rather than by dictionary iteration order. This detects duplicates without requiring generators to preserve insertion order.
 
@@ -62,16 +62,6 @@ A passing result is not whole-`GameMap` equality and not a gameplay simulation p
 The generated map receives ordinary constructor defaults for omitted top-level state unless the generator adds it deliberately. Validate any requested omitted state separately using current APIs and relevant tests.
 
 Full stored-state equality and fluid declarations substantially reduce the old risk of a structural match with different gameplay, but future behaviour may depend on external/global state or newly added derived semantics. If gameplay still differs, inspect current component APIs and run the appropriate package/application checks.
-
-## Aliasing checks
-
-An immutable component wrapper can contain mutable state several levels deep. Checking only the outer object's identity is therefore insufficient. The comparator recursively traverses behaviour fields and tracks mutable objects by identity for each placement.
-
-Generated sharing of a reachable mutable object across distinct component or pipe placements is a failure. It remains a failure even if the original save also contains shared state: a source alias is reported as a source-map warning, not treated as permission to reproduce unsafe construction.
-
-The check is intentionally about cross-placement state. Multiple fields within one placement may legitimately refer to the same object. Stateless isbits values do not have meaningful mutable identity and are ignored.
-
-This remains a structural check of objects reachable through current fields. It cannot detect hidden state held outside the behaviour object graph.
 
 ## Failure diagnosis
 
@@ -119,12 +109,6 @@ This remains a structural check of objects reachable through current fields. It 
 - For public constructors with derived defaults, pass explicit thermal or timing values if the save differs from current defaults.
 - If the save represents evolved runtime state, a clean constructor plus deliberate state setup may be necessary.
 
-### Shared mutable references
-
-- Construct a fresh behaviour for each placement or `deepcopy` a verified template.
-- Check constants and templates even when the outer struct is immutable.
-- Do not silence the failure because the source save also aliases; repair generated ownership of state.
-
 ### Circuit element mismatch
 
 Check:
@@ -158,7 +142,6 @@ Inspect concerns outside comparator scope: docking, learning, space-map state, s
 - The called function name matches the generator filename.
 - The generator returned a `GameMap`.
 - Ship names and all count summaries match.
-- There are no component, pipe, state, surface, element, declaration, or aliasing discrepancies.
-- Any source-map alias warning was investigated.
+- There are no component, pipe, state, surface, element, or declaration discrepancies.
 - Omitted top-level runtime state was reviewed separately.
 - The comparator was rerun after final cleanup and integration edits.

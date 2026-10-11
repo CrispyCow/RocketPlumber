@@ -22,11 +22,11 @@ function mapgen_turbopumpintro2()
         initial_charge = 30.0,
         series_conductance = 5.0
     )
-    blueprint.components[TileCoord(2, 0)] = PlacedComponent(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
-    blueprint.components[TileCoord(2, -1)] = PlacedComponent(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
-    blueprint.components[TileCoord(2, -2)] = PlacedComponent(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
-    blueprint.components[TileCoord(3, -1)] = PlacedComponent(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
-    blueprint.components[TileCoord(3, -2)] = PlacedComponent(deepcopy(tank_template), HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(2, 0)] = PlacedComponent(tank_template, HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(2, -1)] = PlacedComponent(tank_template, HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(2, -2)] = PlacedComponent(tank_template, HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(3, -1)] = PlacedComponent(tank_template, HexFrame.Q_NEG, :_blueprint)
+    blueprint.components[TileCoord(3, -2)] = PlacedComponent(tank_template, HexFrame.Q_NEG, :_blueprint)
 
     # Engine core
     blueprint.components[TileCoord(0, 0)] = PlacedComponent(
@@ -46,7 +46,7 @@ function mapgen_turbopumpintro2()
     )
     blueprint.components[TileCoord(-1, 0)] = PlacedComponent(
         StandardValveCompBehav(
-            SteppedSwitchBehavFrag, TinyValve;
+            SteppedSwitchBehavFrag, TINY_VALVE;
             max_conductance = 1.0,
             min_conductance = 0.0,
             growth_factor = 1.1931663751602173,
@@ -62,7 +62,7 @@ function mapgen_turbopumpintro2()
         BasicNozzleCompBehav(
             connected_node = HexFrame.NODE_Q_POS,
             throat_area = 0.5,
-            sprite = Symbol("AllNozzles_SmallNozzle")
+            sprite_variant = SMALL_NOZZLE_SPRITE
         ),
         HexFrame.Q_POS,
         :_blueprint

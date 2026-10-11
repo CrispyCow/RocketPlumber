@@ -435,6 +435,82 @@ end
     @test pipe_state.pipe_behavior isa ScrapPipeBehav
 end
 
+"Read the values shown by the component editor and inspector."
+tunable_values(component) = map(prop -> prop.current_val, RocketPlumber.HexComponentsAPI.get_tunables(component))
+
+@testset "Pending component editor and inspector values" begin
+    api = RocketPlumber.HexComponentsAPI
+    for (original, count, edits) in (
+            (RocketPlumber.TriGasTank, 4, (3 => 7.0,)),
+            (RocketPlumber.TriLiquidTank, 5, (3 => 7.0, 5 => RocketPlumber.HexFluids.FUEL_LIQUID)),
+            (RocketPlumber.PressureFedLiquidTank, 6, (3 => 7.0, 4 => 3.0, 6 => RocketPlumber.HexFluids.FUEL_LIQUID)),
+            (RocketPlumber.ElecTurboPump, 5, (2 => 15.0,)),
+            (RocketPlumber.TurboPump, 13, (4 => 1500.0, 9 => 12.5)),
+        )
+        component_index = findfirst(component -> component === original, RocketPlumber.component_list)
+        state = RocketPlumber.new_tile_placement_state(component_index)
+        @test state.pendingcomponent === original
+        state.toolrotation = Q_POS
+        state.toolmirrored = true
+        original_values = tunable_values(original)
+        @test length(original_values) == count
+        values = original_values
+        for (index, value) in edits
+            values = Base.setindex(values, value, index)
+        end
+        state.pendingcomponent = api.set_tunables(state.pendingcomponent, values)
+        @test tunable_values(state.pendingcomponent) == values
+        @test tunable_values(original) == original_values
+        @test tunable_values(RocketPlumber.component_list[component_index]) == original_values
+        @test state.toolrotation == Q_POS
+        @test state.toolmirrored
+
+        placed = api.PlacedComponent(state.pendingcomponent, state.toolrotation, state.toolmirrored, :Owner)
+        @test tunable_values(placed) == values
+
+        # Cycling restores the prototype; subsequent tuning also replaces it
+        RocketPlumber.cycle_tile_component!(state, length(RocketPlumber.component_list))
+        @test state.pendingcomponent === original
+        state.pendingcomponent = api.set_tunables(state.pendingcomponent, values)
+        @test tunable_values(state.pendingcomponent) == values
+        @test tunable_values(RocketPlumber.component_list[component_index]) == original_values
+        @test (state.toolrotation, state.toolmirrored) == (Q_POS, true)
+
+        # Two map entries can share the original immutable placed value
+        gamemap = GameMap()
+        first_coord, second_coord = TileCoord(0, 0), TileCoord(1, 0)
+        set_surface_tile!(gamemap, second_coord)
+        shared = api.PlacedComponent(original, HexFrame.R_NEG, true, :primary)
+        set_component!(gamemap, first_coord, shared)
+        set_component!(gamemap, second_coord, shared)
+        updated = api.set_tunables(get_component(gamemap, first_coord), values)
+        set_component!(gamemap, first_coord, updated)
+        @test tunable_values(get_component(gamemap, first_coord)) == values
+        @test tunable_values(get_component(gamemap, second_coord)) == original_values
+        @test tunable_values(shared) == original_values
+        @test (updated.rotation, updated.mirrored, updated.ship) == (HexFrame.R_NEG, true, :primary)
+    end
+end
+
+@testset "Shared pipe values have independent placed tuning" begin
+    api = RocketPlumber.HexComponentsAPI
+    for pipe in (ScrapPipeBehav(), BigPipeBehav())
+        gamemap = GameMap()
+        first_coord, second_coord = get_side_pipes(TileCoord(0, 0))[1:2]
+        original_conductance = api.get_conductance(pipe)
+        shared = api.PlacedPipe(pipe, :primary)
+        set_pipe!(gamemap, first_coord, shared)
+        set_pipe!(gamemap, second_coord, shared)
+        updated = api.set_pipe_tunables(get_pipe(gamemap, first_coord), (7.5,))
+        set_pipe!(gamemap, first_coord, updated)
+        @test api.get_conductance(get_pipe(gamemap, first_coord)) == 7.5
+        @test api.get_conductance(get_pipe(gamemap, second_coord)) == original_conductance
+        @test api.get_conductance(shared) == original_conductance
+        @test updated.ship === :primary
+        @test get_pipe(gamemap, second_coord).ship === :primary
+    end
+end
+
 @testset "application map-source dispatch" begin
     gamemap = GameMap()
     @test RocketPlumber.loadmap_from_source(gamemap) === gamemap
@@ -460,6 +536,43 @@ end
     end
 end
 
+"Capture component fields recursively, checking the immutable state contract."
+function component_value_tree(value)
+    # Symbols and strings have value semantics despite their runtime representation.
+    value isa Union{Symbol, AbstractString} && return value
+    @test !ismutabletype(typeof(value))
+    fieldcount(typeof(value)) == 0 && return value
+    return (typeof(value), map(name -> component_value_tree(getfield(value, name)), fieldnames(typeof(value))))
+end
+
+@testset "shipped component behaviours are isbits" begin
+    for component in RocketPlumber.component_list
+        @testset "$(typeof(component))" begin
+            @test isbitstype(typeof(component))
+        end
+    end
+end
+
+@testset "shipped component values survive save/load" begin
+    gamemap = GameMap()
+    originals = map(component_value_tree, RocketPlumber.component_list)
+    for (index, component) in enumerate(RocketPlumber.component_list)
+        coord = TileCoord(index, 0)
+        set_surface_tile!(gamemap, coord)
+        set_component!(gamemap, coord, RocketPlumber.PlacedComponent(component, HexFrame.R_NEG, true, :primary))
+    end
+    mktempdir() do directory
+        path = joinpath(directory, "component_values.jld2")
+        savemap(gamemap, path; game_version = v"0.1.0")
+        loaded = loadmap(path)
+        for (index, expected) in enumerate(originals)
+            placed = get_component(loaded, TileCoord(index, 0))
+            @test isequal(component_value_tree(placed.component), expected)
+            @test (placed.rotation, placed.mirrored, placed.ship) == (HexFrame.R_NEG, true, :primary)
+        end
+    end
+end
+
 @testset "frozen teaser save compatibility" begin
     # Immutable historical test data: the sole provisional pre-release baseline.
     # At the final 0.1.0 release, replace it with a save generated by that release
@@ -469,6 +582,16 @@ end
     gamemap = loadmap(path)
     @test length(gamemap.ships) == 5
     @test !isempty(gamemap.pipe_behaviors)
+    tank = gamemap.components[TileCoord(3, -1)].component
+    @test tank.tank.tank.state.charge == 30.0
+    @test RocketPlumber.get_stored_fluid(tank) === RocketPlumber.HexFluids.OXIDISER_LIQUID
+    turbo = gamemap.components[TileCoord(-3, -5)].component
+    @test RocketPlumber.HexFlowPumpComponents.get_current_rpm(turbo.rotor) == 0.0
+    @test turbo.rotor.max_rpm == 3000.0
+    @test RocketPlumber.get_component_temperature(turbo) == 300.0
+    for placed in values(gamemap.components)
+        component_value_tree(placed.component)
+    end
 end
 
 @testset "application saves record the root package version" begin
@@ -616,4 +739,28 @@ end
     @test capture_timelapse_frame!(recorder, timestampless_map)
     @test recorder.last_captured_snapshot_timestamp === nothing
     @test maybe_capture_timelapse!(recorder, (gamemap = GameMap(), timestamp = 8.0); now = 300.0)
+end
+
+@testset "Fluid-transfer tutorial requires the transfer pump variant" begin
+    gamemap = GameMap()
+    entry = RocketPlumber.get_entry_fluid_transfer()
+    @test !entry.trigger((gamemap = gamemap,))
+    pump_coord = TileCoord(1, 0)
+    set_surface_tile!(gamemap, pump_coord)
+    set_component!(gamemap, pump_coord, RocketPlumber.PlacedComponent(RocketPlumber.ElecTurboPump, Q_POS, :primary))
+    @test !entry.trigger((gamemap = gamemap,))
+    set_component!(gamemap, pump_coord, RocketPlumber.PlacedComponent(RocketPlumber.ElecTransferPump, Q_POS, :primary))
+    @test entry.trigger((gamemap = gamemap,))
+
+    add_ship!(gamemap, :tanker, ShipState())
+    tank_coord = TileCoord(2, 0)
+    set_surface_tile!(gamemap, tank_coord; ship_name = :tanker)
+    set_component!(gamemap, tank_coord, RocketPlumber.PlacedComponent(RocketPlumber.TriLiquidTank, Q_POS, :tanker))
+    inputs = LearningInputs(gamemap = gamemap, derivedmapstate = DerivedMapState(), gamestate = GameState(), inputstate = InputState(), viewstate = ViewState(), flowcalc_shared_state = FlowCalculatorSharedState())
+    blocker = entry.definition.levels[1].steps[3].step_blocker
+    @test !isnothing(blocker(inputs))
+    for (pump, expected_ready) in ((RocketPlumber.ElecTurboPump, false), (RocketPlumber.ElecTransferPump, true))
+        set_component!(gamemap, pump_coord, RocketPlumber.PlacedComponent(pump, Q_POS, :tanker))
+        @test isnothing(blocker(inputs)) == expected_ready
+    end
 end

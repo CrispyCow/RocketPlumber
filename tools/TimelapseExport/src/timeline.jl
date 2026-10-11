@@ -12,7 +12,7 @@ struct TimelinePlan
     current_note::String
 end
 
-"Compare persisted render state structurally, including deep-copied mutable behaviour state."
+"Compare persisted render state structurally across detached map snapshots."
 function _render_value_equal(left, right)::Bool
     typeof(left) === typeof(right) || return false
     isequal(left, right) && return true

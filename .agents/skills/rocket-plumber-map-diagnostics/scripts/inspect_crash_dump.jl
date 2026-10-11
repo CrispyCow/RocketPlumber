@@ -90,7 +90,7 @@ end
 function tank_summary(comp)::Union{Nothing, String}
     if comp isa HexFlowTankComponents.PressureFedTankCompBehav
         tank = comp.tank
-        return "liquid=$(round_or_raw(tank.liquid_state.charge)) gas=$(round_or_raw(tank.gas_state.charge)) liquid_sealed=$(HexFlowTankComponents.liquid_is_sealed(tank)) gas_sealed=$(HexFlowTankComponents.gas_is_sealed(tank)) stored=$(tank.stored_liquid.fluid)"
+        return "liquid=$(round_or_raw(tank.liquid_state.charge)) gas=$(round_or_raw(tank.gas_state.charge)) liquid_sealed=$(HexFlowTankComponents.liquid_is_sealed(tank)) gas_sealed=$(HexFlowTankComponents.gas_is_sealed(tank)) stored=$(HexFlowTankComponents.get_stored_fluid(tank.stored_liquid))"
     elseif comp isa HexFlowTankComponents.ThevininTankCompBehav
         tank = comp.tank.tank
         return "charge=$(round_or_raw(tank.state.charge)) sealed=$(HexFlowTankComponents.is_sealed(tank))"

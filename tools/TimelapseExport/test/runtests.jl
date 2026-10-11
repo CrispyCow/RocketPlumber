@@ -37,11 +37,11 @@ function map_with_tiles(tiles)
     )
 end
 
-mutable struct TimelineTestCompBehav <: ComponentBehavior
+struct TimelineTestCompBehav <: ComponentBehavior
     visible_state::Bool
 end
 
-mutable struct InterruptingTimelineCompBehav <: ComponentBehavior
+struct InterruptingTimelineCompBehav <: ComponentBehavior
     visible_state::Bool
 end
 
@@ -235,8 +235,7 @@ end
     @test length(stateful_timeline.frames) == 1
     @test !stateful_timeline.current_appended
 
-    changed_state = deepcopy(stateful)
-    changed_state.components[TileCoord(0, 0)].component.visible_state = false
+    changed_state = map_with_component(false)
     changed_timeline = assemble_timeline(
         TestMapBundle(changed_state, TestTimelapseHistory(frames = [stateful])),
         options(),
@@ -244,7 +243,9 @@ end
     @test length(changed_timeline.frames) == 2
 
     interrupting = map_with_component(true; behaviour = InterruptingTimelineCompBehav(true))
-    @test_throws InterruptException TimelapseExportTool._render_relevant_equal(interrupting, deepcopy(interrupting))
+    # Different values reach custom equality rather than identical-value short-circuiting
+    different_state = map_with_component(false; behaviour = InterruptingTimelineCompBehav(false))
+    @test_throws InterruptException TimelapseExportTool._render_relevant_equal(interrupting, different_state)
 end
 
 @testset "Timing and deterministic animation ticks" begin

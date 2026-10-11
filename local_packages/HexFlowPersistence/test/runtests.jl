@@ -10,8 +10,10 @@ using HexFlowPersistence
 using FlowMap
 using HexFrame
 using HexComponentsAPI
-using HexFlowBasicComponents: BasicCompBehav, BasicElemBehavFrag, PlainSpriteBehavFrag
+using HexFlowBasicComponents: BasicCompBehav, BasicElemBehavFrag
 using HexFlowBasicPipes: ScrapPipeBehav
+using HexFlowPersistence.HexFlowNozzleComponents: BipropChamberCompBehav, BipropChamberState
+using HexFlowBasicComponents: AutoDeactivationState, deactivate
 using HexFlowProcGen
 using StaticArrays
 using JLD2
@@ -45,10 +47,15 @@ end
     set_surface_tile!(gamemap, component_coord; ship_name = :primary)
     component = BasicCompBehav(
         elems = BasicElemBehavFrag(),
-        sprite = PlainSpriteBehavFrag(:test_persistence),
+        sprite = :test_persistence,
     )
     gamemap.components[component_coord] = PlacedComponent(component, HexFrame.R_NEG, true, :primary)
     gamemap.pipe_behaviors[pipe_coord] = PlacedPipe(ScrapPipeBehav(7.5), :primary)
+    chamber_coord = TileCoord(3, -1)
+    set_surface_tile!(gamemap, chamber_coord; ship_name = :primary)
+    chamber_state = BipropChamberState(750.0, deactivate(AutoDeactivationState()))
+    chamber = BipropChamberCompBehav(0.4, 1.0, 2.5, chamber_state)
+    set_component!(gamemap, chamber_coord, PlacedComponent(chamber, HexFrame.S_POS, :primary))
     increment_simulated_ticks!(gamemap)
 
     mktempdir() do directory
@@ -279,4 +286,142 @@ end
         @test_throws Exception savemap(GameMap(), path; game_version = v"0.1.0")
         @test_throws Exception savemap(GameMapBundle(GameMap(), TimelapseHistory()), path; game_version = v"0.1.0")
     end
+end
+
+@testset "Historical component state upgrades and current round trips" begin
+    # Stage 1 data covers non-default states absent from the frozen teaser save.
+    path = joinpath(@__DIR__, "fixtures", "component_state_stage1.jld2")
+    saved = JLD2.jldopen(path, "r"; typemap = HexFlowPersistence._build_map_typemap()) do file
+        (; (Symbol(key) => file[key] for key in keys(file))...)
+    end
+    basic = HexFlowPersistence.HexFlowBasicComponents
+    tanks = HexFlowPersistence.HexFlowTankComponents
+    pumps = HexFlowPersistence.HexFlowPumpComponents
+    @test saved.tank.state.charge == 23.0
+    @test tanks.is_sealed(saved.tank)
+    @test tanks.is_force_reactivated(saved.tank)
+    @test saved.pressurefed.liquid_state.charge == 21.0
+    @test saved.pressurefed.gas_state.charge == 4.0
+    @test tanks.liquid_is_sealed(saved.pressurefed)
+    @test !tanks.gas_is_sealed(saved.pressurefed)
+    @test !tanks.liquid_is_force_reactivated(saved.pressurefed)
+    @test tanks.gas_is_force_reactivated(saved.pressurefed)
+    @test tanks.get_stored_fluid(saved.pressurefed.stored_liquid) === tanks.HexFluids.FUEL_LIQUID
+    @test basic.get_component_temperature(saved.overheat) == 725.0
+    @test basic.is_damaged(saved.overheat)
+    @test pumps.get_current_rpm(saved.rotor) == 4200.0  # Preserve overspeed above the 3000 RPM rating
+    @test saved.rotor.max_rpm == 3000.0
+    @test saved.rotor.rotor_inertia == 50.0
+    @test saved.rotor.friction_coefficient == 0.002
+    @test pumps.get_delayed_drive_power(saved.drive) == 12.5
+    @test saved.drive.time_constant == 1.25
+    @test pumps.get_current_energy(saved.energy) == 37.0
+    @test pumps.get_max_energy(saved.energy) == 100.0
+    # The frozen fixture uses output_temperature_state; preserve both runtime values.
+    @test saved.chamber.state.output_temperature_k == 750.0
+    @test basic.is_inactive(saved.chamber.state.auto_deactivation)
+    @test basic.is_stalled(saved.stall)
+    @test basic.is_inactive(saved.deactivation)
+    # These support wrappers were unused by shipped components, so test their conversions directly.
+    fuel = tanks.HexFluids.FUEL_LIQUID
+    @test JLD2.rconvert(tanks.FixedFluid, (fluid = fuel,)).fluid === fuel
+    stored_fluid = tanks.StoredFluidState(fuel)
+    @test JLD2.rconvert(tanks.StoredFluidState, (state = stored_fluid,)) == stored_fluid
+    @test JLD2.rconvert(tanks.StoredFluidState, (fluid = fuel,)) === stored_fluid
+    @test isnothing(tanks.get_stored_fluid(JLD2.rconvert(tanks.StoredFluidState, (fluid = nothing,))))
+
+    chamber_state = HexFlowPersistence.HexFlowNozzleComponents.BipropChamberState
+    for inactive in (false, true)
+        deactivation = basic.AutoDeactivationState(inactive)
+        expected = chamber_state(1234.56789, deactivation)
+        @test JLD2.rconvert(chamber_state, (output_temperature_state = expected.output_temperature_k, auto_deactivation = deactivation)) === expected
+        @test JLD2.rconvert(chamber_state, (output_temperature_k = expected.output_temperature_k, auto_deactivation = deactivation)) === expected
+    end
+
+    mktempdir() do directory
+        # Current layouts also pass through the typemap, including the unchanged damage type name.
+        current_path = joinpath(directory, "current_states.jld2")
+        JLD2.jldsave(current_path; saved...)
+        JLD2.jldopen(current_path, "r"; typemap = HexFlowPersistence._build_map_typemap()) do file
+            for (key, component) in pairs(saved)
+                loaded = file[string(key)]
+                @test loaded == component
+                @test !ismutabletype(typeof(loaded))
+            end
+        end
+
+        gamemap = GameMap()
+        turbo = pumps.TurboPumpCompBehav(50.0, 1.0, 0.3, 0.6, saved.drive, saved.rotor, saved.deactivation, saved.overheat)
+        gamemap.components[TileCoord(0, 0)] = PlacedComponent(turbo, HexFrame.R_NEG, true, :primary)
+        gamemap.components[TileCoord(1, 0)] = PlacedComponent(saved.chamber, HexFrame.S_POS, :primary)
+        map_path = joinpath(directory, "current_map.jld2")
+        savemap(GameMapBundle(gamemap, TimelapseHistory(frames = [gamemap])), map_path; game_version = v"0.1.0-dev")
+        loaded = loadmap_bundle(map_path)
+        for map in (loaded.gamemap, only(loaded.timelapse.frames))
+            @test map.components == gamemap.components
+        end
+    end
+end
+
+@testset "Historical component representation upgrades and current round trips" begin
+    path = joinpath(@__DIR__, "fixtures", "component_representation_stage2.jld2")
+    saved = JLD2.load(path; typemap = HexFlowPersistence._build_map_typemap())
+    basic = HexFlowPersistence.HexFlowBasicComponents
+    nozzles = HexFlowPersistence.HexFlowNozzleComponents
+    switches = HexFlowPersistence.HexFlowSwitchComponents
+    pumps = HexFlowPersistence.HexFlowPumpComponents
+    @test typeof(saved["basic"]) === BasicCompBehav{0, :HistoricalBasic}
+    @test basic.basic_sprite(saved["basic"]) === :HistoricalBasic
+    for (component, variant, sprite) in zip(saved["nozzles"], instances(nozzles.NozzleSpriteVariant), (:AllNozzles_TinyNozzle, :AllNozzles_SmallNozzle, :AllNozzles_MediumNozzle))
+        @test component.sprite_variant === variant
+        @test nozzles.nozzle_sprite(component) === sprite
+        @test component.nozzle.throat_area == 0.73
+    end
+    for (index, component) in enumerate(saved["valves"])
+        switch_type = index <= 2 ? switches.SteppedSwitchBehavFrag : switches.BoolSwitchBehavFrag
+        size = isodd(index) ? switches.TINY_VALVE : switches.LARGE_VALVE
+        @test typeof(component) === switches.StandardValveCompBehav{switch_type}
+        @test component.size === size
+        @test component.switch.switch.state.target_conductance == 1.0
+        @test component.switch.switch.state.current_conductance == 0.4
+    end
+    for (component, variant) in zip(saved["pumps"], instances(pumps.ElectricPumpVariant))
+        @test typeof(component) === pumps.ElectricPumpCompBehav
+        @test component.variant === variant
+        @test pumps.get_current_energy(component.energy) == 37.0
+        @test pumps.get_max_energy(component.energy) == 100.0
+        @test component.pump.pump_voltage == 5.0
+    end
+
+    components = [saved["basic"], saved["nozzles"]..., saved["valves"]..., saved["pumps"]...]
+    gamemap = GameMap()
+    for (index, component) in enumerate(components)
+        @test isbitstype(typeof(component))
+        coord = TileCoord(index, 0)
+        set_surface_tile!(gamemap, coord)
+        set_component!(gamemap, coord, PlacedComponent(component, HexFrame.R_NEG, true, :primary))
+    end
+    mktempdir() do directory
+        current_path = joinpath(directory, "current_representations.jld2")
+        savemap(gamemap, current_path; game_version = v"0.1.0")
+        loaded = loadmap(current_path)
+        for (index, component) in enumerate(components)
+            placed = get_component(loaded, TileCoord(index, 0))
+            @test typeof(placed.component) === typeof(component)
+            @test placed.component === component
+            @test typeof(placed) === PlacedComponent{typeof(component)}
+            @test (placed.rotation, placed.mirrored, placed.ship) == (HexFrame.R_NEG, true, :primary)
+        end
+    end
+    tanks = HexFlowPersistence.HexFlowTankComponents
+    mktempdir() do directory
+        state_path = joinpath(directory, "optional_fluid.jld2")
+        states = [tanks.StoredFluidState(nothing), tanks.StoredFluidState(tanks.HexFluids.FUEL_LIQUID)]
+        JLD2.jldsave(state_path; states)
+        loaded_states = JLD2.load(state_path, "states"; typemap = HexFlowPersistence._build_map_typemap())
+        @test loaded_states == states
+        @test isnothing(tanks.get_stored_fluid(first(loaded_states)))
+        @test tanks.get_stored_fluid(last(loaded_states)) === tanks.HexFluids.FUEL_LIQUID
+    end
+    @test_throws ArgumentError JLD2.rconvert(nozzles.BasicNozzleCompBehav, (nozzle = first(saved["nozzles"]).nozzle, sprite = (sprite = :UnknownNozzle,)))
 end

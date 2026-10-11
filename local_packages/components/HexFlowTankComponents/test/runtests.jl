@@ -36,14 +36,14 @@ function register_vsources!(mna_state::MNA_State, tile::TileCoord, indices::Vara
 end
 
 "Construct a representative pressure-fed monoprop tank for tests."
-function make_pressurefed_tank(; liquid_charge::Float64 = 20.0, gas_charge::Float64 = 4.0, max_liquid_charge::Float64 = 40.0, max_gas_pressure::Float64 = 50.0, series_conductance::Float64 = 5.0)
+function make_pressurefed_tank(; liquid_charge::Float64 = 20.0, gas_charge::Float64 = 4.0, max_liquid_charge::Float64 = 40.0, max_gas_pressure::Float64 = 50.0, series_conductance::Float64 = 5.0, liquid_fluid::FluidType = HexFluids.MONOPROP_LIQUID)
     tank = PressureFedTankBehavFrag(
         initial_liquid_charge = liquid_charge,
         initial_gas_charge = gas_charge,
         max_liquid_charge = max_liquid_charge,
         max_gas_pressure = max_gas_pressure,
         gas_node = HexFrame.NODE_Q_POS,
-        initial_liquid_fluid = HexFluids.MONOPROP_LIQUID
+        initial_liquid_fluid = liquid_fluid
     )
     return PressureFedTankCompBehav(
         tank,
@@ -68,11 +68,11 @@ function make_gas_tank(; initial_charge::Float64 = 20.0)
 end
 
 "Construct an existing three-port liquid tank for regression tests."
-function make_liquid_tank(; initial_charge::Float64 = 20.0)
+function make_liquid_tank(; initial_charge::Float64 = 20.0, fluid::FluidType = HexFluids.MONOPROP_LIQUID)
     return ThevininTankCompBehav(
         LiquidTankBehavFrag,
         3;
-        fluid = HexFluids.MONOPROP_LIQUID,
+        fluid = fluid,
         max_charge = 40.0,
         max_voltage = 1.0,
         initial_charge = initial_charge,
@@ -91,7 +91,7 @@ end
     @test !gas_is_sealed(tank)
 
     # Stored liquid is seeded from initial_liquid_fluid when charge is positive
-    @test tank.stored_liquid.fluid === HexFluids.MONOPROP_LIQUID
+    @test get_stored_fluid(tank.stored_liquid) === HexFluids.MONOPROP_LIQUID
 
     # Full liquid initial charge: NOT pre-sealed, state is derived from charge
     full_tank = PressureFedTankBehavFrag(
@@ -107,7 +107,7 @@ end
     @test pressurefed_liquid_is_auto_full(full_tank)
     @test !pressurefed_liquid_is_auto_empty(full_tank)
     @test HexFlowTankComponents.compute_gas_pressure(full_tank) ≈ 50.0
-    @test full_tank.stored_liquid.fluid === HexFluids.MONOPROP_LIQUID
+    @test get_stored_fluid(full_tank.stored_liquid) === HexFluids.MONOPROP_LIQUID
 
     # Zero liquid charge: stored_liquid is nothing even when initial_liquid_fluid is supplied
     empty_tank = PressureFedTankBehavFrag(
@@ -118,7 +118,7 @@ end
         gas_node = HexFrame.NODE_Q_POS,
         initial_liquid_fluid = HexFluids.MONOPROP_LIQUID
     )
-    @test isnothing(empty_tank.stored_liquid.fluid)
+    @test isnothing(get_stored_fluid(empty_tank.stored_liquid))
 end
 
 @testset "Pressure-fed tank fragment: gas pressure formula" begin
@@ -189,12 +189,12 @@ end
 
     # Manual seals override auto-state helpers
     mid2 = make_pressurefed_tank(liquid_charge = 20.0, gas_charge = 4.0).tank
-    seal!(mid2.liquid_sealstate)
+    mid2 = @set mid2.liquid_sealstate = seal(mid2.liquid_sealstate)
     @test liquid_is_sealed(mid2)
     @test !pressurefed_liquid_is_auto_empty(mid2)  # sealed → not auto
     @test !pressurefed_liquid_source_active(mid2)
 
-    seal!(mid2.gas_sealstate)
+    mid2 = @set mid2.gas_sealstate = seal(mid2.gas_sealstate)
     @test gas_is_sealed(mid2)
     @test !pressurefed_gas_is_auto_empty(mid2)
     @test !pressurefed_gas_source_active(mid2)
@@ -202,7 +202,7 @@ end
 
 @testset "Pressure-fed tank fragment: set_tunables preserves seal state" begin
     tank = make_pressurefed_tank().tank
-    seal!(tank.liquid_sealstate)
+    tank = @set tank.liquid_sealstate = seal(tank.liquid_sealstate)
 
     tuned = set_tunables(tank, (45.0, 60.0, 25.0, 3.0))
     @test tuned.max_liquid_charge == 45.0
@@ -221,7 +221,7 @@ end
     mna = register_vsources!(MNA_State(), TEST_TILE, 1, 2)
     mna.vsource_currents[ElementID(TEST_TILE, 1)] = -6.0
     mna.vsource_currents[ElementID(TEST_TILE, 2)] = 12.0
-    update_flowbehav!(tank; tile = TEST_TILE, mna_state = mna)
+    tank = update_flowbehav(tank; tile = TEST_TILE, mna_state = mna)
     @test tank.liquid_state.charge ≈ 19.9
     @test tank.gas_state.charge ≈ 4.2
 
@@ -230,7 +230,7 @@ end
     emptying_mna = register_vsources!(MNA_State(), TEST_TILE, 1, 2)
     emptying_mna.vsource_currents[ElementID(TEST_TILE, 1)] = -6.0
     emptying_mna.vsource_currents[ElementID(TEST_TILE, 2)] = 60.0
-    update_flowbehav!(emptying_tank; tile = TEST_TILE, mna_state = emptying_mna)
+    emptying_tank = update_flowbehav(emptying_tank; tile = TEST_TILE, mna_state = emptying_mna)
     @test emptying_tank.liquid_state.charge == 0.0
     @test emptying_tank.gas_state.charge ≈ 3.0
     @test !liquid_is_sealed(emptying_tank)  # auto-empty, not sealed
@@ -241,7 +241,7 @@ end
     filling_mna = register_vsources!(MNA_State(), TEST_TILE, 1, 2)
     filling_mna.vsource_currents[ElementID(TEST_TILE, 1)] = 6.0
     filling_mna.vsource_currents[ElementID(TEST_TILE, 2)] = -60.0
-    update_flowbehav!(filling_tank; tile = TEST_TILE, mna_state = filling_mna)
+    filling_tank = update_flowbehav(filling_tank; tile = TEST_TILE, mna_state = filling_mna)
     @test filling_tank.liquid_state.charge == 40.0
     @test filling_tank.gas_state.charge ≈ 1.0
     @test !liquid_is_sealed(filling_tank)  # auto-full, not sealed
@@ -252,7 +252,7 @@ end
     gas_uf_mna = register_vsources!(MNA_State(), TEST_TILE, 1, 2)
     gas_uf_mna.vsource_currents[ElementID(TEST_TILE, 1)] = -6.0
     gas_uf_mna.vsource_currents[ElementID(TEST_TILE, 2)] = -6.0
-    update_flowbehav!(gas_underflow; tile = TEST_TILE, mna_state = gas_uf_mna)
+    gas_underflow = update_flowbehav(gas_underflow; tile = TEST_TILE, mna_state = gas_uf_mna)
     @test gas_underflow.liquid_state.charge ≈ 14.9
     @test gas_underflow.gas_state.charge == 0.0
     @test !liquid_is_sealed(gas_underflow)
@@ -263,7 +263,7 @@ end
     gas_only = make_pressurefed_tank(liquid_charge = 15.0, gas_charge = 1.0).tank
     gas_only_mna = register_vsources!(MNA_State(), TEST_TILE, 2)
     gas_only_mna.vsource_currents[ElementID(TEST_TILE, 2)] = 6.0
-    update_flowbehav!(gas_only; tile = TEST_TILE, mna_state = gas_only_mna)
+    gas_only = update_flowbehav(gas_only; tile = TEST_TILE, mna_state = gas_only_mna)
     @test gas_only.liquid_state.charge ≈ 15.0
     @test gas_only.gas_state.charge ≈ 1.1
 
@@ -271,33 +271,33 @@ end
     liq_only = make_pressurefed_tank(liquid_charge = 15.0, gas_charge = 1.0).tank
     liq_only_mna = register_vsources!(MNA_State(), TEST_TILE, 1)
     liq_only_mna.vsource_currents[ElementID(TEST_TILE, 1)] = -6.0
-    update_flowbehav!(liq_only; tile = TEST_TILE, mna_state = liq_only_mna)
+    liq_only = update_flowbehav(liq_only; tile = TEST_TILE, mna_state = liq_only_mna)
     @test liq_only.liquid_state.charge ≈ 14.9
     @test liq_only.gas_state.charge ≈ 1.0
 
     # Pruned sources: no update
     pruned = make_pressurefed_tank(liquid_charge = 12.0, gas_charge = 3.0).tank
-    update_flowbehav!(pruned; tile = TEST_TILE, mna_state = MNA_State())
+    pruned = update_flowbehav(pruned; tile = TEST_TILE, mna_state = MNA_State())
     @test pruned.liquid_state.charge ≈ 12.0
     @test pruned.gas_state.charge ≈ 3.0
 
     # Manually sealed liquid side ignores stale current
     liq_sealed = make_pressurefed_tank(liquid_charge = 15.0, gas_charge = 2.0).tank
-    seal!(liq_sealed.liquid_sealstate)
+    liq_sealed = @set liq_sealed.liquid_sealstate = seal(liq_sealed.liquid_sealstate)
     sealed_mna = register_vsources!(MNA_State(), TEST_TILE, 1, 2)
     sealed_mna.vsource_currents[ElementID(TEST_TILE, 1)] = 60.0   # large inflow, should be ignored
     sealed_mna.vsource_currents[ElementID(TEST_TILE, 2)] = 6.0
-    update_flowbehav!(liq_sealed; tile = TEST_TILE, mna_state = sealed_mna)
+    liq_sealed = update_flowbehav(liq_sealed; tile = TEST_TILE, mna_state = sealed_mna)
     @test liq_sealed.liquid_state.charge == 15.0  # unchanged
     @test liq_sealed.gas_state.charge ≈ 2.1  # gas still updated
 
     # Manually sealed gas side ignores stale current
     gas_sealed_tank = make_pressurefed_tank(liquid_charge = 15.0, gas_charge = 2.0).tank
-    seal!(gas_sealed_tank.gas_sealstate)
+    gas_sealed_tank = @set gas_sealed_tank.gas_sealstate = seal(gas_sealed_tank.gas_sealstate)
     gas_sealed_mna = register_vsources!(MNA_State(), TEST_TILE, 1, 2)
     gas_sealed_mna.vsource_currents[ElementID(TEST_TILE, 1)] = -6.0
     gas_sealed_mna.vsource_currents[ElementID(TEST_TILE, 2)] = 60.0  # large inflow, should be ignored
-    update_flowbehav!(gas_sealed_tank; tile = TEST_TILE, mna_state = gas_sealed_mna)
+    gas_sealed_tank = update_flowbehav(gas_sealed_tank; tile = TEST_TILE, mna_state = gas_sealed_mna)
     @test gas_sealed_tank.liquid_state.charge ≈ 14.9
     @test gas_sealed_tank.gas_state.charge == 2.0  # unchanged
 end
@@ -352,6 +352,10 @@ end
         t isa TunableProps
     end
     @test tunables[6] isa EnumTunableProps{HexFluids.FluidType}
+    @test tunables[3].type_desc == "Liquid Charge"
+    @test tunables[3].current_val == comp.tank.liquid_state.charge
+    @test tunables[4].type_desc == "Gas Charge"
+    @test tunables[4].current_val == comp.tank.gas_state.charge
     @test tunables[6].current_val == HexFluids.MONOPROP_LIQUID  # seeded from initial_liquid_fluid
 
     tuned_comp = set_tunables(comp, (50.0, 70.0, 15.0, 5.0, 8.0, HexFluids.FUEL_LIQUID))
@@ -360,7 +364,7 @@ end
     @test tuned_comp.tank.liquid_state.charge == 15.0
     @test tuned_comp.tank.gas_state.charge == 5.0
     @test tuned_comp.series_conductance == 8.0
-    @test tuned_comp.tank.stored_liquid.fluid === HexFluids.FUEL_LIQUID
+    @test get_stored_fluid(tuned_comp.tank.stored_liquid) === HexFluids.FUEL_LIQUID
 
     # Filled tank emits concrete FluidSource for stored liquid
     decls = produce_rel_fluid_declarations(comp)
@@ -385,7 +389,7 @@ end
     @test get_component_wet_mass(comp; fluid = HexFluids.MONOPROP_LIQUID) ≈ 20.0 * liquid_density
     @test get_component_wet_mass(comp; fluid = HexFluids.COLD_GAS) ≈ 4.0 * gas_density
     @test get_component_wet_mass(comp; fluid = HexFluids.FUEL_LIQUID) == 0.0  # wrong fluid returns 0
-    comp.tank.gas_state.charge = -2.0
+    comp = @set comp.tank.gas_state.charge = -2.0
     @test get_component_wet_mass(comp; fluid = HexFluids.COLD_GAS) == 0.0
 
     # Empty liquid side: liquid contribution is zero regardless of query fluid
@@ -401,7 +405,7 @@ end
     @test isvalidrequest(can_be_moved(make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 0.0)))
     # Manually sealed still not movable if charge present
     sealed_movable = make_pressurefed_tank(liquid_charge = 39.0, gas_charge = 0.0)
-    seal!(sealed_movable.tank.liquid_sealstate)
+    sealed_movable = @set sealed_movable.tank.liquid_sealstate = seal(sealed_movable.tank.liquid_sealstate)
     @test !isvalidrequest(can_be_moved(sealed_movable))
 end
 
@@ -426,7 +430,7 @@ end
                 (3.0, true, false, false),
             )
             state = make_pressurefed_tank(liquid_charge = 12.0, gas_charge = charge).tank
-            sealed && seal!(state.gas_sealstate)
+            sealed && (state = @set state.gas_sealstate = seal(state.gas_sealstate))
             action = only(item for item in get_actions(state) if item.id === :vent_and_seal_gas)
 
             @test action.enabled == expected_enabled
@@ -446,7 +450,7 @@ end
                 (12.0, true, false, false),
             )
             state = make_pressurefed_tank(liquid_charge = charge, gas_charge = 3.0).tank
-            sealed && seal!(state.liquid_sealstate)
+            sealed && (state = @set state.liquid_sealstate = seal(state.liquid_sealstate))
             action = only(item for item in get_actions(state) if item.id === :vent_and_seal_liquid)
 
             @test action.enabled == expected_enabled
@@ -459,7 +463,7 @@ end
     end
 
     # Vent and Seal Gas: zeroes gas charge and seals gas side only
-    result = do_action!(tank, :vent_and_seal_gas)
+    tank, result = do_action(tank, :vent_and_seal_gas)
     @test isvalidrequest(result)
     @test tank.gas_state.charge == 0.0
     @test gas_is_sealed(tank)
@@ -467,12 +471,12 @@ end
     @test unwrap(result) == "Gas vented and sealed"
 
     # Unseal Gas: clears gas seal
-    result = do_action!(tank, :unseal_gas)
+    tank, result = do_action(tank, :unseal_gas)
     @test isvalidrequest(result)
     @test !gas_is_sealed(tank)
 
     # Vent and Seal Liquid: zeroes liquid charge and seals liquid side only
-    result = do_action!(tank, :vent_and_seal_liquid)
+    tank, result = do_action(tank, :vent_and_seal_liquid)
     @test isvalidrequest(result)
     @test tank.liquid_state.charge == 0.0
     @test liquid_is_sealed(tank)
@@ -480,13 +484,13 @@ end
     @test unwrap(result) == "Liquid vented and sealed"
 
     # Unseal Liquid: clears liquid seal
-    result = do_action!(tank, :unseal_liquid)
+    tank, result = do_action(tank, :unseal_liquid)
     @test isvalidrequest(result)
     @test !liquid_is_sealed(tank)
 
     # Seal Both: seals both without changing charge
     tank2 = make_pressurefed_tank(liquid_charge = 12.0, gas_charge = 3.0).tank
-    result = do_action!(tank2, :seal_both)
+    tank2, result = do_action(tank2, :seal_both)
     @test isvalidrequest(result)
     @test liquid_is_sealed(tank2)
     @test gas_is_sealed(tank2)
@@ -494,29 +498,29 @@ end
     @test tank2.gas_state.charge == 3.0
 
     # Unseal both sides independently
-    do_action!(tank2, :unseal_liquid)
+    tank2, result = do_action(tank2, :unseal_liquid)
     @test !liquid_is_sealed(tank2)
     @test gas_is_sealed(tank2)
-    do_action!(tank2, :unseal_gas)
+    tank2, result = do_action(tank2, :unseal_gas)
     @test !gas_is_sealed(tank2)
 
     # Unrecognised action
-    @test_throws ArgumentError do_action!(tank, :nonexistent)
+    @test_throws ArgumentError do_action(tank, :nonexistent)
 end
 
 @testset "Pressure-fed tank: empty vent actions are safe" begin
     for initially_sealed in (false, true)
         empty_gas = make_pressurefed_tank(liquid_charge = 12.0, gas_charge = 0.0).tank
-        initially_sealed && seal!(empty_gas.gas_sealstate)
-        result = do_action!(empty_gas, :vent_and_seal_gas)
+        initially_sealed && (empty_gas = @set empty_gas.gas_sealstate = seal(empty_gas.gas_sealstate))
+        empty_gas, result = do_action(empty_gas, :vent_and_seal_gas)
         @test isvalidrequest(result)
         @test empty_gas.gas_state.charge == 0.0
         @test gas_is_sealed(empty_gas)
         @test empty_gas.liquid_state.charge == 12.0
 
         empty_liquid = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 3.0).tank
-        initially_sealed && seal!(empty_liquid.liquid_sealstate)
-        result = do_action!(empty_liquid, :vent_and_seal_liquid)
+        initially_sealed && (empty_liquid = @set empty_liquid.liquid_sealstate = seal(empty_liquid.liquid_sealstate))
+        empty_liquid, result = do_action(empty_liquid, :vent_and_seal_liquid)
         @test isvalidrequest(result)
         @test empty_liquid.liquid_state.charge == 0.0
         @test liquid_is_sealed(empty_liquid)
@@ -564,7 +568,7 @@ end
 
     # Manually sealed sides: no probe for sealed side
     liq_empty_gas_sealed = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 4.0)
-    seal!(liq_empty_gas_sealed.tank.gas_sealstate)  # gas sealed (not auto-disconnected)
+    liq_empty_gas_sealed = @set liq_empty_gas_sealed.tank.gas_sealstate = seal(liq_empty_gas_sealed.tank.gas_sealstate)  # gas sealed (not auto-disconnected)
     probe_partial = get_reactivation_probe(liq_empty_gas_sealed)
     @test probe_partial isa ReactivationProbe
     @test probe_partial.rel_elements[1].active  # liquid probed
@@ -572,59 +576,61 @@ end
 
     # Both sides manually sealed: no probe
     both_sealed = make_pressurefed_tank(liquid_charge = 20.0, gas_charge = 4.0)
-    seal!(both_sealed.tank.liquid_sealstate)
-    seal!(both_sealed.tank.gas_sealstate)
+    both_sealed = @set both_sealed.tank.liquid_sealstate = seal(both_sealed.tank.liquid_sealstate)
+    both_sealed = @set both_sealed.tank.gas_sealstate = seal(both_sealed.tank.gas_sealstate)
     @test isnothing(get_reactivation_probe(both_sealed))
 end
 
 @testset "Pressure-fed tank: reactivation probe classify and commit" begin
-    "Build a DerivedMapState and MNA_State with a registered vsource for classify tests."
-    function setup_pf_probe(comp, tile::TileCoord, index::Int, current::Float64; rotation = HexFrame.Q_POS)
-        (frag_liq, frag_gas) = produce_rel_elements(comp.tank)
-        frag = index == 1 ? frag_liq : frag_gas
-        active_frag = @set frag.active = true
-        abs_elem = map_element(active_frag, tile, index, rotation)
+    "Build speculative state with currents for the supplied pressure-fed source indices."
+    function setup_pf_probe(comp::PressureFedTankCompBehav, tile::TileCoord, currents::Pair{Int, Float64}...; rotation::HexAxis = HexFrame.Q_POS)
+        elements = produce_rel_elements(comp.tank)
         dm = DerivedMapState()
-        push!(dm.filteredelements, abs_elem)
         mna = MNA_State()
-        mna.vsource_currents[abs_elem.id] = current
+        for (index, current) in currents
+            frag = elements[index]
+            active_frag = @set frag.active = true
+            abs_elem = map_element(active_frag, tile, index, rotation)
+            push!(dm.filteredelements, abs_elem)
+            mna.vsource_currents[abs_elem.id] = current
+        end
         return dm, mna
     end
 
     # Liquid auto-empty: useful on positive inflow, harmful on outflow
     liq_empty = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 4.0)
-    dm_pos, mna_pos = setup_pf_probe(liq_empty, TEST_TILE, 1, 5.0)
+    dm_pos, mna_pos = setup_pf_probe(liq_empty, TEST_TILE, 1 => 5.0)
     @test classify_reactivation_probe(liq_empty; tile = TEST_TILE, derivedmapstate = dm_pos, mna_state = mna_pos) === PROBE_USEFUL
     @test liq_empty.tank.liquid_state.charge == 0.0
     @test !liquid_is_force_reactivated(liq_empty.tank)
-    commit_reactivation_probe!(liq_empty; tile = TEST_TILE, derivedmapstate = dm_pos, mna_state = mna_pos)
+    liq_empty = commit_reactivation_probe(liq_empty; tile = TEST_TILE, derivedmapstate = dm_pos, mna_state = mna_pos)
     @test liquid_is_force_reactivated(liq_empty.tank)
     @test !gas_is_force_reactivated(liq_empty.tank)
 
     liq_empty2 = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 4.0)
-    dm_neg, mna_neg = setup_pf_probe(liq_empty2, TEST_TILE, 1, -5.0)
+    dm_neg, mna_neg = setup_pf_probe(liq_empty2, TEST_TILE, 1 => -5.0)
     @test classify_reactivation_probe(liq_empty2; tile = TEST_TILE, derivedmapstate = dm_neg, mna_state = mna_neg) === PROBE_HARMFUL
     @test !liquid_is_force_reactivated(liq_empty2.tank)
 
     # Liquid auto-full: useful on negative outflow, harmful on inflow (low gas charge to avoid overpressure)
     liq_full = make_pressurefed_tank(liquid_charge = 40.0, gas_charge = 0.5)
-    dm_full_neg, mna_full_neg = setup_pf_probe(liq_full, TEST_TILE, 1, -5.0)
+    dm_full_neg, mna_full_neg = setup_pf_probe(liq_full, TEST_TILE, 1 => -5.0)
     @test classify_reactivation_probe(liq_full; tile = TEST_TILE, derivedmapstate = dm_full_neg, mna_state = mna_full_neg) === PROBE_USEFUL
     @test liq_full.tank.liquid_state.charge == 40.0
-    commit_reactivation_probe!(liq_full; tile = TEST_TILE, derivedmapstate = dm_full_neg, mna_state = mna_full_neg)
+    liq_full = commit_reactivation_probe(liq_full; tile = TEST_TILE, derivedmapstate = dm_full_neg, mna_state = mna_full_neg)
     @test liquid_is_force_reactivated(liq_full.tank)
 
     liq_full2 = make_pressurefed_tank(liquid_charge = 40.0, gas_charge = 0.5)
-    dm_full_pos, mna_full_pos = setup_pf_probe(liq_full2, TEST_TILE, 1, 5.0)
+    dm_full_pos, mna_full_pos = setup_pf_probe(liq_full2, TEST_TILE, 1 => 5.0)
     @test classify_reactivation_probe(liq_full2; tile = TEST_TILE, derivedmapstate = dm_full_pos, mna_state = mna_full_pos) === PROBE_HARMFUL
     @test !liquid_is_force_reactivated(liq_full2.tank)
 
     # Gas auto-empty: useful on positive inflow
     gas_empty = make_pressurefed_tank(liquid_charge = 20.0, gas_charge = 0.0)
-    dm_ge_pos, mna_ge_pos = setup_pf_probe(gas_empty, TEST_TILE, 2, 5.0)
+    dm_ge_pos, mna_ge_pos = setup_pf_probe(gas_empty, TEST_TILE, 2 => 5.0)
     @test classify_reactivation_probe(gas_empty; tile = TEST_TILE, derivedmapstate = dm_ge_pos, mna_state = mna_ge_pos) === PROBE_USEFUL
     @test gas_empty.tank.gas_state.charge == 0.0
-    commit_reactivation_probe!(gas_empty; tile = TEST_TILE, derivedmapstate = dm_ge_pos, mna_state = mna_ge_pos)
+    gas_empty = commit_reactivation_probe(gas_empty; tile = TEST_TILE, derivedmapstate = dm_ge_pos, mna_state = mna_ge_pos)
     @test gas_is_force_reactivated(gas_empty.tank)
     @test !liquid_is_force_reactivated(gas_empty.tank)
 
@@ -634,23 +640,17 @@ end
 
     # Pruned companion side: still useful when the remaining side can reactivate independently
     liq_empty_gas_pruned = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 0.0)
-    dm_liq_only, mna_liq_only = setup_pf_probe(liq_empty_gas_pruned, TEST_TILE, 1, 5.0)
+    dm_liq_only, mna_liq_only = setup_pf_probe(liq_empty_gas_pruned, TEST_TILE, 1 => 5.0)
     @test classify_reactivation_probe(liq_empty_gas_pruned; tile = TEST_TILE, derivedmapstate = dm_liq_only, mna_state = mna_liq_only) === PROBE_USEFUL
-    commit_reactivation_probe!(liq_empty_gas_pruned; tile = TEST_TILE, derivedmapstate = dm_liq_only, mna_state = mna_liq_only)
+    liq_empty_gas_pruned = commit_reactivation_probe(liq_empty_gas_pruned; tile = TEST_TILE, derivedmapstate = dm_liq_only, mna_state = mna_liq_only)
     @test liquid_is_force_reactivated(liq_empty_gas_pruned.tank)
     @test !gas_is_force_reactivated(liq_empty_gas_pruned.tank)
 
     # Gas overpressure: useful when gas outflow is useful and liquid side stays neutral
     overpressure = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 22.0)
-    dm_op_gas, mna_op_gas = setup_pf_probe(overpressure, TEST_TILE, 2, -5.0)  # gas outflow: useful
-    # Must also register the liquid vsource since both sides are probed
-    (frag_liq, _) = produce_rel_elements(overpressure.tank)
-    active_liq = @set frag_liq.active = true
-    abs_liq = map_element(active_liq, TEST_TILE, 1, HexFrame.Q_POS)
-    push!(dm_op_gas.filteredelements, abs_liq)
-    mna_op_gas.vsource_currents[abs_liq.id] = 0.0  # liquid neutral
+    dm_op_gas, mna_op_gas = setup_pf_probe(overpressure, TEST_TILE, 1 => 0.0, 2 => -5.0)  # liquid neutral, gas outflow useful
     @test classify_reactivation_probe(overpressure; tile = TEST_TILE, derivedmapstate = dm_op_gas, mna_state = mna_op_gas) === PROBE_USEFUL
-    commit_reactivation_probe!(overpressure; tile = TEST_TILE, derivedmapstate = dm_op_gas, mna_state = mna_op_gas)
+    overpressure = commit_reactivation_probe(overpressure; tile = TEST_TILE, derivedmapstate = dm_op_gas, mna_state = mna_op_gas)
     @test !liquid_is_force_reactivated(overpressure.tank)
     @test gas_is_force_reactivated(overpressure.tank)
 
@@ -667,16 +667,13 @@ end
             @test probe.rel_elements[1].active
             @test probe.rel_elements[2].active
 
-            dm_liquid, mna_liquid = setup_pf_probe(comp, TEST_TILE, 1, liquid_current)
-            dm_gas, mna_gas = setup_pf_probe(comp, TEST_TILE, 2, gas_current)
-            append!(dm_liquid.filteredelements, dm_gas.filteredelements)
-            merge!(mna_liquid.vsource_currents, mna_gas.vsource_currents)
+            dm, mna = setup_pf_probe(comp, TEST_TILE, 1 => liquid_current, 2 => gas_current)
 
-            @test classify_reactivation_probe(comp; tile = TEST_TILE, derivedmapstate = dm_liquid, mna_state = mna_liquid) === expected_class
+            @test classify_reactivation_probe(comp; tile = TEST_TILE, derivedmapstate = dm, mna_state = mna) === expected_class
             @test !liquid_is_force_reactivated(comp.tank)
             @test !gas_is_force_reactivated(comp.tank)
 
-            commit_reactivation_probe!(comp; tile = TEST_TILE, derivedmapstate = dm_liquid, mna_state = mna_liquid)
+            comp = commit_reactivation_probe(comp; tile = TEST_TILE, derivedmapstate = dm, mna_state = mna)
             @test liquid_is_force_reactivated(comp.tank) === force_liquid
             @test gas_is_force_reactivated(comp.tank) === force_gas
         end
@@ -697,20 +694,7 @@ end
     @test isnothing(get_stored_fluid(comp_empty))
 
     # Fuel and oxidiser tanks seed their respective fluid when non-empty
-    fuel_tank = PressureFedTankCompBehav(
-        PressureFedTankBehavFrag(
-            initial_liquid_charge = 20.0,
-            initial_gas_charge = 2.0,
-            max_liquid_charge = 40.0,
-            max_gas_pressure = 50.0,
-            gas_node = HexFrame.NODE_Q_POS,
-            initial_liquid_fluid = HexFluids.FUEL_LIQUID
-        ),
-        (HexFrame.NODE_Q_NEG,),
-        5.0,
-        HexFluids.COLD_GAS,
-        NoRotationBehavFrag()
-    )
+    fuel_tank = make_pressurefed_tank(gas_charge = 2.0, liquid_fluid = HexFluids.FUEL_LIQUID)
     @test get_stored_fluid(fuel_tank) === HexFluids.FUEL_LIQUID
 end
 
@@ -732,20 +716,7 @@ end
     @test empty_decls[1] === RelativeFluidDeclaration(HexFrame.NODE_Q_POS, FluidSource(HexFluids.COLD_GAS, 300.0))
 
     # Fuel-filled tank emits its stored fuel fluid
-    fuel_tank = PressureFedTankCompBehav(
-        PressureFedTankBehavFrag(
-            initial_liquid_charge = 20.0,
-            initial_gas_charge = 2.0,
-            max_liquid_charge = 40.0,
-            max_gas_pressure = 50.0,
-            gas_node = HexFrame.NODE_Q_POS,
-            initial_liquid_fluid = HexFluids.FUEL_LIQUID
-        ),
-        (HexFrame.NODE_Q_NEG,),
-        5.0,
-        HexFluids.COLD_GAS,
-        NoRotationBehavFrag()
-    )
+    fuel_tank = make_pressurefed_tank(gas_charge = 2.0, liquid_fluid = HexFluids.FUEL_LIQUID)
     fuel_decls = produce_rel_fluid_declarations(fuel_tank)
     @test fuel_decls[2].declaration.fluid_type === HexFluids.FUEL_LIQUID
 end
@@ -757,16 +728,14 @@ end
     @test tuned.tank.max_liquid_charge == 50.0
     @test tuned.tank.liquid_state.charge == 10.0
     @test tuned.series_conductance == 8.0
-    @test tuned.tank.stored_liquid.fluid === HexFluids.FUEL_LIQUID
+    @test get_stored_fluid(tuned.tank.stored_liquid) === HexFluids.FUEL_LIQUID
 
     # Original component is not affected
-    @test comp.tank.stored_liquid.fluid === HexFluids.MONOPROP_LIQUID
+    @test get_stored_fluid(comp.tank.stored_liquid) === HexFluids.MONOPROP_LIQUID
 
-    # New and original have independent StoredFluidState objects
-    @test !==(tuned.tank.stored_liquid, comp.tank.stored_liquid)
 end
 
-@testset "Pressure-fed liquid switching: update_flowbehav! clears fluid on empty" begin
+@testset "Pressure-fed liquid switching: update_flowbehav clears fluid on empty" begin
     comp = make_pressurefed_tank(liquid_charge = 0.1, gas_charge = 2.0)
     @test get_stored_fluid(comp) === HexFluids.MONOPROP_LIQUID
 
@@ -774,13 +743,13 @@ end
     mna = register_vsources!(MNA_State(), TEST_TILE, 1, 2)
     mna.vsource_currents[ElementID(TEST_TILE, 1)] = -1000.0
     mna.vsource_currents[ElementID(TEST_TILE, 2)] = 0.0
-    update_flowbehav!(comp; tile = TEST_TILE, mna_state = mna)
+    comp = update_flowbehav(comp; tile = TEST_TILE, mna_state = mna)
 
     @test comp.tank.liquid_state.charge == 0.0
     @test isnothing(get_stored_fluid(comp))  # cleared on empty
 end
 
-@testset "Pressure-fed liquid switching: update_flowbehav! adopts fluid on refill" begin
+@testset "Pressure-fed liquid switching: update_flowbehav adopts fluid on refill" begin
     comp = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 4.0)
     @test isnothing(get_stored_fluid(comp))
 
@@ -792,7 +761,7 @@ end
     mna = register_vsources!(MNA_State(), TEST_TILE, 1, 2)
     mna.vsource_currents[ElementID(TEST_TILE, 1)] = 6.0  # inflow raises liquid charge
     mna.vsource_currents[ElementID(TEST_TILE, 2)] = 0.0
-    update_flowbehav!(comp; tile = TEST_TILE, mna_state = mna, derivedmapstate = dm)
+    comp = update_flowbehav(comp; tile = TEST_TILE, mna_state = mna, derivedmapstate = dm)
 
     @test comp.tank.liquid_state.charge > 0.0
     @test get_stored_fluid(comp) === HexFluids.FUEL_LIQUID  # adopted from NODE_INTERNAL_1
@@ -805,7 +774,7 @@ end
     mna = register_vsources!(MNA_State(), TEST_TILE, 1, 2)
     mna.vsource_currents[ElementID(TEST_TILE, 1)] = 6.0
     mna.vsource_currents[ElementID(TEST_TILE, 2)] = 0.0
-    update_flowbehav!(comp; tile = TEST_TILE, mna_state = mna)  # no derivedmapstate
+    comp = update_flowbehav(comp; tile = TEST_TILE, mna_state = mna)  # no derivedmapstate
 
     @test comp.tank.liquid_state.charge > 0.0
     @test isnothing(get_stored_fluid(comp))  # no adoption without derived state
@@ -813,16 +782,23 @@ end
 
 @testset "Pressure-fed liquid switching: fragment set_tunables preserves stored liquid" begin
     tank = make_pressurefed_tank().tank
-    @test tank.stored_liquid.fluid === HexFluids.MONOPROP_LIQUID
+    @test get_stored_fluid(tank.stored_liquid) === HexFluids.MONOPROP_LIQUID
 
-    # set_tunables creates a fresh StoredFluidState with the same fluid (no shared reference)
+    # Updated tunables preserve the stored fluid value
     tuned = set_tunables(tank, (50.0, 60.0, 25.0, 3.0))
-    @test tuned.stored_liquid.fluid === HexFluids.MONOPROP_LIQUID
-    @test !==(tuned.stored_liquid, tank.stored_liquid)  # independent objects
+    @test get_stored_fluid(tuned.stored_liquid) === HexFluids.MONOPROP_LIQUID
+    @test get_stored_fluid(tank.stored_liquid) === HexFluids.MONOPROP_LIQUID
 
     # Tuning charge to zero clears stored_liquid (consistent with empty semantics)
     tuned_empty = set_tunables(tank, (40.0, 50.0, 0.0, 0.0))
-    @test isnothing(tuned_empty.stored_liquid.fluid)
+    @test isnothing(get_stored_fluid(tuned_empty.stored_liquid))
+
+    overfilled = set_tunables(tank, (10.0, 50.0, 25.0, -3.0))
+    @test overfilled.liquid_state === TankState(10.0)
+    @test overfilled.gas_state === TankState(-3.0)
+    underfilled = set_tunables(tank, (40.0, 50.0, -5.0, 3.0))
+    @test underfilled.liquid_state === TankState(0.0)
+    @test isnothing(get_stored_fluid(underfilled.stored_liquid))
 end
 
 @testset "Existing tank regression coverage" begin
@@ -839,19 +815,19 @@ end
 
     gas_mna = register_vsources!(MNA_State(), TEST_TILE, 1)
     gas_mna.vsource_currents[ElementID(TEST_TILE, 1)] = -6.0
-    update_flowbehav!(gas_comp; tile = TEST_TILE, mna_state = gas_mna)
+    gas_comp = update_flowbehav(gas_comp; tile = TEST_TILE, mna_state = gas_mna)
     @test gas_comp.tank.tank.state.charge ≈ 19.9
 
     # Near-empty: clamps to zero and becomes auto-disconnected (not stalled)
     gas_near_empty = make_gas_tank(initial_charge = 0.05)
     gas_near_empty_mna = register_vsources!(MNA_State(), TEST_TILE, 1)
     gas_near_empty_mna.vsource_currents[ElementID(TEST_TILE, 1)] = -6.0
-    update_flowbehav!(gas_near_empty; tile = TEST_TILE, mna_state = gas_near_empty_mna)
+    gas_near_empty = update_flowbehav(gas_near_empty; tile = TEST_TILE, mna_state = gas_near_empty_mna)
     @test gas_near_empty.tank.tank.state.charge == 0.0
     @test isvalidrequest(can_be_moved(gas_near_empty))  # movable when empty
 
     # Vent and Seal action empties and seals
-    result = do_action!(gas_comp, :vent_and_seal)
+    gas_comp, result = do_action(gas_comp, :vent_and_seal)
     @test isvalidrequest(result)
     @test gas_comp.tank.tank.state.charge == 0.0
     @test is_sealed(gas_comp.tank.tank.sealstate)
@@ -870,7 +846,7 @@ end
 
     liquid_mna = register_vsources!(MNA_State(), TEST_TILE, 1)
     liquid_mna.vsource_currents[ElementID(TEST_TILE, 1)] = -6.0
-    update_flowbehav!(liquid_comp; tile = TEST_TILE, mna_state = liquid_mna)
+    liquid_comp = update_flowbehav(liquid_comp; tile = TEST_TILE, mna_state = liquid_mna)
     @test liquid_comp.tank.tank.state.charge ≈ 19.9
 end
 
@@ -878,14 +854,14 @@ end
 # Thevinin Tank (SealState + New Semantics)
 # ===============================================================
 
-@testset "SealStateBehavFrag" begin
-    s = SealStateBehavFrag()
+@testset "SealState" begin
+    s = SealState()
     @test !is_sealed(s)
 
-    seal!(s)
+    s = seal(s)
     @test is_sealed(s)
 
-    unseal!(s)
+    s = unseal(s)
     @test !is_sealed(s)
 end
 
@@ -908,7 +884,7 @@ end
     @test tank_is_auto_full(full_tank)
 
     # Sealed tanks are never auto-empty or auto-full — they are manually sealed
-    seal!(empty_tank.sealstate)
+    empty_tank = @set empty_tank.sealstate = seal(empty_tank.sealstate)
     @test !tank_is_active(empty_tank)
     @test !tank_is_auto_empty(empty_tank)
     @test !tank_is_auto_full(empty_tank)
@@ -936,7 +912,7 @@ end
 
     # Manually sealed: inactive regardless of charge
     sealed_gas = make_gas_tank(initial_charge = 20.0)
-    seal!(sealed_gas.tank.tank.sealstate)
+    sealed_gas = @set sealed_gas.tank.tank.sealstate = seal(sealed_gas.tank.tank.sealstate)
     sealed_elems = produce_rel_elements(sealed_gas)
     @test !sealed_elems[1].active
 end
@@ -977,46 +953,46 @@ end
     @test 0.0 ≤ vsource_half.value ≤ 1.0
 end
 
-@testset "ThevininTankCompBehav: update_flowbehav! charge clamping" begin
+@testset "ThevininTankCompBehav: update_flowbehav charge clamping" begin
     # Normal mid-range update
     gas = make_gas_tank(initial_charge = 20.0)
     mna = register_vsources!(MNA_State(), TEST_TILE, 1)
     mna.vsource_currents[ElementID(TEST_TILE, 1)] = -6.0  # outflow
-    update_flowbehav!(gas; tile = TEST_TILE, mna_state = mna)
+    gas = update_flowbehav(gas; tile = TEST_TILE, mna_state = mna)
     @test gas.tank.tank.state.charge ≈ 19.9
 
     # Underflow clamps to zero
     gas_near_empty = make_gas_tank(initial_charge = 0.05)
     mna_empty = register_vsources!(MNA_State(), TEST_TILE, 1)
     mna_empty.vsource_currents[ElementID(TEST_TILE, 1)] = -6.0
-    update_flowbehav!(gas_near_empty; tile = TEST_TILE, mna_state = mna_empty)
+    gas_near_empty = update_flowbehav(gas_near_empty; tile = TEST_TILE, mna_state = mna_empty)
     @test gas_near_empty.tank.tank.state.charge == 0.0
 
     # Overflow clamps to max_charge
     gas_near_full = make_gas_tank(initial_charge = 39.95)
     mna_full = register_vsources!(MNA_State(), TEST_TILE, 1)
     mna_full.vsource_currents[ElementID(TEST_TILE, 1)] = 6.0  # inflow
-    update_flowbehav!(gas_near_full; tile = TEST_TILE, mna_state = mna_full)
+    gas_near_full = update_flowbehav(gas_near_full; tile = TEST_TILE, mna_state = mna_full)
     @test gas_near_full.tank.tank.state.charge == 40.0
 
     # Sealed tanks ignore stale current even when source is present
     gas_sealed = make_gas_tank(initial_charge = 20.0)
-    seal!(gas_sealed.tank.tank.sealstate)
+    gas_sealed = @set gas_sealed.tank.tank.sealstate = seal(gas_sealed.tank.tank.sealstate)
     mna_sealed = register_vsources!(MNA_State(), TEST_TILE, 1)
     mna_sealed.vsource_currents[ElementID(TEST_TILE, 1)] = -60.0
-    update_flowbehav!(gas_sealed; tile = TEST_TILE, mna_state = mna_sealed)
+    gas_sealed = update_flowbehav(gas_sealed; tile = TEST_TILE, mna_state = mna_sealed)
     @test gas_sealed.tank.tank.state.charge == 20.0  # unchanged
 
     # Pruned source: no update
     gas_pruned = make_gas_tank(initial_charge = 20.0)
-    update_flowbehav!(gas_pruned; tile = TEST_TILE, mna_state = MNA_State())
+    gas_pruned = update_flowbehav(gas_pruned; tile = TEST_TILE, mna_state = MNA_State())
     @test gas_pruned.tank.tank.state.charge == 20.0
 
     # Auto-empty (charge == 0): accepts probe current when vsource is present
     gas_boundary = make_gas_tank(initial_charge = 0.0)
     mna_boundary = register_vsources!(MNA_State(), TEST_TILE, 1)
     mna_boundary.vsource_currents[ElementID(TEST_TILE, 1)] = 6.0  # inflow from accepted probe
-    update_flowbehav!(gas_boundary; tile = TEST_TILE, mna_state = mna_boundary)
+    gas_boundary = update_flowbehav(gas_boundary; tile = TEST_TILE, mna_state = mna_boundary)
     @test gas_boundary.tank.tank.state.charge > 0.0  # moved off boundary
 end
 
@@ -1040,7 +1016,7 @@ end
                     (20.0, true, false, false),
                 )
                 state = make_tank(initial_charge = charge)
-                sealed && seal!(state.tank.tank.sealstate)
+                sealed && (state = @set state.tank.tank.sealstate = seal(state.tank.tank.sealstate))
                 action = only(item for item in get_actions(state) if item.id === :vent_and_seal)
 
                 @test action.enabled == expected_enabled
@@ -1054,26 +1030,26 @@ end
     end
 
     # Vent and Seal: empties tank and seals it
-    result = do_action!(gas, :vent_and_seal)
+    gas, result = do_action(gas, :vent_and_seal)
     @test isvalidrequest(result)
     @test gas.tank.tank.state.charge == 0.0
     @test is_sealed(gas.tank.tank.sealstate)
     @test unwrap(result) == "Tank vented and sealed"
 
     # Unseal: clears seal
-    result = do_action!(gas, :unseal_tank)
+    gas, result = do_action(gas, :unseal_tank)
     @test isvalidrequest(result)
     @test !is_sealed(gas.tank.tank.sealstate)
 
     # Seal Tank: seals without venting
     gas2 = make_gas_tank(initial_charge = 25.0)
-    result = do_action!(gas2, :seal_tank)
+    gas2, result = do_action(gas2, :seal_tank)
     @test isvalidrequest(result)
     @test is_sealed(gas2.tank.tank.sealstate)
     @test gas2.tank.tank.state.charge == 25.0  # charge unchanged
 
     # Unseal via action
-    result = do_action!(gas2, :unseal_tank)
+    gas2, result = do_action(gas2, :unseal_tank)
     @test isvalidrequest(result)
     @test !is_sealed(gas2.tank.tank.sealstate)
 
@@ -1085,20 +1061,20 @@ end
     @test isvalidrequest(can_be_moved(gas3))
 
     # Sealed tank with charge: still not movable
-    seal!(gas2.tank.tank.sealstate)
+    gas2 = @set gas2.tank.tank.sealstate = seal(gas2.tank.tank.sealstate)
     @test !isvalidrequest(can_be_moved(gas2))
 end
 
 @testset "ThevininTankCompBehav: empty vent actions are safe" begin
     empty_unsealed = make_gas_tank(initial_charge = 0.0)
-    result = do_action!(empty_unsealed, :vent_and_seal)
+    empty_unsealed, result = do_action(empty_unsealed, :vent_and_seal)
     @test isvalidrequest(result)
     @test empty_unsealed.tank.tank.state.charge == 0.0
     @test is_sealed(empty_unsealed.tank.tank.sealstate)
 
     empty_sealed = make_gas_tank(initial_charge = 0.0)
-    seal!(empty_sealed.tank.tank.sealstate)
-    result = do_action!(empty_sealed, :vent_and_seal)
+    empty_sealed = @set empty_sealed.tank.tank.sealstate = seal(empty_sealed.tank.tank.sealstate)
+    empty_sealed, result = do_action(empty_sealed, :vent_and_seal)
     @test isvalidrequest(result)
     @test empty_sealed.tank.tank.state.charge == 0.0
     @test is_sealed(empty_sealed.tank.tank.sealstate)
@@ -1123,11 +1099,11 @@ end
 
     # Manually sealed: no probe regardless of charge
     gas_sealed_empty = make_gas_tank(initial_charge = 0.0)
-    seal!(gas_sealed_empty.tank.tank.sealstate)
+    gas_sealed_empty = @set gas_sealed_empty.tank.tank.sealstate = seal(gas_sealed_empty.tank.tank.sealstate)
     @test isnothing(get_reactivation_probe(gas_sealed_empty))
 
     gas_sealed_full = make_gas_tank(initial_charge = 40.0)
-    seal!(gas_sealed_full.tank.tank.sealstate)
+    gas_sealed_full = @set gas_sealed_full.tank.tank.sealstate = seal(gas_sealed_full.tank.tank.sealstate)
     @test isnothing(get_reactivation_probe(gas_sealed_full))
 
     # Liquid tank same behaviour
@@ -1171,7 +1147,7 @@ end
     @test classify_reactivation_probe(gas_empty; tile = TEST_TILE, derivedmapstate = dm_pos, mna_state = mna_pos) === PROBE_USEFUL
     @test gas_empty.tank.tank.state.charge == 0.0
     @test !is_force_reactivated(gas_empty.tank.tank)
-    commit_reactivation_probe!(gas_empty; tile = TEST_TILE, derivedmapstate = dm_pos, mna_state = mna_pos)
+    gas_empty = commit_reactivation_probe(gas_empty; tile = TEST_TILE, derivedmapstate = dm_pos, mna_state = mna_pos)
     @test is_force_reactivated(gas_empty.tank.tank)
 
     # Negative current (outflow): harmful
@@ -1189,7 +1165,7 @@ end
     dm_neg_full, mna_neg_full = setup_probe_accept(gas_full.tank, TEST_TILE, -5.0)
     @test classify_reactivation_probe(gas_full; tile = TEST_TILE, derivedmapstate = dm_neg_full, mna_state = mna_neg_full) === PROBE_USEFUL
     @test gas_full.tank.tank.state.charge == 40.0
-    commit_reactivation_probe!(gas_full; tile = TEST_TILE, derivedmapstate = dm_neg_full, mna_state = mna_neg_full)
+    gas_full = commit_reactivation_probe(gas_full; tile = TEST_TILE, derivedmapstate = dm_neg_full, mna_state = mna_neg_full)
     @test is_force_reactivated(gas_full.tank.tank)
 
     # Positive inflow: harmful
@@ -1203,24 +1179,24 @@ end
 
 @testset "Tank force reactivation flags are one-shot" begin
     gas = make_gas_tank(initial_charge = 0.0)
-    force_reactivate!(gas.tank.tank)
+    gas = @set gas.tank.tank = force_reactivate(gas.tank.tank)
     @test tank_is_active(gas.tank.tank)
 
     mna = register_vsources!(MNA_State(), TEST_TILE, 1)
     mna.vsource_currents[ElementID(TEST_TILE, 1)] = 6.0
-    update_flowbehav!(gas.tank.tank; tile = TEST_TILE, mna_state = mna)
+    gas = @set gas.tank.tank = update_flowbehav(gas.tank.tank; tile = TEST_TILE, mna_state = mna)
     @test !is_force_reactivated(gas.tank.tank)
 
     pf = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 0.0)
-    force_liquid_reactivate!(pf.tank)
-    force_gas_reactivate!(pf.tank)
+    pf = @set pf.tank = force_liquid_reactivate(pf.tank)
+    pf = @set pf.tank = force_gas_reactivate(pf.tank)
     @test pressurefed_liquid_source_active(pf.tank)
     @test pressurefed_gas_source_active(pf.tank)
 
     mna_pf = register_vsources!(MNA_State(), TEST_TILE, 2)
     mna_pf.vsource_currents[ElementID(TEST_TILE, 1)] = 5.0
     mna_pf.vsource_currents[ElementID(TEST_TILE, 2)] = 4.0
-    update_flowbehav!(pf.tank; tile = TEST_TILE, mna_state = mna_pf)
+    pf = @set pf.tank = update_flowbehav(pf.tank; tile = TEST_TILE, mna_state = mna_pf)
     @test !liquid_is_force_reactivated(pf.tank)
     @test !gas_is_force_reactivated(pf.tank)
 end
@@ -1229,6 +1205,8 @@ end
     gas = make_gas_tank(initial_charge = 20.0)
     tunables = get_tunables(gas)
     @test tunables isa NTuple{4, TunableProps}
+    @test tunables[3].type_desc == "Current Charge State"
+    @test tunables[3].current_val == 20.0
 
     tuned = set_tunables(gas, (45.0, 60.0, 15.0, 8.0))
     @test tuned.tank.tank.max_charge == 45.0
@@ -1271,26 +1249,18 @@ end
 @testset "Refillable liquid tank: StoredFluidState basics" begin
     # Non-empty tank is initialised with stored fluid from construction-time fluid
     liq = make_liquid_tank(initial_charge = 20.0)
-    @test liq.tank.stored_fluid.fluid === HexFluids.MONOPROP_LIQUID
+    @test get_stored_fluid(liq.tank.stored_fluid) === HexFluids.MONOPROP_LIQUID
 
     # Empty tank at construction has stored_fluid = nothing
     liq_empty = make_liquid_tank(initial_charge = 0.0)
-    @test isnothing(liq_empty.tank.stored_fluid.fluid)
+    @test isnothing(get_stored_fluid(liq_empty.tank.stored_fluid))
 
     # Fuel and oxidiser tanks initialise with their respective fluids when non-empty
-    fuel_tank = ThevininTankCompBehav(
-        LiquidTankBehavFrag, 3;
-        fluid = HexFluids.FUEL_LIQUID,
-        max_charge = 40.0, max_voltage = 1.0, initial_charge = 20.0, series_conductance = 5.0
-    )
-    @test fuel_tank.tank.stored_fluid.fluid === HexFluids.FUEL_LIQUID
+    fuel_tank = make_liquid_tank(fluid = HexFluids.FUEL_LIQUID)
+    @test get_stored_fluid(fuel_tank.tank.stored_fluid) === HexFluids.FUEL_LIQUID
 
-    ox_tank = ThevininTankCompBehav(
-        LiquidTankBehavFrag, 3;
-        fluid = HexFluids.OXIDISER_LIQUID,
-        max_charge = 40.0, max_voltage = 1.0, initial_charge = 20.0, series_conductance = 5.0
-    )
-    @test ox_tank.tank.stored_fluid.fluid === HexFluids.OXIDISER_LIQUID
+    ox_tank = make_liquid_tank(fluid = HexFluids.OXIDISER_LIQUID)
+    @test get_stored_fluid(ox_tank.tank.stored_fluid) === HexFluids.OXIDISER_LIQUID
 end
 
 @testset "Refillable liquid tank: state-dependent declarations" begin
@@ -1311,11 +1281,7 @@ end
     @test empty_decls[1].declaration.constraint === HexFluids.IS_LIQUID
 
     # Fuel and oxidiser tanks emit their respective fluid when filled
-    fuel_tank = ThevininTankCompBehav(
-        LiquidTankBehavFrag, 3;
-        fluid = HexFluids.FUEL_LIQUID,
-        max_charge = 40.0, max_voltage = 1.0, initial_charge = 20.0, series_conductance = 5.0
-    )
+    fuel_tank = make_liquid_tank(fluid = HexFluids.FUEL_LIQUID)
     fuel_decls = produce_rel_fluid_declarations(fuel_tank)
     @test fuel_decls[1].declaration.fluid_type === HexFluids.FUEL_LIQUID
 end
@@ -1327,13 +1293,11 @@ end
     @test tuned.tank.tank.max_charge == 50.0
     @test tuned.tank.tank.state.charge == 10.0
     @test tuned.series_conductance == 6.0
-    @test tuned.tank.stored_fluid.fluid === HexFluids.FUEL_LIQUID
+    @test get_stored_fluid(tuned.tank.stored_fluid) === HexFluids.FUEL_LIQUID
 
     # The original tank is not affected (set_tunables is non-mutating at component level)
-    @test liq.tank.stored_fluid.fluid === HexFluids.MONOPROP_LIQUID
+    @test get_stored_fluid(liq.tank.stored_fluid) === HexFluids.MONOPROP_LIQUID
 
-    # The new and old fragments have independent StoredFluidState objects
-    @test !==(tuned.tank.stored_fluid, liq.tank.stored_fluid)
 end
 
 @testset "Refillable liquid tank: wet mass uses stored fluid" begin
@@ -1352,31 +1316,27 @@ end
     @test get_component_wet_mass(liq_empty; fluid = HexFluids.MONOPROP_LIQUID) == 0.0
 
     # Fuel-filled tank
-    fuel_tank = ThevininTankCompBehav(
-        LiquidTankBehavFrag, 3;
-        fluid = HexFluids.FUEL_LIQUID,
-        max_charge = 40.0, max_voltage = 1.0, initial_charge = 20.0, series_conductance = 5.0
-    )
+    fuel_tank = make_liquid_tank(fluid = HexFluids.FUEL_LIQUID)
     @test get_component_wet_mass(fuel_tank) ≈ 20.0 * fuel_density
     @test get_component_wet_mass(fuel_tank; fluid = HexFluids.MONOPROP_LIQUID) == 0.0
 end
 
-@testset "Refillable liquid tank: update_flowbehav! clears fluid on empty" begin
+@testset "Refillable liquid tank: update_flowbehav clears fluid on empty" begin
     liq = make_liquid_tank(initial_charge = 0.1)
-    @test liq.tank.stored_fluid.fluid === HexFluids.MONOPROP_LIQUID
+    @test get_stored_fluid(liq.tank.stored_fluid) === HexFluids.MONOPROP_LIQUID
 
     # Large outflow drains tank to zero in one tick
     mna = register_vsources!(MNA_State(), TEST_TILE, 1)
     mna.vsource_currents[ElementID(TEST_TILE, 1)] = -1000.0
-    update_flowbehav!(liq; tile = TEST_TILE, mna_state = mna)
+    liq = update_flowbehav(liq; tile = TEST_TILE, mna_state = mna)
 
     @test liq.tank.tank.state.charge == 0.0
-    @test isnothing(liq.tank.stored_fluid.fluid)  # cleared on empty
+    @test isnothing(get_stored_fluid(liq.tank.stored_fluid))  # cleared on empty
 end
 
-@testset "Refillable liquid tank: update_flowbehav! adopts fluid on refill" begin
+@testset "Refillable liquid tank: update_flowbehav adopts fluid on refill" begin
     liq_empty = make_liquid_tank(initial_charge = 0.0)
-    @test isnothing(liq_empty.tank.stored_fluid.fluid)
+    @test isnothing(get_stored_fluid(liq_empty.tank.stored_fluid))
 
     # Provide derivedmapstate with FUEL_LIQUID on the internal node
     dm = DerivedMapState()
@@ -1386,10 +1346,10 @@ end
     # Inflow: charge rises above zero
     mna = register_vsources!(MNA_State(), TEST_TILE, 1)
     mna.vsource_currents[ElementID(TEST_TILE, 1)] = 6.0
-    update_flowbehav!(liq_empty; tile = TEST_TILE, mna_state = mna, derivedmapstate = dm)
+    liq_empty = update_flowbehav(liq_empty; tile = TEST_TILE, mna_state = mna, derivedmapstate = dm)
 
     @test liq_empty.tank.tank.state.charge > 0.0
-    @test liq_empty.tank.stored_fluid.fluid === HexFluids.FUEL_LIQUID  # adopted
+    @test get_stored_fluid(liq_empty.tank.stored_fluid) === HexFluids.FUEL_LIQUID  # adopted
 end
 
 @testset "Refillable liquid tank: no adoption without derivedmapstate" begin
@@ -1397,8 +1357,250 @@ end
     liq_empty = make_liquid_tank(initial_charge = 0.0)
     mna = register_vsources!(MNA_State(), TEST_TILE, 1)
     mna.vsource_currents[ElementID(TEST_TILE, 1)] = 6.0
-    update_flowbehav!(liq_empty; tile = TEST_TILE, mna_state = mna)  # no derivedmapstate
+    liq_empty = update_flowbehav(liq_empty; tile = TEST_TILE, mna_state = mna)  # no derivedmapstate
 
     @test liq_empty.tank.tank.state.charge > 0.0
-    @test isnothing(liq_empty.tank.stored_fluid.fluid)  # no adoption without derived state
+    @test isnothing(get_stored_fluid(liq_empty.tank.stored_fluid))  # no adoption without derived state
+end
+
+# ===============================================================
+# Value Semantics
+# ===============================================================
+
+@testset "Tank state transitions preserve original fragments" begin
+    @test !ismutabletype(SealState)
+    @test !ismutabletype(TankState)
+    @test !ismutabletype(StoredFluidState)
+
+    original_seal = SealState()
+    sealed = seal(original_seal)
+    reopened = unseal(sealed)
+    @test !is_sealed(original_seal)
+    @test is_sealed(sealed)
+    @test !is_sealed(reopened)
+
+    original_fluid = StoredFluidState(nothing)
+    filled = set_stored_fluid(original_fluid, HexFluids.FUEL_LIQUID)
+    cleared = clear_stored_fluid(filled)
+    @test isnothing(get_stored_fluid(original_fluid))
+    @test get_stored_fluid(filled) === HexFluids.FUEL_LIQUID
+    @test isnothing(get_stored_fluid(cleared))
+
+    original_tank = make_gas_tank(initial_charge = 0.0).tank.tank
+    forced = force_reactivate(original_tank)
+    cleared_force = clear_force_reactivate(forced)
+    @test !is_force_reactivated(original_tank)
+    @test is_force_reactivated(forced)
+    @test !is_force_reactivated(cleared_force)
+    @test forced.connection == original_tank.connection
+    @test forced.max_charge == original_tank.max_charge
+    @test forced.max_voltage == original_tank.max_voltage
+    @test forced.state.charge == original_tank.state.charge
+
+    # Flags still clear when the solver has pruned the source
+    pruned = update_flowbehav(forced; tile = TEST_TILE, mna_state = MNA_State())
+    @test is_force_reactivated(forced)
+    @test !is_force_reactivated(pruned)
+    @test pruned.state.charge == forced.state.charge
+
+    original_pf = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 0.0).tank
+    liquid_forced = force_liquid_reactivate(original_pf)
+    both_forced = force_gas_reactivate(liquid_forced)
+    @test !liquid_is_force_reactivated(original_pf)
+    @test !gas_is_force_reactivated(original_pf)
+    @test liquid_is_force_reactivated(liquid_forced)
+    @test !gas_is_force_reactivated(liquid_forced)
+    @test liquid_is_force_reactivated(both_forced)
+    @test gas_is_force_reactivated(both_forced)
+    @test !liquid_is_force_reactivated(clear_force_liquid_reactivate(both_forced))
+    @test gas_is_force_reactivated(clear_force_liquid_reactivate(both_forced))
+    @test liquid_is_force_reactivated(clear_force_gas_reactivate(both_forced))
+    @test !gas_is_force_reactivated(clear_force_gas_reactivate(both_forced))
+    pf_pruned = update_flowbehav(both_forced; tile = TEST_TILE, mna_state = MNA_State())
+    @test liquid_is_force_reactivated(both_forced)
+    @test gas_is_force_reactivated(both_forced)
+    @test !liquid_is_force_reactivated(pf_pruned)
+    @test !gas_is_force_reactivated(pf_pruned)
+end
+
+@testset "Tank updates propagate through fragments and placement" begin
+    mna = register_vsources!(MNA_State(), TEST_TILE, 1)
+    mna.vsource_currents[ElementID(TEST_TILE, 1)] = 6.0
+    original = make_gas_tank()
+    core = original.tank.tank
+    updated_core = update_flowbehav(core; tile = TEST_TILE, mna_state = mna)
+    updated_frag = update_flowbehav(original.tank; tile = TEST_TILE, mna_state = mna)
+    updated_comp = update_flowbehav(original; tile = TEST_TILE, mna_state = mna)
+    @test core.state.charge == 20.0
+    @test updated_core.state.charge ≈ 20.1
+    @test updated_frag.tank.state.charge ≈ 20.1
+    @test updated_comp.tank.tank.state.charge ≈ 20.1
+    @test original.tank.tank.state.charge == 20.0
+    @test updated_comp.out_nodes == original.out_nodes
+    @test updated_comp.series_conductance == original.series_conductance
+    @test updated_comp.fluid == original.fluid
+
+    for comp in (original, make_liquid_tank(), make_pressurefed_tank())
+        placed = PlacedComponent(comp, HexFrame.S_NEG, true, :ValueSemanticsShip)
+        updated = update_flowbehav(placed; tile = TEST_TILE, mna_state = mna)
+        @test updated.rotation == placed.rotation
+        @test updated.mirrored == placed.mirrored
+        @test updated.ship == placed.ship
+        @test updated.component.series_conductance == comp.series_conductance
+        if comp isa PressureFedTankCompBehav
+            @test comp.tank.liquid_state.charge == 20.0
+            @test updated.component.tank.liquid_state.charge ≈ 20.1
+            @test updated.component.tank.gas_state.charge == comp.tank.gas_state.charge
+            @test updated.component.liquid_nodes == comp.liquid_nodes
+            @test updated.component.gas_fluid == comp.gas_fluid
+        else
+            @test comp.tank.tank.state.charge == 20.0
+            @test updated.component.tank.tank.state.charge ≈ 20.1
+            @test updated.component.out_nodes == comp.out_nodes
+            @test updated.component.fluid == comp.fluid
+        end
+    end
+end
+
+@testset "Liquid identity updates preserve original components" begin
+    dm = DerivedMapState()
+    dm.nodeactualfluids[NodeCoord(TEST_TILE, HexFrame.NODE_INTERNAL_1)] = HexFluids.FUEL_LIQUID
+    mna = register_vsources!(MNA_State(), TEST_TILE, 1)
+    mna.vsource_currents[ElementID(TEST_TILE, 1)] = 6.0
+    for original in (make_liquid_tank(initial_charge = 0.0), make_pressurefed_tank(liquid_charge = 0.0))
+        filled = update_flowbehav(original; tile = TEST_TILE, mna_state = mna, derivedmapstate = dm)
+        @test isnothing(get_stored_fluid(original))
+        @test get_stored_fluid(filled) === HexFluids.FUEL_LIQUID
+        mna.vsource_currents[ElementID(TEST_TILE, 1)] = -1000.0
+        drained = update_flowbehav(filled; tile = TEST_TILE, mna_state = mna, derivedmapstate = dm)
+        @test get_stored_fluid(filled) === HexFluids.FUEL_LIQUID
+        @test isnothing(get_stored_fluid(drained))
+        @test drained.series_conductance == original.series_conductance
+        mna.vsource_currents[ElementID(TEST_TILE, 1)] = 6.0
+    end
+end
+
+@testset "Tank action tuples preserve original values and placement" begin
+    for comp in (make_gas_tank(), make_liquid_tank(), make_pressurefed_tank())
+        placed = PlacedComponent(comp, HexFrame.R_NEG, true, :ValueSemanticsShip)
+        action = comp isa PressureFedTankCompBehav ? :vent_and_seal_liquid : :vent_and_seal
+        updated, result = do_action(placed, action)
+        @test result isa ValidRequestResult
+        @test updated.rotation == placed.rotation
+        @test updated.mirrored == placed.mirrored
+        @test updated.ship == placed.ship
+        @test updated.component.series_conductance == comp.series_conductance
+        if comp isa PressureFedTankCompBehav
+            @test comp.tank.liquid_state.charge == 20.0
+            @test !liquid_is_sealed(comp.tank)
+            @test updated.component.tank.liquid_state.charge == 0.0
+            @test liquid_is_sealed(updated.component.tank)
+            @test updated.component.tank.gas_state.charge == comp.tank.gas_state.charge
+            @test !gas_is_sealed(updated.component.tank)
+        else
+            @test comp.tank.tank.state.charge == 20.0
+            @test !is_sealed(comp.tank.tank)
+            @test updated.component.tank.tank.state.charge == 0.0
+            @test is_sealed(updated.component.tank.tank)
+            @test updated.component.out_nodes == comp.out_nodes
+        end
+        repeated, repeated_result = do_action(updated, action)
+        @test repeated_result isa ValidRequestResult  # Already-empty vents remain safe
+        @test map(prop -> prop.current_val, get_tunables(repeated)) == map(prop -> prop.current_val, get_tunables(updated))
+        @test_throws ArgumentError do_action(placed, :unsupported)
+        @test map(prop -> prop.current_val, get_tunables(placed)) == map(prop -> prop.current_val, get_tunables(comp))
+    end
+end
+
+@testset "Tank reactivation commits preserve original values" begin
+    for comp in (make_gas_tank(initial_charge = 0.0), make_liquid_tank(initial_charge = 0.0), make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 0.0))
+        placed = PlacedComponent(comp, HexFrame.S_NEG, true, :ValueSemanticsShip)
+        probe = get_reactivation_probe(placed)
+        dm = DerivedMapState()
+        mna = MNA_State()
+        source_count = comp isa PressureFedTankCompBehav ? 2 : 1
+        for index in 1:source_count
+            element = map_element(probe.rel_elements[index], TEST_TILE, index, placed.rotation, placed.mirrored)
+            push!(dm.filteredelements, element)
+            mna.vsource_currents[element.id] = 6.0
+        end
+        @test classify_reactivation_probe(placed; tile = TEST_TILE, derivedmapstate = dm, mna_state = mna) === PROBE_USEFUL
+        committed = commit_reactivation_probe(placed; tile = TEST_TILE, derivedmapstate = dm, mna_state = mna)
+        @test committed.rotation == placed.rotation
+        @test committed.mirrored == placed.mirrored
+        @test committed.ship == placed.ship
+        @test committed.component.series_conductance == comp.series_conductance
+        if comp isa PressureFedTankCompBehav
+            @test !liquid_is_force_reactivated(comp.tank)
+            @test !gas_is_force_reactivated(comp.tank)
+            @test liquid_is_force_reactivated(committed.component.tank)
+            @test gas_is_force_reactivated(committed.component.tank)
+            @test committed.component.tank.liquid_state.charge == comp.tank.liquid_state.charge
+            @test committed.component.tank.gas_state.charge == comp.tank.gas_state.charge
+        else
+            @test !is_force_reactivated(comp.tank.tank)
+            @test is_force_reactivated(committed.component.tank.tank)
+            @test committed.component.tank.tank.state.charge == comp.tank.tank.state.charge
+        end
+    end
+end
+
+@testset "Tank editor values replace state and preserve placement" begin
+    gas = make_gas_tank(initial_charge = 20.0)
+    gas = @set gas.tank.tank.sealstate = seal(gas.tank.tank.sealstate)
+    gas = @set gas.tank.tank = force_reactivate(gas.tank.tank)
+    liquid = make_liquid_tank(initial_charge = 20.0)
+    liquid = @set liquid.tank.stored_fluid = set_stored_fluid(liquid.tank.stored_fluid, HexFluids.FUEL_LIQUID)
+    pressurefed = make_pressurefed_tank(liquid_charge = 20.0, gas_charge = -3.0)
+    pressurefed = @set pressurefed.tank.liquid_sealstate = seal(pressurefed.tank.liquid_sealstate)
+    pressurefed = @set pressurefed.tank.gas_sealstate = seal(pressurefed.tank.gas_sealstate)
+    pressurefed = @set pressurefed.tank = force_liquid_reactivate(force_gas_reactivate(pressurefed.tank))
+
+    for comp in (gas, liquid, pressurefed)
+        placed = PlacedComponent(comp, HexFrame.S_NEG, true, :Owner)
+        values = if comp isa PressureFedTankCompBehav
+            (10.0, 60.0, 7.0, -2.0, 8.0, HexFluids.OXIDISER_LIQUID)
+        elseif comp.tank isa LiquidTankBehavFrag
+            (10.0, 60.0, 7.0, 8.0, HexFluids.OXIDISER_LIQUID)
+        else
+            (10.0, 60.0, 7.0, 8.0)
+        end
+        tuned = set_tunables(placed, values)
+        @test tuned isa PlacedComponent
+        @test (tuned.rotation, tuned.mirrored, tuned.ship) == (placed.rotation, true, :Owner)
+        @test tuned.component.series_conductance == 8.0
+        @test placed.component == comp
+        if comp isa PressureFedTankCompBehav
+            @test tuned.component.tank.liquid_state === TankState(7.0)
+            @test comp.tank.liquid_state.charge == 20.0
+            @test tuned.component.tank.gas_state === TankState(-2.0)
+            @test comp.tank.gas_state.charge == -3.0
+            @test tuned.component.tank.stored_liquid === StoredFluidState(HexFluids.OXIDISER_LIQUID)
+            @test get_stored_fluid(comp.tank.stored_liquid) === HexFluids.MONOPROP_LIQUID
+            @test tuned.component.tank.liquid_sealstate == comp.tank.liquid_sealstate
+            @test tuned.component.tank.gas_sealstate == comp.tank.gas_sealstate
+            @test liquid_is_force_reactivated(tuned.component.tank)
+            @test gas_is_force_reactivated(tuned.component.tank)
+        else
+            @test tuned.component.tank.tank.state === TankState(7.0)
+            @test comp.tank.tank.state.charge == 20.0
+            @test tuned.component.tank.tank.sealstate == comp.tank.tank.sealstate
+            @test is_force_reactivated(tuned.component.tank.tank) == is_force_reactivated(comp.tank.tank)
+            if comp.tank isa LiquidTankBehavFrag
+                @test tuned.component.tank.stored_fluid === StoredFluidState(HexFluids.OXIDISER_LIQUID)
+                @test get_stored_fluid(comp.tank.stored_fluid) === HexFluids.FUEL_LIQUID
+            end
+        end
+    end
+end
+
+@testset "Optional stored-fluid identity uses concrete value storage" begin
+    empty = StoredFluidState(nothing)
+    filled = set_stored_fluid(empty, HexFluids.FUEL_LIQUID)
+    @test isbitstype(typeof(empty))
+    @test typeof(empty) === typeof(filled)
+    @test isnothing(get_stored_fluid(empty))
+    @test get_stored_fluid(filled) === HexFluids.FUEL_LIQUID
+    @test clear_stored_fluid(filled) === empty
+    @test get_stored_fluid(filled) === HexFluids.FUEL_LIQUID
 end

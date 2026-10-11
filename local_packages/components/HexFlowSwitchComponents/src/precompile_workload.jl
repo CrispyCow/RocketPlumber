@@ -7,10 +7,10 @@ using PrecompileTools: @setup_workload, @compile_workload
 
 @setup_workload begin
     growth = calculate_growth_factor(2.0, 0.0, 2.0 / BASE_UPS)
-    stepped_large = PlacedComponent(StandardValveCompBehav(SteppedSwitchBehavFrag, LargeValve; max_conductance = 2.0, growth_factor = growth), HexFrame.Q_POS, :PrecompileShip)
-    stepped_tiny = PlacedComponent(StandardValveCompBehav(SteppedSwitchBehavFrag, TinyValve; max_conductance = 2.0, growth_factor = growth), HexFrame.Q_POS, :PrecompileShip)
-    bool_large = PlacedComponent(StandardValveCompBehav(BoolSwitchBehavFrag, LargeValve; max_conductance = 2.0, growth_factor = growth), HexFrame.Q_POS, :PrecompileShip)
-    bool_tiny = PlacedComponent(StandardValveCompBehav(BoolSwitchBehavFrag, TinyValve; max_conductance = 2.0, growth_factor = growth), HexFrame.Q_POS, :PrecompileShip)
+    stepped_large = PlacedComponent(StandardValveCompBehav(SteppedSwitchBehavFrag, LARGE_VALVE; max_conductance = 2.0, growth_factor = growth), HexFrame.Q_POS, :PrecompileShip)
+    stepped_tiny = PlacedComponent(StandardValveCompBehav(SteppedSwitchBehavFrag, TINY_VALVE; max_conductance = 2.0, growth_factor = growth), HexFrame.Q_POS, :PrecompileShip)
+    bool_large = PlacedComponent(StandardValveCompBehav(BoolSwitchBehavFrag, LARGE_VALVE; max_conductance = 2.0, growth_factor = growth), HexFrame.Q_POS, :PrecompileShip)
+    bool_tiny = PlacedComponent(StandardValveCompBehav(BoolSwitchBehavFrag, TINY_VALVE; max_conductance = 2.0, growth_factor = growth), HexFrame.Q_POS, :PrecompileShip)
     tile = TileCoord(2, -1)
 
     glmap = GLObjectMap()
@@ -45,8 +45,8 @@ using PrecompileTools: @setup_workload, @compile_workload
             produce_abs_elements(placed, tile)
             get_tunables(placed)
             get_actions(placed)
-            update_flowbehav!(placed; tile = tile)
-            on_click!(placed; unrotated_clicksite = CartesianCoord(0.0, 0.5))
+            placed = update_flowbehav(placed; tile = tile)
+            placed = on_click(placed; unrotated_clicksite = CartesianCoord(0.0, 0.5))
             render_base_elem!(queue, placed; glmap = glmap, position = tile, pos_offset = AxialCoord(0.0, 0.0), render_height_offset = Int32(0))
             render_map_elem!(queue, placed; glmap = glmap, position = tile, derivedmapstate = derived, gameticks = 1, pos_offset = AxialCoord(0.0, 0.0), render_height_offset = Int32(0))
         end
@@ -55,12 +55,12 @@ using PrecompileTools: @setup_workload, @compile_workload
         render_map_elem!(queue, stepped_large; glmap = glmap, position = tile, derivedmapstate = liquid_derived, gameticks = 1, pos_offset = AxialCoord(0.0, 0.0), render_height_offset = Int32(0))
 
         for placed in (stepped_large, stepped_tiny)
-            set_tunables(placed, (2.0, 0.0, growth, 0.05))
-            do_action!(placed, :step_valve_open)
+            placed = set_tunables(placed, (2.0, 0.0, growth, 0.05))
+            placed, _ = do_action(placed, :step_valve_open)
         end
         for placed in (bool_large, bool_tiny)
-            set_tunables(placed, (2.0, 0.0, growth))
-            do_action!(placed, :open_valve)
+            placed = set_tunables(placed, (2.0, 0.0, growth))
+            placed, _ = do_action(placed, :open_valve)
         end
     end
 end

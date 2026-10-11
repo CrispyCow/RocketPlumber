@@ -13,7 +13,7 @@ platform.
 """
 function mapgen_teasership()
 
-    # Shared templates. Stateful behaviours are deep-copied at placement time.
+    # Shared immutable templates
 
     oxidiser_liquid_tank = ThevininTankCompBehav(
         LiquidTankBehavFrag, 3;
@@ -69,21 +69,21 @@ function mapgen_teasership()
     small_nozzle = BasicNozzleCompBehav(
         connected_node = HexFrame.NODE_Q_POS,
         throat_area = 0.5,
-        sprite = :AllNozzles_SmallNozzle
+        sprite_variant = SMALL_NOZZLE_SPRITE
     )
     medium_nozzle = BasicNozzleCompBehav(
         connected_node = HexFrame.NODE_Q_POS,
         throat_area = 1.5,
-        sprite = :AllNozzles_MediumNozzle
+        sprite_variant = MEDIUM_NOZZLE_SPRITE
     )
     tiny_nozzle = BasicNozzleCompBehav(
         connected_node = HexFrame.NODE_Q_POS,
         throat_area = 0.2,
-        sprite = :AllNozzles_TinyNozzle
+        sprite_variant = TINY_NOZZLE_SPRITE
     )
     # Valves are armed (target = max) but not yet open (current = 0).
     open_large_valve = StandardValveCompBehav(
-        BoolSwitchBehavFrag, LargeValve;
+        BoolSwitchBehavFrag, LARGE_VALVE;
         max_conductance = 4.0,
         growth_factor = calculate_growth_factor(4.0, 0.0, 2.0 / BASE_UPS),
         target_conductance = 4.0,
@@ -91,7 +91,7 @@ function mapgen_teasership()
     )
     # Fully open -- both target and current at max.
     open_tiny_valve = StandardValveCompBehav(
-        BoolSwitchBehavFrag, TinyValve;
+        BoolSwitchBehavFrag, TINY_VALVE;
         max_conductance = 1.0,
         growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
         target_conductance = 1.0,
@@ -107,7 +107,7 @@ function mapgen_teasership()
         NozzleBehavFrag(
             HexFrame.NODE_INTERNAL_1,
             0.2,
-            AutoDeactivationBehavFrag(),
+            AutoDeactivationState(),
             OverheatLimitBehavFrag(400.0, 1.0, 0.3)
         ),
         BoolSwitchBehavFrag(
@@ -132,9 +132,9 @@ function mapgen_teasership()
             (TileCoord(-7, -3), HexFrame.Q_POS),
             (TileCoord(-6, -4), HexFrame.Q_POS),
         ]
-        blueprint_primary.components[tile] = PlacedComponent(deepcopy(small_nozzle), rotation, :_blueprint)
+        blueprint_primary.components[tile] = PlacedComponent(small_nozzle, rotation, :_blueprint)
     end
-    blueprint_primary.components[TileCoord(-7, -2)] = PlacedComponent(deepcopy(medium_nozzle), HexFrame.Q_POS, :_blueprint)
+    blueprint_primary.components[TileCoord(-7, -2)] = PlacedComponent(medium_nozzle, HexFrame.Q_POS, :_blueprint)
 
     for (tile, rotation) in [
             (TileCoord(-5, -3), HexFrame.Q_POS),
@@ -143,14 +143,14 @@ function mapgen_teasership()
         blueprint_primary.components[tile] = PlacedComponent(BipropChamberCompBehav(), rotation, :_blueprint)
     end
 
-    blueprint_primary.components[TileCoord(-3, -5)] = PlacedComponent(deepcopy(turbo_pump), HexFrame.R_NEG, :_blueprint)
+    blueprint_primary.components[TileCoord(-3, -5)] = PlacedComponent(turbo_pump, HexFrame.R_NEG, :_blueprint)
     # Mirrored turbopump on the other side.
-    blueprint_primary.components[TileCoord(-3, -3)] = PlacedComponent(deepcopy(turbo_pump), HexFrame.S_NEG, true, :_blueprint)
+    blueprint_primary.components[TileCoord(-3, -3)] = PlacedComponent(turbo_pump, HexFrame.S_NEG, true, :_blueprint)
 
     for tile in [TileCoord(-2, -6), TileCoord(-2, -3)]
-        blueprint_primary.components[tile] = PlacedComponent(deepcopy(open_large_valve), HexFrame.Q_POS, :_blueprint)
+        blueprint_primary.components[tile] = PlacedComponent(open_large_valve, HexFrame.Q_POS, :_blueprint)
     end
-    blueprint_primary.components[TileCoord(-2, -4)] = PlacedComponent(deepcopy(open_tiny_valve), HexFrame.Q_POS, :_blueprint)
+    blueprint_primary.components[TileCoord(-2, -4)] = PlacedComponent(open_tiny_valve, HexFrame.Q_POS, :_blueprint)
 
     for (tile_a, axis_a, tile_b, axis_b, behaviour) in [
             (TileCoord(-7, -3), HexFrame.Q_POS, TileCoord(-5, -3), HexFrame.Q_NEG, big_pipe),
@@ -226,7 +226,7 @@ function mapgen_teasership()
             TileCoord(5, -2),
             TileCoord(5, -1),
         ]
-        blueprint_cl_204.components[tile] = PlacedComponent(deepcopy(oxidiser_liquid_tank), HexFrame.Q_NEG, :_blueprint)
+        blueprint_cl_204.components[tile] = PlacedComponent(oxidiser_liquid_tank, HexFrame.Q_NEG, :_blueprint)
     end
 
     for (tile_a, axis_a, tile_b, axis_b) in [
@@ -329,7 +329,7 @@ function mapgen_teasership()
             TileCoord(6, -13),
             TileCoord(6, -12),
         ]
-        blueprint_xb_882_144.components[tile] = PlacedComponent(deepcopy(fuel_liquid_tank), HexFrame.Q_POS, :_blueprint)
+        blueprint_xb_882_144.components[tile] = PlacedComponent(fuel_liquid_tank, HexFrame.Q_POS, :_blueprint)
     end
 
     for (tile_a, axis_a, tile_b, axis_b) in [
@@ -402,12 +402,12 @@ function mapgen_teasership()
             TileCoord(-4, 1),
             TileCoord(-4, 2),
         ]
-        blueprint_xb_882_150.components[tile] = PlacedComponent(deepcopy(cold_gas_tank), HexFrame.R_NEG, :_blueprint)
+        blueprint_xb_882_150.components[tile] = PlacedComponent(cold_gas_tank, HexFrame.R_NEG, :_blueprint)
     end
 
     # Standard armed nozzles (axial orientation).
     for tile in [TileCoord(-7, 5), TileCoord(-6, 6)]
-        blueprint_xb_882_150.components[tile] = PlacedComponent(deepcopy(armed_cold_gas_nozzle), HexFrame.R_NEG, :_blueprint)
+        blueprint_xb_882_150.components[tile] = PlacedComponent(armed_cold_gas_nozzle, HexFrame.R_NEG, :_blueprint)
     end
 
     # Diagonal nozzles -- tuned throat areas from in-game adjustments.
@@ -416,7 +416,7 @@ function mapgen_teasership()
             NozzleBehavFrag(
                 HexFrame.NODE_INTERNAL_1,
                 0.1561048474162817,
-                AutoDeactivationBehavFrag(),
+                AutoDeactivationState(),
                 OverheatLimitBehavFrag(400.0, 1.0, 0.3)
             ),
             BoolSwitchBehavFrag(
@@ -437,7 +437,7 @@ function mapgen_teasership()
             NozzleBehavFrag(
                 HexFrame.NODE_INTERNAL_1,
                 0.15860411077737807,
-                AutoDeactivationBehavFrag(),
+                AutoDeactivationState(),
                 OverheatLimitBehavFrag(400.0, 1.0, 0.3)
             ),
             BoolSwitchBehavFrag(
@@ -457,7 +457,7 @@ function mapgen_teasership()
     # Closed feed valve.
     blueprint_xb_882_150.components[TileCoord(-4, 3)] = PlacedComponent(
         StandardValveCompBehav(
-            BoolSwitchBehavFrag, TinyValve;
+            BoolSwitchBehavFrag, TINY_VALVE;
             max_conductance = 1.0,
             growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS)
         ),
@@ -517,7 +517,7 @@ function mapgen_teasership()
             TileCoord(4, 4),
             TileCoord(4, 5),
         ]
-        blueprint_platform.components[tile] = PlacedComponent(deepcopy(monoprop_liquid_tank), HexFrame.Q_POS, :_blueprint)
+        blueprint_platform.components[tile] = PlacedComponent(monoprop_liquid_tank, HexFrame.Q_POS, :_blueprint)
     end
 
     for tile in [
@@ -529,26 +529,26 @@ function mapgen_teasership()
             TileCoord(-1, 6),
             TileCoord(-1, 7),
         ]
-        blueprint_platform.components[tile] = PlacedComponent(deepcopy(pressure_fed_monoprop_tank), HexFrame.Q_POS, :_blueprint)
+        blueprint_platform.components[tile] = PlacedComponent(pressure_fed_monoprop_tank, HexFrame.Q_POS, :_blueprint)
     end
 
     for tile in [TileCoord(-6, 11), TileCoord(-6, 12)]
-        blueprint_platform.components[tile] = PlacedComponent(deepcopy(small_nozzle), HexFrame.Q_POS, :_blueprint)
+        blueprint_platform.components[tile] = PlacedComponent(small_nozzle, HexFrame.Q_POS, :_blueprint)
     end
     for tile in [TileCoord(-5, 7), TileCoord(-5, 8)]
-        blueprint_platform.components[tile] = PlacedComponent(deepcopy(tiny_nozzle), HexFrame.Q_POS, :_blueprint)
+        blueprint_platform.components[tile] = PlacedComponent(tiny_nozzle, HexFrame.Q_POS, :_blueprint)
     end
 
     for tile in [TileCoord(-4, 7), TileCoord(-4, 11)]
         blueprint_platform.components[tile] = PlacedComponent(DecompChamberCompBehav(), HexFrame.Q_POS, :_blueprint)
     end
 
-    blueprint_platform.components[TileCoord(-2, 10)] = PlacedComponent(deepcopy(turbo_pump), HexFrame.Q_POS, :_blueprint)
+    blueprint_platform.components[TileCoord(-2, 10)] = PlacedComponent(turbo_pump, HexFrame.Q_POS, :_blueprint)
 
     # Valve at (-3, 7): armed open (target = max, current = 0).
     blueprint_platform.components[TileCoord(-3, 7)] = PlacedComponent(
         StandardValveCompBehav(
-            BoolSwitchBehavFrag, TinyValve;
+            BoolSwitchBehavFrag, TINY_VALVE;
             max_conductance = 1.0,
             growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
             target_conductance = 1.0,
@@ -560,7 +560,7 @@ function mapgen_teasership()
     # Valve at (-1, 8): closed.
     blueprint_platform.components[TileCoord(-1, 8)] = PlacedComponent(
         StandardValveCompBehav(
-            BoolSwitchBehavFrag, TinyValve;
+            BoolSwitchBehavFrag, TINY_VALVE;
             max_conductance = 1.0,
             growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS)
         ),
@@ -570,7 +570,7 @@ function mapgen_teasership()
     # Stepped valve at (-3, 10): partially open target.
     blueprint_platform.components[TileCoord(-3, 10)] = PlacedComponent(
         StandardValveCompBehav(
-            SteppedSwitchBehavFrag, TinyValve;
+            SteppedSwitchBehavFrag, TINY_VALVE;
             max_conductance = 1.0,
             growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
             percentage_step_size = 0.05,
@@ -582,7 +582,7 @@ function mapgen_teasership()
     )
     # Large valve at (-1, 9): armed open (target = max, current = 0).
     blueprint_platform.components[TileCoord(-1, 9)] = PlacedComponent(
-        deepcopy(open_large_valve), HexFrame.R_NEG, :_blueprint
+        open_large_valve, HexFrame.R_NEG, :_blueprint
     )
 
     for (tile_a, axis_a, tile_b, axis_b, behaviour) in [

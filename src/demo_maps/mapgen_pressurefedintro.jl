@@ -24,10 +24,10 @@ function mapgen_pressurefedintro()
         series_conductance = 5.0
     )
 
-    blueprint.components[TileCoord(-2, 3)] = PlacedComponent(deepcopy(liquid_tank_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(-1, 2)] = PlacedComponent(deepcopy(liquid_tank_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(-1, 3)] = PlacedComponent(deepcopy(liquid_tank_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(-2, 2)] = PlacedComponent(deepcopy(liquid_tank_template), HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(-2, 3)] = PlacedComponent(liquid_tank_template, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(-1, 2)] = PlacedComponent(liquid_tank_template, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(-1, 3)] = PlacedComponent(liquid_tank_template, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(-2, 2)] = PlacedComponent(liquid_tank_template, HexFrame.Q_POS, :_blueprint)
 
     # Pressure-fed liquid tanks start with fuel loaded but no pressurising gas.
     pressure_fed_tank_template = PressureFedTankCompBehav(
@@ -45,8 +45,8 @@ function mapgen_pressurefedintro()
         NoRotationBehavFrag()
     )
 
-    blueprint.components[TileCoord(0, -1)] = PlacedComponent(deepcopy(pressure_fed_tank_template), HexFrame.Q_POS, :_blueprint)
-    blueprint.components[TileCoord(0, 0)] = PlacedComponent(deepcopy(pressure_fed_tank_template), HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(0, -1)] = PlacedComponent(pressure_fed_tank_template, HexFrame.Q_POS, :_blueprint)
+    blueprint.components[TileCoord(0, 0)] = PlacedComponent(pressure_fed_tank_template, HexFrame.Q_POS, :_blueprint)
 
     # Cold-gas pressurant source.
     blueprint.components[TileCoord(3, -4)] = PlacedComponent(
@@ -65,7 +65,7 @@ function mapgen_pressurefedintro()
     # Feed control and reaction hardware.
     blueprint.components[TileCoord(-2, 0)] = PlacedComponent(
         StandardValveCompBehav(
-            BoolSwitchBehavFrag, TinyValve;
+            BoolSwitchBehavFrag, TINY_VALVE;
             max_conductance = 1.0,
             min_conductance = 0.0,
             growth_factor = calculate_growth_factor(1.0, 0.0, 2.0 / BASE_UPS),
@@ -80,7 +80,7 @@ function mapgen_pressurefedintro()
         BasicNozzleCompBehav(
             connected_node = HexFrame.NODE_Q_POS,
             throat_area = 0.5,
-            sprite = :AllNozzles_SmallNozzle
+            sprite_variant = SMALL_NOZZLE_SPRITE
         ),
         HexFrame.Q_POS,
         :_blueprint

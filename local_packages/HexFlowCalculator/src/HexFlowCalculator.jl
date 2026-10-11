@@ -234,7 +234,7 @@ end
 end
 @struct_hash_equal DeleteElementsCommand
 
-"Invoke `on_click!` semantics for a tile component."
+"Invoke `on_click` semantics for a tile component."
 @kwdef struct ClickTileCommand <: MapEditCommand
     id::UInt64
     coord::TileCoord
@@ -566,7 +566,7 @@ function apply_mapedit_command!(gamemap::GameMap, command::SetTileCommand)::MapE
 
     set_component!(
         gamemap, command.coord, PlacedComponent(
-            deepcopy(command.component), mapped_rotation, mapped_mirror, unwrap(destination_status),
+            command.component, mapped_rotation, mapped_mirror, unwrap(destination_status),
         )
     )
     return ValidRequest()
@@ -582,7 +582,7 @@ function apply_mapedit_command!(gamemap::GameMap, command::SetPipeBehaviorComman
     end
 
     provisional_ship = something(find_ship_containing(gamemap, command.coord), :primary)
-    set_pipe!(gamemap, command.coord, PlacedPipe(deepcopy(command.pipe_behavior), provisional_ship))
+    set_pipe!(gamemap, command.coord, PlacedPipe(command.pipe_behavior, provisional_ship))
     normalisation_status = normalise_pipe_ownership!(gamemap)
     isvalidrequest(normalisation_status) ||
         return InvalidRequest("Cannot place pipe: connect it to a ship surface or an attached pipe network")
@@ -752,7 +752,8 @@ function apply_mapedit_command!(gamemap::GameMap, command::ClickTileCommand)::Ma
     tilecomp = get_component(gamemap, command.coord)
     isnothing(tilecomp) && return ValidRequest()
 
-    on_click!(tilecomp; unrotated_clicksite = command.unrotated_clicksite)
+    updated = on_click(tilecomp; unrotated_clicksite = command.unrotated_clicksite)
+    set_component!(gamemap, command.coord, updated)
     return ValidRequest()
 end
 
@@ -770,13 +771,14 @@ function apply_mapedit_command!(gamemap::GameMap, command::DoActionCommand)::Map
         tilecomp = get_component(gamemap, coord)
         isnothing(tilecomp) && return StaleMapEdit()
 
-        result = try
-            do_action!(tilecomp, command.action_id)::RequestResult{String}
+        updated, result = try
+            do_action(tilecomp, command.action_id)::Tuple{PlacedComponent, RequestResult{String}}
         catch error
             throw(ActionExecutionError(coord, command.action_id, error, catch_backtrace()))
         end
 
         result isa InvalidRequest && return result
+        set_component!(gamemap, coord, updated)
         isnothing(first_message) && (first_message = unwrap(result))
     end
 
@@ -1528,7 +1530,7 @@ end
 
 "Commit one useful component against the scheduler's current speculative trial state."
 function commit_trial_outcome!(comp::PlacedComponent, coord::TileCoord, gamemap::GameMap, scheduler::ReactivationScheduler)
-    commit_reactivation_probe!(
+    updated = commit_reactivation_probe(
         comp;
         tile = coord,
         ship_name = comp.ship,
@@ -1536,6 +1538,7 @@ function commit_trial_outcome!(comp::PlacedComponent, coord::TileCoord, gamemap:
         derivedmapstate = scheduler.trial_derivedmapstate,
         mna_state = scheduler.trial_mna_state,
     )
+    set_component!(gamemap, coord, updated)
     return nothing
 end
 

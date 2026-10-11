@@ -11,6 +11,7 @@ packages.
 """
 module HexComponentsAPI
 
+using Accessors
 using StaticArrays
 using HexElements, HexFluids, HexFrame
 
@@ -28,15 +29,15 @@ export isvalidrequest, unwrap, reason
 export ComponentBehavior
 export produce_rel_elements, produce_abs_elements, produce_rel_fluid_declarations
 export get_tunables, set_tunables, render_base_elem!, render_map_elem!
-export update_flowbehav!, on_click!, get_thrust, get_component_temperature, get_component_mass, map_rotation, map_mirroring, can_be_moved, placement_valid
+export update_flowbehav, on_click, get_thrust, get_component_temperature, get_component_mass, map_rotation, map_mirroring, can_be_moved, placement_valid
 export get_component_dry_mass, get_component_wet_mass
 export collect_effect_particles!
-export get_actions, do_action!
+export get_actions, do_action
 export get_default_component_mass, set_default_component_mass!
 
 # Reactivation Probe Exports
 export ReactivationProbe, ReactivationProbeOutcome, PROBE_HARMFUL, PROBE_NEUTRAL, PROBE_USEFUL
-export get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe!
+export get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe
 
 # Pipe Behaviour Exports
 export PipeBehavior
@@ -111,6 +112,9 @@ A type that subtypes ComponentBehavior must implement all the mandatory function
 and should implement the optional functions if the defaults are unsuitable.
 These types have the suffix 'Behav'
 
+All state beneath a ComponentBehavior is immutable. State transitions return replacements,
+which callers must propagate and explicitly store at the mutable map boundary.
+
 A ComponentBehavior can also be built as a composite of other ComponentBehaviors,
 with suitable method delegation or output combination applied.
 
@@ -123,17 +127,21 @@ All concrete ComponentBehavior types T must implement the following
 MANDATORY METHODS:
 
     produce_rel_elements(behav::T)::NTuple{N, RelativeElement}
-    get_tunables(behav::T)::NTuple{N, TunableProps}
-    set_tunables(behav::T, tunables::NTuple{N, Real})::T
+    get_tunables(behav::T)::Tuple{Vararg{AnyTunableProps}}
+    set_tunables(behav::T, tunables::Tuple)::T
     render_base_elem!(queue::AbstractVector, behav::T; glmap, rotation, position, pos_offset = nothing, scale = 1.0, transparency = 1.0, render_height_offset::Integer = 0, kwargs...)::Nothing
+
+Tunables expose current values to the placement editor and runtime inspector through scalar
+`TunableProps` and enum-backed `EnumTunableProps`. `set_tunables` accepts the corresponding
+tuple of selected/current values and returns a replacement behaviour.
 
 There are suitable defaults, but concrete ComponentBehavior types T can also implement the following
 OPTIONAL METHODS:
 
     render_map_elem!(queue::AbstractVector, behav::T; glmap, rotation, position, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)::Nothing
     produce_rel_fluid_declarations(behav::T)::Tuple
-    update_flowbehav!(behav::T; kwargs...)::Nothing
-    on_click!(behav::T; kwargs...)::Nothing
+    update_flowbehav(behav::T; kwargs...)::T
+    on_click(behav::T; kwargs...)::T
     get_thrust(behav::T; kwargs...)::SVector{2, Float64}
     get_component_temperature(behav::T; kwargs...)::Union{Nothing, Float64}
     get_component_dry_mass(behav::T; kwargs...)::Float64
@@ -145,10 +153,10 @@ OPTIONAL METHODS:
     map_mirroring(behav::T, mirrored::Bool)::Bool
     can_be_moved(behav::T; kwargs...)::RequestStatus
     placement_valid(behav::T, coord::TileCoord, surface; rotation::HexAxis, kwargs...)::RequestStatus
-    do_action!(behav::T, action_id::Symbol; kwargs...)::RequestResult{String}
+    do_action(behav::T, action_id::Symbol; kwargs...)::Tuple{T, RequestResult{String}}
     get_reactivation_probe(behav::T; kwargs...)::Union{Nothing, ReactivationProbe}
     classify_reactivation_probe(behav::T; kwargs...)::ReactivationProbeOutcome
-    commit_reactivation_probe!(behav::T; kwargs...)::Nothing
+    commit_reactivation_probe(behav::T; kwargs...)::T
 
 """
 abstract type ComponentBehavior end
@@ -226,11 +234,11 @@ end
 "Default `produce_rel_fluid_declarations` returns an empty tuple (no fluid declarations)."
 produce_rel_fluid_declarations(behav::ComponentBehavior) = ()
 
-"Default `update_flowbehav!` does nothing."
-update_flowbehav!(behav::ComponentBehavior; kwargs...) = nothing
+"Default `update_flowbehav` returns the unchanged behaviour."
+update_flowbehav(behav::ComponentBehavior; kwargs...) = behav
 
-"Default `on_click!` does nothing."
-on_click!(behav::ComponentBehavior; kwargs...) = nothing
+"Default `on_click` returns the unchanged behaviour."
+on_click(behav::ComponentBehavior; kwargs...) = behav
 
 "Default thrust is a zero vector for non-nozzles."
 get_thrust(behav::ComponentBehavior; kwargs...) = SVector{2, Float64}(0.0, 0.0)
@@ -261,8 +269,14 @@ get_component_mass(behav::ComponentBehavior; kwargs...) = get_component_dry_mass
 "Default `get_actions` returns an empty tuple; the component has no actions."
 get_actions(behav::ComponentBehavior; kwargs...) = ()
 
-"Default do_action! rejects unsupported action IDs as programming errors."
-function do_action!(behav::T, action_id::Symbol; kwargs...) where {T <: ComponentBehavior}
+"""
+Return `(updated_behav, result)` for a supported action.
+
+Successful actions return a replacement behaviour and a valid `RequestResult`.
+Expected rejections return the unchanged input behaviour and an `InvalidRequest`.
+Unsupported action IDs are programming errors and throw `ArgumentError`.
+"""
+function do_action(behav::T, action_id::Symbol; kwargs...) where {T <: ComponentBehavior}
     throw(ArgumentError("Action :$(action_id) not implemented for $(nameof(T))"))
 end
 
@@ -312,7 +326,7 @@ or `nothing` if the component has no pending reactivation request this tick.
 Returning a non-`nothing` probe signals to the calculator scheduler that this component
 wishes to test whether it can be safely reactivated. The scheduler will run a speculative
 solve with the probe's elements appended, classify the result with `classify_reactivation_probe`,
-and call `commit_reactivation_probe!` only when the classification is useful.
+and call `commit_reactivation_probe` only when the classification is useful.
 """
 get_reactivation_probe(behav::ComponentBehavior; kwargs...) = nothing
 
@@ -335,22 +349,24 @@ function classify_reactivation_probe(behav::T; kwargs...) where {T <: ComponentB
 end
 
 """
-Apply the committed effect of a useful speculative reactivation probe.
+Return the replacement behaviour for a useful speculative reactivation probe.
+The default returns the unchanged behaviour.
 
 The scheduler only calls this hook after `classify_reactivation_probe` returned
 `PROBE_USEFUL` for the corresponding speculative solve.
 """
-commit_reactivation_probe!(behav::ComponentBehavior; kwargs...) = nothing
+commit_reactivation_probe(behav::ComponentBehavior; kwargs...) = behav
 
 # ===============================================================
 # PlacedComponent Wrapper
 # ===============================================================
 """
-A wrapper for a component placed on the map.
+An immutable placement wrapper for a component value on the map.
 
 Includes shared placement information: the placed rotation, mirror state, and
 owning `ship` tag. `ship` records which ship in a unified `GameMap` owns the
-component. All behavioural methods delegate to the component.
+component. All behavioural methods delegate to the component. Behaviour changes
+return replacement wrappers preserving rotation, mirroring and ship ownership.
 """
 struct PlacedComponent{T <: ComponentBehavior}
     component::T
@@ -367,7 +383,7 @@ PlacedComponent(component::T, rotation::HexAxis, ship::Symbol) where {T <: Compo
 produce_rel_elements(comp::PlacedComponent) = produce_rel_elements(comp.component)
 produce_rel_fluid_declarations(comp::PlacedComponent) = produce_rel_fluid_declarations(comp.component)
 get_tunables(comp::PlacedComponent) = get_tunables(comp.component)
-set_tunables(comp::PlacedComponent, tunables::NTuple{N, Real}) where {N} = set_tunables(comp.component, tunables)
+set_tunables(comp::PlacedComponent, tunables::Tuple) = @set comp.component = set_tunables(comp.component, tunables)
 
 # Rendering and effects
 render_map_elem!(queue::AbstractVector, comp::PlacedComponent; kwargs...) = render_map_elem!(queue, comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
@@ -375,15 +391,15 @@ render_base_elem!(queue::AbstractVector, comp::PlacedComponent; kwargs...) = ren
 collect_effect_particles!(manager, comp::PlacedComponent; kwargs...) = collect_effect_particles!(manager, comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
 
 # Flow and interaction
-update_flowbehav!(comp::PlacedComponent; kwargs...) = update_flowbehav!(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
-function on_click!(comp::PlacedComponent; unrotated_clicksite = nothing, kwargs...)
+update_flowbehav(comp::PlacedComponent; kwargs...) = @set comp.component = update_flowbehav(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
+function on_click(comp::PlacedComponent; unrotated_clicksite = nothing, kwargs...)
     if !isnothing(unrotated_clicksite)
         relative_clicksite = tile_orientation_matrix(comp.rotation, comp.mirrored) * unrotated_clicksite
-        on_click!(comp.component; relative_clicksite = relative_clicksite, kwargs...) # Forward with the rotated click site
+        updated = on_click(comp.component; relative_clicksite = relative_clicksite, kwargs...) # Forward with the rotated click site
     else
-        on_click!(comp.component; kwargs...) # No click site info, just forward everything
+        updated = on_click(comp.component; kwargs...) # No click site info, just forward everything
     end
-    return nothing
+    return @set comp.component = updated
 end
 get_thrust(comp::PlacedComponent; kwargs...) = get_thrust(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
 get_component_temperature(comp::PlacedComponent; kwargs...) = get_component_temperature(comp.component; kwargs...)
@@ -395,12 +411,15 @@ map_mirroring(comp::PlacedComponent, mirrored::Bool) = map_mirroring(comp.compon
 can_be_moved(comp::PlacedComponent; kwargs...) = can_be_moved(comp.component; kwargs...)
 placement_valid(comp::PlacedComponent, coord, surface; kwargs...) = placement_valid(comp.component, coord, surface; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
 get_actions(comp::PlacedComponent; kwargs...) = get_actions(comp.component; kwargs...)
-do_action!(comp::PlacedComponent, action_id::Symbol; kwargs...) = do_action!(comp.component, action_id; kwargs...)
+function do_action(comp::PlacedComponent, action_id::Symbol; kwargs...)
+    updated, result = do_action(comp.component, action_id; kwargs...)
+    return (@set comp.component = updated), result
+end
 
 # Reactivation probes
 get_reactivation_probe(comp::PlacedComponent; kwargs...) = get_reactivation_probe(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
 classify_reactivation_probe(comp::PlacedComponent; kwargs...) = classify_reactivation_probe(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
-commit_reactivation_probe!(comp::PlacedComponent; kwargs...) = commit_reactivation_probe!(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
+commit_reactivation_probe(comp::PlacedComponent; kwargs...) = @set comp.component = commit_reactivation_probe(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
 
 "Map relative component elements to absolute elements."
 function produce_abs_elements(tilecomp::PlacedComponent, tile::TileCoord)
@@ -415,6 +434,10 @@ end
 """
 A PipeBehavior encapsulates all of a pipe's behaviour on pipe coordinates.
 This includes its interaction with the flow engine, and its rendering.
+
+Concrete pipe behaviours and all state beneath them are immutable values. Operations
+that change pipe behaviour return replacements, which callers must propagate and
+explicitly store at the mutable map boundary.
 
 A type that subtypes PipeBehavior must implement all the mandatory functions listed,
 and should implement the optional functions if the defaults are unsuitable.
@@ -451,7 +474,8 @@ abstract type PipeBehavior end
 # ===============================================================
 
 """
-A `PipeBehavior` placed on the map. Carries the owning ship's `Symbol` tag.
+An immutable placement wrapper for a pipe value on the map, carrying the owning
+ship's `Symbol` tag. Behaviour changes return replacements preserving ownership.
 All behavioural methods delegate to the inner pipe.
 """
 struct PlacedPipe{T <: PipeBehavior}
@@ -488,7 +512,7 @@ function get_pipe_tunables(behav::T) where {T <: PipeBehavior}
     error("Required method get_pipe_tunables not implemented for $(nameof(T))")
 end
 
-"Error for concrete PipeBehavior without required method set_pipe_tunables"
+"Return a replacement pipe value reflecting the supplied tunables."
 function set_pipe_tunables(behav::T, tunables::NTuple{N, Real}) where {N, T <: PipeBehavior}
     error("Required method set_pipe_tunables not implemented for $(nameof(T))")
 end

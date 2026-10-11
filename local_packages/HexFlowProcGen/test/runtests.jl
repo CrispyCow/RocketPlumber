@@ -36,8 +36,9 @@ HexComponentsAPI.produce_rel_elements(::MockCompBehav) = (
     ),
 )
 
-HexComponentsAPI.get_tunables(::MockCompBehav) = ()
+HexComponentsAPI.get_tunables(b::MockCompBehav) = (TunableProps(b.value, "Value", ""),)
 HexComponentsAPI.set_tunables(b::MockCompBehav, ::NTuple{0, Real}) = b
+HexComponentsAPI.set_tunables(::MockCompBehav, values::NTuple{1, Real}) = MockCompBehav(Float64(only(values)))
 HexComponentsAPI.render_base_elem!(::AbstractVector, ::MockCompBehav; kwargs...) = nothing
 
 "Minimal ComponentBehavior with explicit dry and wet masses for delta-V tests."
@@ -614,7 +615,16 @@ end
 
         success, msg = place_shipset!(gm, shipset, UInt32(0x5678))
         @test success == true
-        @test length(get_components(gm)) >= 1
+        @test length(get_components(gm)) == 2
+        first_coord, second_coord = keys(get_components(gm))
+        shared = get_component(gm, first_coord)
+        @test shared === get_component(gm, second_coord)
+        updated = set_tunables(shared, (2.0,))
+        set_component!(gm, first_coord, updated)
+        @test get_component(gm, first_coord).component.value == 2.0
+        @test get_component(gm, second_coord).component.value == 1.0
+        @test shared.component.value == 1.0
+        @test (updated.rotation, updated.mirrored, updated.ship) == (shared.rotation, shared.mirrored, shared.ship)
     end
 
     @testset "place_shipset! scales only clustered counts" begin

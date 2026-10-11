@@ -6,6 +6,7 @@ Formatter: Runic
 ENV["JULIA_GLFW_PLATFORM"] = "null"
 
 using Test
+using Accessors: @set
 using HexFrame
 using HexElements
 using HexFluids
@@ -18,11 +19,10 @@ using HexFlowRendering
 using RenderEngine
 using StaticArrays
 
-using HexFlowPumpComponents: EnergyStoreBehavFrag
-using HexFlowPumpComponents: get_current_energy, get_max_energy, update_energy!
-using HexFlowPumpComponents: get_current_rpm, get_rpm_fraction, update_rpm!
+using HexFlowPumpComponents: get_current_energy, get_max_energy, update_energy
+using HexFlowPumpComponents: get_current_rpm, get_rpm_fraction, update_rpm
 using HexFlowPumpComponents: effective_turbine_conductance, turbopump_vibe_magnitude
-using HexFlowPumpComponents: get_delayed_drive_power, get_stored_drive_energy, update_delayed_drive!
+using HexFlowPumpComponents: get_delayed_drive_power, get_stored_drive_energy, update_delayed_drive
 using HexFlowPumpComponents: get_rated_rpm, get_failure_rpm, get_turbine_runaway_rpm
 using HexFlowPumpComponents: get_overspeed_fraction, get_animation_rpm_fraction
 
@@ -74,45 +74,14 @@ end
 turbopump_friction_power(comp::TurboPumpCompBehav, rpm::Float64)::Float64 = HexFlowPumpComponents.turbopump_shaft_drag(comp.rotor.friction_coefficient, rpm)
 
 "Construct a representative variable-conductance turbopump for tests."
-function make_turbopump(
-        ;
-        max_pump_voltage::Float64 = 50.0,
-        series_conductance::Float64 = 1.0,
-        max_turbine_conductance::Float64 = 0.3,
-        cycle_efficiency::Float64 = 0.6,
-        current_rpm::Float64 = 0.0,
-        max_rpm::Float64 = 3000.0,
-        rotor_inertia::Float64 = 50.0,
-        friction_coefficient::Float64 = 0.002,
-        current_delayed_drive_power::Float64 = 0.0,
-        drive_time_constant::Float64 = 1.25,
-        deactivation::AutoDeactivationBehavFrag = AutoDeactivationBehavFrag(),
-        limit_temperature_k::Float64 = 1500.0,
-        thermal_mass::Float64 = 30.0,
-        heat_loss_factor::Float64 = 0.7
-    )
-    return TurboPumpCompBehav(
-        max_pump_voltage = max_pump_voltage,
-        series_conductance = series_conductance,
-        max_turbine_conductance = max_turbine_conductance,
-        cycle_efficiency = cycle_efficiency,
-        current_rpm = current_rpm,
-        max_rpm = max_rpm,
-        rotor_inertia = rotor_inertia,
-        friction_coefficient = friction_coefficient,
-        current_delayed_drive_power = current_delayed_drive_power,
-        drive_time_constant = drive_time_constant,
-        deactivation = deactivation,
-        limit_temperature_k = limit_temperature_k,
-        thermal_mass = thermal_mass,
-        heat_loss_factor = heat_loss_factor
-    )
+function make_turbopump(; max_pump_voltage::Float64 = 50.0, series_conductance::Float64 = 1.0, thermal_mass::Float64 = 30.0, heat_loss_factor::Float64 = 0.7, kwargs...)
+    return TurboPumpCompBehav(; max_pump_voltage, series_conductance, thermal_mass, heat_loss_factor, kwargs...)
 end
 
 "Construct a turbopump with a post-construction RPM value, including overspeed values."
 function make_turbopump_at_rpm(rpm::Float64; kwargs...)
     comp = make_turbopump(; kwargs...)
-    setstate!(comp.rotor.rpm, max(rpm, 0.0))
+    comp = @set comp.rotor.state.rpm = max(rpm, 0.0)
     return comp
 end
 
@@ -122,7 +91,7 @@ function make_hot_turbopump(; kwargs...)
 end
 
 "Advance a turbopump under a fixed turbine-side condition until damage triggers or the limit expires."
-function run_until_damage!(
+function run_until_damage(
         comp::TurboPumpCompBehav;
         tile::TileCoord = TEST_TILE,
         rotation::HexAxis = TEST_ROTATION,
@@ -136,25 +105,25 @@ function run_until_damage!(
     derivedmapstate = make_derived_state(tile; rotation = rotation, fluid = fluid, temperature_k = temperature_k)
 
     for tick in 1:max_ticks
-        update_flowbehav!(comp; tile = tile, rotation = rotation, mna_state = mna_state, derivedmapstate = derivedmapstate)
-        is_damaged(comp.overheat) && return tick
+        comp = update_flowbehav(comp; tile = tile, rotation = rotation, mna_state = mna_state, derivedmapstate = derivedmapstate)
+        is_damaged(comp.overheat) && return comp, tick
     end
 
-    return max_ticks
+    return comp, max_ticks
 end
 
 "Construct an electric pump variant for regression coverage."
 function make_electric_pump(
-        ::Type{T};
+        variant::ElectricPumpVariant;
         pump_voltage::Float64 = 50.0,
         max_energy::Float64 = 200.0,
         initial_energy::Float64 = 200.0,
         max_conductance::Float64 = 1.0,
         min_conductance::Float64 = 0.0,
         growth_factor::Float64 = calculate_growth_factor(1.0, 0.0, 1.0 / BASE_UPS)
-    ) where {T}
+    )
     return ElectricPumpCompBehav(
-        T;
+        variant;
         pump_voltage = pump_voltage,
         max_energy = max_energy,
         initial_energy = initial_energy,
@@ -180,36 +149,36 @@ end
 end
 
 @testset "Energy and rotor fragments" begin
-    energy = EnergyStoreBehavFrag(FloatStateBehavFrag(20.0), 50.0)
-    update_energy!(energy, 10.0)
+    energy = EnergyStore(EnergyStoreState(20.0), 50.0)
+    energy = update_energy(energy, 10.0)
     @test get_current_energy(energy) ≈ 30.0
-    update_energy!(energy, 50.0)
+    energy = update_energy(energy, 50.0)
     @test get_current_energy(energy) ≈ get_max_energy(energy)
-    update_energy!(energy, -100.0)
+    energy = update_energy(energy, -100.0)
     @test get_current_energy(energy) == 0.0
 
-    rotor = RotorStateBehavFrag(current_rpm = 7000.0, max_rpm = 3000.0, rotor_inertia = 0.1, friction_coefficient = 0.001)
+    rotor = Rotor(current_rpm = 7000.0, max_rpm = 3000.0, rotor_inertia = 0.1, friction_coefficient = 0.001)
     @test get_current_rpm(rotor) == 3000.0  # keyword constructor clamps to [0, max_rpm]
     @test get_rpm_fraction(rotor) == 1.0
-    update_rpm!(rotor, -1500.0)
+    rotor = update_rpm(rotor, -1500.0)
     @test get_current_rpm(rotor) == 1500.0
-    update_rpm!(rotor, -10_000.0)
+    rotor = update_rpm(rotor, -10_000.0)
     @test get_current_rpm(rotor) == 0.0
 
-    # RPM can exceed max_rpm via update_rpm! (no upper clamp — conductance limiting handles ceiling)
-    update_rpm!(rotor, 5000.0)
+    # RPM can exceed max_rpm via update_rpm (no upper clamp — conductance limiting handles ceiling)
+    rotor = update_rpm(rotor, 5000.0)
     @test get_current_rpm(rotor) == 5000.0
     @test get_rpm_fraction(rotor) == 1.0  # rpm_fraction is clamped to [0, 1]
     @test turbopump_friction_power(make_turbopump(friction_coefficient = 0.001), 0.0) ≈ 1.2
 
     stopped = make_turbopump(current_rpm = 0.5)
-    update_flowbehav!(stopped; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = MNA_State(), derivedmapstate = make_derived_state())
+    stopped = update_flowbehav(stopped; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = MNA_State(), derivedmapstate = make_derived_state())
     @test get_current_rpm(stopped.rotor) == 0.0
 
     applied_rotor_inertia = rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
     @test applied_rotor_inertia ≈ 1.0e-4
 
-    clamped_rotor = RotorStateBehavFrag(current_rpm = 5.0, max_rpm = 0.0, rotor_inertia = 0.0, friction_coefficient = -1.0)
+    clamped_rotor = Rotor(current_rpm = 5.0, max_rpm = 0.0, rotor_inertia = 0.0, friction_coefficient = -1.0)
     @test clamped_rotor.max_rpm == 1.0e-6
     @test clamped_rotor.rotor_inertia == 1.0e-6
     @test clamped_rotor.friction_coefficient == 1.0e-6
@@ -232,33 +201,33 @@ end
 end
 
 @testset "Delayed drive fragment" begin
-    negative = DelayedDriveBehavFrag(current_power = -5.0, time_constant = 1.0)
+    negative = DelayedDrive(current_power = -5.0, time_constant = 1.0)
     @test get_delayed_drive_power(negative) == 0.0
 
-    minimum_time_constant = DelayedDriveBehavFrag(current_power = 2.0, time_constant = 0.0)
+    minimum_time_constant = DelayedDrive(current_power = 2.0, time_constant = 0.0)
     @test minimum_time_constant.time_constant == 1.0 / BASE_UPS
 
-    drive = DelayedDriveBehavFrag(current_power = 0.0, time_constant = 1.0)
+    drive = DelayedDrive(current_power = 0.0, time_constant = 1.0)
     target = 12.0
     alpha = -expm1(-0.5 / drive.time_constant)
-    update_delayed_drive!(drive, target; dt = 0.5)
+    drive = update_delayed_drive(drive, target; dt = 0.5)
     @test get_delayed_drive_power(drive) ≈ alpha * target
     for _ in 1:1000
-        update_delayed_drive!(drive, target; dt = 1.0 / BASE_UPS)
+        drive = update_delayed_drive(drive, target; dt = 1.0 / BASE_UPS)
     end
     @test 0.0 < get_delayed_drive_power(drive) < target
     @test get_delayed_drive_power(drive) ≈ target atol = 1.0e-6
 
     settled_power = get_delayed_drive_power(drive)
-    update_delayed_drive!(drive, 0.0; dt = 0.25)
+    drive = update_delayed_drive(drive, 0.0; dt = 0.25)
     @test get_delayed_drive_power(drive) ≈ settled_power * exp(-0.25 / drive.time_constant)
-    update_delayed_drive!(drive, -10.0; dt = 1.0)
+    drive = update_delayed_drive(drive, -10.0; dt = 1.0)
     @test get_delayed_drive_power(drive) ≥ 0.0
     @test get_stored_drive_energy(drive) ≈ drive.time_constant * get_delayed_drive_power(drive)
 
-    power_state = FloatStateBehavFrag(4.0)
-    reconstructed = DelayedDriveBehavFrag(power_state, 2.0)
-    @test reconstructed.power === power_state
+    power_state = DelayedDriveState(4.0)
+    reconstructed = DelayedDrive(power_state, 2.0)
+    @test reconstructed.state == power_state
     @test get_stored_drive_energy(reconstructed) ≈ 8.0
 end
 
@@ -283,22 +252,22 @@ end
     @test all(elem.active for elem in elements)
 
     # Auto-deactivation disables all three elements.
-    deactivate!(comp.deactivation)
+    comp = @set comp.deactivation = deactivate(comp.deactivation)
     deactivated_elements = produce_rel_elements(comp)
     @test all(!elem.active for elem in deactivated_elements)
-    reactivate!(comp.deactivation)
+    comp = @set comp.deactivation = reactivate(comp.deactivation)
 
     tunables = get_tunables(comp)
     @test tunables isa NTuple{13, TunableProps}
-    original_rpm_state = comp.rotor.rpm
-    original_drive_state = comp.delayed_drive.power
+    original_rpm_state = comp.rotor.state
+    original_drive_state = comp.delayed_drive.state
     original_temperature_state = comp.overheat.temperature
     original_damage_state = comp.overheat.damage
     tuned = set_tunables(comp, (60.0, 2.0, 0.6, 3500.0, 3500.0, 400.0, 0.5, 0.9, 25.0, 2.0, 1600.0, 12.0, 7.0))
-    @test tuned.rotor.rpm === original_rpm_state
-    @test tuned.delayed_drive.power === original_drive_state
-    @test tuned.overheat.temperature === original_temperature_state
-    @test tuned.overheat.damage === original_damage_state
+    @test original_rpm_state.rpm == 1500.0
+    @test original_drive_state.power == 0.0
+    @test tuned.overheat.temperature == original_temperature_state
+    @test tuned.overheat.damage == original_damage_state
     @test tuned.max_pump_voltage ≈ 60.0
     @test tuned.series_conductance ≈ 2.0
     @test tuned.max_turbine_conductance ≈ 0.6
@@ -324,7 +293,7 @@ end
     @test length(actions) == 1
     @test actions[1].id === :repair_component
     @test !actions[1].enabled
-    on_click!(comp)
+    comp = on_click(comp)
     @test !is_inactive(comp.deactivation)
 end
 
@@ -346,7 +315,9 @@ end
     for case in cases
         @testset "$(case.name)" begin
             comp = make_turbopump_at_rpm(case.rpm)
-            case.damaged && damage!(comp.overheat)
+            if case.damaged
+                comp = @set comp.overheat = damage(comp.overheat)
+            end
             indicator = HexFlowPumpComponents.turbopump_speed_indicator(comp)
             @test indicator.fill_fraction == case.fill_fraction
             @test indicator.colour == case.colour
@@ -354,7 +325,7 @@ end
     end
 
     heated = make_turbopump_at_rpm(1500.0)
-    set_component_temperature!(heated.overheat, 1400.0)
+    heated = @set heated.overheat = set_component_temperature(heated.overheat, 1400.0)
     heated_indicator = HexFlowPumpComponents.turbopump_speed_indicator(heated)
     @test !is_damaged(heated.overheat)
     @test heated_indicator.fill_fraction == 0.5
@@ -417,8 +388,8 @@ end
     @test tunables[13].type_desc == "Heat Loss Factor"
 
     heated = make_turbopump()
-    set_component_temperature!(heated.overheat, 975.0)
-    damage!(heated.overheat)
+    heated = @set heated.overheat = set_component_temperature(heated.overheat, 975.0)
+    heated = @set heated.overheat = damage(heated.overheat)
     roundtrip_values = ntuple(index -> tunables[index].current_val, 13)
     roundtripped = set_tunables(heated, roundtrip_values)
     @test get_component_temperature(roundtripped) == 975.0
@@ -429,7 +400,7 @@ end
     set_node_voltage!(monoprop_mna, TEST_TILE, HexFrame.NODE_S_POS, 40.0)
     monoprop_derived = make_derived_state(fluid = HexFluids.MONOPROP_GAS, temperature_k = 800.0)
     for _ in 1:(5 * BASE_UPS)
-        update_flowbehav!(monoprop_safe; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = monoprop_mna, derivedmapstate = monoprop_derived)
+        monoprop_safe = update_flowbehav(monoprop_safe; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = monoprop_mna, derivedmapstate = monoprop_derived)
     end
     @test !is_damaged(monoprop_safe.overheat)
     @test get_component_temperature(monoprop_safe) < 1000.0
@@ -439,46 +410,49 @@ end
     set_node_voltage!(off_mixture_mna, TEST_TILE, HexFrame.NODE_S_POS, 40.0)
     off_mixture_derived = make_derived_state(fluid = HexFluids.BIPROP_EXHAUST, temperature_k = 1400.0)
     for _ in 1:(5 * BASE_UPS)
-        update_flowbehav!(off_mixture_safe; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = off_mixture_mna, derivedmapstate = off_mixture_derived)
+        off_mixture_safe = update_flowbehav(off_mixture_safe; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = off_mixture_mna, derivedmapstate = off_mixture_derived)
     end
     @test !is_damaged(off_mixture_safe.overheat)
 
     peak_biprop = make_hot_turbopump()
-    damage_tick = run_until_damage!(peak_biprop)
+    peak_biprop, damage_tick = run_until_damage(peak_biprop)
     @test is_damaged(peak_biprop.overheat)
     @test damage_tick < 30 * BASE_UPS
     @test get_overheat_percentage(peak_biprop.overheat) == 1.0
     @test get_component_temperature(peak_biprop) >= peak_biprop.overheat.limit_temperature_k
     @test all(!elem.active for elem in produce_rel_elements(peak_biprop))
 
-    damaged_probe = make_hot_turbopump(deactivation = AutoDeactivationBehavFrag())
-    @test run_until_damage!(damaged_probe) < 30 * BASE_UPS
-    deactivate!(damaged_probe.deactivation)
+    damaged_probe = make_hot_turbopump(deactivation = AutoDeactivationState())
+    damaged_probe, damage_tick = run_until_damage(damaged_probe)
+    @test damage_tick < 30 * BASE_UPS
+    damaged_probe = @set damaged_probe.deactivation = deactivate(damaged_probe.deactivation)
     @test isnothing(get_reactivation_probe(damaged_probe; tile = TEST_TILE, rotation = TEST_ROTATION))
 
     repaired_active = make_hot_turbopump()
-    @test run_until_damage!(repaired_active) < 30 * BASE_UPS
+    repaired_active, damage_tick = run_until_damage(repaired_active)
+    @test damage_tick < 30 * BASE_UPS
     repair_actions = get_actions(repaired_active)
     @test length(repair_actions) == 1
     @test repair_actions[1].id === :repair_component
     @test repair_actions[1].enabled
-    result = do_action!(repaired_active, :repair_component)
+    repaired_active, result = do_action(repaired_active, :repair_component)
     @test isvalidrequest(result)
     @test !is_damaged(repaired_active.overheat)
     @test all(elem.active for elem in produce_rel_elements(repaired_active))
     @test isnothing(get_reactivation_probe(repaired_active; tile = TEST_TILE, rotation = TEST_ROTATION))
 
-    result = do_action!(damaged_probe, :repair_component)
+    damaged_probe, result = do_action(damaged_probe, :repair_component)
     @test isvalidrequest(result)
     @test !is_damaged(damaged_probe.overheat)
     @test get_reactivation_probe(damaged_probe; tile = TEST_TILE, rotation = TEST_ROTATION) isa ReactivationProbe
 
     cooling_probe = make_hot_turbopump()
-    @test run_until_damage!(cooling_probe) < 30 * BASE_UPS
+    cooling_probe, damage_tick = run_until_damage(cooling_probe)
+    @test damage_tick < 30 * BASE_UPS
     start_temperature = get_component_temperature(cooling_probe)
     ambient_state = make_derived_state(fluid = HexFluids.BIPROP_EXHAUST, temperature_k = THERMAL_AMBIENT_TEMPERATURE_K)
     for _ in 1:(20 * BASE_UPS)
-        update_flowbehav!(cooling_probe; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = MNA_State(), derivedmapstate = ambient_state)
+        cooling_probe = update_flowbehav(cooling_probe; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = MNA_State(), derivedmapstate = ambient_state)
     end
     @test get_component_temperature(cooling_probe) < start_temperature
     @test all(!elem.active for elem in produce_rel_elements(cooling_probe))
@@ -500,7 +474,7 @@ end
 @testset "Turbo pump RPM updates" begin
     # Friction-only decay (no gas, no pump load)
     friction_only = make_turbopump(current_rpm = 1200.0, rotor_inertia = 6000.0, friction_coefficient = 0.1)
-    update_flowbehav!(friction_only; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = MNA_State(), derivedmapstate = make_derived_state())
+    friction_only = update_flowbehav(friction_only; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = MNA_State(), derivedmapstate = make_derived_state())
     applied_inertia = friction_only.rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
     friction_power = turbopump_friction_power(friction_only, 1200.0)
     friction_expected = 1200.0 - friction_power / (applied_inertia * BASE_UPS)
@@ -511,7 +485,7 @@ end
     spinup_mna = MNA_State()
     set_node_voltage!(spinup_mna, TEST_TILE, HexFrame.NODE_S_POS, 5.0)
     spinup_derived = make_derived_state(fluid = HexFluids.MONOPROP_GAS, temperature_k = 800.0)
-    update_flowbehav!(spun_up; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = spinup_mna, derivedmapstate = spinup_derived)
+    spun_up = update_flowbehav(spun_up; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = spinup_mna, derivedmapstate = spinup_derived)
     turbine_g = spun_up.max_turbine_conductance  # at 0 RPM, G = max
     turbine_current = 5.0 * turbine_g
     density = HexFluids.lookup_fluid_density(HexFluids.COLD_GAS)::Float64
@@ -529,7 +503,7 @@ end
     ambient_gas_mna = MNA_State()
     set_node_voltage!(ambient_gas_mna, TEST_TILE, HexFrame.NODE_S_POS, 40.0)
     ambient_gas_derived = make_derived_state(temperature_k = HexFluids.THERMAL_AMBIENT_TEMPERATURE_K)
-    update_flowbehav!(ambient_gas; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = ambient_gas_mna, derivedmapstate = ambient_gas_derived)
+    ambient_gas = update_flowbehav(ambient_gas; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = ambient_gas_mna, derivedmapstate = ambient_gas_derived)
     ambient_applied_inertia = ambient_gas.rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
     ambient_friction = turbopump_friction_power(ambient_gas, 1200.0)
     ambient_expected = 1200.0 - ambient_friction / (ambient_applied_inertia * BASE_UPS)
@@ -539,7 +513,7 @@ end
     loaded = make_turbopump(current_rpm = 1500.0, rotor_inertia = 6000.0, friction_coefficient = 0.1)
     loaded_mna = register_vsources!(MNA_State(), TEST_TILE, 1)
     loaded_mna.vsource_currents[ElementID(TEST_TILE, 1)] = -5.0
-    update_flowbehav!(loaded; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = loaded_mna, derivedmapstate = make_derived_state())
+    loaded = update_flowbehav(loaded; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = loaded_mna, derivedmapstate = make_derived_state())
     load_applied_inertia = loaded.rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
     pump_voltage = loaded.max_pump_voltage * 0.5  # rpm_fraction = 0.5
     pump_power = pump_voltage * 5.0
@@ -552,7 +526,7 @@ end
     startup_mna = register_vsources!(MNA_State(), TEST_TILE, 1)
     startup_mna.vsource_currents[ElementID(TEST_TILE, 1)] = -0.3
     set_node_voltage!(startup_mna, TEST_TILE, HexFrame.NODE_S_POS, 40.0)
-    update_flowbehav!(startup; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = startup_mna, derivedmapstate = make_derived_state(fluid = HexFluids.MONOPROP_GAS, temperature_k = 800.0))
+    startup = update_flowbehav(startup; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = startup_mna, derivedmapstate = make_derived_state(fluid = HexFluids.MONOPROP_GAS, temperature_k = 800.0))
     @test !is_inactive(startup.deactivation)
     @test get_current_rpm(startup.rotor) > 0.0
 
@@ -560,7 +534,7 @@ end
     contract_comp = make_turbopump(current_rpm = 0.0)
     contract_mna = MNA_State()
     set_node_voltage!(contract_mna, TEST_TILE, HexFrame.NODE_S_POS, 50.0)
-    update_flowbehav!(contract_comp; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = contract_mna, derivedmapstate = make_derived_state(fluid = HexFluids.MONOPROP_GAS, temperature_k = 800.0))
+    contract_comp = update_flowbehav(contract_comp; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = contract_mna, derivedmapstate = make_derived_state(fluid = HexFluids.MONOPROP_GAS, temperature_k = 800.0))
     contract_elements = produce_rel_elements(contract_comp)
     @test get_current_rpm(contract_comp.rotor) > 0.0
     @test contract_elements[1].value ≈ contract_comp.max_pump_voltage * get_rpm_fraction(contract_comp.rotor)
@@ -569,7 +543,7 @@ end
     missing_fluid = make_turbopump(current_rpm = 1200.0, rotor_inertia = 6000.0, friction_coefficient = 0.1)
     missing_fluid_mna = MNA_State()
     set_node_voltage!(missing_fluid_mna, TEST_TILE, HexFrame.NODE_S_POS, 40.0)
-    update_flowbehav!(missing_fluid; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = missing_fluid_mna, derivedmapstate = DerivedMapState())
+    missing_fluid = update_flowbehav(missing_fluid; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = missing_fluid_mna, derivedmapstate = DerivedMapState())
     missing_applied_inertia = missing_fluid.rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
     missing_friction = turbopump_friction_power(missing_fluid, 1200.0)
     missing_expected = 1200.0 - missing_friction / (missing_applied_inertia * BASE_UPS)
@@ -587,7 +561,7 @@ end
 
     loaded = make_turbopump()
     for _ in 1:600
-        update_flowbehav!(loaded; tile = tile, rotation = rotation, mna_state = loaded_mna, derivedmapstate = loaded_derived)
+        loaded = update_flowbehav(loaded; tile = tile, rotation = rotation, mna_state = loaded_mna, derivedmapstate = loaded_derived)
     end
     loaded_rpm = get_current_rpm(loaded.rotor)
     @test !is_damaged(loaded.overheat)
@@ -603,12 +577,12 @@ end
     cold_derived = make_derived_state(tile; rotation = rotation, fluid = nothing, temperature_k = THERMAL_AMBIENT_TEMPERATURE_K)
 
     # Removing turbine drive and pump load together leaves stored drive to accelerate the shaft.
-    common_shutdown = deepcopy(loaded)
+    common_shutdown = loaded
     common_cut_mna = MNA_State()
     first_cut_drive = nothing
     shutdown_damage_tick = nothing
     for tick in 1:180
-        update_flowbehav!(common_shutdown; tile = tile, rotation = rotation, mna_state = common_cut_mna, derivedmapstate = cold_derived)
+        common_shutdown = update_flowbehav(common_shutdown; tile = tile, rotation = rotation, mna_state = common_cut_mna, derivedmapstate = cold_derived)
         tick == 1 && (first_cut_drive = get_delayed_drive_power(common_shutdown.delayed_drive))
         if is_damaged(common_shutdown.overheat)
             shutdown_damage_tick = tick
@@ -622,12 +596,12 @@ end
     @test get_component_temperature(common_shutdown) < common_shutdown.overheat.limit_temperature_k
 
     # Removing turbine drive while retaining liquid load winds the pump down safely.
-    safe_shutdown = deepcopy(loaded)
+    safe_shutdown = loaded
     safe_cut_mna = register_vsources!(MNA_State(), tile, 1)
     safe_cut_mna.vsource_currents[ElementID(tile, 1)] = -6.0
     maximum_safe_rpm = loaded_rpm
     for _ in 1:180
-        update_flowbehav!(safe_shutdown; tile = tile, rotation = rotation, mna_state = safe_cut_mna, derivedmapstate = cold_derived)
+        safe_shutdown = update_flowbehav(safe_shutdown; tile = tile, rotation = rotation, mna_state = safe_cut_mna, derivedmapstate = cold_derived)
         maximum_safe_rpm = max(maximum_safe_rpm, get_current_rpm(safe_shutdown.rotor))
     end
     @test maximum_safe_rpm ≈ loaded_rpm
@@ -637,10 +611,10 @@ end
     @test get_delayed_drive_power(safe_shutdown.delayed_drive) < get_delayed_drive_power(loaded.delayed_drive)
 
     # Restoring turbine drive and liquid load during the warning band recovers the pump.
-    recovery = deepcopy(loaded)
+    recovery = loaded
     warning_tick = nothing
     for tick in 1:180
-        update_flowbehav!(recovery; tile = tile, rotation = rotation, mna_state = common_cut_mna, derivedmapstate = cold_derived)
+        recovery = update_flowbehav(recovery; tile = tile, rotation = rotation, mna_state = common_cut_mna, derivedmapstate = cold_derived)
         if get_overspeed_fraction(recovery) > 0.0
             warning_tick = tick
             break
@@ -650,7 +624,7 @@ end
     @test get_overspeed_fraction(recovery) < 1.0
     recovered = false
     for _ in 1:300
-        update_flowbehav!(recovery; tile = tile, rotation = rotation, mna_state = loaded_mna, derivedmapstate = loaded_derived)
+        recovery = update_flowbehav(recovery; tile = tile, rotation = rotation, mna_state = loaded_mna, derivedmapstate = loaded_derived)
         if get_overspeed_fraction(recovery) == 0.0
             recovered = true
             break
@@ -666,7 +640,7 @@ end
     no_load_damage_tick = nothing
     passed_rated = false
     for tick in 1:180
-        update_flowbehav!(no_load; tile = tile, rotation = rotation, mna_state = no_load_mna, derivedmapstate = loaded_derived)
+        no_load = update_flowbehav(no_load; tile = tile, rotation = rotation, mna_state = no_load_mna, derivedmapstate = loaded_derived)
         passed_rated |= get_current_rpm(no_load.rotor) > get_rated_rpm(no_load)
         if is_damaged(no_load.overheat)
             no_load_damage_tick = tick
@@ -683,7 +657,7 @@ end
     set_node_voltage!(low_input_mna, tile, HexFrame.NODE_S_POS, 0.1; rotation = rotation)
     low_input_derived = make_derived_state(tile; rotation = rotation, fluid = HexFluids.MONOPROP_GAS, temperature_k = 800.0)
     for _ in 1:(30 * BASE_UPS)
-        update_flowbehav!(low_input; tile = tile, rotation = rotation, mna_state = low_input_mna, derivedmapstate = low_input_derived)
+        low_input = update_flowbehav(low_input; tile = tile, rotation = rotation, mna_state = low_input_mna, derivedmapstate = low_input_derived)
     end
     @test get_current_rpm(low_input.rotor) < get_rated_rpm(low_input)
     @test get_current_rpm(low_input.rotor) < get_failure_rpm(low_input)
@@ -692,12 +666,12 @@ end
     # Repairing an overspeeding shaft does not reset its mechanical state.
     damaged_rpm = get_current_rpm(no_load.rotor)
     damaged_drive = get_delayed_drive_power(no_load.delayed_drive)
-    repair_result = do_action!(no_load, :repair_component)
+    no_load, repair_result = do_action(no_load, :repair_component)
     @test isvalidrequest(repair_result)
     @test !is_damaged(no_load.overheat)
     @test get_current_rpm(no_load.rotor) == damaged_rpm
     @test get_delayed_drive_power(no_load.delayed_drive) == damaged_drive
-    update_flowbehav!(no_load; tile = tile, rotation = rotation, mna_state = common_cut_mna, derivedmapstate = cold_derived)
+    no_load = update_flowbehav(no_load; tile = tile, rotation = rotation, mna_state = common_cut_mna, derivedmapstate = cold_derived)
     @test is_damaged(no_load.overheat)
 end
 
@@ -709,7 +683,7 @@ end
     reversed_turbine = make_turbopump(current_rpm = 1200.0, rotor_inertia = 6000.0, friction_coefficient = 0.1)
     rev_mna = MNA_State()
     set_node_voltage!(rev_mna, tile, HexFrame.NODE_S_POS, -5.0; rotation = rotation)
-    update_flowbehav!(reversed_turbine; tile = tile, rotation = rotation, mna_state = rev_mna, derivedmapstate = make_derived_state())
+    reversed_turbine = update_flowbehav(reversed_turbine; tile = tile, rotation = rotation, mna_state = rev_mna, derivedmapstate = make_derived_state())
     @test is_inactive(reversed_turbine.deactivation)
     # RPM decays via friction only after deactivation.
     applied_inertia = reversed_turbine.rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
@@ -721,14 +695,14 @@ end
     pos_mna = register_vsources!(MNA_State(), tile, 1)
     pos_mna.vsource_currents[ElementID(tile, 1)] = 0.5  # back-drive through pump source
     # No reverse turbine voltage — turbine node at zero.
-    update_flowbehav!(positive_source; tile = tile, rotation = rotation, mna_state = pos_mna, derivedmapstate = make_derived_state())
+    positive_source = update_flowbehav(positive_source; tile = tile, rotation = rotation, mna_state = pos_mna, derivedmapstate = make_derived_state())
     @test !is_inactive(positive_source.deactivation)
 
     # Reverse pump current does not contribute to rotor energy (clamp ensures this).
     reverse_pump_energy = make_turbopump(current_rpm = 1500.0, rotor_inertia = 6000.0, friction_coefficient = 0.1)
     rpe_mna = register_vsources!(MNA_State(), tile, 1)
     rpe_mna.vsource_currents[ElementID(tile, 1)] = 2.0  # positive = reverse pump flow
-    update_flowbehav!(reverse_pump_energy; tile = tile, rotation = rotation, mna_state = rpe_mna, derivedmapstate = make_derived_state())
+    reverse_pump_energy = update_flowbehav(reverse_pump_energy; tile = tile, rotation = rotation, mna_state = rpe_mna, derivedmapstate = make_derived_state())
     rpe_applied_inertia = reverse_pump_energy.rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
     rpe_friction = turbopump_friction_power(reverse_pump_energy, 1500.0)
     # Pump_current clamp yields 0 (max(-2.0, 0) = 0), so pump_power = 0, only friction acts.
@@ -736,9 +710,9 @@ end
     @test get_current_rpm(reverse_pump_energy.rotor) ≈ rpe_expected
 
     # Inactive pump: RPM decays via friction only, no further deactivation change.
-    inactive_decay = make_turbopump(current_rpm = 800.0, rotor_inertia = 6000.0, friction_coefficient = 0.1, deactivation = AutoDeactivationBehavFrag())
-    deactivate!(inactive_decay.deactivation)
-    update_flowbehav!(inactive_decay; tile = tile, rotation = rotation, mna_state = MNA_State(), derivedmapstate = make_derived_state())
+    inactive_decay = make_turbopump(current_rpm = 800.0, rotor_inertia = 6000.0, friction_coefficient = 0.1, deactivation = AutoDeactivationState())
+    inactive_decay = @set inactive_decay.deactivation = deactivate(inactive_decay.deactivation)
+    inactive_decay = update_flowbehav(inactive_decay; tile = tile, rotation = rotation, mna_state = MNA_State(), derivedmapstate = make_derived_state())
     id_applied_inertia = inactive_decay.rotor.rotor_inertia * HexFlowPumpComponents.TURBOPUMP_ROTOR_INERTIA_APPLICATION_SCALE
     id_friction = turbopump_friction_power(inactive_decay, 800.0)
     @test get_current_rpm(inactive_decay.rotor) ≈ 800.0 - id_friction / (id_applied_inertia * BASE_UPS)
@@ -754,8 +728,8 @@ end
     @test isnothing(get_reactivation_probe(active_comp; tile = tile, rotation = rotation))
 
     # Inactive pump: three-element probe in correct index order.
-    inactive_comp = make_turbopump(current_rpm = 500.0, deactivation = AutoDeactivationBehavFrag())
-    deactivate!(inactive_comp.deactivation)
+    inactive_comp = make_turbopump(current_rpm = 500.0, deactivation = AutoDeactivationState())
+    inactive_comp = @set inactive_comp.deactivation = deactivate(inactive_comp.deactivation)
     probe = get_reactivation_probe(inactive_comp; tile = tile, rotation = rotation)
     @test probe isa ReactivationProbe
     @test length(probe.rel_elements) == 3
@@ -767,7 +741,7 @@ end
     @test probe.rel_elements[1].value ≈ inactive_comp.max_pump_voltage * get_rpm_fraction(inactive_comp.rotor)
 end
 
-@testset "Turbopump classify_reactivation_probe and commit_reactivation_probe!" begin
+@testset "Turbopump classify_reactivation_probe and commit_reactivation_probe" begin
     tile = TEST_TILE
     rotation = TEST_ROTATION
 
@@ -792,36 +766,36 @@ end
 
     # Positive turbine current (useful flow) → useful.
     comp_accept = make_turbopump(current_rpm = 500.0)
-    deactivate!(comp_accept.deactivation)
+    comp_accept = @set comp_accept.deactivation = deactivate(comp_accept.deactivation)
     mna_pos, dm_pos = make_turbine_probe_state(comp_accept; s_pos_voltage = 5.0)
     @test classify_reactivation_probe(comp_accept; tile = tile, rotation = rotation, derivedmapstate = dm_pos, mna_state = mna_pos) === PROBE_USEFUL
     @test is_inactive(comp_accept.deactivation)
-    commit_reactivation_probe!(comp_accept; tile = tile, rotation = rotation, derivedmapstate = dm_pos, mna_state = mna_pos)
+    comp_accept = commit_reactivation_probe(comp_accept; tile = tile, rotation = rotation, derivedmapstate = dm_pos, mna_state = mna_pos)
     @test !is_inactive(comp_accept.deactivation)
 
     # Zero turbine current (neutral-ish) → useful at the shared API boundary.
     comp_neutral = make_turbopump(current_rpm = 500.0)
-    deactivate!(comp_neutral.deactivation)
+    comp_neutral = @set comp_neutral.deactivation = deactivate(comp_neutral.deactivation)
     mna_zero, dm_zero = make_turbine_probe_state(comp_neutral; s_pos_voltage = 0.0)
     @test classify_reactivation_probe(comp_neutral; tile = tile, rotation = rotation, derivedmapstate = dm_zero, mna_state = mna_zero) === PROBE_USEFUL
     @test is_inactive(comp_neutral.deactivation)
 
     # Harmful reverse turbine current → harmful; state unchanged.
     comp_reject = make_turbopump(current_rpm = 500.0)
-    deactivate!(comp_reject.deactivation)
+    comp_reject = @set comp_reject.deactivation = deactivate(comp_reject.deactivation)
     mna_neg, dm_neg = make_turbine_probe_state(comp_reject; s_pos_voltage = -5.0)
     @test classify_reactivation_probe(comp_reject; tile = tile, rotation = rotation, derivedmapstate = dm_neg, mna_state = mna_neg) === PROBE_HARMFUL
     @test is_inactive(comp_reject.deactivation)
 
     # Pruned turbine element → neutral.
     comp_pruned = make_turbopump(current_rpm = 500.0)
-    deactivate!(comp_pruned.deactivation)
+    comp_pruned = @set comp_pruned.deactivation = deactivate(comp_pruned.deactivation)
     @test classify_reactivation_probe(comp_pruned; tile = tile, rotation = rotation, derivedmapstate = DerivedMapState(), mna_state = MNA_State()) === PROBE_NEUTRAL
     @test is_inactive(comp_pruned.deactivation)
 
     # Reverse pump-source current does NOT block useful classification.
     comp_revpump = make_turbopump(current_rpm = 500.0)
-    deactivate!(comp_revpump.deactivation)
+    comp_revpump = @set comp_revpump.deactivation = deactivate(comp_revpump.deactivation)
     mna_revpump, dm_revpump = make_turbine_probe_state(comp_revpump; s_pos_voltage = 3.0)
     # Inject a positive (reversing) pump source current into the mock state.
     register_vsources!(mna_revpump, tile, 1)
@@ -850,7 +824,7 @@ end
     # Conductance reaches zero at the runaway RPM and stays there above it.
     comp_runaway = make_turbopump_at_rpm(3750.0; max_rpm = 3000.0)
     @test effective_turbine_conductance(comp_runaway) ≈ 0.0
-    update_rpm!(comp_runaway.rotor, 1000.0)
+    comp_runaway = @set comp_runaway.rotor = update_rpm(comp_runaway.rotor, 1000.0)
     @test effective_turbine_conductance(comp_runaway) ≈ 0.0
 
     sampled = [effective_turbine_conductance(make_turbopump(current_rpm = rpm)) for rpm in 0.0:250.0:4000.0]
@@ -858,7 +832,7 @@ end
 
     # Transient overshoot: pump voltage remains capped while conductance stays positive below runaway.
     overshoot = make_turbopump(current_rpm = 2900.0, max_rpm = 3000.0)
-    update_rpm!(overshoot.rotor, 200.0)  # push above max_rpm
+    overshoot = @set overshoot.rotor = update_rpm(overshoot.rotor, 200.0)  # push above max_rpm
     @test get_current_rpm(overshoot.rotor) ≈ 3100.0
     @test get_rpm_fraction(overshoot.rotor) == 1.0
     elems_overshoot = produce_rel_elements(overshoot)
@@ -876,7 +850,7 @@ end
 @testset "Turbopump render helpers" begin
     base_colour = HexFlowPumpComponents.ColourType(0.4, 0.6, 0.8, 0.5)
     heated = make_turbopump()
-    set_component_temperature!(heated.overheat, heated.overheat.limit_temperature_k * 1.2)
+    heated = @set heated.overheat = set_component_temperature(heated.overheat, heated.overheat.limit_temperature_k * 1.2)
     layer_colours = HexFlowPumpComponents.turbopump_render_colours(base_colour, heated.overheat, 0.5)
 
     @test layer_colours.base == base_colour
@@ -903,13 +877,13 @@ end
     overspeed = make_turbopump_at_rpm(3300.0)
     @test turbopump_vibe_magnitude(overspeed, 0.0) ≈ 4.5
 
-    damage!(overspeed.overheat)
+    overspeed = @set overspeed.overheat = damage(overspeed.overheat)
     @test turbopump_vibe_magnitude(overspeed, 1.0) == 0.0
 end
 
 @testset "Electric pump regression coverage" begin
-    turbo_electric = make_electric_pump(ElectricTurboPump)
-    transfer_electric = make_electric_pump(ElectricTransferPump; pump_voltage = 5.0, max_conductance = 0.5, growth_factor = calculate_growth_factor(0.5, 0.0, 0.4 / BASE_UPS))
+    turbo_electric = make_electric_pump(ELECTRIC_TURBO_PUMP)
+    transfer_electric = make_electric_pump(ELECTRIC_TRANSFER_PUMP; pump_voltage = 5.0, max_conductance = 0.5, growth_factor = calculate_growth_factor(0.5, 0.0, 0.4 / BASE_UPS))
 
     turbo_elements = produce_rel_elements(turbo_electric)
     @test length(turbo_elements) == 2
@@ -926,7 +900,7 @@ end
 
     turbo_mna = register_vsources!(MNA_State(), TEST_TILE, 1)
     turbo_mna.vsource_currents[ElementID(TEST_TILE, 1)] = 2.0
-    update_flowbehav!(turbo_electric; tile = TEST_TILE, mna_state = turbo_mna)
+    turbo_electric = update_flowbehav(turbo_electric; tile = TEST_TILE, mna_state = turbo_mna)
     @test get_current_energy(turbo_electric.energy) ≈ 100.0
 
     tuned_electric = set_tunables(turbo_electric, (40.0, 50.0, 100.0, 0.8, 0.0))
@@ -937,7 +911,185 @@ end
     action_ids = Set(action.id for action in get_actions(turbo_electric))
     @test action_ids == Set((:pump_on, :pump_off))
 
-    empty_electric = make_electric_pump(ElectricTransferPump; pump_voltage = 5.0, max_energy = 10.0, initial_energy = 0.0, max_conductance = 0.5, growth_factor = calculate_growth_factor(0.5, 0.0, 0.4 / BASE_UPS))
-    on_click!(empty_electric)
+    empty_electric = make_electric_pump(ELECTRIC_TRANSFER_PUMP; pump_voltage = 5.0, max_energy = 10.0, initial_energy = 0.0, max_conductance = 0.5, growth_factor = calculate_growth_factor(0.5, 0.0, 0.4 / BASE_UPS))
+    empty_electric = on_click(empty_electric)
     @test get_current_energy(empty_electric.energy) == 0.0
+end
+
+@testset "Pump replacement values and composition" begin
+    energy = EnergyStore(EnergyStoreState(20.0), 50.0)
+    charged = update_energy(energy, 10.0)
+    @test get_current_energy(energy) == 20.0
+    @test get_current_energy(charged) == 30.0
+    @test charged.max_energy == energy.max_energy
+
+    rotor = Rotor(current_rpm = 1500.0, max_rpm = 3000.0, rotor_inertia = 50.0, friction_coefficient = 0.002)
+    accelerated = update_rpm(rotor, 200.0)
+    @test get_current_rpm(rotor) == 1500.0
+    @test get_current_rpm(accelerated) == 1700.0
+    @test accelerated.max_rpm == rotor.max_rpm
+    @test accelerated.rotor_inertia == rotor.rotor_inertia
+    @test accelerated.friction_coefficient == rotor.friction_coefficient
+
+    negative_rpm = RotorState(-10.0)
+    clamped_rotor = Rotor(negative_rpm, 3000.0, 50.0, 0.002)
+    @test negative_rpm.rpm == -10.0
+    @test get_current_rpm(clamped_rotor) == 0.0
+    negative_power = DelayedDriveState(-10.0)
+    clamped_drive = DelayedDrive(negative_power, 1.0)
+    @test negative_power.power == -10.0
+    @test get_delayed_drive_power(clamped_drive) == 0.0
+
+    drive = DelayedDrive(current_power = 2.0, time_constant = 1.25)
+    advanced_drive = update_delayed_drive(drive, 10.0)
+    @test get_delayed_drive_power(drive) == 2.0
+    @test get_delayed_drive_power(advanced_drive) > 2.0
+    @test advanced_drive.time_constant == drive.time_constant
+
+    turbo = make_turbopump(current_rpm = 1500.0, current_delayed_drive_power = 2.0)
+    reversed_mna = set_node_voltage!(MNA_State(), TEST_TILE, HexFrame.NODE_S_POS, -5.0)
+    stopped = update_flowbehav(turbo; tile = TEST_TILE, rotation = TEST_ROTATION, mna_state = reversed_mna, derivedmapstate = make_derived_state())
+    @test !is_inactive(turbo.deactivation)
+    @test is_inactive(stopped.deactivation)
+    @test get_current_rpm(turbo.rotor) == 1500.0
+    @test get_delayed_drive_power(turbo.delayed_drive) == 2.0
+    @test get_delayed_drive_power(stopped.delayed_drive) < 2.0
+    @test stopped.max_pump_voltage == turbo.max_pump_voltage
+    @test stopped.cycle_efficiency == turbo.cycle_efficiency
+    @test stopped.overheat.limit_temperature_k == turbo.overheat.limit_temperature_k
+
+    reactivated = commit_reactivation_probe(stopped)
+    @test is_inactive(stopped.deactivation)
+    @test !is_inactive(reactivated.deactivation)
+    @test reactivated.rotor == stopped.rotor
+    @test reactivated.delayed_drive == stopped.delayed_drive
+
+    damaged = @set stopped.overheat = damage(stopped.overheat)
+    placed = PlacedComponent(damaged, HexFrame.R_POS, true, :ValueSemanticsShip)
+    repaired, result = do_action(placed, :repair_component)
+    @test isvalidrequest(result)
+    @test is_damaged(placed.component.overheat)
+    @test !is_damaged(repaired.component.overheat)
+    @test is_inactive(repaired.component.deactivation)
+    @test repaired.rotation == placed.rotation
+    @test repaired.mirrored == placed.mirrored
+    @test repaired.ship == placed.ship
+    rejected, rejection = do_action(repaired, :repair_component)
+    @test !isvalidrequest(rejection)
+    @test rejected == repaired
+    @test_throws ArgumentError do_action(repaired, :unsupported)
+    resumed = commit_reactivation_probe(repaired)
+    @test is_inactive(repaired.component.deactivation)
+    @test !is_inactive(resumed.component.deactivation)
+    @test resumed.rotation == placed.rotation
+    @test resumed.mirrored == placed.mirrored
+    @test resumed.ship == placed.ship
+
+    for variant in (ELECTRIC_TURBO_PUMP, ELECTRIC_TRANSFER_PUMP)
+        electric = make_electric_pump(variant)
+        powered, action_result = do_action(electric, :pump_on)
+        @test isvalidrequest(action_result)
+        @test typeof(powered) === typeof(electric)
+        @test powered.variant === variant
+        @test get_target_percentage(electric.switch) == 0.0
+        @test get_target_percentage(powered.switch) == 1.0
+        @test powered.pump == electric.pump
+        @test powered.energy == electric.energy
+        clicked = on_click(electric)
+        @test clicked.variant === variant
+        @test get_target_percentage(clicked.switch) == 1.0
+        @test get_target_percentage(electric.switch) == 0.0
+
+        mna = register_vsources!(MNA_State(), TEST_TILE, 1)
+        mna.vsource_currents[ElementID(TEST_TILE, 1)] = 1.0
+        advanced = update_flowbehav(powered; tile = TEST_TILE, mna_state = mna)
+        @test get_current_energy(powered.energy) == 200.0
+        @test get_current_energy(advanced.energy) == 150.0
+        @test get_switch_percentage(powered.switch) == 0.0
+        @test advanced.switch.switch.state.current_conductance > 0.0
+        @test advanced.pump == electric.pump
+        @test typeof(advanced) === typeof(electric)
+        @test advanced.variant === variant
+
+        tuned = set_tunables(electric, (40.0, 50.0, 100.0, 0.8, 0.0))
+        @test tuned.variant === variant
+        @test get_current_energy(electric.energy) == 200.0
+        @test get_current_energy(tuned.energy) == 50.0
+        @test get_max_energy(tuned.energy) == 100.0
+        empty = make_electric_pump(variant; initial_energy = 0.0)
+        switched_off = update_flowbehav(empty; tile = TEST_TILE, mna_state = mna)
+        @test switched_off.variant === variant
+        @test on_click(empty) === empty
+        stopped, stop_result = do_action(powered, :pump_off)
+        @test isvalidrequest(stop_result)
+        @test stopped.variant === variant
+        @test_throws ArgumentError do_action(electric, :unsupported)
+    end
+end
+
+@testset "Pump editor values replace selected state" begin
+    turbo = make_turbopump(current_rpm = 1500.0, current_delayed_drive_power = 12.5)
+    turbo = @set turbo.rotor = update_rpm(turbo.rotor, 2700.0)
+    turbo = @set turbo.deactivation = deactivate(turbo.deactivation)
+    turbo = @set turbo.overheat = damage(set_component_temperature(turbo.overheat, 1600.0))
+    tuned = set_tunables(turbo, (60.0, 2.0, 0.6, 4100.0, 2000.0, 400.0, 0.5, 0.9, 18.0, 2.0, 1700.0, 12.0, 7.0))
+    @test get_tunables(turbo) isa NTuple{13, TunableProps}
+    @test get_tunables(turbo)[4].type_desc == "Current RPM"
+    @test get_tunables(turbo)[4].current_val == 4200.0
+    @test get_tunables(turbo)[9].current_val == 12.5
+    @test tuned.rotor.state === RotorState(4100.0)
+    @test get_current_rpm(turbo.rotor) == 4200.0
+    @test get_current_rpm(tuned.rotor) == 4100.0
+    @test tuned.delayed_drive.state === DelayedDriveState(18.0)
+    @test get_delayed_drive_power(turbo.delayed_drive) == 12.5
+    @test tuned.deactivation == turbo.deactivation
+    @test tuned.overheat.temperature == turbo.overheat.temperature
+    @test tuned.overheat.damage == turbo.overheat.damage
+    @test tuned.rotor.max_rpm == 2000.0
+    @test turbo.rotor.max_rpm == 3000.0
+
+    electric = make_electric_pump(ELECTRIC_TURBO_PUMP; initial_energy = 37.0)
+    electric = on_click(electric)
+    electric = @set electric.switch.switch.state.current_conductance = 0.3
+    tuned_electric = set_tunables(electric, (60.0, 15.0, 20.0, 2.0, 0.0))
+    @test get_tunables(electric) isa NTuple{5, TunableProps}
+    @test get_tunables(electric)[2].type_desc == "Current stored energy"
+    @test get_tunables(electric)[2].current_val == 37.0
+    @test tuned_electric.energy.state === EnergyStoreState(15.0)
+    @test get_current_energy(electric.energy) == 37.0
+    @test tuned_electric.switch.switch.state == electric.switch.switch.state
+    @test get_current_energy(tuned_electric.energy) == 15.0
+    @test get_max_energy(tuned_electric.energy) == 20.0
+
+    negative_values = (60.0, 2.0, 0.6, -1.0, 2000.0, 400.0, 0.5, 0.9, -5.0, 2.0, 1700.0, 12.0, 7.0)
+    clamped_turbo = set_tunables(turbo, negative_values)
+    @test clamped_turbo.rotor.state === RotorState(0.0)
+    @test clamped_turbo.delayed_drive.state === DelayedDriveState(0.0)
+    for (requested, expected) in ((-5.0, 0.0), (30.0, 20.0))
+        clamped_electric = set_tunables(electric, (60.0, requested, 20.0, 2.0, 0.0))
+        @test clamped_electric.energy.state === EnergyStoreState(expected)
+    end
+end
+
+@testset "Electric pump variants share a type and retain rendering traits" begin
+    helpers = (HexFlowPumpComponents.chargemask_sprite, HexFlowPumpComponents.fluidmask_sprite, HexFlowPumpComponents.static_sprite, HexFlowPumpComponents.vibrating_sprite, HexFlowPumpComponents.rotor_sprite)
+    for (variant, expected) in (
+            (ELECTRIC_TURBO_PUMP, (:ElectroPump1_chargemask, nothing, :ElectroPump1_static, :ElectroPump1_vibe, :ElectroPump1_rotor)),
+            (ELECTRIC_TRANSFER_PUMP, (:ElectroTransferPump_chargemask, :ElectroTransferPump_fluidmask, :ElectroTransferPump_static, nothing, :ElectroTransferPump_rotor)),
+        )
+        component = make_electric_pump(variant)
+        @test typeof(component) === ElectricPumpCompBehav
+        @test isbitstype(typeof(component))
+        @test map(helper -> helper(component), helpers) === expected
+    end
+end
+
+@testset "Electric pump helpers reject unhandled variants" begin
+    # Simulate a future enum member without extending the production enum.
+    unknown = reinterpret(ElectricPumpVariant, typemax(UInt8))
+    component = make_electric_pump(unknown)
+    helpers = (HexFlowPumpComponents.chargemask_sprite, HexFlowPumpComponents.fluidmask_sprite, HexFlowPumpComponents.static_sprite, HexFlowPumpComponents.vibrating_sprite, HexFlowPumpComponents.rotor_sprite)
+    for helper in helpers
+        @test_throws ArgumentError helper(component)
+    end
 end

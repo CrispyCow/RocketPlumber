@@ -314,7 +314,7 @@ function place_shipset!(
             tilecomp = PlacedComponent(comp_behav, comp_rotation, :primary)
 
             for selected_coord in component_location_list
-                set_component!(map, selected_coord, deepcopy(tilecomp))
+                set_component!(map, selected_coord, tilecomp)
             end
 
         elseif spawn_option.placement == RANDOM_PLACE
@@ -324,7 +324,7 @@ function place_shipset!(
                 comp_rotation = map_rotation(comp_behav, pick_element_from_rng(instances(HexFrame.HexAxis), prng))
                 tilecomp = PlacedComponent(comp_behav, comp_rotation, :primary)
 
-                set_component!(map, selected_coord, deepcopy(tilecomp))
+                set_component!(map, selected_coord, tilecomp)
             end
 
         elseif spawn_option.placement == NOZZLE_EDGE_PLACE

@@ -22,16 +22,16 @@ function _precompile_pump_glmap()
 end
 
 "Build a production-like electric-pump specialisation with a partially charged store."
-function _precompile_electric_pump(::Type{T}) where {T <: ElectricPumpType}
-    return ElectricPumpCompBehav(T; pump_voltage = 50.0, max_energy = 200.0, initial_energy = 100.0, max_conductance = 1.0, min_conductance = 0.0, growth_factor = calculate_growth_factor(1.0, 0.0, 1.0 / BASE_UPS))
+function _precompile_electric_pump(variant::ElectricPumpVariant)
+    return ElectricPumpCompBehav(variant; pump_voltage = 50.0, max_energy = 200.0, initial_energy = 100.0, max_conductance = 1.0, min_conductance = 0.0, growth_factor = calculate_growth_factor(1.0, 0.0, 1.0 / BASE_UPS))
 end
 
 @setup_workload begin
     tile = TileCoord(3, -2)
     rotation = HexFrame.Q_POS
     turbo = TurboPumpCompBehav(max_pump_voltage = 50.0, series_conductance = 1.0, current_rpm = 1500.0)
-    electric_turbo = _precompile_electric_pump(ElectricTurboPump)
-    electric_transfer = _precompile_electric_pump(ElectricTransferPump)
+    electric_turbo = _precompile_electric_pump(ELECTRIC_TURBO_PUMP)
+    electric_transfer = _precompile_electric_pump(ELECTRIC_TRANSFER_PUMP)
     placed = (
         PlacedComponent(turbo, rotation, true, :PrecompileShip),
         PlacedComponent(electric_turbo, rotation, :PrecompileShip),
@@ -64,28 +64,29 @@ end
             render_base_elem!(queue, component; glmap = glmap, position = tile, gameticks = 1, pos_offset = AxialCoord(0.0, 0.0), render_height_offset = Int32(0))
             render_map_elem!(queue, component; glmap = glmap, position = tile, derivedmapstate = derived, mna_state = snapshot, gameticks = 1, pos_offset = AxialCoord(0.0, 0.0), render_height_offset = Int32(0))
         end
-        set_tunables(placed[1], (50.0, 1.0, 0.3, 1500.0, 3000.0, 50.0, 0.002, 0.6, 0.0, 1.25, 1500.0, 30.0, 0.7))
+        turbo_placed = placed[1]
+        turbo_placed = set_tunables(turbo_placed, (50.0, 1.0, 0.3, 1500.0, 3000.0, 50.0, 0.002, 0.6, 0.0, 1.25, 1500.0, 30.0, 0.7))
         for component in placed[2:3]
-            set_tunables(component, (50.0, 100.0, 200.0, 1.0, 0.0))
-            on_click!(component; unrotated_clicksite = CartesianCoord(0.0, 0.5))
-            do_action!(component, :pump_on)
-            update_flowbehav!(component; tile = tile, mna_state = mna)
+            component = set_tunables(component, (50.0, 100.0, 200.0, 1.0, 0.0))
+            component = on_click(component; unrotated_clicksite = CartesianCoord(0.0, 0.5))
+            component, _ = do_action(component, :pump_on)
+            component = update_flowbehav(component; tile = tile, mna_state = mna)
         end
-        map_mirroring(placed[1], true)
-        on_click!(placed[1]; unrotated_clicksite = CartesianCoord(0.0, 0.5))
-        do_action!(placed[1], :repair_component)
-        get_component_temperature(placed[1])
-        update_flowbehav!(placed[1]; tile = tile, mna_state = mna, derivedmapstate = derived)
+        map_mirroring(turbo_placed, true)
+        turbo_placed = on_click(turbo_placed; unrotated_clicksite = CartesianCoord(0.0, 0.5))
+        turbo_placed, _ = do_action(turbo_placed, :repair_component)
+        get_component_temperature(turbo_placed)
+        turbo_placed = update_flowbehav(turbo_placed; tile = tile, mna_state = mna, derivedmapstate = derived)
 
         # A reverse turbine flow reaches the real reactivation probe path
         mna.node_voltages[turbine_node] = -5.0
-        update_flowbehav!(placed[1]; tile = tile, mna_state = mna, derivedmapstate = derived)
-        probe = get_reactivation_probe(placed[1])
+        turbo_placed = update_flowbehav(turbo_placed; tile = tile, mna_state = mna, derivedmapstate = derived)
+        probe = get_reactivation_probe(turbo_placed)
         turbine_element = map_element(probe.rel_elements[3], tile, 3, rotation, true)
         push!(derived.filteredelements, turbine_element)
         mna.node_voltages[turbine_node] = 5.0
-        classify_reactivation_probe(placed[1]; tile = tile, derivedmapstate = derived, mna_state = mna)
-        commit_reactivation_probe!(placed[1]; tile = tile, derivedmapstate = derived, mna_state = mna)
-        produce_rel_elements(placed[1])
+        classify_reactivation_probe(turbo_placed; tile = tile, derivedmapstate = derived, mna_state = mna)
+        turbo_placed = commit_reactivation_probe(turbo_placed; tile = tile, derivedmapstate = derived, mna_state = mna)
+        produce_rel_elements(turbo_placed)
     end
 end

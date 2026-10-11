@@ -128,38 +128,38 @@ end
         get_component_wet_mass(placed_liquid; fluid = HexFluids.MONOPROP_LIQUID)
         get_component_wet_mass(placed_pressurefed; fluid = HexFluids.MONOPROP_LIQUID)
 
-        set_tunables(placed_gas, (40.0, 50.0, 20.0, 5.0))
-        set_tunables(liquid, (40.0, 1.0, 20.0, 5.0, HexFluids.MONOPROP_LIQUID))
-        set_tunables(pressurefed, (40.0, 50.0, 20.0, 4.0, 5.0, HexFluids.MONOPROP_LIQUID))
+        placed_gas = set_tunables(placed_gas, (40.0, 50.0, 20.0, 5.0))
+        placed_liquid = set_tunables(placed_liquid, (40.0, 1.0, 20.0, 5.0, HexFluids.MONOPROP_LIQUID))
+        placed_pressurefed = set_tunables(placed_pressurefed, (40.0, 50.0, 20.0, 4.0, 5.0, HexFluids.MONOPROP_LIQUID))
 
-        update_flowbehav!(placed_gas; tile = tile, mna_state = mna)
-        update_flowbehav!(placed_liquid; tile = tile, mna_state = mna, derivedmapstate = derived)
-        update_flowbehav!(placed_pressurefed; tile = tile, mna_state = pressurefed_mna, derivedmapstate = derived)
+        placed_gas = update_flowbehav(placed_gas; tile = tile, mna_state = mna)
+        placed_liquid = update_flowbehav(placed_liquid; tile = tile, mna_state = mna, derivedmapstate = derived)
+        placed_pressurefed = update_flowbehav(placed_pressurefed; tile = tile, mna_state = pressurefed_mna, derivedmapstate = derived)
         produce_rel_fluid_declarations(liquid_empty)
         produce_rel_fluid_declarations(pressurefed_empty)
         render_base_elem!(queue, liquid_empty; glmap = glmap, position = tile, gameticks = 1, pos_offset = AxialCoord(0.0, 0.0), render_height_offset = Int32(0))
 
-        do_action!(placed_gas, :seal_tank)
-        do_action!(placed_liquid, :seal_tank)
-        do_action!(placed_pressurefed, :seal_both)
+        placed_gas, _ = do_action(placed_gas, :seal_tank)
+        placed_liquid, _ = do_action(placed_liquid, :seal_tank)
+        placed_pressurefed, _ = do_action(placed_pressurefed, :seal_both)
 
         get_reactivation_probe(gas_empty)
         classify_reactivation_probe(gas_empty; tile = tile, derivedmapstate = gas_probe_derived, mna_state = gas_probe_mna)
-        commit_reactivation_probe!(gas_empty; tile = tile, derivedmapstate = gas_probe_derived, mna_state = gas_probe_mna)
+        gas_empty = commit_reactivation_probe(gas_empty; tile = tile, derivedmapstate = gas_probe_derived, mna_state = gas_probe_mna)
 
         get_reactivation_probe(liquid_empty)
         classify_reactivation_probe(liquid_empty; tile = tile, derivedmapstate = liquid_probe_derived, mna_state = liquid_probe_mna)
-        commit_reactivation_probe!(liquid_empty; tile = tile, derivedmapstate = liquid_probe_derived, mna_state = liquid_probe_mna)
+        liquid_empty = commit_reactivation_probe(liquid_empty; tile = tile, derivedmapstate = liquid_probe_derived, mna_state = liquid_probe_mna)
 
         get_reactivation_probe(pressurefed_empty)
         classify_reactivation_probe(pressurefed_empty; tile = tile, derivedmapstate = pressurefed_probe_derived, mna_state = pressurefed_probe_mna)
-        commit_reactivation_probe!(pressurefed_empty; tile = tile, derivedmapstate = pressurefed_probe_derived, mna_state = pressurefed_probe_mna)
+        pressurefed_empty = commit_reactivation_probe(pressurefed_empty; tile = tile, derivedmapstate = pressurefed_probe_derived, mna_state = pressurefed_probe_mna)
 
         get_reactivation_probe(pressurefed_overpressure)
         classify_reactivation_probe(pressurefed_overpressure; tile = tile, derivedmapstate = overpressure_probe_derived, mna_state = overpressure_probe_mna)
-        commit_reactivation_probe!(pressurefed_overpressure; tile = tile, derivedmapstate = overpressure_probe_derived, mna_state = overpressure_probe_mna)
+        pressurefed_overpressure = commit_reactivation_probe(pressurefed_overpressure; tile = tile, derivedmapstate = overpressure_probe_derived, mna_state = overpressure_probe_mna)
 
-        update_flowbehav!(liquid_empty; tile = tile, mna_state = mna, derivedmapstate = derived)
-        update_flowbehav!(pressurefed_empty; tile = tile, mna_state = pressurefed_mna, derivedmapstate = derived)
+        liquid_empty = update_flowbehav(liquid_empty; tile = tile, mna_state = mna, derivedmapstate = derived)
+        pressurefed_empty = update_flowbehav(pressurefed_empty; tile = tile, mna_state = pressurefed_mna, derivedmapstate = derived)
     end
 end

@@ -23,19 +23,21 @@ using HexFlowRendering, RenderEngine
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 
 # `ComponentBehavior` optional methods
-import HexComponentsAPI: on_click!, get_thrust, get_component_temperature, update_flowbehav!, render_map_elem!
-import HexComponentsAPI: placement_valid, collect_effect_particles!, get_actions, do_action!
+import HexComponentsAPI: on_click, get_thrust, get_component_temperature, update_flowbehav, render_map_elem!
+import HexComponentsAPI: placement_valid, collect_effect_particles!, get_actions, do_action
 import HexComponentsAPI: produce_rel_fluid_declarations, map_mirroring
 
 # Reactivation probe interface
-import HexComponentsAPI: get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe!
+import HexComponentsAPI: get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe
 
 # Behaviour fragment interfaces
-import HexFlowBasicComponents: deactivate!, reactivate!, is_inactive, damage!, undamage!, is_damaged
+import HexFlowBasicComponents: deactivate, reactivate, is_inactive, damage, undamage, is_damaged
 import HexFlowBasicComponents: get_overheat_percentage, get_overheat_tint
 
 # Behaviour Fragment Exports
 export NozzleBehavFrag
+# Support Type Exports
+export NozzleSpriteVariant, TINY_NOZZLE_SPRITE, SMALL_NOZZLE_SPRITE, MEDIUM_NOZZLE_SPRITE
 # Concrete Component Behaviour Exports
 export BasicNozzleCompBehav, SwitchedNozzleCompBehav, DecompChamberCompBehav, BipropChamberCompBehav
 
@@ -49,7 +51,7 @@ export BasicNozzleCompBehav, SwitchedNozzleCompBehav, DecompChamberCompBehav, Bi
 struct NozzleBehavFrag
     connected_node::NodePos
     throat_area::Float64
-    deactivation::AutoDeactivationBehavFrag
+    deactivation::AutoDeactivationState
     overheat::OverheatLimitBehavFrag
 end
 
@@ -72,7 +74,7 @@ function default_nozzle_overheat(
         limit_temperature_k::Real = DEFAULT_NOZZLE_LIMIT_TEMPERATURE_K,
         thermal_mass::Union{Nothing, Real} = nothing,
         heat_loss_factor::Union{Nothing, Real} = nothing,
-        temperature::ComponentTemperatureBehavFrag = ComponentTemperatureBehavFrag(),
+        temperature::ComponentTemperatureState = ComponentTemperatureState(),
         damage::DamageStateBehavFrag = DamageStateBehavFrag()
     )
     thermal_mass_f = isnothing(thermal_mass) ? default_nozzle_thermal_mass(throat_area) : Float64(thermal_mass)
@@ -80,25 +82,25 @@ function default_nozzle_overheat(
     return OverheatLimitBehavFrag(limit_temperature_k, thermal_mass_f, heat_loss_factor_f; temperature = temperature, damage = damage)
 end
 
-function NozzleBehavFrag(connected_node::NodePos, throat_area::Real, deactivation::AutoDeactivationBehavFrag, overheat::OverheatLimitBehavFrag)
+function NozzleBehavFrag(connected_node::NodePos, throat_area::Real, deactivation::AutoDeactivationState, overheat::OverheatLimitBehavFrag)
     return NozzleBehavFrag(connected_node, Float64(throat_area), deactivation, overheat)
 end
 
 function NozzleBehavFrag(connected_node::NodePos, throat_area::Real, overheat::OverheatLimitBehavFrag)
-    return NozzleBehavFrag(connected_node, Float64(throat_area), AutoDeactivationBehavFrag(), overheat)
+    return NozzleBehavFrag(connected_node, Float64(throat_area), AutoDeactivationState(), overheat)
 end
 
 function NozzleBehavFrag(connected_node::NodePos, throat_area::Real)
     throat_area_f = Float64(throat_area)
-    return NozzleBehavFrag(connected_node, throat_area_f, AutoDeactivationBehavFrag(), default_nozzle_overheat(throat_area_f))
+    return NozzleBehavFrag(connected_node, throat_area_f, AutoDeactivationState(), default_nozzle_overheat(throat_area_f))
 end
 
 is_inactive(nozzle::NozzleBehavFrag) = is_inactive(nozzle.deactivation)
-deactivate!(nozzle::NozzleBehavFrag) = deactivate!(nozzle.deactivation)
-reactivate!(nozzle::NozzleBehavFrag) = reactivate!(nozzle.deactivation)
+deactivate(nozzle::NozzleBehavFrag) = @set nozzle.deactivation = deactivate(nozzle.deactivation)
+reactivate(nozzle::NozzleBehavFrag) = @set nozzle.deactivation = reactivate(nozzle.deactivation)
 is_damaged(nozzle::NozzleBehavFrag) = is_damaged(nozzle.overheat)
-damage!(nozzle::NozzleBehavFrag) = damage!(nozzle.overheat)
-undamage!(nozzle::NozzleBehavFrag) = undamage!(nozzle.overheat)
+damage(nozzle::NozzleBehavFrag) = @set nozzle.overheat = damage(nozzle.overheat)
+undamage(nozzle::NozzleBehavFrag) = @set nozzle.overheat = undamage(nozzle.overheat)
 get_component_temperature(nozzle::NozzleBehavFrag)::Float64 = get_component_temperature(nozzle.overheat)
 get_overheat_percentage(nozzle::NozzleBehavFrag)::Float64 = get_overheat_percentage(nozzle.overheat)
 get_overheat_tint(nozzle::NozzleBehavFrag)::ColourType = get_overheat_tint(nozzle.overheat)
@@ -187,9 +189,10 @@ end
 
 get_actions(nozzle::NozzleBehavFrag; kwargs...) = get_actions(nozzle.overheat; kwargs...)
 
-function do_action!(nozzle::NozzleBehavFrag, action_id::Symbol; kwargs...)
+function do_action(nozzle::NozzleBehavFrag, action_id::Symbol; kwargs...)
     if action_id === :repair_component
-        return do_action!(nozzle.overheat, action_id; kwargs...)
+        updated, result = do_action(nozzle.overheat, action_id; kwargs...)
+        return (@set nozzle.overheat = updated), result
     end
     throw(ArgumentError("Action :$(action_id) not recognised by NozzleBehavFrag"))
 end
@@ -228,12 +231,11 @@ function classify_reactivation_probe(nozzle::NozzleBehavFrag; tile::TileCoord, r
     return HexComponentsAPI.PROBE_NEUTRAL
 end
 
-function commit_reactivation_probe!(nozzle::NozzleBehavFrag; kwargs...)
-    reactivate!(nozzle)
-    return nothing
+function commit_reactivation_probe(nozzle::NozzleBehavFrag; kwargs...)
+    return reactivate(nozzle)
 end
 
-function update_flowbehav!(nozzle::NozzleBehavFrag; rotation::HexAxis, tile::TileCoord, mna_state::MNA_State, derivedmapstate::DerivedMapState, kwargs...)
+function update_flowbehav(nozzle::NozzleBehavFrag; rotation::HexAxis, tile::TileCoord, mna_state::MNA_State, derivedmapstate::DerivedMapState, kwargs...)
     # Get the voltage at the nozzle's connected node
     nozzle_input_node = map_element(nozzle.connected_node, tile, rotation)
     nozzle_input_pressure = get(mna_state.node_voltages, nozzle_input_node, 0.0)
@@ -249,13 +251,13 @@ function update_flowbehav!(nozzle::NozzleBehavFrag; rotation::HexAxis, tile::Til
         fluid_density = something(lookup_fluid_density(fluid), 0.0)
         mass_flow_rate = max(nozzle_current, 0.0) * fluid_density
     end
-    update_overheat_state!(nozzle.overheat; fluid_temperature_k = fluid_temperature_k, mass_flow_rate = mass_flow_rate)
+    nozzle = @set nozzle.overheat = update_overheat_state(nozzle.overheat; fluid_temperature_k = fluid_temperature_k, mass_flow_rate = mass_flow_rate)
 
     # Deactivate when reverse flow is detected; the reactivation scheduler will restore it once safe.
     if nozzle_input_pressure < -probe_tol
-        deactivate!(nozzle)
+        nozzle = deactivate(nozzle)
     end
-    return nothing
+    return nozzle
 end
 
 function render_map_elem!(queue::Vector{<:RenderCommand}, nozzle::NozzleBehavFrag; kwargs...)
@@ -383,16 +385,23 @@ end
 
 #= ---------- BasicNozzleCompBehav ----------- =#
 
+"Sprite family for a basic nozzle, independent of throat area and physics."
+@enum NozzleSpriteVariant::UInt8 begin
+    TINY_NOZZLE_SPRITE
+    SMALL_NOZZLE_SPRITE
+    MEDIUM_NOZZLE_SPRITE
+end
+
 "Basic nozzle component with a fixed sprite and nozzle fragment"
 struct BasicNozzleCompBehav <: ComponentBehavior
     nozzle::NozzleBehavFrag
-    sprite::PlainSpriteBehavFrag
+    sprite_variant::NozzleSpriteVariant
 end
 
 function BasicNozzleCompBehav(;
         connected_node::NodePos,
         throat_area::Float64,
-        sprite::Symbol,
+        sprite_variant::NozzleSpriteVariant,
         limit_temperature_k::Float64 = DEFAULT_NOZZLE_LIMIT_TEMPERATURE_K,
         thermal_mass::Union{Nothing, Float64} = nothing,
         heat_loss_factor::Union{Nothing, Float64} = nothing
@@ -400,7 +409,7 @@ function BasicNozzleCompBehav(;
     nozzlefrag = NozzleBehavFrag(
         connected_node,
         throat_area,
-        AutoDeactivationBehavFrag(),
+        AutoDeactivationState(),
         default_nozzle_overheat(
             throat_area;
             limit_temperature_k = limit_temperature_k,
@@ -408,8 +417,19 @@ function BasicNozzleCompBehav(;
             heat_loss_factor = heat_loss_factor
         )
     )
-    spritefrag = PlainSpriteBehavFrag(sprite)
-    return BasicNozzleCompBehav(nozzlefrag, spritefrag)
+    return BasicNozzleCompBehav(nozzlefrag, sprite_variant)
+end
+
+"Select the basic nozzle sprite without imposing physical nozzle dimensions."
+function nozzle_sprite(comp::BasicNozzleCompBehav)::Symbol
+    if comp.sprite_variant === TINY_NOZZLE_SPRITE
+        return :AllNozzles_TinyNozzle
+    elseif comp.sprite_variant === SMALL_NOZZLE_SPRITE
+        return :AllNozzles_SmallNozzle
+    elseif comp.sprite_variant === MEDIUM_NOZZLE_SPRITE
+        return :AllNozzles_MediumNozzle
+    end
+    throw(ArgumentError("Unhandled nozzle sprite variant: $(comp.sprite_variant)"))
 end
 
 produce_rel_elements(comp::BasicNozzleCompBehav) = produce_rel_elements(comp.nozzle)
@@ -421,17 +441,24 @@ end
 get_thrust(comp::BasicNozzleCompBehav; kwargs...) = get_thrust(comp.nozzle; kwargs...)
 get_component_temperature(comp::BasicNozzleCompBehav; kwargs...) = get_component_temperature(comp.nozzle)
 get_actions(comp::BasicNozzleCompBehav; kwargs...) = get_actions(comp.nozzle; kwargs...)
-do_action!(comp::BasicNozzleCompBehav, action_id::Symbol; kwargs...) = do_action!(comp.nozzle, action_id; kwargs...)
-update_flowbehav!(comp::BasicNozzleCompBehav; kwargs...) = update_flowbehav!(comp.nozzle; kwargs...)
+function do_action(comp::BasicNozzleCompBehav, action_id::Symbol; kwargs...)
+    updated, result = do_action(comp.nozzle, action_id; kwargs...)
+    return (@set comp.nozzle = updated), result
+end
+update_flowbehav(comp::BasicNozzleCompBehav; kwargs...) = @set comp.nozzle = update_flowbehav(comp.nozzle; kwargs...)
 get_reactivation_probe(comp::BasicNozzleCompBehav; kwargs...) = get_reactivation_probe(comp.nozzle; kwargs...)
 classify_reactivation_probe(comp::BasicNozzleCompBehav; kwargs...) = classify_reactivation_probe(comp.nozzle; kwargs...)
-commit_reactivation_probe!(comp::BasicNozzleCompBehav; kwargs...) = commit_reactivation_probe!(comp.nozzle; kwargs...)
-render_base_elem!(queue::Vector{<:RenderCommand}, behav::BasicNozzleCompBehav; kwargs...) = render_base_elem!(queue, behav.sprite; kwargs...)
+commit_reactivation_probe(comp::BasicNozzleCompBehav; kwargs...) = @set comp.nozzle = commit_reactivation_probe(comp.nozzle; kwargs...)
+function render_base_elem!(queue::Vector{<:RenderCommand}, comp::BasicNozzleCompBehav; glmap::GLObjectMap, rotation::HexAxis, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
+    base_height = Int32(HexFlowRendering.RENDER_HEIGHT_COMPONENT_STATIC) + Int32(render_height_offset)
+    push!(queue, render_basic_tile(glmap, nozzle_sprite(comp), rotation, position; scale = scale, transparency = transparency, colour = colour, draw_height = base_height, pos_offset = pos_offset))
+    return nothing
+end
 collect_effect_particles!(manager, comp::BasicNozzleCompBehav; kwargs...) = collect_effect_particles!(manager, comp.nozzle; kwargs...)
 placement_valid(comp::BasicNozzleCompBehav, coord::TileCoord, gamemap::GameMap; kwargs...) = placement_valid(comp.nozzle, coord, gamemap; kwargs...)
 
 function render_map_elem!(queue::Vector{<:RenderCommand}, behav::BasicNozzleCompBehav; kwargs...)
-    render_base_elem!(queue, behav.sprite; kwargs...) # Render base sprite
+    render_base_elem!(queue, behav; kwargs...) # Render base sprite
     render_map_elem!(queue, behav.nozzle; kwargs...) # Delegate to nozzle for stall overlay
     return nothing
 end
@@ -458,7 +485,7 @@ function SwitchedNozzleCompBehav(;
     nozzlefrag = NozzleBehavFrag(
         HexFrame.NODE_INTERNAL_1,
         throat_area,
-        AutoDeactivationBehavFrag(),
+        AutoDeactivationState(),
         default_nozzle_overheat(
             throat_area;
             limit_temperature_k = limit_temperature_k,
@@ -525,10 +552,9 @@ get_thrust(comp::SwitchedNozzleCompBehav; kwargs...) = get_thrust(comp.nozzle; k
 get_component_temperature(comp::SwitchedNozzleCompBehav; kwargs...) = get_component_temperature(comp.nozzle)
 collect_effect_particles!(manager, comp::SwitchedNozzleCompBehav; kwargs...) = collect_effect_particles!(manager, comp.nozzle; kwargs...)
 
-function on_click!(comp::SwitchedNozzleCompBehav; kwargs...)
+function on_click(comp::SwitchedNozzleCompBehav; kwargs...)
     # Always toggle the switch; auto-deactivation does not require manual reset.
-    on_click!(comp.switch; kwargs...)
-    return nothing
+    return @set comp.switch = on_click(comp.switch; kwargs...)
 end
 
 function get_actions(comp::SwitchedNozzleCompBehav; kwargs...)
@@ -537,24 +563,26 @@ function get_actions(comp::SwitchedNozzleCompBehav; kwargs...)
     return (switch_actions..., nozzle_actions...)
 end
 
-function do_action!(comp::SwitchedNozzleCompBehav, action_id::Symbol; kwargs...)
+function do_action(comp::SwitchedNozzleCompBehav, action_id::Symbol; kwargs...)
     # Try switch actions first
     if action_id in (:open_valve, :close_valve)
-        return do_action!(comp.switch, action_id)
+        updated, result = do_action(comp.switch, action_id; kwargs...)
+        return (@set comp.switch = updated), result
     end
     # Then nozzle actions (damage repair)
-    return do_action!(comp.nozzle, action_id)
+    updated, result = do_action(comp.nozzle, action_id; kwargs...)
+    return (@set comp.nozzle = updated), result
 end
 
-function update_flowbehav!(comp::SwitchedNozzleCompBehav; kwargs...)
-    update_flowbehav!(comp.nozzle; kwargs...) # Update both fragments
-    update_flowbehav!(comp.switch; kwargs...)
-    return nothing
+function update_flowbehav(comp::SwitchedNozzleCompBehav; kwargs...)
+    comp = @set comp.nozzle = update_flowbehav(comp.nozzle; kwargs...)
+    comp = @set comp.switch = update_flowbehav(comp.switch; kwargs...)
+    return comp
 end
 
 get_reactivation_probe(comp::SwitchedNozzleCompBehav; kwargs...) = get_reactivation_probe(comp.nozzle; kwargs...)
 classify_reactivation_probe(comp::SwitchedNozzleCompBehav; kwargs...) = classify_reactivation_probe(comp.nozzle; kwargs...)
-commit_reactivation_probe!(comp::SwitchedNozzleCompBehav; kwargs...) = commit_reactivation_probe!(comp.nozzle; kwargs...)
+commit_reactivation_probe(comp::SwitchedNozzleCompBehav; kwargs...) = @set comp.nozzle = commit_reactivation_probe(comp.nozzle; kwargs...)
 
 function placement_valid(comp::SwitchedNozzleCompBehav, coord::TileCoord, gamemap::GameMap; rotation::HexAxis, ship_name::Symbol = :primary, kwargs...)
     # For switched nozzles, check the switch's external connection node (v1).
@@ -725,11 +753,14 @@ const backflow_tolerance::Float64 = 0.02   # Tolerance for flow detection and ba
 const biprop_flow_threshold::Float64 = 1.0e-9  # Total-flow threshold guarding the limiting-reactant divide
 const BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K::Float64 = 50.0  # Minimum temperature for unmixed propellants
 
-"Mutable state for bipropellant chamber temperature and auto-deactivation"
-mutable struct BipropChamberState
-    output_temperature_state::Float64
-    auto_deactivation::AutoDeactivationBehavFrag
+"Immutable state for bipropellant chamber temperature and auto-deactivation"
+struct BipropChamberState
+    output_temperature_k::Float64
+    auto_deactivation::AutoDeactivationState
 end
+
+deactivate(state::BipropChamberState) = @set state.auto_deactivation = deactivate(state.auto_deactivation)
+reactivate(state::BipropChamberState) = @set state.auto_deactivation = reactivate(state.auto_deactivation)
 
 "Bipropellant chamber with injector orifices feeding a shared exhaust output"
 struct BipropChamberCompBehav <: ComponentBehavior
@@ -749,7 +780,7 @@ At equal upstream pressures, the nominal volumetric ratio is
 the orifice dominates inlet impedance.
 """
 function BipropChamberCompBehav(; fuel_conductance::Float64 = 0.4, oxid_conductance::Float64 = 1.0, r_optimal::Float64 = 2.5)
-    state = BipropChamberState(BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K, AutoDeactivationBehavFrag())
+    state = BipropChamberState(BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K, AutoDeactivationState())
     return BipropChamberCompBehav(fuel_conductance, oxid_conductance, r_optimal, state)
 end
 
@@ -815,7 +846,7 @@ function produce_rel_fluid_declarations(comp::BipropChamberCompBehav)
     return (
         RelativeFluidDeclaration(HexFrame.NODE_R_NEG, HexFluids.FluidTypeRule(HexFluids.FUEL_LIQUID)),
         RelativeFluidDeclaration(HexFrame.NODE_S_NEG, HexFluids.FluidTypeRule(HexFluids.OXIDISER_LIQUID)),
-        RelativeFluidDeclaration(HexFrame.NODE_Q_NEG, HexFluids.FluidSource(HexFluids.BIPROP_EXHAUST, comp.state.output_temperature_state)),
+        RelativeFluidDeclaration(HexFrame.NODE_Q_NEG, HexFluids.FluidSource(HexFluids.BIPROP_EXHAUST, comp.state.output_temperature_k)),
     )
 end
 
@@ -833,13 +864,12 @@ function set_tunables(comp::BipropChamberCompBehav, tunables::NTuple{3, T})::Bip
     return BipropChamberCompBehav(fuel_cond, oxid_cond, r_opt, comp.state)
 end
 
-function update_flowbehav!(comp::BipropChamberCompBehav; rotation::HexAxis, tile::TileCoord, mna_state::MNA_State, derivedmapstate::DerivedMapState, kwargs...)
+function update_flowbehav(comp::BipropChamberCompBehav; rotation::HexAxis, tile::TileCoord, mna_state::MNA_State, derivedmapstate::DerivedMapState, kwargs...)
     t_min = BIPROP_NONCOMBUSTION_MIN_TEMPERATURE_K
 
     # Inactive chamber must not retain its previous combustion temperature
     if is_inactive(comp.state.auto_deactivation)
-        comp.state.output_temperature_state = t_min
-        return nothing
+        return @set comp.state.output_temperature_k = t_min
     end
 
     # Read VCVS currents to detect propellant flow rates
@@ -848,9 +878,8 @@ function update_flowbehav!(comp::BipropChamberCompBehav; rotation::HexAxis, tile
 
     # Deactivate on backflow (negative current beyond tolerance) on either leg
     if fuel_current < -backflow_tolerance || oxid_current < -backflow_tolerance
-        deactivate!(comp.state.auto_deactivation)
-        comp.state.output_temperature_state = t_min
-        return nothing
+        comp = @set comp.state = deactivate(comp.state)
+        return @set comp.state.output_temperature_k = t_min
     end
 
     # Combustion chamber temperature range: 50K (cold unmixed propellants) to 2300K (stoichiometric combustion)
@@ -863,16 +892,13 @@ function update_flowbehav!(comp::BipropChamberCompBehav; rotation::HexAxis, tile
     total_flow = fuel_flow + oxid_flow
 
     if total_flow < biprop_flow_threshold
-        comp.state.output_temperature_state = t_min
-        return nothing
+        return @set comp.state.output_temperature_k = t_min
     end
 
     combustible_fuel = min(fuel_flow, oxid_flow / comp.r_optimal)
     combusted_flow = combustible_fuel * (1.0 + comp.r_optimal)
     combustion_fraction = combusted_flow / total_flow
-    comp.state.output_temperature_state = t_min + combustion_fraction * (t_max - t_min)
-
-    return nothing
+    return @set comp.state.output_temperature_k = t_min + combustion_fraction * (t_max - t_min)
 end
 
 """
@@ -894,7 +920,7 @@ map_mirroring(::BipropChamberCompBehav, mirrored::Bool) = mirrored
 """
 Classify chamber reactivation from speculative VCVS currents on both inlet legs.
 
-This mirrors the live backflow guard in `update_flowbehav!`: either leg below
+This mirrors the live backflow guard in `update_flowbehav`: either leg below
 `-backflow_tolerance` is harmful, and missing speculative currents are neutral.
 """
 function classify_reactivation_probe(comp::BipropChamberCompBehav; tile::TileCoord, rotation::HexAxis, derivedmapstate::DerivedMapState, mna_state, kwargs...)
@@ -911,9 +937,8 @@ function classify_reactivation_probe(comp::BipropChamberCompBehav; tile::TileCoo
     return HexComponentsAPI.PROBE_USEFUL
 end
 
-function commit_reactivation_probe!(comp::BipropChamberCompBehav; kwargs...)
-    reactivate!(comp.state.auto_deactivation)
-    return nothing
+function commit_reactivation_probe(comp::BipropChamberCompBehav; kwargs...)
+    return @set comp.state = reactivate(comp.state)
 end
 
 function render_base_elem!(queue::Vector{<:RenderCommand}, comp::BipropChamberCompBehav; glmap::GLObjectMap, rotation::HexAxis, mirrored::Bool = false, position::TileCoord, pos_offset = nothing, scale::Float64 = 1.0, transparency::Float64 = 1.0, colour::ColourType = ColourType(1.0, 1.0, 1.0, 1.0), render_height_offset::Integer = 0, kwargs...)
