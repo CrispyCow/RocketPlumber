@@ -22,6 +22,12 @@ using JLD2
 
 include(joinpath(@__DIR__, "smoke", "SmokeTestSupport.jl"))
 
+@testset "Background video recording" begin
+    script = joinpath(@__DIR__, "recording_writer.jl")
+    command = `$(Base.julia_cmd()) --project=$(dirname(Base.active_project())) --threads=2,1 $script`
+    @test success(pipeline(command; stdout, stderr))
+end
+
 # ===============================================================
 # Space-map manoeuvre planning
 # ===============================================================

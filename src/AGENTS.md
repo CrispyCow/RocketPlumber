@@ -49,6 +49,9 @@ launching, input, UI, rendering, persistence, and game-session flow.
   calculator thread owns authoritative simulation mutation. Keep Julia's
   normal I/O-loop scheduling and yield between rendered frames so it can
   service pending tasks and timer wake-ups.
+- Video recording uses a blocking OS pipe owned by the background FFmpeg writer.
+  Keep frame writes off the render thread and independent of libuv I/O progress;
+  see `start_recording_process()` for the regression this prevents.
 - Send gameplay changes through `MapEditCommand` constructors and
   `try_enqueue_command!`. Do not mutate the live `GameMap` from UI, input, or
   render code.

@@ -70,6 +70,9 @@ end
     accumulator::Float64 = 0.0
     last_frame_time::Float64 = 0.0
     frame_count::Int64 = 0
+    started_at::Float64 = 0.0
+    pbo_skips::Int = 0
+    buffer_drops::Int = 0
     output_path::String = ""
 end
 
@@ -182,6 +185,42 @@ end
 # FFmpeg Encoder
 # ===============================================================
 
+"Wrap a blocking pipe handle in an owned stream, using binary mode on Windows."
+function recording_pipe_stream(handle::Base.OS_HANDLE)::IOStream
+    descriptor = @static if Sys.iswindows()
+        ccall(:_open_osfhandle, Cint, (Base.OS_HANDLE, Cint), handle, 0x8000) # _O_BINARY
+    else
+        Base.cconvert(Cint, handle)
+    end
+    Base.systemerror("Opening recording pipe", descriptor == -1)
+    return Base.fdio(descriptor, true)
+end
+
+"Start a subprocess with blocking stdin owned exclusively by the background recording writer."
+function start_recording_process(cmd::Cmd)::Base.Process
+    #=
+    open(cmd, "w") used libuv-managed stdin: large writes depended on I/O event-loop
+    progress. Removing the dedicated I/O thread exposed this dependency and caused
+    severe recording frame loss. A blocking OS pipe lets the background writer
+    transfer frames without libuv servicing those writes; do not replace it with open.
+    =#
+    read_handle, write_handle = Base.link_pipe(false, false)
+    reader = nothing
+    writer = nothing
+    try
+        reader = recording_pipe_stream(read_handle)
+        writer = recording_pipe_stream(write_handle)
+        process = run(pipeline(cmd; stdin = reader, stdout = devnull, stderr = stderr); wait = false)
+        process.in = writer
+        return process
+    catch
+        isnothing(writer) ? Base.close_pipe_sync(write_handle) : close(writer)
+        rethrow()
+    finally
+        isnothing(reader) ? Base.close_pipe_sync(read_handle) : close(reader)
+    end
+end
+
 "Start an FFmpeg subprocess that reads raw RGBA frames from stdin and encodes to H.264 MP4."
 function start_ffmpeg_encoder(width::Integer, height::Integer, fps::Integer, output_path::String)::Base.Process
     ffmpeg_path = FFMPEG.ffmpeg()
@@ -190,7 +229,7 @@ function start_ffmpeg_encoder(width::Integer, height::Integer, fps::Integer, out
         -f rawvideo -pix_fmt rgba -s $(width)x$(height) -r $fps -i pipe:0
         -threads 4 -c:v libx264 -preset medium -pix_fmt yuv420p -crf 20 -vf $video_filter
         $output_path`
-    return open(cmd, "w")
+    return start_recording_process(cmd)
 end
 
 # ===============================================================
@@ -359,7 +398,9 @@ function ffmpeg_writer_loop!(
             slot = take!(ready_slots)
             slot == RECORDING_STOP_SENTINEL_SLOT && break
 
-            write(ffmpeg_input, rec.recording_buffers[slot])
+            buffer = rec.recording_buffers[slot]
+            bytes_written = write(ffmpeg_input, buffer)
+            bytes_written == length(buffer) || throw(ErrorException("Incomplete recording frame write: $(bytes_written) of $(length(buffer)) bytes"))
 
             put!(free_slots, slot)
         end
@@ -483,6 +524,7 @@ function try_collect_completed_pbo!(rec::RecordingState, pbo_slot::Integer; wait
             buffer_slot = wait ? take_free_recording_slot!(rec) : try_take_free_recording_slot!(rec)
 
             if isnothing(buffer_slot)
+                rec.buffer_drops += 1
                 delete_recording_sync!(rec, pbo_slot)
                 return true
             end
@@ -526,7 +568,10 @@ end
 "Capture a frame directly into CPU memory when async GPU readback is unavailable."
 function capture_frame_direct!(rec::RecordingState)::Bool
     buffer_slot = try_take_free_recording_slot!(rec)
-    isnothing(buffer_slot) && return false
+    if isnothing(buffer_slot)
+        rec.buffer_drops += 1
+        return false
+    end
 
     try
         capture_framebuffer!(rec.recording_buffers[buffer_slot], rec.buffer_width, rec.buffer_height)
@@ -558,7 +603,7 @@ end
 function process_async_readback_tick!(rec::RecordingState)
     pbo_slot = rec.next_pbo_issue_slot
     if recording_pbo_pending(rec, pbo_slot) && !try_collect_completed_pbo!(rec, pbo_slot)
-        @debug "Recording frame skipped because GPU readback is still pending" pbo_slot captured_frames = rec.frame_count
+        rec.pbo_skips += 1
         return nothing
     end
 
@@ -588,6 +633,9 @@ function start_recording!(rec::RecordingState, fb_width::Int32, fb_height::Int32
     empty!(rec.ffmpeg_log_tail)
     rec.ffmpeg_stderr_pipe = nothing
     rec.ffmpeg_stderr_task = nothing
+    rec.started_at = 0.0
+    rec.pbo_skips = 0
+    rec.buffer_drops = 0
     initialise_recording_buffers!(rec, fb_width, fb_height)
     rec.buffer_width = fb_width
     rec.buffer_height = fb_height
@@ -626,6 +674,7 @@ function start_recording!(rec::RecordingState, fb_width::Int32, fb_height::Int32
     rec.accumulator = 0.0
     rec.last_frame_time = 0.0
     rec.frame_count = 0
+    rec.started_at = time()
     rec.is_recording = true
 
     # Report the active capture configuration
@@ -650,6 +699,7 @@ function stop_recording!(
         failure_message::Union{Nothing, String} = nothing,
     )
     # Drain queued frames before closing FFmpeg
+    capture_seconds = max(0.0, time() - rec.started_at)
     output = rec.output_path
     exit_code = nothing
     writer_failure = poll_writer_failure!(rec)
@@ -731,6 +781,10 @@ function stop_recording!(
             isempty(captured_log) || @warn "FFmpeg stderr tail" ffmpeg_log = captured_log
         end
     elseif exit_code == 0 && output_has_data
+        expected_frames = floor(Int, capture_seconds * RECORDING_TARGET_FPS)
+        if capture_seconds >= 3.0 && rec.frame_count < 0.9 * expected_frames
+            @warn "Recording below target frame rate; playback will be shorter than the recording period" expected_frames actual_frames = rec.frame_count pbo_skips = rec.pbo_skips buffer_drops = rec.buffer_drops
+        end
         console_push("Recording saved: $(output) ($(rec.frame_count) frames)")
         @info "Recording saved: $(output) ($(rec.frame_count) frames)"
     else

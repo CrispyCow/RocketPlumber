@@ -589,7 +589,7 @@ function ui_dev_utils_menu_render!(
             ]
             names = [s.name for s in all_component_sets]
             tileset_selection = get!(inputstate.gui_inputs, :tileset_selection, Cint(0))::Cint
-            _, tileset_selection = CImGui.ListBox("##tilesets", tileset_selection, names, length(names), 4)
+            @cref CImGui.ListBox("##tilesets", &tileset_selection, names, 4)
             inputstate.gui_inputs[:tileset_selection] = tileset_selection
 
             if CImGui.Button("Place Tileset")
