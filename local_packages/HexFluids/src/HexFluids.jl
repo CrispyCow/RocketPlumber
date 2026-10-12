@@ -95,17 +95,12 @@ const FluidDeclaration = Union{FluidSource, FluidTypeRule, FluidConstraintRule}
 
 const THERMAL_AMBIENT_TEMPERATURE_K = 300.0
 
-"Default temperature for a fluid type. Returns `nothing` if no default (e.g. MONOPROP_GAS is derived from decomp chamber)."
-get_default_temperature(::Val{COLD_GAS}) = THERMAL_AMBIENT_TEMPERATURE_K
-get_default_temperature(::Val{MONOPROP_LIQUID}) = THERMAL_AMBIENT_TEMPERATURE_K
-get_default_temperature(::Val{FUEL_LIQUID}) = THERMAL_AMBIENT_TEMPERATURE_K
-get_default_temperature(::Val{OXIDISER_LIQUID}) = THERMAL_AMBIENT_TEMPERATURE_K
-get_default_temperature(::Val{T}) where {T} = nothing
-
 "Default temperature for a runtime fluid type with fallback. Returns the fluid's default temperature if available, otherwise the provided fallback."
 function get_default_temperature(fluid::FluidType, fallback::Real)::Float64
-    temp = get_default_temperature(Val(fluid))
-    return isnothing(temp) ? Float64(fallback) : temp
+    if fluid in (COLD_GAS, MONOPROP_LIQUID, FUEL_LIQUID, OXIDISER_LIQUID)
+        return THERMAL_AMBIENT_TEMPERATURE_K
+    end
+    return Float64(fallback)
 end
 
 # ===============================================================

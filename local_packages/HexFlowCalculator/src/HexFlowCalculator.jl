@@ -1587,15 +1587,15 @@ function commit_trial_outcome!(comp::PlacedComponent, coord::TileCoord, gamemap:
     return nothing
 end
 
-"Attempt one grouped retry using the current neutral registry."
+"Attempt one grouped retry; return whether any useful component was committed."
 function attempt_grouped_neutral_retry!(
         scheduler::ReactivationScheduler,
         gamemap::GameMap,
         derivedmapstate::DerivedMapState,
         current_tick::Int64
-    )
+    )::Bool
     prune_neutral_registry!(scheduler, gamemap)
-    length(scheduler.neutral_registry) > 1 || return nothing
+    length(scheduler.neutral_registry) > 1 || return false
 
     empty!(scheduler.grouped_coords)
     append!(scheduler.grouped_coords, scheduler.neutral_registry)
@@ -1605,10 +1605,10 @@ function attempt_grouped_neutral_retry!(
     catch
         reset_reactivation_trial_state!(scheduler)
         prune_neutral_registry!(scheduler, gamemap)
-        return nothing
+        return false
     end
 
-    solve_reactivation_trial!(scheduler, derivedmapstate, current_tick) || return nothing
+    solve_reactivation_trial!(scheduler, derivedmapstate, current_tick) || return false
 
     useful_coords = TileCoord[]
     harmful_coords = TileCoord[]
@@ -1621,7 +1621,7 @@ function attempt_grouped_neutral_retry!(
             classify_trial_outcome(comp, coord, gamemap, scheduler)
         catch
             drop_neutral_registry!(scheduler, coord)
-            return nothing
+            return false
         end
 
         if outcome === HexComponentsAPI.PROBE_USEFUL
@@ -1635,18 +1635,20 @@ function attempt_grouped_neutral_retry!(
         for coord in harmful_coords
             drop_neutral_registry!(scheduler, coord)
         end
-        return nothing
+        return false
     end
 
+    committed = false
     for coord in useful_coords
         comp = get_component(gamemap, coord)
         isnothing(comp) && continue
         commit_trial_outcome!(comp, coord, gamemap, scheduler)
+        committed = true
         drop_neutral_registry!(scheduler, coord)
         drop_pending_coord!(scheduler, coord)
     end
 
-    return nothing
+    return committed
 end
 
 """
@@ -1657,8 +1659,8 @@ target is found or the queue is exhausted. Returns `true` if a speculative attem
 or `false` if the queue was empty.
 
 Speculative trials run on scheduler-owned trial state so a singular or otherwise invalid probe
-cannot poison the live MNA cache. After any attempted trial, the live primary inputs are
-recollected and the committed solve is rerun on the live state.
+cannot poison the live MNA cache. Recollect live primary inputs only when a useful solo or
+grouped probe was committed; always rerun the committed solve on the live state.
 """
 function run_reactivation_trial!(
         scheduler::ReactivationScheduler,
@@ -1687,6 +1689,8 @@ function run_reactivation_trial!(
         # Load probe-only elements/declarations into scheduler scratch buffers
         load_reactivation_probe!(scheduler, comp, coord)
 
+        committed = false
+
         # Speculative solo solve — isolated by try/catch so a failure does not crash the loop.
         if solve_reactivation_trial!(scheduler, derivedmapstate, current_tick)
             trial_outcome = try
@@ -1698,20 +1702,22 @@ function run_reactivation_trial!(
 
             if trial_outcome === HexComponentsAPI.PROBE_USEFUL
                 commit_trial_outcome!(comp, coord, gamemap, scheduler)
+                committed = true
                 drop_neutral_registry!(scheduler, coord)
             elseif trial_outcome === HexComponentsAPI.PROBE_HARMFUL
                 drop_neutral_registry!(scheduler, coord)
             else
                 push_neutral_registry!(scheduler, coord)
-                attempt_grouped_neutral_retry!(scheduler, gamemap, derivedmapstate, current_tick)
+                committed = attempt_grouped_neutral_retry!(scheduler, gamemap, derivedmapstate, current_tick)
             end
         else
             drop_neutral_registry!(scheduler, coord)
         end
 
-        # Always rebuild the live solve from committed map state. Useful probes may mutate the
-        # component, so the primary input collections must be refreshed before solving.
-        collect_primary_map_inputs!(gamemap, derivedmapstate)
+        # Trial state is isolated; only committed probes invalidate the live primary inputs
+        if committed
+            collect_primary_map_inputs!(gamemap, derivedmapstate)
+        end
         solve_from_inputs!(derivedmapstate, mna_state, scratchpad, current_tick)
 
         return true  # one speculative attempt was processed this tick
@@ -1760,7 +1766,7 @@ Fills `ship_surface_edge`, `primaryelements`, `primarynodes`, and
 function collect_primary_map_inputs!(gamemap::GameMap, derivedmapstate::DerivedMapState)
     @timeit flowcalc_loop_timer "find ship edge" collect_surface_edge_tiles!(derivedmapstate, gamemap)
     @timeit flowcalc_loop_timer "list elements" list_elements!(derivedmapstate.primaryelements, gamemap)
-    @timeit flowcalc_loop_timer "list nodes" list_nodes!(derivedmapstate.primarynodes, derivedmapstate.primaryelements) # diagnostic only
+    @timeit flowcalc_loop_timer "list nodes" list_nodes!(derivedmapstate.primarynodes, derivedmapstate.primaryelements)
     @timeit flowcalc_loop_timer "fluid declarations" list_fluid_declarations!(derivedmapstate.primary_fluid_declarations, gamemap)
     return nothing
 end
@@ -1906,6 +1912,7 @@ function handle_thrusters!(gamestate::GameState, gamemap::GameMap, derivedmapsta
     thrust = mapreducepairs(+, gamemap.components; init = SVector{2, Float64}(0.0, 0.0)) do tile, comp
         return get_thrust(comp; tile = tile, mna_state = mna_state, derivedmapstate = derivedmapstate)
     end
+    thrust = thrust::SVector{2, Float64}  # Recover the component API's type after the generic reduction
     gamestate.thrust = thrust
     thrust_magnitude = norm(thrust)
 

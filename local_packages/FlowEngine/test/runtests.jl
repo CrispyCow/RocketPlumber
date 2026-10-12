@@ -447,6 +447,35 @@ end
     @test derived.node_temperatures[source_node] ≈ 450.0
 end
 
+@testset "region temperatures reuse scratch buffers across changing regions and flows" begin
+    nodes = [nc(index, 0, HexFrame.NODE_Q_POS) for index in 1:2]
+    ground = ground_node()
+    derived = DerivedMapState(
+        filteredelements = [make_element(TileCoord(index, 0), 1, nodes[index], ground, Float64(index), CONST_CURRENT) for index in 1:2],
+        primary_fluid_declarations = [
+            FlowEngine.AbsoluteFluidDeclaration(nodes[1], HexFluids.FluidSource(HexFluids.COLD_GAS, 450.0)),
+            FlowEngine.AbsoluteFluidDeclaration(nodes[2], HexFluids.FluidSource(HexFluids.COLD_GAS, 600.0)),
+        ],
+        node_to_region = Dict(node => 1 for node in nodes),
+    )
+    scratchpad = CalculatorScratchpad()
+    FlowEngine.index_grounded_source_elements!(scratchpad.filtered_source_element_index, derived.filteredelements)
+    mna_state = MNA_State()
+
+    compute_region_temperatures!(derived, scratchpad, mna_state)
+    @test derived.node_temperatures == Dict(node => 550.0 for node in nodes)
+
+    # No surviving source flow: discard prior weights and use the fluid's fallback
+    empty!(scratchpad.filtered_source_element_index)
+    compute_region_temperatures!(derived, scratchpad, mna_state)
+    @test derived.node_temperatures == Dict(node => HexFluids.THERMAL_AMBIENT_TEMPERATURE_K for node in nodes)
+
+    empty!(derived.primary_fluid_declarations)
+    empty!(derived.node_to_region)
+    compute_region_temperatures!(derived, scratchpad, mna_state)
+    @test isempty(derived.region_temperatures) && isempty(derived.node_temperatures)
+end
+
 
 "Run ground search on a copy of elements via the new in-place API; returns the mutated survivor vector."
 function run_ground_search(elements::Vector{AbsoluteElement})

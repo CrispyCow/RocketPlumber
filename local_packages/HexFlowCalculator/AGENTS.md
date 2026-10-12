@@ -80,6 +80,9 @@ derived/MNA state and publish without advancing time.
 - Commit only a `PROBE_USEFUL` result. Preserve fairness/queue behaviour when
   changing scan or trial scheduling, and ensure a failed probe cannot leak
   solver state into the base tick.
+- Recollect live primary inputs only after a solo or grouped trial commits a
+  component. Always run the live solve after an attempted trial, including
+  failed, harmful and neutral outcomes.
 
 ## Verification
 

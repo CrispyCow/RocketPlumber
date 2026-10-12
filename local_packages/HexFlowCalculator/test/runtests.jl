@@ -2958,6 +2958,7 @@ end
 
     @test_throws SingularException solve_from_inputs!(trial_derived, MNA_State(), CalculatorScratchpad(), Int64(1))
 
+    empty!(live_mna.node_voltages)  # The live solve must still run after a failed trial
     @test HexFlowCalculator.run_reactivation_trial!(scheduler, gamemap, live_derived, live_mna, live_scratchpad, Int64(1))
     @test isempty(scheduler.pending)
     @test !get_component(gamemap, probe_tile).component.accepted
@@ -3033,6 +3034,7 @@ end
     @test !(anchor_tile in scheduler.neutral_registry)
     @test !(peer_tile in scheduler.neutral_registry)
     @test !(peer_tile in scheduler.pending_set)
+    @test Set(element.id for element in live_derived.primaryelements) == Set((ElementID(anchor_tile, 1), ElementID(peer_tile, 1)))
 end
 
 @testset "run_reactivation_trial! — harmful grouped member aborts retry and is evicted" begin

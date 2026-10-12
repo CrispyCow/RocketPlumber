@@ -93,7 +93,7 @@ end
     # All ship parts
     ship_surface_edge::Set{TileCoord} = Set{TileCoord}()
     primaryelements::Vector{AbsoluteElement} = Vector{AbsoluteElement}()   # base collected elements before filtering
-    primarynodes::Dict{NodeCoord, UInt16} = Dict{NodeCoord, UInt16}()      # diagnostic node count from primary elements
+    primarynodes::Dict{NodeCoord, UInt16} = Dict{NodeCoord, UInt16}()      # node counts for rendering and diagnostics
     # Survivors filtered by pruning/grounding/dangling checks
     filteredelements::Vector{AbsoluteElement} = Vector{AbsoluteElement}()
     filterednodes::Dict{NodeCoord, UInt16} = Dict{NodeCoord, UInt16}()
@@ -122,6 +122,9 @@ end
     final_nodeconnections::Dict{NodeCoord, ConnectionVect} = Dict{NodeCoord, ConnectionVect}()  # adjacency for fluid propagation
     fluid_propagation_visited::Set{NodeCoord} = Set{NodeCoord}()  # reusable visited-node buffer for propagate_fluid_types!
     fluid_propagation_pending::Vector{NodeCoord} = Vector{NodeCoord}()  # reusable DFS stack for propagate_fluid_types!
+    region_weighted_temp::Dict{Int, Float64} = Dict{Int, Float64}()
+    region_total_flow::Dict{Int, Float64} = Dict{Int, Float64}()
+    region_fluid_type::Dict{Int, FluidType} = Dict{Int, FluidType}()
 end
 
 "Empty all scratch buffers in one call. Use at early-exit paths to leave the scratchpad in a clean state."
@@ -136,6 +139,9 @@ function clear_calculator_scratchpad!(scratchpad::CalculatorScratchpad)
     empty!(scratchpad.final_nodeconnections)
     empty!(scratchpad.fluid_propagation_visited)
     empty!(scratchpad.fluid_propagation_pending)
+    empty!(scratchpad.region_weighted_temp)
+    empty!(scratchpad.region_total_flow)
+    empty!(scratchpad.region_fluid_type)
     return nothing
 end
 
@@ -658,8 +664,10 @@ function push_mapped_declarations!(out::Vector{AbsFluidDecl}, tilecomp::PlacedCo
     rel_decls = produce_rel_fluid_declarations(tilecomp.component)
     rot = tilecomp.rotation
     mirrored = tilecomp.mirrored
-    for rel in rel_decls
+    # Tuple-specialised traversal keeps heterogeneous declarations unboxed
+    foreach(rel_decls) do rel
         push!(out, map_declaration(rel, tile, rot, mirrored))
+        return nothing
     end
     return nothing
 end
@@ -858,9 +866,9 @@ function compute_region_temperatures!(derivedmapstate::DerivedMapState, scratchp
     empty!(node_temps)
 
     # Collect per-region flow-weighted temperature sums
-    region_weighted_temp = Dict{Int, Float64}()
-    region_total_flow = Dict{Int, Float64}()
-    region_fluid_type = Dict{Int, FluidType}()
+    region_weighted_temp = scratchpad.region_weighted_temp
+    region_total_flow = scratchpad.region_total_flow
+    region_fluid_type = scratchpad.region_fluid_type
 
     for abs_decl in derivedmapstate.primary_fluid_declarations
         abs_decl.declaration isa FluidSource || continue
@@ -891,6 +899,10 @@ function compute_region_temperatures!(derivedmapstate::DerivedMapState, scratchp
     for (node, rid) in node_to_region
         node_temps[node] = region_temps[rid]
     end
+
+    empty!(region_weighted_temp)
+    empty!(region_total_flow)
+    empty!(region_fluid_type)
     return nothing
 end
 

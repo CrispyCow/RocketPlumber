@@ -1052,9 +1052,23 @@ function get_surface_centroid(tiles)::Union{AxialCoord, Nothing}
 
     return AxialCoord(q_sum / count, r_sum / count)
 end
+
+"Get a ship's surface centroid in axial coordinates. Returns nothing for an empty surface."
 function get_surface_centroid(gamemap::GameMap, ship_name::Symbol)::Union{AxialCoord, Nothing}
     _get_ship_state(gamemap, ship_name)
-    return get_surface_centroid(tile for (tile, owner) in each_surface_owner(gamemap) if owner === ship_name)
+    q_sum = 0.0
+    r_sum = 0.0
+    count = 0
+    for (tile, owner) in each_surface_owner(gamemap)
+        owner === ship_name || continue
+        q_sum += tile.q
+        r_sum += tile.r
+        count += 1
+    end
+
+    count == 0 && return nothing
+
+    return AxialCoord(q_sum / count, r_sum / count)
 end
 
 """
@@ -1924,7 +1938,9 @@ end
 
 "Total mass of all ships: dry mass (tiles + structure) + wet mass (stored fluid)."
 function get_mass(gamemap::GameMap; mass_per_tile::Float64 = get_tile_mass())::Float64
-    return get_dry_mass(gamemap; mass_per_tile = mass_per_tile) + get_wet_mass(gamemap)
+    tile_mass = length(gamemap.surface_shiptags) * mass_per_tile
+    component_mass = mapreducevalues(get_component_mass, +, gamemap.components; init = 0.0)::Float64
+    return tile_mass + component_mass
 end
 
 #= ---------- Tile Mass Tuning ----------- =#

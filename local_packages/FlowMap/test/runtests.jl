@@ -886,6 +886,14 @@ side_pipe(tile::TileCoord, index::Integer = 1) = get_side_pipes(tile)[index]
         centroid_gm = get_surface_centroid(gm, :primary)
         @test centroid_gm ≈ AxialCoord(0.0, 0.0)
 
+        add_ship!(gm, :visitor, ShipState())
+        set_surface_tile!(gm, TileCoord(8, -2); ship_name = :visitor)
+        set_surface_tile!(gm, TileCoord(10, 4); ship_name = :visitor)
+        @test get_surface_centroid(gm, :visitor) == AxialCoord(9.0, 1.0)
+        @test get_surface_centroid(gm, :primary) == centroid_gm
+        delete_all_surface_tiles!(gm; ship_name = :visitor)
+        @test isnothing(get_surface_centroid(gm, :visitor))
+
         # Empty surface returns nothing
         gm_empty = GameMap()
         delete_all_surface_tiles!(gm_empty; ship_name = :primary)

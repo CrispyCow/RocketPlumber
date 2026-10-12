@@ -199,3 +199,50 @@ end
     @test length(Set(command.uniforms.object_rotation for command in queue)) >= 2
     @test Set(command.draw_height for command in queue) == Set(_test_pipe_sprite_height(pipe, 0) for pipe in (side_pipe, short_pipe, long_pipe))
 end
+
+@testset "Dotted beam sprites" begin
+    glmap = _mock_sprite_glmap()
+    glmap.sprites[:MoveArrow_arrow_start] = glmap.sprites[:TestSprite]
+    queue = SpriteRenderCommand[]
+    start = AxialCoord(-2.0, 1.0)
+    finish = CartesianCoord(6.0, -3.0)
+    start_cart = convert(CartesianCoord, start)
+    colour = ColourType(0.2, 0.5, 0.7, 0.4)
+    height = Int32(-1234)
+
+    render_beam!(queue, glmap, Int64(0), start, finish; num_elements = 3, noise_magnitude = 0.0, scale = 0.65f0, colour, draw_height = height)
+    midpoint = CartesianCoord((start_cart.x + finish.x) / 2, (start_cart.y + finish.y) / 2)
+    @test queue == [
+        render_basic_sprite(glmap, :MoveArrow_arrow_start, rotmat_2D(0.0), position; scale = 0.65f0, colour, draw_height = height)
+            for position in (start_cart, midpoint, finish)
+    ]
+end
+
+@testset "Node rendering uses cached primary nodes" begin
+    glmap = _mock_sprite_glmap()
+    for sprite in (:Node_pressuremask, :Node_frame)
+        glmap.sprites[sprite] = glmap.sprites[:TestSprite]
+    end
+    gamemap = GameMap()
+    node = NodeCoord(TileCoord(0, 0), HexFrame.NODE_Q_POS)
+    internal_node = NodeCoord(TileCoord(0, 0), HexFrame.NODE_INTERNAL_1)
+    # No elements: the renderer must use the cached nodes and skip the internal node
+    derived = DerivedMapState(primarynodes = Dict(node => UInt16(1), internal_node => UInt16(1)))
+    mna = MNA_StateSnapshot()
+    queue = SpriteRenderCommand[]
+    position = glvec(node)
+    height = HexFlowRendering.RENDER_HEIGHT_NODE
+
+    for (voltage, clamped) in ((nothing, 0.0f0), (0.4, 0.4f0))
+        empty!(queue)
+        empty!(mna.node_voltages_scaled)
+        isnothing(voltage) || (mna.node_voltages_scaled[node] = voltage)
+        node_queued_render!(queue, glmap, gamemap, derived, mna)
+        rgb = get(HexFlowRendering.NODE_VOLTAGE_COLORSCHEME, clamped)
+        colour = ColourType(rgb.r, rgb.g, rgb.b, 1.0)
+        @test queue == [
+            render_basic_sprite(glmap, :Node_pressuremask, hex_rotmats[HexFrame.Q_POS], position; colour, draw_height = height),
+            render_basic_sprite(glmap, :Node_frame, hex_rotmats[HexFrame.Q_POS], position; draw_height = height + Int32(10)),
+        ]
+    end
+end

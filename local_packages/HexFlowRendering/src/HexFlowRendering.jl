@@ -539,6 +539,10 @@ function render_beam!(
     dy = end_cart.y - start_cart.y
 
     steps = max(num_elements - 1, 1)
+    base_uniforms = setup_basesprite_uniforms(
+        glmap, :MoveArrow_arrow_start, rotmat_2D(0.0), glvec(start_cart);
+        colour = colour, scale = scale
+    )
 
     for i in 0:(num_elements - 1)
         t = i / steps
@@ -548,19 +552,8 @@ function render_beam!(
         noise_x, noise_y = animation_vibe_offset(gameticks + idx_hash; magnitude = noise_magnitude)
         x = start_cart.x + dx * t + noise_x
         y = start_cart.y + dy * t + noise_y
-        pos = CartesianCoord(x, y)
-        push!(
-            queue,
-            render_basic_sprite(
-                glmap,
-                :MoveArrow_arrow_start,
-                rotmat_2D(0.0),
-                pos;
-                colour = colour,
-                scale = scale,
-                draw_height = draw_height
-            )
-        )
+        uniforms = @set base_uniforms.object_translation = glvec(CartesianCoord(x, y))
+        push!(queue, RenderCommand(uniforms, draw_height))
     end
 
     return nothing
@@ -610,27 +603,21 @@ end
 
 "Renders all node vertices with colours based on MNA voltage/pressure values."
 function node_queued_render!(queue::Vector{<:RenderCommand}, map::GLObjectMap, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot)
-    nodes = list_nodes(derivedmapstate.primaryelements)
-    isempty(nodes) && return nothing
-
-    for (node, _) in nodes
+    for node in keys(derivedmapstate.primarynodes)
         if !is_axis(node.dir)  # Skip if node isn't a vertex
             continue
         end
 
         # Determine colour based on MNA voltage, falling back to 0.0 for missing/invalid values
-        colour = begin
-            if haskey(mna_state.node_voltages_scaled, node)
-                vs = mna_state.node_voltages_scaled[node]
-                vs = isfinite(vs) ? vs : 0.0  # Handle NaN/infinite values
-                voltage_clamped = clamp(Float32(vs), 0.0f0, 1.0f0)
-                c = get(NODE_VOLTAGE_COLORSCHEME, voltage_clamped)
-                SVector{4, Float32}(Float32(c.r), Float32(c.g), Float32(c.b), 1.0f0)
-            else
-                c = get(NODE_VOLTAGE_COLORSCHEME, 0.0)
-                SVector{4, Float32}(Float32(c.r), Float32(c.g), Float32(c.b), 1.0f0)
-            end
+        voltage_clamped = if haskey(mna_state.node_voltages_scaled, node)
+            vs = mna_state.node_voltages_scaled[node]
+            vs = isfinite(vs) ? vs : 0.0  # Handle NaN/infinite values
+            clamp(Float32(vs), 0.0f0, 1.0f0)
+        else
+            0.0
         end
+        c = get(NODE_VOLTAGE_COLORSCHEME, voltage_clamped)
+        colour = SVector{4, Float32}(Float32(c.r), Float32(c.g), Float32(c.b), 1.0f0)
 
         # Get ship offset for this node
         ship_name = find_ship_for_node(node, gamemap)

@@ -837,8 +837,7 @@ function set_tunables(comp::ThevininTankCompBehav{LiquidTankBehavFrag, N}, tunab
 end
 
 function produce_rel_fluid_declarations(comp::ThevininTankCompBehav)
-    temp = get_default_temperature(Val(comp.fluid))
-    temp_val = !isnothing(temp) ? temp : 300.0
+    temp_val = get_default_temperature(comp.fluid, THERMAL_AMBIENT_TEMPERATURE_K)
     return (RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, FluidSource(comp.fluid, temp_val)),)
 end
 
@@ -850,8 +849,7 @@ allowing any compatible liquid to refill the tank.
 function produce_rel_fluid_declarations(comp::ThevininTankCompBehav{LiquidTankBehavFrag})
     stored = get_stored_fluid(comp.tank.stored_fluid)
     if !isnothing(stored) && comp.tank.tank.state.charge > 0.0
-        temp = get_default_temperature(Val(stored))
-        temp_val = !isnothing(temp) ? temp : THERMAL_AMBIENT_TEMPERATURE_K
+        temp_val = get_default_temperature(stored, THERMAL_AMBIENT_TEMPERATURE_K)
         return (RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, FluidSource(stored, temp_val)),)
     else
         # Empty: advertise a liquid constraint so any liquid can flow in and seed refill
@@ -1049,22 +1047,15 @@ Gas side remains a concrete `FluidSource`. Liquid side emits a `FluidSource` whe
 or `FluidConstraintRule(IS_LIQUID)` when empty — allowing any compatible liquid to refill.
 """
 function produce_rel_fluid_declarations(comp::PressureFedTankCompBehav)
-    gas_temp = let t = get_default_temperature(Val(comp.gas_fluid))
-        !isnothing(t) ? t : 300.0
-    end
+    gas_temp = get_default_temperature(comp.gas_fluid, THERMAL_AMBIENT_TEMPERATURE_K)
+    gas_decl = RelativeFluidDeclaration(comp.tank.gas_node, FluidSource(comp.gas_fluid, gas_temp))
     stored = get_stored_fluid(comp.tank.stored_liquid)
-    liq_decl = if !isnothing(stored) && comp.tank.liquid_state.charge > 0.0
-        liq_temp = let t = get_default_temperature(Val(stored))
-            !isnothing(t) ? t : 300.0
-        end
-        RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, FluidSource(stored, liq_temp))
+    if !isnothing(stored) && comp.tank.liquid_state.charge > 0.0
+        liq_temp = get_default_temperature(stored, THERMAL_AMBIENT_TEMPERATURE_K)
+        return (gas_decl, RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, FluidSource(stored, liq_temp)))
     else
-        RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, FluidConstraintRule(HexFluids.IS_LIQUID))
+        return (gas_decl, RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, FluidConstraintRule(HexFluids.IS_LIQUID)))
     end
-    return (
-        RelativeFluidDeclaration(comp.tank.gas_node, FluidSource(comp.gas_fluid, gas_temp)),
-        liq_decl,
-    )
 end
 
 "Wet mass is the combined stored liquid and non-negative stored gas mass. Liquid mass uses the runtime stored fluid identity."

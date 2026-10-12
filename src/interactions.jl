@@ -1295,17 +1295,10 @@ end
 
 "Render tractor beams between the primary ship and other docked ships."
 function render_docking_beams!(queue::Vector{<:RenderCommand}, glmap::GLObjectMap, gamemap::GameMap, gameticks::Int64)
-    primary_centroid = get_surface_centroid(gamemap, :primary)
-    isnothing(primary_centroid) && return nothing
-    primary_offset = get_ship_render_offset(gamemap, :primary)
-    primary_pos = primary_centroid + primary_offset
+    primary_pos = nothing
 
     for (ship_name, ship) in gamemap.ships
         ship_name == :primary && continue
-
-        ship_centroid = get_surface_centroid(gamemap, ship_name)
-        isnothing(ship_centroid) && continue
-        ship_pos = ship_centroid + get_render_offset(ship)
 
         status = get_docking_status(ship)
 
@@ -1321,26 +1314,24 @@ function render_docking_beams!(queue::Vector{<:RenderCommand}, glmap::GLObjectMa
 
         isnothing(beam_colour) && continue
 
-        # Connected beams are narrower and steadier
-        local_num_elements = 50
-        local_noise = 0.1
-        local_scale = 1.0f0
-        if status isa ConnectedDockStat
-            local_scale *= 0.5f0
-            local_noise *= 0.25
+        ship_centroid = get_surface_centroid(gamemap, ship_name)
+        isnothing(ship_centroid) && continue
+        ship_pos = ship_centroid + get_render_offset(ship)
+
+        if isnothing(primary_pos)
+            primary_centroid = get_surface_centroid(gamemap, :primary)
+            isnothing(primary_centroid) && return nothing
+            primary_pos = primary_centroid + get_ship_render_offset(gamemap, :primary)
         end
 
+        # Connected beams are narrower and steadier
+        connected = status isa ConnectedDockStat
         render_beam!(
-            queue,
-            glmap,
-            gameticks,
-            primary_pos,
-            ship_pos;
-            num_elements = local_num_elements,
-            noise_magnitude = local_noise,
-            scale = local_scale,
+            queue, glmap, gameticks, primary_pos, ship_pos;
+            noise_magnitude = connected ? 0.025 : 0.1,
+            scale = connected ? 0.5f0 : 1.0f0,
             colour = beam_colour,
-            draw_height = Int32(HexFlowRendering.RENDER_HEIGHT_TRACTOR_BEAM)
+            draw_height = HexFlowRendering.RENDER_HEIGHT_TRACTOR_BEAM
         )
     end
 
