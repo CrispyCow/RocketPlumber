@@ -61,7 +61,7 @@ function custom_rendering!(
         @timeit render_loop_timer "Particle Systems" begin
             @timeit render_loop_timer "Background Particles" begin
                 if !shared_state.is_paused
-                    thrust_dust_particle_effect!(viewstate.background_particles, snapshot.gamestate, snapshot.gamemap)
+                    thrust_dust_particle_effect!(viewstate.background_particles, snapshot.gamestate, snapshot.gamemap, snapshot.derived)
                     update_particle_physics!(viewstate.background_particles, snapshot.gamestate)
                 end
                 # Passing the map enables ship-surface culling

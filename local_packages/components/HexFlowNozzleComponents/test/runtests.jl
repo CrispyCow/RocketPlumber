@@ -87,6 +87,33 @@ function make_nozzle_state(nozzle::NozzleBehavFrag; tile::TileCoord = TEST_TILE,
     return mna_state, derivedmapstate
 end
 
+@testset "Nozzle exhaust spawning" begin
+    comp = make_basic_nozzle()
+    solved, derived = make_nozzle_state(comp.nozzle)
+    mna = MNA_StateSnapshot(node_voltages = solved.node_voltages)
+    manager = ParticleManager()
+    offset = AxialCoord(0.3, 0.0)
+    centre = glvec(TEST_TILE) + glvec(offset)
+    colour = get_fluid_colour(HexFluids.MONOPROP_GAS, 800.0)
+    expected_colour = ColourType(colour[1], colour[2], colour[3], 0.5f0)
+
+    collect_effect_particles!(manager, PlacedComponent(comp, TEST_ROTATION, :primary); tile = TEST_TILE, derivedmapstate = derived, mna_state = mna, gameticks = 7, pos_offset = offset)
+    @test length(manager.particles) == 24
+    @test all(p -> p.colour == expected_colour && p.vanishing_time == 7 + Int(2 * BASE_UPS), manager.particles)
+    vertical_radius = sqrt(comp.nozzle.throat_area) * 120.0 / HexFlowRendering.hex_size_pixels
+    horizontal_radius = vertical_radius / 3
+    @test all(manager.particles) do particle
+        delta = particle.position - centre
+        return (delta[1] / horizontal_radius)^2 + (delta[2] / vertical_radius)^2 <= 1.00001
+    end
+    @test all(p -> -0.07 <= p.velocity[1] <= -0.03 && abs(p.velocity[2]) <= 0.03, manager.particles)
+
+    empty!(manager.particles)
+    set_node_voltage!(solved, TEST_TILE, comp.nozzle.connected_node, 0.0)
+    collect_effect_particles!(manager, comp; tile = TEST_TILE, rotation = TEST_ROTATION, derivedmapstate = derived, mna_state = mna, gameticks = 8)
+    @test isempty(manager.particles)
+end
+
 @testset "Biprop chamber mirroring" begin
     comp = BipropChamberCompBehav()
     @test map_mirroring(comp, true)

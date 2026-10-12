@@ -6,6 +6,10 @@ layout(triangle_strip, max_vertices = 4) out;
 
 /*  INPUTS  */
 in vec2 particle_center[];  // game coordinates from vertex shader
+in vec4 vertex_colour[];
+
+/*  OUTPUTS  */
+flat out vec4 particle_colour;
 
 /*  UNIFORM BLOCKS  */
 layout(std140) uniform ViewBlock {mat3 view_transform;};
@@ -34,6 +38,7 @@ void main()
         vec2 vertex_game_space = center + offsets[i];
         vec3 vertex_clip_space = view_transform * vec3(vertex_game_space, 1.0);
         gl_Position = vec4(vertex_clip_space.xy, 0.0, 1.0);
+        particle_colour = vertex_colour[0];
         EmitVertex();
     }
     

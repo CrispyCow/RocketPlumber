@@ -281,7 +281,7 @@ function placement_valid(nozzle::NozzleBehavFrag, coord::TileCoord, gamemap::Gam
 end
 
 function collect_effect_particles!(
-        manager,
+        manager::ParticleManager,
         nozzle::NozzleBehavFrag;
         tile::TileCoord,
         rotation::HexAxis,
@@ -338,10 +338,6 @@ function collect_effect_particles!(
     fluid_colour_full = get_fluid_colour(fluid, temperature; default = ColourType(1.0, 1.0, 1.0, 1.0))
     particle_colour = SVector{4, Float32}(fluid_colour_full[1], fluid_colour_full[2], fluid_colour_full[3], 0.5f0) # Set alpha to 50%
 
-    # Batch generate particles
-    positions = Vector{SVector{2, Float32}}(undef, num_particles)
-    velocities = Vector{SVector{2, Float64}}(undef, num_particles)
-
     tile_pos = glvec(tile)
     # Apply position offset if provided
     if !isnothing(pos_offset)
@@ -353,7 +349,7 @@ function collect_effect_particles!(
     spawn_radius_vertical_hex = spawn_radius_vertical_px / HexFlowRendering.hex_size_pixels
     spawn_radius_horizontal_hex = spawn_radius_horizontal_px / HexFlowRendering.hex_size_pixels
 
-    for i in 1:num_particles
+    for _ in 1:num_particles
         # Random position within elliptical spawn area
         angle = rand() * 2π
         radius_factor = sqrt(rand())  # sqrt for uniform distribution in circle
@@ -365,16 +361,14 @@ function collect_effect_particles!(
         # Transform to world coordinates using exhaust and perpendicular directions
         offset_vec = exhaust_direction .* local_horizontal .+ perpendicular_direction .* local_vertical
         offset = SVector{2, Float32}(Float32(offset_vec[1]), Float32(offset_vec[2]))
-        positions[i] = tile_pos .+ offset
+        position = tile_pos .+ offset
 
         # Velocity: base direction + randomness in both directions
         horizontal_component = (rand() - 0.5) * 2.0 * horizontal_velocity_randomness
         perp_component = (rand() - 0.5) * 2.0 * perpendicular_velocity_randomness
-        velocities[i] = exhaust_direction .* (base_velocity_magnitude + horizontal_component) .+ perpendicular_direction .* perp_component
+        velocity = exhaust_direction .* (base_velocity_magnitude + horizontal_component) .+ perpendicular_direction .* perp_component
+        spawn_particle!(manager, position, velocity, gameticks + particle_lifetime; colour = particle_colour)
     end
-
-    # Spawn particles with colour
-    spawn_particles!(manager, positions, velocities, gameticks, gameticks + particle_lifetime; colour = particle_colour)
 
     return nothing
 end
