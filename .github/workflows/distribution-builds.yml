@@ -87,5 +87,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
-        run: gh release upload "$env:RELEASE_TAG" "build/outputs/RocketPlumber-${{ runner.os }}.${{ runner.os == 'Linux' && 'tar.gz' || 'zip' }}" --clobber
+        run: |
+          # Avrea's Windows SSL_CERT_DIR configuration breaks GitHub CLI certificate verification.
+          if ($env:RUNNER_OS -eq 'Windows') {
+            Remove-Item Env:SSL_CERT_DIR -ErrorAction SilentlyContinue
+          }
+          gh release upload "$env:RELEASE_TAG" "build/outputs/RocketPlumber-${{ runner.os }}.${{ runner.os == 'Linux' && 'tar.gz' || 'zip' }}" --clobber
         shell: pwsh
