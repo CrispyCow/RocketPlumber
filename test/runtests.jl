@@ -935,6 +935,77 @@ end
     end
 end
 
+@testset "paired escape saves" begin
+    mktempdir() do directory
+        checkpoint = GameMap()
+        increment_simulated_ticks!(checkpoint)
+        escape_map = GameMap(space_map = GalaxyEscapeSpaceMap(SVector(10.0, 0.0), 10.0, 0.0, checkpoint))
+        recorder = TimelapseRecorder(TimelapseHistory(); now = 0.0)
+        state = RocketPlumber.EscapeSaveState()
+        messages = String[]
+        console_push = message -> push!(messages, message)
+        selected_path = nothing
+        dialog = (directory; filterlist) -> selected_path
+        captures = String[]
+        capture = path -> (push!(captures, path); write(path, "complete PNG"))
+
+        # Cancellation neither persists nor queues a capture
+        RocketPlumber.request_escape_save!(state, recorder, escape_map, console_push; dialog)
+        RocketPlumber.finish_escape_save!(state, capture, console_push)
+        @test isempty(readdir(directory))
+        @test isempty(captures)
+        @test isempty(messages)
+
+        selected_path = joinpath(directory, "My Galactic Escape")
+        RocketPlumber.request_escape_save!(state, recorder, escape_map, console_push; dialog)
+        ship_path = selected_path * ".jld2"
+        png_path = selected_path * ".png"
+        @test state.pending_path == ship_path
+        bundle = loadmap_bundle(ship_path)
+        @test get_simulated_ticks(bundle.gamemap) == 1
+        @test !is_galaxy_escape_active(bundle.gamemap)
+        @test get_simulated_ticks(only(bundle.timelapse.frames)) == 1
+        @test isempty(captures)  # Capture is deferred until the render loop finishes the next frame
+        @test !ispath(png_path)
+        RocketPlumber.finish_escape_save!(state, capture, console_push)
+        @test read(png_path, String) == "complete PNG"
+        @test isnothing(state.pending_path)
+        @test last(messages) == "Escape saved! Ship: $ship_path; Screenshot: $png_path"
+        @test !ispath(only(captures))
+        @test sort(readdir(directory)) == ["My Galactic Escape.jld2", "My Galactic Escape.png"]
+
+        # Refuse the PNG collision before replacing even an authorised ship file
+        selected_path = ship_path
+        write(ship_path, "keep ship")
+        RocketPlumber.request_escape_save!(state, recorder, escape_map, console_push; dialog)
+        @test isnothing(state.pending_path)
+        @test read(ship_path, String) == "keep ship"
+        @test read(png_path, String) == "complete PNG"
+        @test startswith(last(messages), "Nothing saved.")
+
+        selected_path = joinpath(directory, "failed_capture.jld2")
+        RocketPlumber.request_escape_save!(state, recorder, escape_map, console_push; dialog)
+        failed_capture = path -> (write(path, "partial PNG"); error("capture failed"))
+        @test_logs (:warn, "Escape screenshot save failed") RocketPlumber.finish_escape_save!(state, failed_capture, console_push)
+        @test startswith(last(messages), "Ship saved: $selected_path; screenshot failed:")
+        @test isnothing(state.pending_path)
+        @test !is_galaxy_escape_active(loadmap_bundle(selected_path).gamemap)
+        @test !ispath(first(splitext(selected_path)) * ".png")
+        @test all(name -> endswith(name, ".jld2") || endswith(name, ".png"), readdir(directory))
+
+        # Ship failure must not queue or attempt a screenshot
+        selected_path = joinpath(directory, "blocked.jld2")
+        mkdir(selected_path)
+        capture_count = length(captures)
+        @test_logs (:warn, "Pre-escape map save failed") RocketPlumber.request_escape_save!(state, recorder, escape_map, console_push; dialog)
+        @test isnothing(state.pending_path)
+        RocketPlumber.finish_escape_save!(state, capture, console_push)
+        @test length(captures) == capture_count
+        @test !ispath(first(splitext(selected_path)) * ".png")
+        @test startswith(last(messages), "Ship save failed: $selected_path.")
+    end
+end
+
 @testset "galaxy-escape restart owns a mutable checkpoint copy" begin
     checkpoint = GameMap(
         space_map = SpaceMapState(encounter_config = RocketPlumber.get_encounter_system_config()),

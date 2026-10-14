@@ -885,8 +885,6 @@ end
 function apply_mapedit_command!(gamemap::GameMap, ::StartGalaxyEscapeCommand)::MapEditResult
     space_map = gamemap.space_map
     space_map isa SpaceMapState || return InvalidRequest("Galaxy escape can only begin from normal galactic navigation")
-    is_galaxy_escape_unlocked(get_peak_estimated_delta_v(gamemap)) ||
-        return InvalidRequest("Galaxy escape has not been discovered yet")
 
     velocity = get_velocity(space_map)
     all(isfinite, velocity) || return InvalidRequest("Cannot begin galaxy escape with a non-finite velocity")

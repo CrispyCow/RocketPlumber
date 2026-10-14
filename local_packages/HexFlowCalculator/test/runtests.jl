@@ -539,14 +539,13 @@ function make_gamemap()
     return gm
 end
 
-"Build a normal galactic map whose historical estimate has unlocked galaxy escape."
+"Build a normal galactic map ready for a galaxy-escape command."
 function make_galaxy_escape_ready_map(
         ; velocity::SVector{2, Float64} = SVector(10.0, 0.0), time_years::Float64 = 0.0,
     )::GameMap
     gamemap = make_gamemap()
     initialise_spacemap!(gamemap, UInt32(0x1234), _test_enc_config, velocity)
     set_time_years!(gamemap, time_years)
-    record_peak_estimated_delta_v!(gamemap, GALAXY_ESCAPE_UNLOCK_ESTIMATED_DELTA_V)
     return gamemap
 end
 
@@ -2691,7 +2690,7 @@ end
 @testset "StartGalaxyEscapeCommand" begin
     command_queue = create_command_queue(16)
 
-    @testset "creator and eligibility rejections" begin
+    @testset "creator, locked navigation, and structural rejections" begin
         response = Channel{CommandStatus}(1)
         command = create_start_galaxy_escape_command(command_queue; response_channel = response)
         @test command isa StartGalaxyEscapeCommand
@@ -2699,12 +2698,12 @@ end
 
         locked_map = make_gamemap()
         initialise_spacemap!(locked_map, UInt32(1), _test_enc_config)
-        @test process_and_log!(command, locked_map) == ["Galaxy escape has not been discovered yet"]
-        @test take!(response) == INVALID
-        @test locked_map.space_map isa SpaceMapState
+        @test !is_galaxy_escape_unlocked(get_peak_estimated_delta_v(locked_map))
+        @test process_and_log!(command, locked_map) == ["Galaxy escape begun. Galactic navigation is no longer available."]
+        @test take!(response) == APPLIED
+        @test locked_map.space_map isa GalaxyEscapeSpaceMap
 
         empty_map = GameMap()
-        record_peak_estimated_delta_v!(empty_map, GALAXY_ESCAPE_UNLOCK_ESTIMATED_DELTA_V)
         @test process_and_log!(create_start_galaxy_escape_command(command_queue), empty_map) ==
             ["Galaxy escape can only begin from normal galactic navigation"]
         @test empty_map.space_map isa SpaceMapEmpty
@@ -2715,7 +2714,6 @@ end
                 pre_escape_map = GameMap(),
             )
         )
-        record_peak_estimated_delta_v!(active_map, GALAXY_ESCAPE_UNLOCK_ESTIMATED_DELTA_V)
         @test process_and_log!(create_start_galaxy_escape_command(command_queue), active_map) ==
             ["Galaxy escape can only begin from normal galactic navigation"]
         @test active_map.space_map isa GalaxyEscapeSpaceMap

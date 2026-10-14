@@ -25,6 +25,75 @@ const GALAXY_ESCAPE_VICTORY_FLAVOUR_TEXT =
     "You have broken free of the galactic plane. With the final burn complete, your ship is now en route to its " *
     "destination beyond the galaxy."
 
+#= ---------- Escape Save State ---------- =#
+
+"Render-owned pending screenshot and temporary email-copy feedback."
+@kwdef mutable struct EscapeSaveState
+    pending_path::Union{Nothing, String} = nothing
+    email_copied_until::Float64 = 0.0
+end
+
+"Choose a paired destination, save the checkpoint, and queue capture for a fresh victory frame."
+function request_escape_save!(state::EscapeSaveState, recorder::TimelapseRecorder, gamemap::GameMap, console_push::Function; dialog::Function = save_file)
+    isnothing(state.pending_path) || return nothing
+    save_path = map_save_dialog(console_push; dialog)
+    isnothing(save_path) && return nothing
+
+    screenshot_path = first(splitext(save_path)) * ".png"
+    # The map dialog only authorises replacing the ship file
+    if lowercase(last(splitext(save_path))) != ".jld2" || ispath(screenshot_path) || islink(screenshot_path)
+        console_push("Nothing saved. Choose a .jld2 filename with no matching PNG. Screenshot destination: $screenshot_path")
+        return nothing
+    end
+
+    try
+        save_pre_escape_map(recorder, gamemap, save_path)
+    catch e
+        e isa InterruptException && rethrow()
+        @warn "Pre-escape map save failed" path = save_path exception = (e, catch_backtrace())
+        console_push("Ship save failed: $save_path. $(sprint(showerror, e))")
+        return nothing
+    end
+    state.pending_path = save_path
+    return nothing
+end
+
+"Finish a queued save after a fresh victory frame renders, without replacing an unconfirmed PNG."
+function finish_escape_save!(state::EscapeSaveState, capture::Function, console_push::Function)
+    isnothing(state.pending_path) && return nothing
+    save_path = state.pending_path::String
+    screenshot_path = first(splitext(save_path)) * ".png"
+    screenshot_saved = false
+    temporary_path = nothing
+    try
+        if ispath(screenshot_path) || islink(screenshot_path)
+            throw(ArgumentError("$screenshot_path already exists."))
+        end
+        temporary_path, temporary_io = mktemp(dirname(screenshot_path))
+        close(temporary_io)
+        capture(temporary_path)
+        if ispath(screenshot_path) || islink(screenshot_path)
+            throw(ArgumentError("$screenshot_path already exists."))
+        end
+        # Publish only a complete image; mv refuses a destination created during capture
+        mv(temporary_path, screenshot_path; force = false)
+        screenshot_saved = true
+    catch e
+        e isa InterruptException && rethrow()
+        @warn "Escape screenshot save failed" path = screenshot_path exception = (e, catch_backtrace())
+    finally
+        isnothing(temporary_path) || rm(temporary_path; force = true)
+        state.pending_path = nothing
+    end
+
+    if screenshot_saved
+        console_push("Escape saved! Ship: $save_path; Screenshot: $screenshot_path")
+    else
+        console_push("Ship saved: $save_path; screenshot failed: $screenshot_path. See the terminal log.")
+    end
+    return nothing
+end
+
 #= ---------- Text Formatting ---------- =#
 
 "Return an integer string grouped with commas for result-screen readability."
@@ -203,7 +272,7 @@ end
 #= ---------- Final Flight Report ---------- =#
 
 "Render the exclusive final flight report shown after a galaxy escape is completed."
-function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, timelapse_recorder::TimelapseRecorder, window::GLFW.Window)
+function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC, timelapse_recorder::TimelapseRecorder, window::GLFW.Window, save_state::EscapeSaveState)
     # Full-screen backdrop
     winsize = to_float(GLFW.GetWindowSize(window))
     CImGui.AddRectFilledMultiColor(
@@ -227,13 +296,11 @@ function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputSta
     CImGui.Begin("##galaxy_escape_victory", C_NULL, flags)
 
     # Main report panel
-    panel_width = clamp(winsize.width - 32.0, 1.0, 720.0)
-    panel_height = clamp(winsize.height - 32.0, 1.0, 900.0)
+    panel_width = clamp(winsize.width - 32.0, 1.0, 920.0)
+    panel_height = clamp(winsize.height - 32.0, 1.0, 920.0)
     action_button_height = 45.0
     action_button_gap = 10.0
-    action_vertical_margin = 16.0
-    action_group_height = 3 * action_button_height + 2 * action_button_gap
-    footer_height = action_group_height + 2 * action_vertical_margin
+    footer_height = min(260.0, panel_height * 0.5)
     footer_gap = 10.0
     report_height = max(1.0, panel_height - footer_height - footer_gap)
     panel_pos = ImVec2(
@@ -295,38 +362,110 @@ function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputSta
     # Action footer
     footer_pos = ImVec2(panel_pos.x, panel_pos.y + report_height + footer_gap)
     CImGui.SetCursorPos(footer_pos)
-    CImGui.PushStyleVar(CImGui.ImGuiStyleVar_WindowPadding, ImVec2(24.0, 8.0))
+    CImGui.PushStyleVar(CImGui.ImGuiStyleVar_WindowPadding, ImVec2(18.0, 16.0))
     CImGui.PushStyleVar(CImGui.ImGuiStyleVar_ChildRounding, 10.0)
     CImGui.PushStyleVar(CImGui.ImGuiStyleVar_ChildBorderSize, 1.0)
     CImGui.PushStyleColor(CImGui.ImGuiCol_ChildBg, GALAXY_ESCAPE_VICTORY_PANEL_BACKGROUND)
     CImGui.PushStyleColor(CImGui.ImGuiCol_Border, GALAXY_ESCAPE_VICTORY_BORDER)
     CImGui.BeginChild("##galaxy_escape_victory_actions", ImVec2(panel_width, footer_height), panel_flags)
 
-    action_start_y = CImGui.GetCursorPosY() + max(0.0, (CImGui.GetContentRegionAvail().y - action_group_height) / 2.0)
-    CImGui.SetCursorPosY(action_start_y)
-    if CImGui.Button("Save Pre-Escape Map", ImVec2(-1, action_button_height))
-        save_path = map_save_dialog(flowcalc_ipc.console_push)
-        if !isnothing(save_path)
-            try
-                save_pre_escape_map(timelapse_recorder, gamemap, save_path)
-            catch e
-                e isa InterruptException && rethrow()
-                @warn "Pre-escape map save failed" path = save_path exception = (e, catch_backtrace())
-                flowcalc_ipc.console_push("Saving failed. See the terminal log for details.")
-            end
+    footer_content_height = CImGui.GetContentRegionAvail().y
+    footer_flags = CImGui.ImGuiTableFlags_SizingStretchProp | CImGui.ImGuiTableFlags_BordersInnerV
+    CImGui.PushStyleVar(CImGui.ImGuiStyleVar_CellPadding, ImVec2(18.0, 2.0))
+    if CImGui.BeginTable("##escape_footer_columns", 2, footer_flags)
+        CImGui.TableSetupColumn("Share", CImGui.ImGuiTableColumnFlags_WidthStretch, 0.64f0)
+        CImGui.TableSetupColumn("Actions", CImGui.ImGuiTableColumnFlags_WidthStretch, 0.36f0)
+        CImGui.TableNextRow(0, footer_content_height)
+        CImGui.TableSetColumnIndex(0)
+        share_start_x = CImGui.GetCursorPosX()
+        share_width = CImGui.GetContentRegionAvail().x
+
+        CImGui.PushFont(UI_VECTOR_FONT, 22.0)
+        CImGui.TextColored(GALAXY_ESCAPE_VICTORY_ACCENT, "SHARE YOUR ESCAPE")
+        CImGui.PopFont()
+        CImGui.Spacing()
+        CImGui.PushStyleColor(CImGui.ImGuiCol_Text, GALAXY_ESCAPE_VICTORY_VALUE)
+        CImGui.TextWrapped("You've escaped the galaxy! Congratulations, you might be one of the first people to pull it off!")
+        CImGui.Spacing()
+        CImGui.TextWrapped("I'd love to see the ship that got you here.")
+        CImGui.Spacing()
+        CImGui.TextWrapped("Send me your screenshots, ship, and any feedback or stories from your journey!")
+        CImGui.PopStyleColor()
+        CImGui.Dummy(ImVec2(0.0, 8.0))
+
+        email = "feedback@rocketplumbergame.com"
+        copy_button_width = 65.0
+        feedback_gap = 10.0
+        CImGui.PushFont(UI_VECTOR_FONT, 16.0)
+        email_width = CImGui.CalcTextSize(email).x
+        inline_copy = share_width >= email_width + feedback_gap + copy_button_width
+        # Scale only the address on narrow windows; Copy moves to its own centred line
+        email_size = min(16.0, 16.0 * share_width / email_width)
+        CImGui.PopFont()
+        CImGui.PushFont(UI_VECTOR_FONT, email_size)
+        feedback_width = CImGui.CalcTextSize(email).x + (inline_copy ? feedback_gap + copy_button_width : 0.0)
+        CImGui.SetCursorPosX(share_start_x + max(0.0, (share_width - feedback_width) / 2))
+        CImGui.AlignTextToFramePadding()
+        CImGui.TextLinkOpenURL(email, "mailto:feedback@rocketplumbergame.com?subject=Rocket%20Plumber%20-%20My%20Galactic%20Escape")
+        CImGui.PopFont()
+        if inline_copy
+            CImGui.SameLine(0.0, feedback_gap)
+        else
+            CImGui.SetCursorPosX(share_start_x + max(0.0, (share_width - copy_button_width) / 2))
         end
-    end
+        copied = CImGui.GetTime() < save_state.email_copied_until
+        if CImGui.Button(copied ? "Copied!###escape_copy_email" : "Copy###escape_copy_email", ImVec2(copy_button_width, 22.0))
+            CImGui.SetClipboardText(email)
+            save_state.email_copied_until = CImGui.GetTime() + 2.0
+        end
 
-    CImGui.SetCursorPosY(action_start_y + action_button_height + action_button_gap)
-    if CImGui.Button("Exit to Main Menu", ImVec2(-1, action_button_height))
-        inputstate.exit_reason = EXIT_MENU
-    end
+        CImGui.Spacing()
+        CImGui.Separator()
+        CImGui.Spacing()
+        CImGui.TextColored(GALAXY_ESCAPE_VICTORY_MUTED, "Enjoyed Rocket Plumber?\nWant updates on new features and releases?")
+        CImGui.Dummy(ImVec2(0.0, 6.0))
+        mailing_list_label = "Join the Mailing List"
+        CImGui.SetCursorPosX(share_start_x + max(0.0, (share_width - CImGui.CalcTextSize(mailing_list_label).x) / 2))
+        CImGui.TextLinkOpenURL(mailing_list_label, "https://rocketplumbergame.com/mailing-list/")
 
-    CImGui.SetCursorPosY(action_start_y + 2 * (action_button_height + action_button_gap))
-    if CImGui.Button("Exit Game", ImVec2(-1, action_button_height))
-        inputstate.exit_reason = EXIT_QUIT
-        GLFW.SetWindowShouldClose(window, true)
+        CImGui.TableSetColumnIndex(1)
+        action_group_height = 3 * action_button_height + 2 * action_button_gap
+        action_available_height = footer_content_height - 4.0 # Allow for the row's cell padding
+        action_start_y = CImGui.GetCursorPosY() + max(0.0, (action_available_height - action_group_height) / 2)
+        CImGui.SetCursorPosY(action_start_y)
+        CImGui.BeginDisabled(!isnothing(save_state.pending_path))
+        CImGui.PushStyleColor(CImGui.ImGuiCol_Button, ImVec4(0.38, 0.26, 0.065, 1.0))
+        CImGui.PushStyleColor(CImGui.ImGuiCol_ButtonHovered, ImVec4(0.52, 0.36, 0.09, 1.0))
+        CImGui.PushStyleColor(CImGui.ImGuiCol_Text, GALAXY_ESCAPE_VICTORY_ACCENT)
+        save_clicked = CImGui.Button("##escape_save", ImVec2(-1, action_button_height))
+        # Centre each line independently over the normal button
+        button_min = CImGui.GetItemRectMin()
+        button_size = CImGui.GetItemRectSize()
+        line_height = CImGui.GetTextLineHeight()
+        text_y = button_min.y + (button_size.y - 2 * line_height) / 2
+        for (line_index, line) in enumerate(("Save Escape", "Screenshot + Ship"))
+            text_x = button_min.x + (button_size.x - CImGui.CalcTextSize(line).x) / 2
+            CImGui.AddText(CImGui.GetWindowDrawList(), ImVec2(text_x, text_y + (line_index - 1) * line_height), CImGui.GetColorU32(CImGui.ImGuiCol_Text), line)
+        end
+        if save_clicked
+            request_escape_save!(save_state, timelapse_recorder, gamemap, flowcalc_ipc.console_push)
+        end
+        CImGui.PopStyleColor(3)
+
+        CImGui.SetCursorPosY(action_start_y + action_button_height + action_button_gap)
+        if CImGui.Button("Exit to Main Menu", ImVec2(-1, action_button_height))
+            inputstate.exit_reason = EXIT_MENU
+        end
+
+        CImGui.SetCursorPosY(action_start_y + 2 * (action_button_height + action_button_gap))
+        if CImGui.Button("Exit Game", ImVec2(-1, action_button_height))
+            inputstate.exit_reason = EXIT_QUIT
+            GLFW.SetWindowShouldClose(window, true)
+        end
+        CImGui.EndDisabled()
+        CImGui.EndTable()
     end
+    CImGui.PopStyleVar()
 
     CImGui.EndChild()
     CImGui.PopStyleColor(2)

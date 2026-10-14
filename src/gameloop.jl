@@ -212,10 +212,11 @@ function ui_rendering!(
         learning_state::Union{Nothing, LearningSystemState} = nothing,
         session_timing::PlaySessionTiming,
         completed_gamemap::Union{Nothing, GameMap},
+        escape_save_state::EscapeSaveState,
     )
     if !isnothing(completed_gamemap)
         ui_renderwrap() do
-            ui_galaxy_escape_victory_render!(completed_gamemap, inputstate, flowcalc_ipc, timelapse_recorder, window)
+            ui_galaxy_escape_victory_render!(completed_gamemap, inputstate, flowcalc_ipc, timelapse_recorder, window, escape_save_state)
             ui_notifications_render!(GLFW.GetWindowSize(window), flowcalc_ipc.console_see)
         end
         return nothing
@@ -438,6 +439,7 @@ function enter_gameloop(
     glClearColor(0.114, 0.161, 0.318, 1.0)  # Space cadet blue
 
     g_recording = RecordingState()
+    escape_save_state = EscapeSaveState()
 
     ui_loadingscreen_render(window, "Starting FlowCalculator")
     g_flowcalc_task = Threads.@spawn flowcalculator_loop!(
@@ -486,11 +488,13 @@ function enter_gameloop(
                 g_flowcalc_ipc.shared_state, g_inputstate, g_viewstate,
             )
         end
+        escape_save_pending = !isnothing(escape_save_state.pending_path)
         @timeit render_loop_timer "UI Rendering" ui_rendering!(
             g_inputstate, g_flowcalc_ipc, timelapse_recorder, g_snapshot, g_viewstate, window;
             learning_state = learning_state,
             session_timing = session_timing,
             completed_gamemap = completed_gamemap,
+            escape_save_state = escape_save_state,
         )
 
         # Resolve escape transitions
@@ -510,6 +514,17 @@ function enter_gameloop(
             # The displayed snapshot defines the result; only this detached copy becomes render-owned.
             completed_gamemap = capture_session_gamemap(g_snapshot.gamemap, session_timing, learning_state)
             @atomic :monotonic g_flowcalc_ipc.shared_state.should_exit = true
+        end
+        # Capture on the frame after the save dialog closed, with the victory UI fully rendered
+        if escape_save_pending
+            finish_escape_save!(
+                escape_save_state,
+                path -> begin
+                    fb_size = GLFW.GetFramebufferSize(window)
+                    capture_screenshot!(g_recording, Int32(fb_size.width), Int32(fb_size.height), path)
+                end,
+                g_flowcalc_ipc.console_push,
+            )
         end
         recording_tick!(g_recording, g_inputstate, g_viewstate, window, g_flowcalc_ipc.console_push)
         GLFW.SwapBuffers(window)

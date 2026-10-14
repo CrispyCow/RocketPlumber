@@ -158,22 +158,27 @@ function save_png_screenshot(output_path::AbstractString, screenshot_image)
     return nothing
 end
 
+"Capture the current framebuffer as a PNG, propagating failures to the caller."
+function capture_screenshot!(rec::RecordingState, fb_width::Int32, fb_height::Int32, output_path::String)
+    fb_width > 0 && fb_height > 0 || throw(ArgumentError("The framebuffer has no visible pixels."))
+    resize!(rec.screenshot_buffer, Int(fb_width) * Int(fb_height) * 4)
+    capture_framebuffer!(rec.screenshot_buffer, fb_width, fb_height)
+    screenshot_image = framebuffer_rgba_to_image(rec.screenshot_buffer, fb_width, fb_height)
+    save_png_screenshot(output_path, screenshot_image)
+    return nothing
+end
+
 "Capture the current framebuffer and save it as a PNG screenshot."
 function save_screenshot!(rec::RecordingState, fb_width::Int32, fb_height::Int32, console_push::Function)
     output_path = nothing
     try
         output_path = default_capture_path(:screenshot)
         mkpath(dirname(output_path))
-
-        buffer_size = fb_width * fb_height * 4
-        resize!(rec.screenshot_buffer, buffer_size)
-
-        capture_framebuffer!(rec.screenshot_buffer, fb_width, fb_height)
-        screenshot_image = framebuffer_rgba_to_image(rec.screenshot_buffer, fb_width, fb_height)
-        save_png_screenshot(output_path, screenshot_image)
+        capture_screenshot!(rec, fb_width, fb_height, output_path)
         console_push("Screenshot saved: $(output_path)")
         @info "Screenshot saved: $(output_path)"
     catch e
+        e isa InterruptException && rethrow()
         console_push("Screenshot failed; see the terminal log for details")
         @warn "Screenshot capture failed" output_path = output_path exception = (e, catch_backtrace())
     end

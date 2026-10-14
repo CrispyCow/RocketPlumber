@@ -322,6 +322,31 @@ function ui_dev_utils_menu_render!(
             CImGui.TreePop()
         end
 
+        if CImGui.TreeNode("Galaxy Escape")
+            has_normal_navigation = snapshot.gamemap.space_map isa SpaceMapState
+            if button_with_disable(
+                    "Start Galaxy Escape", ImVec2(button_width, button_height), !has_normal_navigation;
+                    tooltip = "Requires normal galactic navigation. Unavailable during an active galaxy escape.",
+                )
+                command = create_start_galaxy_escape_command(flowcalc_ipc.command_queue)
+                if try_enqueue_command!(flowcalc_ipc.command_queue, command)
+                    inputstate.gui_inputs[:galaxy_escape_confirmation] = false
+                    inputstate.spacemap_active = false
+                else
+                    flowcalc_ipc.console_push("Could not begin galaxy escape because the command queue is full.")
+                end
+            end
+
+            if button_with_disable(
+                    "Complete Galaxy Escape", ImVec2(button_width, button_height), !is_galaxy_escape_active(snapshot.gamemap);
+                    tooltip = "Requires an active galaxy escape. No minimum escape delta-V is required.",
+                )
+                inputstate.galaxy_escape_completion_requested = true
+            end
+
+            CImGui.TreePop()
+        end
+
         # Modify Space Map
         if CImGui.TreeNode("Modify Space Map")
             current_velocity = get_velocity(snapshot.gamemap)
