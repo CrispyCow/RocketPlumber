@@ -119,7 +119,7 @@ file's formatter policy and keep adjacent cleanup small and directly useful.
   dependencies rather than workspace members. Standalone tools may own separate
   environments.
 - `build/` is a workspace project for build-only JuliaC. `build/build.jl`
-  produces a relocatable distribution in ignored `build/outputs/RocketPlumber/`.
+  produces relocatable distributions under the ignored `build/outputs/` directory.
 
 See the nested guides for package responsibilities and area-specific
 invariants. Keep detailed type and function inventories next to the code they
@@ -178,7 +178,7 @@ graphical smoke test and separate tool suites such as `tools/TimelapseExport`.
 Report exactly which local checks ran and which display-dependent checks did not.
 
 The separate, manually triggered Distribution builds workflow compiles Windows
-and Linux candidate ZIPs and uploads them to private draft GitHub Releases in
+ZIPs and Linux tarballs and uploads them to private draft GitHub Releases in
 `RocketPlumberPrivate`. Each full run/attempt gets a unique draft targeting the
 selected source commit; individual job reruns reuse that draft. Drafts remain
 in place after failures. The workflow does not run graphical checks.

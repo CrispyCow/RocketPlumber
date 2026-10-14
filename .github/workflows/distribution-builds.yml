@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Blank: temporary distribution-<run-id>-<attempt> candidate draft. Set e.g. v0.1.0: draft using that exact tag, intended for later publication as the real release.'
+        description: 'Blank: temporary dist-<run-id>-<attempt> candidate draft. Set e.g. v0.1.0: draft using that exact tag, intended for later publication as the real release.'
         type: string
         required: false
 
@@ -37,7 +37,11 @@ jobs:
           if [ -n "$REQUESTED_RELEASE_TAG" ]; then
             tag="$REQUESTED_RELEASE_TAG"
           else
-            tag="distribution-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            tag="dist-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          fi
+          if [[ ! "$tag" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || "$tag" == *. ]]; then
+            echo "Invalid release tag: use letters, numbers, periods, underscores and hyphens; start with a letter or number and do not end with a period." >&2
+            exit 1
           fi
           cat > release-notes.md <<EOF
           Rocket Plumber Windows/Linux distribution candidates.
@@ -48,12 +52,14 @@ jobs:
           Run attempt: ${GITHUB_RUN_ATTEMPT}
           EOF
           gh release create "$tag" --draft --target "$SOURCE_SHA" \
-            --title "Distribution candidates: ${SOURCE_REF} (${GITHUB_RUN_ID}, attempt ${GITHUB_RUN_ATTEMPT})" \
+            --title "Rocket Plumber ${tag}" \
             --notes-file release-notes.md
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   build:
     needs: prepare-release
+    env:
+      ROCKETPLUMBER_BUILD_LABEL: ${{ needs.prepare-release.outputs.tag }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -76,11 +82,11 @@ jobs:
       - name: Archive Linux distribution
         if: runner.os == 'Linux'
         working-directory: build/outputs
-        run: tar -czf RocketPlumber-Linux.tar.gz RocketPlumber
+        run: tar -czf "RocketPlumber-${ROCKETPLUMBER_BUILD_LABEL}-Linux.tar.gz" "RocketPlumber-${ROCKETPLUMBER_BUILD_LABEL}"
       - name: Archive Windows distribution
         if: runner.os == 'Windows'
         working-directory: build/outputs
-        run: Compress-Archive -Path RocketPlumber -DestinationPath RocketPlumber-Windows.zip
+        run: Compress-Archive -Path "RocketPlumber-$env:ROCKETPLUMBER_BUILD_LABEL" -DestinationPath "RocketPlumber-$env:ROCKETPLUMBER_BUILD_LABEL-Windows.zip"
       # Upload each platform archive directly to the draft prepared above.
       - name: Upload distribution to draft release
         env:
@@ -92,5 +98,5 @@ jobs:
           if ($env:RUNNER_OS -eq 'Windows') {
             Remove-Item Env:SSL_CERT_DIR -ErrorAction SilentlyContinue
           }
-          gh release upload "$env:RELEASE_TAG" "build/outputs/RocketPlumber-${{ runner.os }}.${{ runner.os == 'Linux' && 'tar.gz' || 'zip' }}" --clobber
+          gh release upload "$env:RELEASE_TAG" "build/outputs/RocketPlumber-$env:ROCKETPLUMBER_BUILD_LABEL-${{ runner.os }}.${{ runner.os == 'Linux' && 'tar.gz' || 'zip' }}" --clobber
         shell: pwsh
