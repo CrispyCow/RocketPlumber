@@ -132,7 +132,7 @@ function user_handler!(
         inputstate::InputState,
         viewstate::ViewState,
         snapshot::FlowCalculatorSnapshot,
-        window::GLFW.Window
+        window::GLFW.Window,
     )
     # Synchronise state used by input handlers
     update_ship_bounds!(viewstate, snapshot.gamemap)
@@ -176,7 +176,6 @@ function user_handler!(
         (stale_component_popup || stale_group_popup || stale_ship_popup) && dismiss_action_popup!(inputstate)
     end
 
-    GLFW.PollEvents()
     cimgui_io = CImGui.GetIO()
     handle_inputs!(inputstate, viewstate, flowcalc_ipc.shared_state, window, cimgui_io)
     mouse_captured = unsafe_load(cimgui_io.WantCaptureMouse)
@@ -400,6 +399,7 @@ function enter_gameloop(
         initial_bundle::Union{Nothing, GameMapBundle} = nothing,
         initial_active_tutorial_id::Union{Nothing, Symbol} = nothing,
         frame_hook::Union{Nothing, Function} = nothing,
+        window_mode::WindowModeState = WindowModeState(),
     )::GameLoopResult
 
     # Initialise session state
@@ -530,10 +530,13 @@ function enter_gameloop(
         GLFW.SwapBuffers(window)
 
         # Process input against the displayed snapshot
+        GLFW.PollEvents()
+        poll_window_mode!(window_mode, window)
+
         if isnothing(completed_gamemap) && isnothing(restart_gamemap)
             @timeit render_loop_timer "User Input Handling" user_handler!(g_flowcalc_ipc, g_inputstate, g_viewstate, g_snapshot, window)
         else
-            GLFW.PollEvents()
+            poll_windowstate!(g_viewstate, window)
         end
 
         # Capture time-lapse history during ordinary play

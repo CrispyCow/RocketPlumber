@@ -121,6 +121,70 @@ end
 const INITIAL_WINDOW_WIDTH = 1920
 const INITIAL_WINDOW_HEIGHT = 1080
 
+"Windowed geometry and F11 edge tracking, shared for the lifetime of a window."
+@kwdef mutable struct WindowModeState
+    windowed_x::Int = 0
+    windowed_y::Int = 0
+    windowed_width::Int = INITIAL_WINDOW_WIDTH
+    windowed_height::Int = INITIAL_WINDOW_HEIGHT
+    was_maximised::Bool = false
+    f11_pressed::Bool = false
+end
+
+"Return the monitor containing the window's centre, falling back to the primary monitor."
+function window_monitor(window::GLFW.Window)
+    primary = GLFW.GetPrimaryMonitor()
+    platform = GLFW.GetPlatform()
+    if platform != GLFW.PLATFORM_WIN32 && platform != GLFW.PLATFORM_X11
+        return primary
+    end
+
+    position = GLFW.GetWindowPos(window)
+    size = GLFW.GetWindowSize(window)
+    centre_x = position.x + size.width / 2
+    centre_y = position.y + size.height / 2
+
+    for monitor in GLFW.GetMonitors()
+        origin = GLFW.GetMonitorPos(monitor)
+        mode = GLFW.GetVideoMode(monitor)
+        if origin.x <= centre_x < origin.x + mode.width && origin.y <= centre_y < origin.y + mode.height
+            return monitor
+        end
+    end
+
+    return primary
+end
+
+"Toggle native full-screen mode on an F11 press, independently of ImGui capture."
+function poll_window_mode!(state::WindowModeState, window::GLFW.Window)
+    pressed = GLFW.GetKey(window, GLFW.KEY_F11)
+    toggle = pressed && !state.f11_pressed
+    state.f11_pressed = pressed
+    toggle || return nothing
+
+    if GLFW.GetWindowMonitor(window).handle != C_NULL
+        GLFW.SetWindowMonitor(window, GLFW.Monitor(C_NULL), state.windowed_x, state.windowed_y, state.windowed_width, state.windowed_height, GLFW.DONT_CARE)
+        if state.was_maximised
+            GLFW.MaximizeWindow(window)
+        end
+        return nothing
+    end
+
+    monitor = window_monitor(window)
+    mode = GLFW.GetVideoMode(monitor)
+    state.was_maximised = GLFW.GetWindowAttrib(window, GLFW.MAXIMIZED) != 0
+    size = GLFW.GetWindowSize(window)
+    state.windowed_width, state.windowed_height = size.width, size.height
+    # Native Wayland leaves placement to the compositor
+    if GLFW.GetPlatform() != GLFW.PLATFORM_WAYLAND
+        position = GLFW.GetWindowPos(window)
+        state.windowed_x, state.windowed_y = position.x, position.y
+    end
+
+    GLFW.SetWindowMonitor(window, monitor, 0, 0, mode.width, mode.height, mode.refreshrate)
+    return nothing
+end
+
 "Log errors reported through GLFW's callback interface."
 error_callback(err::GLFW.GLFWError) = @error "GLFW ERROR: code $(err.code) msg: $(err.description)"
 

@@ -62,6 +62,7 @@ end
 
 "Mutable state for the start menu loop"
 @kwdef mutable struct StartMenuState
+    window_mode::WindowModeState = WindowModeState()
     page::StartMenuPage = PAGE_INITIAL
     action::StartMenuAction = ACTION_NONE
     menu_inputs::Dict{Symbol, Any} = Dict{Symbol, Any}()
@@ -435,19 +436,19 @@ function _find_sandbox_definition(id::Symbol)::Union{Nothing, SandboxTutorialDef
 end
 
 "Run a map session by entering the main game loop with its map source."
-function run_session(window::GLFW.Window, session::MapSession)::GameLoopResult
-    return enter_gameloop(window; initial_bundle = session.bundle, initial_active_tutorial_id = session.initial_active_tutorial_id)
+function run_session(window::GLFW.Window, session::MapSession; window_mode::WindowModeState)::GameLoopResult
+    return enter_gameloop(window; initial_bundle = session.bundle, initial_active_tutorial_id = session.initial_active_tutorial_id, window_mode)
 end
 
 "Run a sandbox tutorial session for the current level."
-function run_session(window::GLFW.Window, session::SandboxSession)::GameLoopResult
+function run_session(window::GLFW.Window, session::SandboxSession; window_mode::WindowModeState)::GameLoopResult
     level = session.definition.levels[session.current_level]
     sandbox_map = level.map_generator()
     set_learning_system!(
         sandbox_map,
         SandboxLearningState(tutorial_id = session.tutorial_id, level_index = session.current_level),
     )
-    return enter_gameloop(window; initial_bundle = GameMapBundle(sandbox_map))
+    return enter_gameloop(window; initial_bundle = GameMapBundle(sandbox_map), window_mode)
 end
 
 "Determine the next session after a map session exits."
@@ -576,7 +577,7 @@ function handle_start_menu_action!(state::StartMenuState, window::GLFW.Window)
     isnothing(session) && return nothing
 
     while !isnothing(session) && !GLFW.WindowShouldClose(window)
-        result = run_session(window, session)
+        result = run_session(window, session; window_mode = state.window_mode)
         session = next_session(session, result)
     end
 
@@ -596,6 +597,9 @@ function enter_start_menu(window::GLFW.Window)
 
     while !GLFW.WindowShouldClose(window)
         GLFW.PollEvents()
+        poll_window_mode!(state.window_mode, window)
+        fbsize = GLFW.GetFramebufferSize(window)
+        glViewport(0, 0, fbsize.width, fbsize.height)
         glClear(GL_COLOR_BUFFER_BIT)
 
         # Render the frame
