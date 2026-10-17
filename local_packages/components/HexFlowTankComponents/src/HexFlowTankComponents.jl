@@ -478,14 +478,14 @@ pressurefed_liquid_is_auto_full(tank::PressureFedTankBehavFrag) = !liquid_is_sea
 pressurefed_gas_is_auto_empty(tank::PressureFedTankBehavFrag) = !gas_is_sealed(tank) && tank.gas_state.charge <= 0.0
 
 """True when gas pressure has reached or exceeded the maximum (not manually sealed).
-This condition disables both the gas source and the liquid side via cross-side coupling."""
+This condition disables both sides unless their reactivation probes approve pressure relief."""
 pressurefed_gas_is_auto_full_pressure(tank::PressureFedTankBehavFrag) = !gas_is_sealed(tank) && compute_gas_pressure(tank) >= tank.max_gas_pressure
 
 "True when the liquid voltage source should be active."
 function pressurefed_liquid_source_active(tank::PressureFedTankBehavFrag)
     liquid_is_sealed(tank) && return false
     (0.0 < tank.liquid_state.charge < tank.max_liquid_charge || liquid_is_force_reactivated(tank)) || return false
-    pressurefed_gas_is_auto_full_pressure(tank) && return false
+    pressurefed_gas_is_auto_full_pressure(tank) && !liquid_is_force_reactivated(tank) && return false
     return true
 end
 
@@ -493,7 +493,7 @@ end
 function pressurefed_gas_source_active(tank::PressureFedTankBehavFrag)
     gas_is_sealed(tank) && return false
     (tank.gas_state.charge > 0.0 || gas_is_force_reactivated(tank)) || return false
-    pressurefed_gas_is_auto_full_pressure(tank) && return false
+    pressurefed_gas_is_auto_full_pressure(tank) && !gas_is_force_reactivated(tank) && return false
     return true
 end
 
@@ -1124,6 +1124,9 @@ function pressurefed_probe_sides(tank::PressureFedTankBehavFrag)
 
     probe_liquid = (liq_auto_empty || liq_auto_full || gas_auto_full_pressure) && !liquid_is_sealed(tank)
     probe_gas = (gas_auto_empty || gas_auto_full_pressure) && !gas_is_sealed(tank)
+
+    # An empty, pressure-limited tank can neither discharge liquid nor accept more
+    probe_liquid &= !(liq_auto_empty && gas_auto_full_pressure)
 
     return (; probe_liquid, probe_gas, gas_auto_full_pressure, liq_auto_empty, liq_auto_full, gas_auto_empty)
 end

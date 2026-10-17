@@ -559,12 +559,17 @@ end
     @test !probe_ge.rel_elements[3].active  # resistor inactive when liquid not probed
 
     # Gas overpressure: both sides probed
-    overpressure = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 22.0)
+    overpressure = make_pressurefed_tank(liquid_charge = 20.0, gas_charge = 12.0)
     probe_op = get_reactivation_probe(overpressure)
     @test probe_op isa ReactivationProbe
     @test probe_op.rel_elements[1].active   # liquid probed
     @test probe_op.rel_elements[2].active   # gas probed
     @test probe_op.rel_elements[3].active   # resistor follows liquid
+
+    # Empty liquid cannot flow in either direction while gas pressure is at its limit
+    empty_overpressure = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 22.0)
+    probe_empty_op = get_reactivation_probe(empty_overpressure)
+    @test map(e -> e.active, probe_empty_op.rel_elements) == (false, true, false)
 
     # Manually sealed sides: no probe for sealed side
     liq_empty_gas_sealed = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 4.0)
@@ -662,7 +667,7 @@ end
             ("both neutral", 0.0, 0.0, PROBE_NEUTRAL, false, false),
         )
         @testset "$label" begin
-            comp = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 22.0)
+            comp = make_pressurefed_tank(liquid_charge = 20.0, gas_charge = 12.0)
             probe = get_reactivation_probe(comp)
             @test probe.rel_elements[1].active
             @test probe.rel_elements[2].active
@@ -676,6 +681,111 @@ end
             comp = commit_reactivation_probe(comp; tile = TEST_TILE, derivedmapstate = dm, mna_state = mna)
             @test liquid_is_force_reactivated(comp.tank) === force_liquid
             @test gas_is_force_reactivated(comp.tank) === force_gas
+            @test map(e -> e.active, produce_rel_elements(comp)) == (force_liquid, force_gas, force_liquid)
+        end
+    end
+end
+
+@testset "Pressure-fed tank: empty liquid stays disconnected during pressure relief" begin
+    for liquid_current in (-5.0, 5.0)
+        comp = make_pressurefed_tank(liquid_charge = 0.0, gas_charge = 22.0)
+        derived = DerivedMapState()
+        mna = MNA_State()
+        for (index, current) in (1 => liquid_current, 2 => -5.0)
+            source = produce_rel_elements(comp.tank)[index]
+            source = @set source.active = true
+            element = map_element(source, TEST_TILE, index, HexFrame.Q_POS)
+            push!(derived.filteredelements, element)
+            mna.vsource_currents[element.id] = current
+        end
+        @test classify_reactivation_probe(comp; tile = TEST_TILE, derivedmapstate = derived, mna_state = mna) === PROBE_USEFUL
+        committed = commit_reactivation_probe(comp; tile = TEST_TILE, derivedmapstate = derived, mna_state = mna)
+        @test !liquid_is_force_reactivated(committed.tank)
+        @test gas_is_force_reactivated(committed.tank)
+        @test map(e -> e.active, produce_rel_elements(committed)) == (false, true, false)
+    end
+end
+
+@testset "Pressure-fed tank: approved pressure relief reaches the live solve" begin
+    for gas_charge in (2.0, 2.1), relief_side in (:liquid, :gas, :both)
+        @testset "gas charge $gas_charge, relief $relief_side" begin
+            comp = make_pressurefed_tank(liquid_charge = 40.0, gas_charge = gas_charge)
+            placed = PlacedComponent(comp, HexFrame.Q_POS, :primary)
+            @test !any(e -> e.active, produce_rel_elements(comp))
+
+            # Grounded outlets let the real solver measure useful relief on either side
+            outlets = AbsoluteElement[]
+            if relief_side in (:liquid, :both)
+                push!(
+                    outlets, map_element(
+                        RelativeElement(
+                            RelativeElementConnections(HexFrame.NODE_Q_NEG, HexFrame.GROUND),
+                            1.0, HexElements.CONST_RESISTOR
+                        ), TEST_TILE, 4, HexFrame.Q_POS
+                    )
+                )
+            end
+            if relief_side in (:gas, :both)
+                push!(
+                    outlets, map_element(
+                        RelativeElement(
+                            RelativeElementConnections(HexFrame.NODE_Q_POS, HexFrame.GROUND),
+                            1.0, HexElements.CONST_RESISTOR
+                        ), TEST_TILE, 5, HexFrame.Q_POS
+                    )
+                )
+            end
+
+            probe = get_reactivation_probe(placed)
+            derived = DerivedMapState()
+            append!(derived.filteredelements, [map_element(e, TEST_TILE, i, HexFrame.Q_POS) for (i, e) in pairs(probe.rel_elements) if e.active])
+            append!(derived.filteredelements, outlets)
+            scratchpad = CalculatorScratchpad()
+            prune!(derived.filteredelements, scratchpad)
+            ground_search!(derived.filteredelements, scratchpad)
+            list_nodes!(derived.filterednodes, derived.filteredelements)
+            mna = MNA_State()
+            MNA_indexnodes!(mna, derived)
+            MNA_splitelements!(mna, derived)
+            MNA_updateA!(mna)
+            MNA_getZ!(mna)
+            MNA_solve!(mna)
+
+            @test classify_reactivation_probe(placed; tile = TEST_TILE, derivedmapstate = derived, mna_state = mna) === PROBE_USEFUL
+            committed = commit_reactivation_probe(placed; tile = TEST_TILE, derivedmapstate = derived, mna_state = mna)
+            liquid_relief = relief_side in (:liquid, :both)
+            gas_relief = relief_side in (:gas, :both)
+            @test map(e -> e.active, produce_rel_elements(committed)) == (liquid_relief, gas_relief, liquid_relief)
+
+            # Rebuild from committed behaviour, rather than retaining the speculative sources
+            empty!(derived.filteredelements)
+            append!(derived.filteredelements, filter(e -> e.active, produce_abs_elements(committed, TEST_TILE)))
+            append!(derived.filteredelements, outlets)
+            list_nodes!(derived.filterednodes, derived.filteredelements)
+            MNA_indexnodes!(mna, derived)
+            MNA_splitelements!(mna, derived)
+            MNA_updateA!(mna)
+            MNA_getZ!(mna)
+            MNA_solve!(mna)
+            if liquid_relief
+                @test mna.vsource_currents[ElementID(TEST_TILE, 1)] ≈ -(25.0 * gas_charge + 0.5) * 5.0 / 6.0
+            end
+            if gas_relief
+                @test mna.vsource_currents[ElementID(TEST_TILE, 2)] ≈ -25.0 * gas_charge
+            end
+
+            updated = update_flowbehav(committed; tile = TEST_TILE, derivedmapstate = derived, mna_state = mna)
+            @test (updated.component.tank.liquid_state.charge < 40.0) === liquid_relief
+            @test (updated.component.tank.gas_state.charge < gas_charge) === gas_relief
+            @test !liquid_is_force_reactivated(updated.component.tank)
+            @test !gas_is_force_reactivated(updated.component.tank)
+
+            # Even an approved side remains disconnected if the player seals it
+            sealed_liquid = @set committed.component.tank.liquid_sealstate = seal(committed.component.tank.liquid_sealstate)
+            sealed_gas = @set committed.component.tank.gas_sealstate = seal(committed.component.tank.gas_sealstate)
+            @test !produce_rel_elements(sealed_liquid)[1].active
+            @test !produce_rel_elements(sealed_liquid)[3].active
+            @test !produce_rel_elements(sealed_gas)[2].active
         end
     end
 end
