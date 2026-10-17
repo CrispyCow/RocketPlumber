@@ -363,7 +363,7 @@ function poll_scrollwheel_zoom!(
     yoff == 0.0 && return nothing
 
     # Don't zoom when mouse is over an ImGui window
-    if !isnothing(cimgui_io) && unsafe_load(cimgui_io.WantCaptureMouse)
+    if !inputstate.ui_hidden && !isnothing(cimgui_io) && unsafe_load(cimgui_io.WantCaptureMouse)
         return nothing
     end
 
@@ -437,6 +437,11 @@ end
 
 "Poll per-frame input in dependency order, respecting CImGui keyboard and mouse capture."
 function handle_inputs!(inputstate::InputState, viewstate::ViewState, shared_state::FlowCalculatorSharedState, window::GLFW.Window, cimgui_io::Union{Nothing, Ptr{CImGui.lib.ImGuiIO}} = nothing)
+    # UI visibility is independent of keyboard capture, including text-field focus
+    if get_inrising!(inputstate, GLFW.KEY_F10, window)
+        inputstate.ui_hidden = !inputstate.ui_hidden
+    end
+
     # View input uses the dimensions and cursor position from this frame
     poll_windowstate!(viewstate, window)
     poll_cursorpos!(inputstate, viewstate, window)
@@ -445,7 +450,7 @@ function handle_inputs!(inputstate::InputState, viewstate::ViewState, shared_sta
     poll_scrollwheel_zoom!(inputstate, viewstate, cimgui_io)
 
     # Action/mode/pause/exit keys — only when not typing in UI
-    if isnothing(cimgui_io) || !unsafe_load(cimgui_io.WantCaptureKeyboard)
+    if inputstate.ui_hidden || isnothing(cimgui_io) || !unsafe_load(cimgui_io.WantCaptureKeyboard)
         poll_keys!(inputstate, shared_state, window)
     end
 

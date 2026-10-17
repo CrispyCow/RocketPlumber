@@ -359,6 +359,7 @@ const PlacementState = Union{
 
     # Game and interface controls
     sim_speed::SimSpeed = SIM_1X
+    ui_hidden::Bool = false
     escape_menu_active::Bool = false
     editor_mode::Bool = false
     dev_utils_menu_active::Bool = false

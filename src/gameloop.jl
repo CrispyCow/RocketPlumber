@@ -178,7 +178,7 @@ function user_handler!(
 
     cimgui_io = CImGui.GetIO()
     handle_inputs!(inputstate, viewstate, flowcalc_ipc.shared_state, window, cimgui_io)
-    mouse_captured = unsafe_load(cimgui_io.WantCaptureMouse)
+    mouse_captured = !inputstate.ui_hidden && unsafe_load(cimgui_io.WantCaptureMouse)
 
     # Dispatch interaction mode
     state = placement_state(inputstate)
@@ -226,6 +226,8 @@ function ui_rendering!(
     set_max_reachable_bounds!(flowcalc_ipc.shared_state, max_view_bounds)
 
     ui_renderwrap() do
+        inputstate.ui_hidden && return nothing
+
         if !isnothing(learning_state) && is_sandbox_learning(learning_state)
             active_entry = get_active_entry(learning_state)
             if !isnothing(active_entry)
