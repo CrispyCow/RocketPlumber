@@ -125,6 +125,8 @@ end
 
     @testset "InputState defaults" begin
         is = make_test_inputstate()
+        @test is.pan_smoothing_seconds == 0.02f0
+        @test iszero(is.pan_velocity)
         @test placement_state(is) isa PlacementReadyState
         @test selection_state(is) isa SelectionEmptyState
         @test isempty(selected_component_coords(is))

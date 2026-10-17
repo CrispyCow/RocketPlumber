@@ -10,7 +10,7 @@ using FlowMap
 # ===============================================================
 
 "Poll continuous movement and zoom keys into the view state."
-function poll_keys!(viewstate::ViewState, window::GLFW.Window)
+function poll_keys!(viewstate::ViewState, inputstate::InputState, window::GLFW.Window)
     # Establish the frame-time baseline
     if viewstate.last_update_time == 0.0
         viewstate.last_update_time = time()
@@ -18,26 +18,48 @@ function poll_keys!(viewstate::ViewState, window::GLFW.Window)
     end
 
     # Frame timing and input rates
-    pan_rate_per_sec = 7.0f0
-    zoom_rate_per_sec = 2.5f0
+    pan_rate_per_sec = 7.0f0 * inputstate.pan_speed_multiplier
+    zoom_rate_per_sec = 2.5f0 * inputstate.zoom_speed_multiplier
     current_time = time()
-    delta_time = current_time - viewstate.last_update_time
+    delta_time = max(0.0, current_time - viewstate.last_update_time)
     viewstate.last_update_time = current_time
 
-    # Frame-rate-independent movement scales
-    pan_amount = pan_rate_per_sec * delta_time / viewstate.view_zoom
+    # Mouse dragging takes immediate control without retaining keyboard velocity
+    if get_instate(GLFW.MOUSE_BUTTON_MIDDLE, window)
+        inputstate.pan_velocity = SVector{2, Float32}(0.0f0, 0.0f0)
+    else
+        target_velocity = pan_rate_per_sec * SVector{2, Float32}(
+            get_instate(GLFW.KEY_A, window) - get_instate(GLFW.KEY_D, window),
+            get_instate(GLFW.KEY_S, window) - get_instate(GLFW.KEY_W, window),
+        )
+        smoothing_seconds = inputstate.pan_smoothing_seconds
+        if smoothing_seconds > 0.0f0
+            # Integrate the exponential response exactly over the frame
+            old_velocity = inputstate.pan_velocity
+            alpha = -expm1(-delta_time / smoothing_seconds)
+            inputstate.pan_velocity = old_velocity + alpha * (target_velocity - old_velocity)
+            pan_displacement = target_velocity * delta_time + (old_velocity - target_velocity) * (smoothing_seconds * alpha)
+        else
+            inputstate.pan_velocity = target_velocity
+            pan_displacement = target_velocity * delta_time
+        end
+        viewstate.view_x += pan_displacement[1] / viewstate.view_zoom
+        viewstate.view_y += pan_displacement[2] / viewstate.view_zoom
+    end
+
+    # Preserve exponential keyboard zoom
     zoom_factor_in = exp(zoom_rate_per_sec * delta_time)
     zoom_factor_out = exp(-zoom_rate_per_sec * delta_time)
-
-    # Apply pan and exponential zoom before enforcing view limits
-    get_instate(GLFW.KEY_A, window) && (viewstate.view_x += pan_amount)
-    get_instate(GLFW.KEY_D, window) && (viewstate.view_x -= pan_amount)
-    get_instate(GLFW.KEY_S, window) && (viewstate.view_y += pan_amount)
-    get_instate(GLFW.KEY_W, window) && (viewstate.view_y -= pan_amount)
     get_instate(GLFW.KEY_Q, window) && (viewstate.view_zoom *= zoom_factor_out)
     get_instate(GLFW.KEY_E, window) && (viewstate.view_zoom *= zoom_factor_in)
 
+    # Discard velocity on axes constrained by the existing view limits
+    unclamped_x, unclamped_y = viewstate.view_x, viewstate.view_y
     apply_view_limits!(viewstate)
+    inputstate.pan_velocity = SVector{2, Float32}(
+        viewstate.view_x == unclamped_x ? inputstate.pan_velocity[1] : 0.0f0,
+        viewstate.view_y == unclamped_y ? inputstate.pan_velocity[2] : 0.0f0,
+    )
 
     return nothing
 end
@@ -445,7 +467,7 @@ function handle_inputs!(inputstate::InputState, viewstate::ViewState, shared_sta
     # View input uses the dimensions and cursor position from this frame
     poll_windowstate!(viewstate, window)
     poll_cursorpos!(inputstate, viewstate, window)
-    poll_keys!(viewstate, window)
+    poll_keys!(viewstate, inputstate, window)
     poll_middleclick_pan!(viewstate, inputstate, window)
     poll_scrollwheel_zoom!(inputstate, viewstate, cimgui_io)
 

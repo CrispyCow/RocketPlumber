@@ -357,6 +357,12 @@ const PlacementState = Union{
     last_keystates::Dict{GLFW.Key, Bool} = Dict{GLFW.Key, Bool}()
     last_mousestates::Dict{GLFW.MouseButton, Bool} = Dict{GLFW.MouseButton, Bool}()
 
+    # Keyboard camera controls
+    pan_speed_multiplier::Float32 = 1.0f0
+    zoom_speed_multiplier::Float32 = 1.0f0
+    pan_smoothing_seconds::Float32 = 0.02f0
+    pan_velocity::SVector{2, Float32} = SVector{2, Float32}(0.0f0, 0.0f0)  # World units per second before zoom compensation
+
     # Game and interface controls
     sim_speed::SimSpeed = SIM_1X
     ui_hidden::Bool = false

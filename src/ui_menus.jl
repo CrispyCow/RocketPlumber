@@ -268,6 +268,27 @@ function ui_dev_utils_menu_render!(
         !inputstate.editor_mode && CImGui.EndDisabled()
     end
 
+    if CImGui.CollapsingHeader("Camera")
+        pan_speed_multiplier = inputstate.pan_speed_multiplier
+        @cref CImGui.SliderFloat("Pan Speed", &pan_speed_multiplier, 0.02f0, 1.0f0, "%.2f×")
+        inputstate.pan_speed_multiplier = pan_speed_multiplier
+
+        zoom_speed_multiplier = inputstate.zoom_speed_multiplier
+        @cref CImGui.SliderFloat("Zoom Speed", &zoom_speed_multiplier, 0.02f0, 1.0f0, "%.2f×")
+        inputstate.zoom_speed_multiplier = zoom_speed_multiplier
+
+        pan_smoothing_ms = inputstate.pan_smoothing_seconds * 1000.0f0
+        @cref CImGui.SliderFloat("Pan Smoothing", &pan_smoothing_ms, 0.0f0, 300.0f0, "%.0f ms")
+        inputstate.pan_smoothing_seconds = pan_smoothing_ms / 1000.0f0
+
+        if CImGui.Button("Reset Camera", (button_width, button_height))
+            inputstate.pan_speed_multiplier = 1.0f0
+            inputstate.zoom_speed_multiplier = 1.0f0
+            inputstate.pan_smoothing_seconds = 0.02f0
+            inputstate.pan_velocity = SVector{2, Float32}(0.0f0, 0.0f0)
+        end
+    end
+
     if CImGui.CollapsingHeader("Playthrough Statistics")
         gamemap = snapshot.gamemap
         game_time = get_time_years(gamemap)
