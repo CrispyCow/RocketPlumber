@@ -86,6 +86,8 @@ function ui_pause_menu_render!(
     # Save map button (hidden in sandbox mode)
     if !is_sandbox
         save_label = escape_active ? "Save Escape Attempt" : "Save Map"
+        save_disabled = haskey(inputstate.gui_inputs, :timelapse_original_map)
+        save_disabled && CImGui.BeginDisabled()
         if CImGui.Button(save_label, (button_width, button_height))
             save_path = map_save_dialog(flowcalc_ipc.console_push)
             if !isnothing(save_path)
@@ -97,6 +99,10 @@ function ui_pause_menu_render!(
                     flowcalc_ipc.console_push("Saving failed. See the terminal log for details.")
                 end
             end
+        end
+        save_disabled && CImGui.EndDisabled()
+        if save_disabled && CImGui.IsItemHovered(CImGui.ImGuiHoveredFlags_AllowWhenDisabled)
+            CImGui.SetTooltip("Saving is disabled while browsing time-lapse snapshots. Cancel browsing or start a game from a snapshot to save.")
         end
         CImGui.Dummy((0.0, 10.0))
         CImGui.SetCursorPosX((box_w - button_width) / 2)
@@ -145,6 +151,14 @@ end
 function enqueue_map_override!(flowcalc_ipc::FlowCalculatorIPC, gamemap::GameMap)
     cmd = create_map_override_command(flowcalc_ipc.command_queue, gamemap)
     try_enqueue_command!(flowcalc_ipc.command_queue, cmd)
+    return nothing
+end
+
+"Preview an independently owned historical map through the ordinary paused override path."
+function preview_timelapse_frame!(flowcalc_ipc::FlowCalculatorIPC, recorder::TimelapseRecorder, frame::Int)
+    @atomic flowcalc_ipc.shared_state.is_paused = true
+    set_timelapse_enabled!(recorder, false)
+    enqueue_map_override!(flowcalc_ipc, recorder.history.frames[frame])
     return nothing
 end
 
@@ -311,13 +325,78 @@ function ui_dev_utils_menu_render!(
         if is_sandbox_learning(snapshot.gamemap)
             CImGui.TextWrapped("Parent-map time-lapse recording is suspended during tutorials.")
         else
-            CImGui.Text("Frames: $(timelapse_frame_count(timelapse_recorder))")
+            browsing = haskey(inputstate.gui_inputs, :timelapse_original_map)
+            frame_count = timelapse_frame_count(timelapse_recorder)
+            CImGui.Text("Frames: $frame_count")
             recording_enabled = timelapse_recorder.enabled
+            CImGui.BeginDisabled(browsing)
             @cref CImGui.Checkbox("Record Time Lapse", &recording_enabled)
+            CImGui.EndDisabled()
             if recording_enabled != timelapse_recorder.enabled
                 set_timelapse_enabled!(timelapse_recorder, recording_enabled)
             end
             recording_enabled && CImGui.TextWrapped("Capturing every $(Int(TIMELAPSE_CAPTURE_INTERVAL_SECONDS)) seconds.")
+
+            if !browsing
+                CImGui.SeparatorText("Snapshot Browser")
+                CImGui.Spacing()
+                CImGui.TextWrapped("Inspect earlier stages of this playthrough.")
+                CImGui.Spacing()
+                CImGui.TextWrapped("Browsing pauses the game and temporarily replaces the current map. Cancel restores it.")
+                CImGui.Spacing()
+                CImGui.BeginDisabled(frame_count == 0)
+                if CImGui.Button("Browse Snapshots", (button_width, button_height))
+                    inputstate.gui_inputs[:timelapse_original_map] = deepcopy(snapshot.gamemap)
+                    inputstate.gui_inputs[:timelapse_frame] = frame_count
+                    preview_timelapse_frame!(flowcalc_ipc, timelapse_recorder, frame_count)
+                    empty!(viewstate.background_particles.particles)
+                    empty!(viewstate.foreground_particles.particles)
+                end
+                CImGui.EndDisabled()
+            else
+                CImGui.Separator()
+                selected_frame = inputstate.gui_inputs[:timelapse_frame]::Int
+                slider_frame = Cint(selected_frame)
+                @cref CImGui.SliderInt("Snapshot", &slider_frame, 1, frame_count)
+                # Include clicks on the initial value so single-frame histories can be previewed
+                apply_frame = CImGui.IsItemDeactivated()
+                selected_frame = Int(slider_frame)
+
+                CImGui.BeginDisabled(selected_frame == 1)
+                if CImGui.Button("Previous")
+                    selected_frame -= 1
+                    apply_frame = true
+                end
+                CImGui.EndDisabled()
+                CImGui.SameLine()
+                CImGui.BeginDisabled(selected_frame == frame_count)
+                if CImGui.Button("Next")
+                    selected_frame += 1
+                    apply_frame = true
+                end
+                CImGui.EndDisabled()
+                CImGui.Text("Snapshot: $selected_frame / $frame_count")
+                inputstate.gui_inputs[:timelapse_frame] = selected_frame
+
+                if apply_frame
+                    preview_timelapse_frame!(flowcalc_ipc, timelapse_recorder, selected_frame)
+                    empty!(viewstate.background_particles.particles)
+                    empty!(viewstate.foreground_particles.particles)
+                end
+                if CImGui.Button("Start Game From Snapshot")
+                    inputstate.gui_inputs[:timelapse_restart_frame] = selected_frame
+                    inputstate.exit_reason = EXIT_RESTART
+                end
+                if CImGui.Button("Cancel Browsing")
+                    original_map = inputstate.gui_inputs[:timelapse_original_map]::GameMap
+                    enqueue_map_override!(flowcalc_ipc, original_map)
+                    empty!(viewstate.background_particles.particles)
+                    empty!(viewstate.foreground_particles.particles)
+                    delete!(inputstate.gui_inputs, :timelapse_original_map)
+                    delete!(inputstate.gui_inputs, :timelapse_frame)
+                    @atomic flowcalc_ipc.shared_state.is_paused = false
+                end
+            end
         end
     end
 

@@ -419,7 +419,7 @@ function enter_gameloop(
     timelapse_recorder = TimelapseRecorder(loaded_bundle.timelapse)
     session_timing = PlaySessionTiming(get_recorded_play_time_seconds(loaded_gamemap))
     completed_gamemap::Union{Nothing, GameMap} = nothing
-    restart_gamemap::Union{Nothing, GameMap} = nothing
+    restart_bundle::Union{Nothing, GameMapBundle} = nothing
     learning_state = build_learning_runtime_state(loaded_gamemap; initial_active_tutorial_id)
     initial_snapshot::FlowCalculatorSnapshot = FlowCalculatorSnapshot(
         gamemap = loaded_gamemap,
@@ -499,12 +499,20 @@ function enter_gameloop(
             escape_save_state = escape_save_state,
         )
 
-        # Resolve escape transitions
+        # Resolve session transitions
         if g_inputstate.exit_reason == EXIT_RESTART
-            restart_gamemap = capture_galaxy_escape_restart_gamemap(
-                g_snapshot.gamemap, session_timing, learning_state,
-            )
-            if !isnothing(restart_gamemap)
+            restart_frame = get(g_inputstate.gui_inputs, :timelapse_restart_frame, nothing)
+            if !isnothing(restart_frame)
+                restart_bundle = GameMapBundle(deepcopy(timelapse_recorder.history.frames[restart_frame]))
+            else
+                restart_gamemap = capture_galaxy_escape_restart_gamemap(
+                    g_snapshot.gamemap, session_timing, learning_state,
+                )
+                if !isnothing(restart_gamemap)
+                    restart_bundle = GameMapBundle(restart_gamemap, snapshot_timelapse_history(timelapse_recorder))
+                end
+            end
+            if !isnothing(restart_bundle)
                 @atomic :monotonic g_flowcalc_ipc.shared_state.should_exit = true
             else
                 g_inputstate.exit_reason = nothing
@@ -535,14 +543,14 @@ function enter_gameloop(
         GLFW.PollEvents()
         poll_window_mode!(window_mode, window)
 
-        if isnothing(completed_gamemap) && isnothing(restart_gamemap)
+        if isnothing(completed_gamemap) && isnothing(restart_bundle)
             @timeit render_loop_timer "User Input Handling" user_handler!(g_flowcalc_ipc, g_inputstate, g_viewstate, g_snapshot, window)
         else
             poll_windowstate!(g_viewstate, window)
         end
 
         # Capture time-lapse history during ordinary play
-        if isnothing(completed_gamemap) && isnothing(restart_gamemap)
+        if isnothing(completed_gamemap) && isnothing(restart_bundle)
             capture_suppressed = is_timelapse_capture_suppressed(
                 g_inputstate, g_snapshot.gamemap;
                 window_focused = GLFW.GetWindowAttrib(window, GLFW.FOCUSED) != 0,
@@ -561,8 +569,8 @@ function enter_gameloop(
 
     # Materialise the session result
     result_snapshot = g_flowcalc_ipc.get_snapshot()
-    if !isnothing(restart_gamemap)
-        saved_bundle = GameMapBundle(restart_gamemap, snapshot_timelapse_history(timelapse_recorder))
+    if !isnothing(restart_bundle)
+        saved_bundle = restart_bundle
     elseif isnothing(completed_gamemap)
         if timelapse_recorder.enabled && !is_galaxy_escape_active(result_snapshot.gamemap)
             capture_timelapse_frame!(timelapse_recorder, result_snapshot.gamemap; snapshot_timestamp = result_snapshot.timestamp)
