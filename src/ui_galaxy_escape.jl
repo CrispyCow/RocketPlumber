@@ -34,7 +34,7 @@ const GALAXY_ESCAPE_VICTORY_FLAVOUR_TEXT =
 end
 
 "Choose a paired destination, save the checkpoint, and queue capture for a fresh victory frame."
-function request_escape_save!(state::EscapeSaveState, recorder::TimelapseRecorder, gamemap::GameMap, console_push::Function; dialog::Function = save_file)
+function request_escape_save!(state::EscapeSaveState, recorder::TimelapseRecorder, gamemap::GameMap, console_push::Function; dialog::Function = windowed_save_file)
     isnothing(state.pending_path) || return nothing
     save_path = map_save_dialog(console_push; dialog)
     isnothing(save_path) && return nothing

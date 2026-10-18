@@ -210,7 +210,6 @@ function startgl_minimal(width, height)
     end
 
     GLFW.WindowHint(GLFW.SAMPLES, 0) # disable MSAA
-    GLFW.WindowHint(GLFW.AUTO_ICONIFY, false) # prevent window minimising on focus loss
 
     @info "Starting GLFW (minimal)..."
     @info GLFW.GetVersionString()

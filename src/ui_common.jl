@@ -201,6 +201,47 @@ end
 
 #= ---------- Map File Dialogs ---------- =#
 
+"Run a native file dialog temporarily windowed, restoring fullscreen even if it fails."
+function with_windowed_file_dialog(f::Function)
+    window = GLFW.GetCurrentContext()
+    window.handle == C_NULL && return f()
+    monitor = GLFW.GetWindowMonitor(window)
+    monitor.handle == C_NULL && return f()
+
+    fullscreen_size = GLFW.GetWindowSize(window)
+    mode = GLFW.GetVideoMode(monitor)
+
+    # Leave room for decorations on smaller displays
+    width = min(1280, max(1, fullscreen_size.width - 64))
+    height = min(720, max(1, fullscreen_size.height - 64))
+
+    x, y = 0, 0
+    if GLFW.GetPlatform() != GLFW.PLATFORM_WAYLAND
+        position = GLFW.GetWindowPos(window)
+        x = position.x + (fullscreen_size.width - width) ÷ 2
+        y = position.y + (fullscreen_size.height - height) ÷ 2
+    end
+
+    try
+        # The existing window retains its normal windowed decorations
+        GLFW.SetWindowMonitor(window, GLFW.Monitor(C_NULL), x, y, width, height, GLFW.DONT_CARE)
+        return f()
+    finally
+        # Suppress auto-iconify while processing fullscreen restoration events
+        auto_iconify = GLFW.GetWindowAttrib(window, GLFW.AUTO_ICONIFY)
+        GLFW.SetWindowAttrib(window, GLFW.AUTO_ICONIFY, false)
+        try
+            GLFW.SetWindowMonitor(window, monitor, 0, 0, fullscreen_size.width, fullscreen_size.height, mode.refreshrate)
+            GLFW.PollEvents()
+        finally
+            GLFW.SetWindowAttrib(window, GLFW.AUTO_ICONIFY, auto_iconify != 0)
+        end
+    end
+end
+
+windowed_pick_file(args...; kwargs...) = with_windowed_file_dialog(() -> pick_file(args...; kwargs...))
+windowed_save_file(args...; kwargs...) = with_windowed_file_dialog(() -> save_file(args...; kwargs...))
+
 "Normalise missing or .jld map extensions without overwriting a destination the dialog did not confirm."
 function normalise_map_save_path(path::String)::String
     stem, extension = splitext(path)
@@ -213,7 +254,7 @@ function normalise_map_save_path(path::String)::String
 end
 
 "Choose a map save path and report dialog or filename failures through the game console."
-function map_save_dialog(console_push::Function; dialog::Function = save_file)::Union{Nothing, String}
+function map_save_dialog(console_push::Function; dialog::Function = windowed_save_file)::Union{Nothing, String}
     try
         path = dialog(Path(maps_dir(; create = true)); filterlist = "jld2")
         isnothing(path) && return nothing
@@ -227,6 +268,6 @@ function map_save_dialog(console_push::Function; dialog::Function = save_file)::
 end
 
 "Choose a map to load, opening the dialog in an existing user maps directory."
-function map_load_dialog(; dialog::Function = pick_file)
+function map_load_dialog(; dialog::Function = windowed_pick_file)
     return dialog(Path(maps_dir(; create = true)); filterlist = "jld2")
 end
