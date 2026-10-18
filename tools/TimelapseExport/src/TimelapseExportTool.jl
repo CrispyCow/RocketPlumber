@@ -9,9 +9,10 @@ using HexFrame
 using HexComponentsAPI
 
 export main, parse_cli, print_help
-export ExportOptions, WorldRect, CameraViewport, TimelineEntry, TimelinePlan, FrameSchedule
-export assemble_timeline, build_camera_schedule, build_frame_schedule
+export ExportOptions, WorldRect, CameraViewport, SmoothCameraPlan, TimelineEntry, TimelinePlan, FrameSchedule
+export assemble_timeline, build_camera_schedule, build_smooth_camera_plan, build_frame_schedule
 export tile_area_bounds, padded_bounds, aspect_expand, expand_camera_rect, camera_viewport, animation_tick
+export evaluate_camera, camera_timeline_position
 export ToolError, UsageError, ValidationError, RenderToolError, OutputError
 
 const DEFAULT_REPOSITORY_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
@@ -72,6 +73,7 @@ end
 function _run(options::ExportOptions)::Int
     try
         validate_paths!(options)
+        options.inspect && get!(ENV, "JULIA_GLFW_PLATFORM", "null")
         load_persistence!()
         return Base.invokelatest(_run_with_persistence, options)
     catch error

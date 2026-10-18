@@ -331,11 +331,14 @@ function ui_dev_utils_menu_render!(
             recording_enabled = timelapse_recorder.enabled
             CImGui.BeginDisabled(browsing)
             @cref CImGui.Checkbox("Record Time Lapse", &recording_enabled)
+            capture_interval = Cint(timelapse_recorder.capture_interval_seconds)
+            if @cref CImGui.SliderInt("Capture Interval", &capture_interval, 10, 300, "%d s")
+                timelapse_recorder.capture_interval_seconds = Float64(capture_interval)
+            end
             CImGui.EndDisabled()
             if recording_enabled != timelapse_recorder.enabled
                 set_timelapse_enabled!(timelapse_recorder, recording_enabled)
             end
-            recording_enabled && CImGui.TextWrapped("Capturing every $(Int(TIMELAPSE_CAPTURE_INTERVAL_SECONDS)) seconds.")
 
             if !browsing
                 CImGui.SeparatorText("Snapshot Browser")

@@ -26,7 +26,7 @@ entry point remains available for direct use:
 julia --project=. tools/TimelapseExport/export.jl --help
 julia --project=. tools/TimelapseExport/export.jl maps/save.jld2 --inspect
 julia --project=. tools/TimelapseExport/export.jl maps/save.jld2 \
-  --output recordings/save.mp4 --camera expand
+  --output recordings/save.mp4 --camera smooth
 ```
 
 The tool uses the root project because it depends on the game packages,
@@ -42,8 +42,28 @@ starting FFmpeg, or creating an output file.
 ## Cameras and timeline
 
 `expand` is the default camera. It fits the first retained keyframe and grows
-outwards when later stored surface-tile positions require more space. `fixed`
-uses one padded union of all retained surface tiles. `manual` requires
+outwards when later stored surface-tile positions require more space.
+`fit` independently centres and zooms each retained keyframe to fit all ships
+present, so it can zoom back in when ships disappear or the layout shrinks.
+`smooth` plans one continuous camera path from the complete retained history.
+It uses a wide 25-snapshot low-pass window, anticipates approaching growth, and
+applies an even slower scale recovery after contraction. A shape-preserving
+cubic trajectory carries camera velocity across keyframe boundaries and is
+sampled by the existing output frames, without adding frames or interpolating
+game state.
+Changing `--keyframe-seconds` therefore changes playback speed rather than the
+underlying camera path. Automatic modes apply `--padding` and `--min-padding`
+and preserve the output aspect ratio.
+
+Smooth transition cameras contain the padded geometry on both sides of each
+snapshot boundary. Every sampled camera is also checked against the current
+snapshot's padded bounds, preventing smoothing lag from clipping new geometry.
+The start hold keeps the camera stationary. In smooth mode, up to the first
+second (and at most half) of the end hold settles from the filtered construction
+camera to a tight padded fit of the final ship; the remaining end hold is
+stationary. Other camera modes keep their entire end hold stationary.
+
+`fixed` uses one padded union of all retained surface tiles. `manual` requires
 `--viewport XMIN,YMIN,XMAX,YMAX` and aspect-expands that minimum rectangle.
 
 Automatic camera bounds use stored base tile coordinates only. Runtime docking

@@ -297,10 +297,10 @@ function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputSta
 
     # Main report panel
     panel_width = clamp(winsize.width - 32.0, 1.0, 920.0)
-    panel_height = clamp(winsize.height - 32.0, 1.0, 920.0)
+    panel_height = clamp(winsize.height - 32.0, 1.0, 1040.0)
     action_button_height = 45.0
     action_button_gap = 10.0
-    footer_height = min(260.0, panel_height * 0.5)
+    footer_height = min(310.0, panel_height * 0.5)
     footer_gap = 10.0
     report_height = max(1.0, panel_height - footer_height - footer_gap)
     panel_pos = ImVec2(
@@ -375,7 +375,7 @@ function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputSta
     if CImGui.BeginTable("##escape_footer_columns", 2, footer_flags)
         CImGui.TableSetupColumn("Share", CImGui.ImGuiTableColumnFlags_WidthStretch, 0.64f0)
         CImGui.TableSetupColumn("Actions", CImGui.ImGuiTableColumnFlags_WidthStretch, 0.36f0)
-        CImGui.TableNextRow(0, footer_content_height)
+        CImGui.TableNextRow(0, footer_content_height - 4.0) # Allow for the row's cell padding
         CImGui.TableSetColumnIndex(0)
         share_start_x = CImGui.GetCursorPosX()
         share_width = CImGui.GetContentRegionAvail().x
@@ -391,6 +391,7 @@ function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputSta
         CImGui.Spacing()
         CImGui.TextWrapped("Send me your screenshots, ship, and any feedback or stories from your journey!")
         CImGui.PopStyleColor()
+        CImGui.Spacing()
         CImGui.Dummy(ImVec2(0.0, 8.0))
 
         email = "feedback@rocketplumbergame.com"
@@ -420,6 +421,12 @@ function ui_galaxy_escape_victory_render!(gamemap::GameMap, inputstate::InputSta
         end
 
         CImGui.Spacing()
+        CImGui.Dummy(ImVec2(0.0, 8.0))
+        CImGui.PushStyleColor(CImGui.ImGuiCol_Text, GALAXY_ESCAPE_VICTORY_MUTED)
+        CImGui.TextWrapped("Tip: If your save is too large put it in a ZIP!")
+        CImGui.PopStyleColor()
+        CImGui.Spacing()
+        CImGui.Dummy(ImVec2(0.0, 8.0))
         CImGui.Separator()
         CImGui.Spacing()
         CImGui.TextColored(GALAXY_ESCAPE_VICTORY_MUTED, "Enjoyed Rocket Plumber?\nWant updates on new features and releases?")

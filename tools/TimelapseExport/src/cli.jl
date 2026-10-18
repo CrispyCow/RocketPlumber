@@ -232,7 +232,7 @@ function parse_cli(args::Vector{String} = ARGS; repository_root::AbstractString 
     isnothing(resolution) && (resolution = inferred_format == :mp4 ? (1920, 1080) : (960, 540))
     inferred_format == :mp4 && (resolution[1] % 2 == 0 && resolution[2] % 2 == 0 || throw(UsageError("MP4 width and height must be even")))
     include_current in (:auto, :always, :never) || throw(UsageError("--include-current must be auto, always, or never"))
-    camera in (:fixed, :expand, :manual) || throw(UsageError("--camera must be fixed, expand, or manual"))
+    camera in (:fixed, :expand, :fit, :smooth, :manual) || throw(UsageError("--camera must be fixed, expand, fit, smooth, or manual"))
     if camera == :manual
         isnothing(viewport) && throw(UsageError("--camera manual requires --viewport"))
         "padding" in seen && throw(UsageError("--padding is invalid with --camera manual"))
@@ -326,9 +326,9 @@ Options:
       --end-hold FLOAT           Finite and >=0; default 2.0
       --include-current POLICY   auto (default), always, or never; escape is omitted/rejected
       --no-dedupe                Keep adjacent render-equivalent frames
-      --camera MODE               expand (default), fixed, or manual
-      --padding FLOAT             Finite and >=0, fixed/expand only; default 0.12
-      --min-padding FLOAT         Finite and >=0, fixed/expand only; default 2.0
+      --camera MODE               expand (default), fit, smooth, fixed, or manual
+      --padding FLOAT             Finite and >=0, automatic cameras only; default 0.12
+      --min-padding FLOAT         Finite and >=0, automatic cameras only; default 2.0
       --viewport X1,Y1,X2,Y2      Four finite values with X1<X2,Y1<Y2; manual only
       --background RRGGBB         Six hexadecimal RGB digits; default 1D2951
       --force                     Replace an existing output after success
@@ -337,11 +337,15 @@ Options:
   -h, --help                     Show this help
 
 Camera bounds use stored base surface-tile coordinates and ignore ship render
-offsets. Automatic cameras never shrink. Manual camera rectangles are aspect-
-expanded without automatic padding. Keyframes receive equal holds; endpoint
-holds are added independently. Example:
+offsets. Expand never shrinks; fit independently centres and zooms each keyframe;
+smooth plans a continuous, filtered trajectory across the full timeline; and
+fixed fits the whole timeline. Manual camera rectangles are aspect-expanded
+without automatic padding.
+Keyframes receive equal holds; endpoint holds are added independently. Smooth
+uses up to the first second and half of the end hold to settle on a tight final
+fit, then remains stationary. Example:
   julia --project=. tools/TimelapseExport/export.jl maps/save.jld2 \\
-      --output recordings/save.mp4 --camera expand
+      --output recordings/save.mp4 --camera smooth
 
 Exit codes: 0 success/help/inspection; 2 usage; 3 input/save/timeline; 4
 assets/OpenGL/reconstruction/rendering; 5 output/FFmpeg; 130 interruption.

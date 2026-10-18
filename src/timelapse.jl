@@ -11,12 +11,13 @@ using FlowMap
 
 #= ---------- Recorder State ---------- =#
 
-const TIMELAPSE_CAPTURE_INTERVAL_SECONDS::Float64 = 30.0
+const DEFAULT_TIMELAPSE_CAPTURE_INTERVAL_SECONDS::Float64 = 60.0
 
 "Render-thread-owned runtime state for fixed-interval time-lapse capture."
 mutable struct TimelapseRecorder
     enabled::Bool
     history::Union{Nothing, TimelapseHistory}
+    capture_interval_seconds::Float64
     next_capture_time_seconds::Float64
     last_captured_snapshot_timestamp::Union{Nothing, Float64}
     last_captured_source::WeakRef  # Track identity without retaining a snapshot buffer
@@ -31,10 +32,10 @@ function TimelapseRecorder(
         now::Real = _monotonic_time_seconds(),
     )
     current_time = Float64(now)
-    enabled = !isnothing(history)
-    next_capture_time = enabled ? current_time + TIMELAPSE_CAPTURE_INTERVAL_SECONDS : Inf
+    capture_interval = DEFAULT_TIMELAPSE_CAPTURE_INTERVAL_SECONDS
+    next_capture_time = current_time + capture_interval
     last_source = isnothing(history) || isempty(history.frames) ? nothing : last(history.frames)
-    return TimelapseRecorder(enabled, history, next_capture_time, nothing, WeakRef(last_source))
+    return TimelapseRecorder(true, history, capture_interval, next_capture_time, nothing, WeakRef(last_source))
 end
 
 "Enable or disable recording without changing the retained history."
@@ -100,6 +101,6 @@ function maybe_capture_timelapse!(
     current_time < recorder.next_capture_time_seconds && return false
 
     captured = capture_timelapse_frame!(recorder, snapshot.gamemap; snapshot_timestamp = snapshot.timestamp)
-    captured && (recorder.next_capture_time_seconds = current_time + TIMELAPSE_CAPTURE_INTERVAL_SECONDS)
+    captured && (recorder.next_capture_time_seconds = current_time + recorder.capture_interval_seconds)
     return captured
 end

@@ -757,46 +757,61 @@ end
     gamemap = GameMap()
     snapshot = (gamemap = gamemap, timestamp = 1.0)
 
-    recorder = TimelapseRecorder(nothing; now = 0.0)
-    @test !recorder.enabled
+    recorder = TimelapseRecorder(; now = 0.0)
+    @test recorder.enabled
+    @test recorder.capture_interval_seconds == 60.0
+    @test recorder.next_capture_time_seconds == 60.0
     @test isnothing(recorder.history)
     @test timelapse_frame_count(recorder) == 0
-    @test !capture_timelapse_frame!(recorder, GameMap(); snapshot_timestamp = 0.5)
+    @test !maybe_capture_timelapse!(recorder, snapshot; now = 0.0)
+    @test !maybe_capture_timelapse!(recorder, snapshot; now = 59.0)
     @test isnothing(recorder.history)
 
-    loaded_recorder = TimelapseRecorder(TimelapseHistory(); now = 10.0)
+    loaded_history = TimelapseHistory(frames = [GameMap()])
+    loaded_recorder = TimelapseRecorder(loaded_history; now = 10.0)
     @test loaded_recorder.enabled
-    @test loaded_recorder.next_capture_time_seconds == 40.0
+    @test loaded_recorder.capture_interval_seconds == 60.0
+    @test loaded_recorder.next_capture_time_seconds == 70.0
+    @test loaded_recorder.history === loaded_history
+    set_timelapse_enabled!(loaded_recorder, false; now = 20.0)
+    @test !capture_timelapse_frame!(loaded_recorder, GameMap())
+    @test loaded_recorder.history === loaded_history
+    @test timelapse_frame_count(loaded_recorder) == 1
 
-    set_timelapse_enabled!(recorder, true; now = 0.0)
-    @test recorder.enabled
-    @test maybe_capture_timelapse!(recorder, snapshot; now = 0.0)
+    @test maybe_capture_timelapse!(recorder, snapshot; now = 60.0)
     @test timelapse_frame_count(recorder) == 1
     @test only(recorder.history.frames) !== gamemap
     @test only(recorder.history.frames) == gamemap
-    @test !maybe_capture_timelapse!(recorder, snapshot; now = 30.0)
+    @test recorder.next_capture_time_seconds == 120.0
 
     changed_snapshot = (gamemap = GameMap(), timestamp = 2.0)
-    @test maybe_capture_timelapse!(recorder, changed_snapshot; now = 31.0)
+    recorder.capture_interval_seconds = 10.0
+    @test recorder.next_capture_time_seconds == 120.0
+    @test !maybe_capture_timelapse!(recorder, changed_snapshot; now = 119.0)
+    @test !maybe_capture_timelapse!(recorder, snapshot; now = 120.0)
+    @test maybe_capture_timelapse!(recorder, changed_snapshot; now = 121.0)
     @test timelapse_frame_count(recorder) == 2
-    @test recorder.next_capture_time_seconds == 61.0
+    @test recorder.next_capture_time_seconds == 131.0
 
     suppressed_snapshot = (gamemap = GameMap(), timestamp = 3.0)
-    @test !maybe_capture_timelapse!(recorder, suppressed_snapshot; capture_suppressed = true, now = 100.0)
-    @test recorder.next_capture_time_seconds == 61.0
-    @test maybe_capture_timelapse!(recorder, suppressed_snapshot; now = 101.0)
+    @test !maybe_capture_timelapse!(recorder, suppressed_snapshot; capture_suppressed = true, now = 160.0)
+    @test recorder.next_capture_time_seconds == 131.0
+    @test maybe_capture_timelapse!(recorder, suppressed_snapshot; now = 161.0)
     @test timelapse_frame_count(recorder) == 3
 
     before_disable = snapshot_timelapse_history(recorder)::TimelapseHistory
     @test before_disable.frames !== recorder.history.frames
     @test before_disable.frames[1] === recorder.history.frames[1]
     @test capture_timelapse_frame!(recorder, GameMap(); snapshot_timestamp = 4.0)
-    set_timelapse_enabled!(recorder, false; now = 110.0)
+    set_timelapse_enabled!(recorder, false; now = 170.0)
     @test !recorder.enabled
+    @test !capture_timelapse_frame!(recorder, GameMap(); snapshot_timestamp = 5.0)
     @test !maybe_capture_timelapse!(recorder, (gamemap = GameMap(), timestamp = 5.0); now = 200.0)
     @test timelapse_frame_count(recorder) == 4
 
     set_timelapse_enabled!(recorder, true; now = 200.0)
+    @test recorder.enabled
+    @test recorder.next_capture_time_seconds == 200.0
     reenabled_snapshot = (gamemap = GameMap(), timestamp = 6.0)
     @test maybe_capture_timelapse!(recorder, reenabled_snapshot; now = 200.0)
     @test timelapse_frame_count(recorder) == 5
@@ -867,6 +882,8 @@ Base.deepcopy_internal(::UncopyableTimelapseLearningState, ::IdDict) = error("Un
     @test_throws ErrorException deepcopy(gamemap)
     snapshot = (gamemap = gamemap, timestamp = 1.0)
     recorder = TimelapseRecorder(nothing; now = 0.0)
+    @test !maybe_capture_timelapse!(recorder, snapshot; now = 0.0)
+    set_timelapse_enabled!(recorder, false; now = 0.0)
     @test !capture_timelapse_frame!(recorder, gamemap)
     @test !maybe_capture_timelapse!(recorder, snapshot; now = 0.0)
     @test isnothing(recorder.history)
@@ -878,12 +895,12 @@ Base.deepcopy_internal(::UncopyableTimelapseLearningState, ::IdDict) = error("Un
     gamemap.learning_system = NoLearningSystem()
     @test maybe_capture_timelapse!(recorder, snapshot; now = 0.0)
     gamemap.learning_system = UncopyableTimelapseLearningState()
-    @test !maybe_capture_timelapse!(recorder, (gamemap = gamemap, timestamp = 2.0); now = 29.0)
+    @test !maybe_capture_timelapse!(recorder, (gamemap = gamemap, timestamp = 2.0); now = 59.0)
     @test !capture_timelapse_frame!(recorder, gamemap; snapshot_timestamp = 1.0)
     @test !capture_timelapse_frame!(recorder, GameMap(learning_system = UncopyableTimelapseLearningState()); snapshot_timestamp = 1.0)
     @test !capture_timelapse_frame!(recorder, gamemap)
     @test timelapse_frame_count(recorder) == 1
-    @test recorder.next_capture_time_seconds == 30.0
+    @test recorder.next_capture_time_seconds == 60.0
 end
 
 @testset "time-lapse source identity without timestamps" begin

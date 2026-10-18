@@ -214,7 +214,8 @@ function render_frame!(renderer::ExportRenderer, context::ReconstructionContext,
     entry = timeline.frames[frame.keyframe_index]
     local_frame == 0 && reconstruct_keyframe!(context, entry; retained_index = frame.keyframe_index, verbose = renderer.options.verbose)
     tick = animation_tick(entry.gamemap, local_frame, renderer.options.fps)
-    return _render_keyframe!(renderer, context, entry, cameras[frame.keyframe_index], tick)
+    camera = camera_for_frame(cameras, frame, local_frame, renderer.options)
+    return _render_keyframe!(renderer, context, entry, camera, tick)
 end
 
 function each_rendered_frame(callback::Function, renderer::ExportRenderer, timeline::TimelinePlan, cameras, schedule::FrameSchedule; label = "render")

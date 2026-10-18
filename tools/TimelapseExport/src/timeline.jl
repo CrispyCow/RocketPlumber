@@ -122,9 +122,18 @@ function print_inspection(options::ExportOptions, bundle, timeline::TimelinePlan
     for (index, entry) in enumerate(timeline.frames)
         counts = _map_counts(entry)
         bounds = tile_area_bounds(entry.gamemap)
-        viewport = cameras[index].rect
         println("  $(index): $(entry.origin), ships=$(counts.ships), surface_tiles=$(counts.surfaces), components=$(counts.components), pipes=$(counts.pipes)")
-        println("      unpadded base bounds=$(bounds), camera viewport=$(viewport)")
+        if cameras isa SmoothCameraPlan
+            start_viewport = evaluate_camera(cameras, index - 1; keyframe_index = index).rect
+            end_viewport = evaluate_camera(cameras, index; keyframe_index = index).rect
+            println("      unpadded base bounds=$(bounds), camera interval=$(start_viewport) -> $(end_viewport)")
+            if index == length(timeline.frames)
+                settled_viewport = evaluate_camera(cameras, index + 1; keyframe_index = index).rect
+                println("      settled end-hold viewport=$(settled_viewport)")
+            end
+        else
+            println("      unpadded base bounds=$(bounds), camera viewport=$(cameras[index].rect)")
+        end
     end
     println("Format: $(options.format), resolution=$(options.width)x$(options.height), fps=$(options.fps), camera=$(options.camera)")
     println("Total encoded frames: $(schedule.total_frames)")
