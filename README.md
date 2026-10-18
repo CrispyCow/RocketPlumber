@@ -1,17 +1,17 @@
 <div style="text-align:center; padding:18px 0 8px 0; border-radius:6px;">
   <h1 style="margin:0; font-size:2.2em; letter-spacing:0.6px;">Rocket Plumber</h1>
-  <p style="margin:6px 0 8px 0; color:#555; font-size:1.05em;">A tech-demo for a rocket engine/spaceship fluid flow simulation game!</p>
+  <p style="margin:6px 0 8px 0; color:#555; font-size:1.05em;">A demo for a rocket engine/spaceship fluid flow simulation game!</p>
   <p>
     <em style="color:#666">Built in Julia • Rendered with OpenGL</em>
   </p>
   <p>
-    <img src="readme_assets/plumbing.gif" alt="Simple plumbing demo" />
+    <img src="readme_assets/new-intercept.webp" alt="Ship encounter demo" />
   </p>
   <p>
-    <img src="readme_assets/manoeuvre.gif" alt="Manoeuvre to intercept demo" />
+    <img src="readme_assets/biprop-spinup-close.webp" alt="Biprop engine demo" />
   </p>
   <p>
-    <img src="readme_assets/encounter.gif" alt="Ship encounter demo" />
+    <img src="readme_assets/approach-finish.webp" alt="Manoeuvre to intercept demo" />
   </p>
 </div>
 
@@ -43,7 +43,7 @@ If you like the project and want to stay up to date then join the [mailing list]
   - [Creating and Solving of the MNA Matrices](#creating-and-solving-of-the-mna-matrices)
   - [The 'Component' System and its API](#the-component-system-and-its-api)
   - [Rendering Engine and Tools](#rendering-engine-and-tools)
-- [Licence](#licence)
+- [Licence](#licence)text
 
 ---
 ## About The Project
@@ -68,7 +68,7 @@ If you are just interested in playing around, **I have built some stand-alone 'a
 
 **A bit of technical detail on the app executables you don't actually need:**
 
-Julia is a JIT compiled language, and generally you are supposed to have Julia installed to run Julia code. I have produced these executables using tools that effectively package my code with a Julia environment to run it, so the executables are a bit larger than I would like (although there's a lot of ongoing work in this space I haven't fully leveraged). Due to some pre-compilation baked into this process, the demo ends up loading and running better in this format than loading from source!
+Julia is a JIT compiled language, and generally you are supposedtext to have Julia installed to run Julia code. I have produced these executables using tools that effectively package my code with a Julia environment to run it, so the executables are a bit larger than I would like (although there's a lot of ongoing work in this space I haven't fully leveraged). Due to some pre-compilation baked into this process, the demo ends up loading and running better in this format than loading from source!
 
 There is a JuliaC script included in the repo under `build/` which I use to create executables, and a GitHub Actions distribution workflow that uses 32GB 8-core actions runners from Avrea to run the compilations and put the results into a draft release.
 
@@ -102,7 +102,7 @@ If you are serious about making changes to the code I would recommend using the 
 You might notice Julia seems to take a while to start up, and that the demo seems to take a while to load. This is primarily because of the way Julia works. The first time it sees a function, it JIT compiles, but for subsequent calls it uses a cache of the compiled code to speed things up. To leverage this for your development, you want to keep the Julia session running as long as you can, to minimise how often you have to recompile things. This is what the REPL does, it lets you evaluate sections of code interactively while keeping the session open!
 
 To start the REPL in the project's dev environment run:
-
+[text](../../Videos/WebPs/readme/convert-mp4-to-webp.sh)
 ```bash
 julia --project=dev --threads=2,1
 ```
