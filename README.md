@@ -43,14 +43,16 @@ If you like the project and want to stay up to date then join the [mailing list]
   - [Creating and Solving of the MNA Matrices](#creating-and-solving-of-the-mna-matrices)
   - [The 'Component' System and its API](#the-component-system-and-its-api)
   - [Rendering Engine and Tools](#rendering-engine-and-tools)
-- [Licence](#licence)text
+- [Licence](#licence)
 
 ---
 ## About The Project
 
 **Welcome to Rocket Plumber!** This is a spaceship and rocket engine plumbing simulation game, under active development. Currently I have the fluid mechanics implemented, along with enough components to build basic engines and get your ship moving. The gameplay is lacking in depth but its core is there in the game's "Explorer Mode", where you fire your engines to perform manoeuvres in space and encounter randomly generated ships. You must salvage parts and fuel from these ships to keep yourself moving, and the further and faster you go the better rocket parts you will find! Eventually you will build your ship up enough to be able to perform one massive burn to escape the galaxy and win the game! There is also a learning system with both in-game and sandbox tutorials to make the game more accessible. 
 
-**Note:** the game is VERY far from being done and polished. There are currently no loss conditions (unless you run out of fuel), and the galaxy escape win condition is really only there to give you a goal to work towards. There is also only a small subset of engine and fuel types I would like to have one day. The UI is very much still a work in progress, with a lot of internal debug info still being displayed. These are all things I want to work on in the future, but hopefully what's already here is enough to be interesting and give you an idea of where this game could go!
+Check out Rocket Plumber's [website](https://rocketplumbergame.com/) for the most up-to-date information!
+
+**Note:** the game is VERY far from being done and polished. There are currently no loss conditions (unless you run out of fuel), and the galaxy escape win condition is really only there to give you a goal to work towards. There is also only a small subset of the engine and fuel types I would like to have one day. The UI is very much still a work in progress, with a lot of internal debug info still being displayed. These are all things I want to work on in the future, but hopefully what's already here is enough to be interesting and give you an idea of where this game could go!
 
 I started this project more just to experiment with an idea I had for how you could implement a fluid system for a game. The setting (plumbing up rocket engines on a space ship) was just an interesting way to exercise this system. I am making these public releases to motivate me to clean things up, and to help direct the game towards something as fun and interesting as possible!
 
@@ -64,11 +66,16 @@ If you are looking for a finished game I'd wait a bit, but if any of this sounds
 ## Get The Game
 ### Self-Contained Executables (The easy way!)
 
-If you are just interested in playing around, **I have built some stand-alone 'app' executables that can just be downloaded and run**. You will find those in the [release assets](../../releases) on the right-hand side of the repository. Just download the one for your operating system, there are Windows and Linux builds! The game runs fine in macOS on x86 Macs too and I have made builds for it in the past, but Apple's malware prevention makes it pretty much impossible to run it on a different computer so until I can sort out certificates if you are on Mac you will have to run from source.
+If you are just interested in playing around, **I have built some stand-alone 'app' executables that can just be downloaded and run**. You will find those in the [release assets](../../releases) on the right-hand side of the repository. Just download the one for your operating system, there are Windows and Linux builds!
 
-**A bit of technical detail on the app executables you don't actually need:**
+**Windows users:** Windows may display a "Windows protected your PC" warning when launching Rocket Plumber. This is because the game is a small independent project that hasn't yet established a reputation with Microsoft SmartScreen, rather than a specific detection of malware.
+If you're comfortable proceeding, select More info → Run anyway. Otherwise, you can [run the game from source](#running-from-source-the-hard-way), with the code available to inspect before running it.
 
-Julia is a JIT compiled language, and generally you are supposedtext to have Julia installed to run Julia code. I have produced these executables using tools that effectively package my code with a Julia environment to run it, so the executables are a bit larger than I would like (although there's a lot of ongoing work in this space I haven't fully leveraged). Due to some pre-compilation baked into this process, the demo ends up loading and running better in this format than loading from source!
+**macOS users:** The game runs in macOS on x86 Macs too, and I have made builds for it in the past, but Apple's malware prevention makes it pretty much impossible to run it on a different computer so until I can sort out certificates if you are on Mac you will have to run from source.
+
+#### A bit of technical detail on the app executables you don't actually need:
+
+Julia is a JIT compiled language, and generally you are supposed to have Julia installed to run Julia code. I have produced these executables using tools that effectively package my code with a Julia environment to run it, so the executables are a bit larger than I would like (although there's a lot of ongoing work in this space I haven't fully leveraged). Due to some pre-compilation baked into this process, the demo ends up loading and running better in this format than loading from source!
 
 There is a JuliaC script included in the repo under `build/` which I use to create executables, and a GitHub Actions distribution workflow that uses 32GB 8-core actions runners from Avrea to run the compilations and put the results into a draft release.
 
@@ -102,7 +109,6 @@ If you are serious about making changes to the code I would recommend using the 
 You might notice Julia seems to take a while to start up, and that the demo seems to take a while to load. This is primarily because of the way Julia works. The first time it sees a function, it JIT compiles, but for subsequent calls it uses a cache of the compiled code to speed things up. To leverage this for your development, you want to keep the Julia session running as long as you can, to minimise how often you have to recompile things. This is what the REPL does, it lets you evaluate sections of code interactively while keeping the session open!
 
 To start the REPL in the project's dev environment run:
-[text](../../Videos/WebPs/readme/convert-mp4-to-webp.sh)
 ```bash
 julia --project=dev --threads=2,1
 ```

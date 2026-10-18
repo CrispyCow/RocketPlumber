@@ -927,7 +927,7 @@ Must be called within ui_renderwrap.
 """
 function render_spacemap_no_map_message!(win_float)
     centre_y = win_float.height / 2.0
-    text = "No space map available — initialise from the developer menu."
+    text = "No space map available: play explorer mode or initialise from the developer menu."
     text_size = CImGui.CalcTextSize(text)
     CImGui.SetCursorPos(ImVec2((win_float.width - text_size.x) / 2.0, centre_y))
     CImGui.Text(text)
