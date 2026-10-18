@@ -16,25 +16,5 @@
     },
     "terminal.integrated.env.osx": {
         "JULIA_NUM_THREADS": "2,1"
-    },
-    "chat.tools.terminal.autoApprove": {
-        "Pkg.resolve()": true,
-        "Pkg.test(\\\"HexFlowProcGen\\\")": true,
-        "\\\"HexFlowProcGen\\\"": true,
-        "/^julia tools/encounter_balance\\.jl$/": {
-            "approve": true,
-            "matchCommandLine": true
-        },
-        "/^julia --project=\\. -e \"using Pkg; Pkg\\.test\\(\\\\\"HexFlowProcGen\\\\\"\\)\"$/": {
-            "approve": true,
-            "matchCommandLine": true
-        },
-        "/^julia --project=\\. -e 'using Pkg; Pkg\\.test\\(\"HexFlowProcGen\"\\)'$/": {
-            "approve": true,
-            "matchCommandLine": true
-        },
-        "Pkg.test(string(:HexFlowProcGen))": true,
-        "string(:HexFlowProcGen)": true,
-        ":HexFlowProcGen": true
     }
 }

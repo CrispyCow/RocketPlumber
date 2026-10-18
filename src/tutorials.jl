@@ -1232,7 +1232,7 @@ function get_entry_editor_intro()::LearningEntry
                         "I'm not going to explain everything in this menu, but I'll call out some highlights.\n
                         The menu includes an 'Updates Per Second' counter you can use to monitor performance. \
                         It will normally be targeting 60 UPS, but you can see this change if you adjust the simulation speed.\n
-                        Under 'Tools' -> 'Modify Space Map' you can initialise a space map on a blank map like this, useful if you want to try and fly around a ship you created in editor mode.\n
+                        Under 'Tools' -> 'Overwrite Space Map' you can initialise a space map on a blank map like this, useful if you want to try and fly around a ship you created in editor mode.\n
                         Under 'Proc Gen' -> 'Generate Encounter' you can create random encounters like you get in the space map, with the ability to tune the type and size. \n
                         And the most important tool in the developer utilities menu is editor mode which will be explained next."
                     ),
@@ -1240,7 +1240,7 @@ function get_entry_editor_intro()::LearningEntry
                 TutorialStep(
                     heading = "USING EDITOR MODE",
                     text = tutorial_dedent(
-                        "Enter editor mode by clicking the checkbox under 'Editor' -> 'Enable Editor Mode'.\n
+                        "Enter editor mode by clicking the checkbox under 'Editor' -> 'Editor Mode'.\n
                         You should see there a few special placement modes you can access by clicking them or pressing the indicated keys:\n
                         - Press 4 to enter 'Delete' mode where you can quickly remove components and pipes by clicking on them.\n
                         - Press 5 to enter 'create tile' mode, which lets you place the different tiles to build a ship. You can cycle through the options with the Z and C keys, and tune their parameters in the 'properties' panel on the right of the screen.\n

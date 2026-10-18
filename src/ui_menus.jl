@@ -119,7 +119,7 @@ function ui_pause_menu_render!(
         if CImGui.IsItemHovered(CImGui.ImGuiHoveredFlags_AllowWhenDisabled)
             tooltip = abort_available ?
                 "Restore the ship and galaxy to their pre-departure state." :
-                "This development save does not contain a recoverable pre-departure map."
+                "No pre-departure backup is available for this save."
             CImGui.SetTooltip(tooltip)
         end
         CImGui.Dummy((0.0, 10.0))
