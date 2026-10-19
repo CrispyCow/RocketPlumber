@@ -1,6 +1,6 @@
 name = "RocketPlumber"
 uuid = "49293a16-84b5-4c04-b023-19c4eddda1c7"
-version = "0.1.0-dev"
+version = "0.1.0"
 
 [workspace]
 projects = ["dev", "build"]
