@@ -152,3 +152,43 @@ end
     @test_throws ArgumentError do_action(original, :unsupported)
     @test (original.component.state, original.rotation, original.mirrored, original.ship) == (10, HexComponentsAPI.HexFrame.S_NEG, true, :Owner)
 end
+
+struct DefaultInspectionPipe <: PipeBehavior end
+struct OrientationInspectionBehaviour <: ComponentBehavior end
+function HexComponentsAPI.get_inspection_items(::OrientationInspectionBehaviour; rotation, mirrored, mna_state, kwargs...)
+    return (InspectionStatus("Rotation", string(rotation)), InspectionStatus("Mirrored", string(mirrored)), InspectionValue("Reading", mna_state.reading))
+end
+
+@testset "Optional read-only inspection and placed delegation" begin
+    @test @inferred(get_inspection_items(DefaultValueBehaviour())) === ()
+    @test @inferred(get_inspection_items(DefaultInspectionPipe())) === ()
+    @test get_inspection_items(PlacedPipe(DefaultInspectionPipe(), :owner)) === ()
+    rotation = HexComponentsAPI.HexFrame.S_NEG
+    mna_state = (reading = 12.0,)
+    placed = PlacedComponent(OrientationInspectionBehaviour(), rotation, true, :owner)
+    @test_throws UndefKeywordError get_inspection_items(placed)
+    items = @inferred get_inspection_items(placed; mna_state)
+    @test items[1].value == string(rotation)
+    @test items[2].value == "true"
+    @test items[3].value == 12.0
+end
+
+@testset "Inspection descriptors" begin
+    @test InspectionDivider().label == ""
+    @test InspectionDivider("Condition").label == "Condition"
+    @test InspectionAlert("Information").tone == INSPECTION_NORMAL
+    for tone in (INSPECTION_NORMAL, INSPECTION_WARNING, INSPECTION_ERROR)
+        @test InspectionAlert("Message"; tone).tone == tone
+    end
+    @test InspectionValue("Reading", 2).value === 2.0
+    @test InspectionValue("Reading", 0).value === 0.0
+    @test isnothing(InspectionValue("Reading", nothing; units = "bar").value)
+    @test isnothing(inspection_flow_Lps("Flow", nothing).value)
+    @test isnothing(inspection_pressure_bar("Pressure", nothing).value)
+    @test isnothing(InspectionGauge("Energy", 3, 10; units = "EU").target)
+    for target in (-10, 40, 80, 120)
+        gauge = InspectionGauge("Opening", 40, 100; target, units = "%")
+        @test gauge.target == target
+        @test gauge.value == 40.0
+    end
+end

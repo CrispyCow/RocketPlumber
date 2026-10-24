@@ -19,6 +19,11 @@ Rocket Plumber is a WIP rocket engine and space ship simulation game, using circ
 
 Follow the guidance in [Get The Game](#get-the-game) to download an executable, or run the game from source.
 
+Properties stays visible during ship gameplay. Hover over components, pipes or
+junctions for temporary operating readouts; select a part for persistent inspection
+and expandable, read-only **Technical details (Debug)**. Larger inspections expand
+and scroll as needed.
+
 Once in-game, have a look at the 'Teaser' to get a feel for what's possible, then start a new 'Explorer Mode' game to get into the real gameplay.
 
 Saved files are kept in `RocketPlumber-saves` under your system's Documents directory: maps and exported ships in `maps/`, screenshots in `pictures/`, and recordings in `videos/`.
@@ -52,7 +57,7 @@ If you like the project and want to stay up to date then join the [mailing list]
 
 Check out Rocket Plumber's [website](https://rocketplumbergame.com/) for the most up-to-date information!
 
-**Note:** the game is VERY far from being done and polished. There are currently no loss conditions (unless you run out of fuel), and the galaxy escape win condition is really only there to give you a goal to work towards. There is also only a small subset of the engine and fuel types I would like to have one day. The UI is very much still a work in progress, with a lot of internal debug info still being displayed. These are all things I want to work on in the future, but hopefully what's already here is enough to be interesting and give you an idea of where this game could go!
+**Note:** the game is VERY far from being done and polished. There are currently no loss conditions (unless you run out of fuel), and the galaxy escape win condition is really only there to give you a goal to work towards. There is also only a small subset of the engine and fuel types I would like to have one day, and the UI is still evolving. These are all things I want to work on in the future, but hopefully what's already here is enough to be interesting and give you an idea of where this game could go!
 
 I started this project more just to experiment with an idea I had for how you could implement a fluid system for a game. The setting (plumbing up rocket engines on a space ship) was just an interesting way to exercise this system. I am making these public releases to motivate me to clean things up, and to help direct the game towards something as fun and interesting as possible!
 

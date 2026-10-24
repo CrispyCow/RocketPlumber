@@ -10,7 +10,8 @@ a behaviour fragment; ordinary configuration/domain types need neither suffix.
 ## Package Map
 
 - `HexComponentsAPI` defines the interfaces, placed wrappers, tunables,
-  actions, request results, mass hooks, and reactivation-probe contract.
+  actions, request results, read-only inspection descriptors, mass hooks, and
+  reactivation-probe contract.
 - `HexFlowBasicComponents` provides shared rendering, circuit, state, stall,
   rotation, and mirroring fragments.
 - `HexFlowSwitchComponents` implements boolean and stepped switches plus valve
@@ -101,9 +102,24 @@ its descriptive sprite symbol in its type, with keyword construction supported.
   replacements preserve their metadata and are explicitly stored at the mutable
   `GameMap` boundary. Shared behaviour values need no defensive copies.
 - Tunables expose placement-editor values, also shown read-only in the runtime
-  inspector. They may include configuration and selected runtime/initial state.
+  technical inspector, available under the collapsed `Technical details (Debug)`
+  section in every game mode. Editing remains capability-gated. Tunables may
+  include configuration and selected runtime/initial state.
   `set_tunables` returns a replacement reflecting supplied values; placed setters
   preserve placement metadata.
+- `get_inspection_items` is an optional, read-only descriptor interface; the default
+  is an empty tuple. Components choose measurement semantics and ordering; the
+  application formats and renders the descriptors.
+  Begin complete component/pipe inspections with `InspectionDivider("Operation")`;
+  compose shared fragments without duplicating the outer Operation divider.
+  Declare required typed position/solver keywords and forward relevant `kwargs...`.
+  Placed components supply orientation; callers supply `tile` or pipe `position`.
+  Missing solver values are distinct from legitimate zero. Query solved elements
+  through `solved_element_current`; use `has_solved_element` to distinguish pruned
+  paths from incomplete surviving outputs. Keep unavailable core readings visible.
+  Matching derived/MNA snapshots are borrowed: never mutate or retain them.
+  Use the shared unit-specific inspection helpers for physical presentation,
+  backed by HexFluids conversions; simulation and tunables keep internal units.
 - `get_actions` describes supported UI actions. `do_action` returns
   `(updated_behaviour, result)`. Expected rejection returns the unchanged input
   and an invalid request; unsupported action IDs throw.

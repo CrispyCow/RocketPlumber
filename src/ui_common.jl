@@ -16,7 +16,8 @@ using HexFlowCalculator
 
 #= ---------- UI Layout Constants ---------- =#
 
-const propertyboxwidth = 350.0
+const PROPERTY_INSPECTOR_WIDTH = 320.0
+const DEVELOPER_UTILITIES_WIDTH = 350.0
 
 #= ---------- Window Configuration ---------- =#
 

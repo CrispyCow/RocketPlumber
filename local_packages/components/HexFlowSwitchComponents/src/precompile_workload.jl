@@ -33,6 +33,7 @@ using PrecompileTools: @setup_workload, @compile_workload
         )
     end
     queue = HexFlowRendering.SpriteRenderCommand[]
+    snapshot = MNA_StateSnapshot()
     derived = DerivedMapState()
     derived.nodeactualfluids[NodeCoord(tile, HexFrame.NODE_Q_POS)] = HexFluids.COLD_GAS
     liquid_derived = DerivedMapState()
@@ -44,6 +45,7 @@ using PrecompileTools: @setup_workload, @compile_workload
             produce_rel_elements(placed)
             produce_abs_elements(placed, tile)
             get_tunables(placed)
+            get_inspection_items(placed; tile, mna_state = snapshot)
             get_actions(placed)
             placed = update_flowbehav(placed; tile = tile)
             placed = on_click(placed; unrotated_clicksite = CartesianCoord(0.0, 0.5))

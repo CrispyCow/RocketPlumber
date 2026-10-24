@@ -21,6 +21,7 @@ export set_fluid_exhaust_velocity!, set_fluid_density!
 export get_fluid_exhaust_velocities, get_fluid_densities
 export lookup_fluid_reference_temperature, set_fluid_reference_temperature!
 export get_fluid_reference_temperatures
+export volume_to_litres, flow_to_litres_per_second, pressure_to_bar
 
 # ===============================================================
 # Fluid Types and Constraints
@@ -203,6 +204,26 @@ get_fluid_densities()::Dict{FluidType, Float64} =
 "Return a snapshot of reference temperatures for UI enumeration."
 get_fluid_reference_temperatures()::Dict{FluidType, Float64} =
     Dict(k => v[] for (k, v) in _fluid_reference_temperatures)
+
+# ===============================================================
+# Physical Presentation
+# ===============================================================
+
+# Tank charge and circuit flow retain their internal units. Densities are kg per
+# internal volume unit, so existing mass calculations remain unchanged (1 mass
+# unit = 1 kg). These scales affect presentation only, never simulation.
+# Gas volumes and flows are simulation-equivalent under the simplified fluid model.
+const SIM_VOLUME_TO_LITRES = 5.0
+const SIM_PRESSURE_TO_BAR = 1.0
+
+"Convert internal tank volume to litres for presentation."
+volume_to_litres(volume::Real) = volume * SIM_VOLUME_TO_LITRES
+
+"Convert internal circuit flow to litres per second for presentation, including gas."
+flow_to_litres_per_second(flow::Real) = flow * SIM_VOLUME_TO_LITRES
+
+"Convert internal pressure to bar for presentation."
+pressure_to_bar(pressure::Real) = pressure * SIM_PRESSURE_TO_BAR
 
 # ===============================================================
 # Display

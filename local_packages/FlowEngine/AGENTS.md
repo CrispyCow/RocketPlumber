@@ -38,6 +38,14 @@ mutation in `HexFlowCalculator`.
 - Do not hide singularities by broadly catching solver errors; candidate-map
   validation relies on failures to reject invalid transactions.
 
+## Solved Readouts
+
+`solved_element_current` queries solved element dictionaries and values, never
+newer behaviour state. Preserve absent elements, missing outputs and valid zero
+current as distinct cases; `has_solved_element` checks whether an element survived
+without trusting stale outputs. Invalid surviving dependencies are programming
+errors.
+
 ## Verification
 
 Run:

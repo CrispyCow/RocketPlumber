@@ -21,6 +21,7 @@ using HexFlowRendering, RenderEngine
 using JLD2
 
 include(joinpath(@__DIR__, "smoke", "SmokeTestSupport.jl"))
+include("inspection.jl")
 
 @testset "Background video recording" begin
     script = joinpath(@__DIR__, "recording_writer.jl")

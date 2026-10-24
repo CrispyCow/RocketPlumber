@@ -57,6 +57,9 @@ end
     snapshot.vsource_currents[ElementID(tile, 2)] = 0.2
     mna.vsource_currents[ElementID(tile, 1)] = 0.2
     mna.vsource_currents[ElementID(tile, 2)] = 0.2
+    for source in produce_abs_elements(placed[4], tile)[1:2]
+        snapshot.vsources[source.id] = source
+    end
 
     @compile_workload begin
         for component in placed
@@ -65,6 +68,7 @@ end
             produce_abs_elements(component, tile)
             produce_rel_fluid_declarations(component)
             get_tunables(component)
+            get_inspection_items(component; derivedmapstate = derived, mna_state = snapshot, tile)
             get_component_mass(component)
             render_base_elem!(queue, component; glmap = glmap, position = tile, gameticks = 1, pos_offset = AxialCoord(0.0, 0.0), render_height_offset = Int32(0))
         end

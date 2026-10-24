@@ -382,10 +382,72 @@ Notes:
   action rejections.
 
 `get_tunables` exposes values available to the placement editor and shown
-read-only in the runtime inspector. These may include fixed configuration and
+read-only in the collapsed `Technical details (Debug)` section in every game mode.
+Editing remains capability-gated. These may include fixed configuration and
 selected runtime/initial state, such as tank contents or pump speed.
 `set_tunables` returns a replacement reflecting the supplied values.
 `PlacedComponent` setters retain rotation, mirroring and ship ownership.
+
+## Player Inspection
+
+`get_inspection_items(behav; kwargs...)` returns a tuple of UI-independent
+readouts, or an empty tuple by default. Complete component and pipe inspections
+begin with `InspectionDivider("Operation")`. Compose shared fragments by splatting
+their tuples; fragments omit the outer Operation divider when their parent supplies it.
+Add a Condition section only when condition content is present.
+
+```julia
+get_inspection_items(comp::MyCompBehav; kwargs...) = (
+    InspectionDivider("Operation"),
+    InspectionStatus("Fluid", comp.fluid),
+    get_inspection_items(comp.storage; kwargs...)...,
+)
+```
+
+Component packages choose meaningful gauge colours through descriptors, including
+fluid and operating-condition colours. The application renders supplied gauge
+colours and applies status emphasis, including fluid identity names and colours.
+Use `InspectionAlert("Overspeed"; tone = INSPECTION_WARNING)` for operating warnings
+and `INSPECTION_ERROR` for persistent faults.
+
+Gauges accept an optional commanded target:
+
+```julia
+InspectionGauge("Opening", current, 100; units = "%", target = commanded)
+```
+
+Only the visual fill and marker are clamped; numerical readings retain over-limit
+values. Formatting belongs to the application.
+
+For derived readings, declare the required typed keywords without defaults, for
+example `tile::TileCoord, mna_state::Union{MNA_State, MNA_StateSnapshot}`. Add
+`derivedmapstate::DerivedMapState`, `position::PipeCoord` and `rotation::HexAxis`
+when needed, forwarding relevant keywords through fragments. Placed components
+supply rotation and mirroring; local-only fragments need no solver arguments.
+
+Use `FlowEngine.solved_element_current(mna_state, element_id)` for solved flows,
+so calculations use the stored element values rather than newer runtime behaviour.
+Use `has_solved_element` to distinguish pruned paths (zero flow where appropriate)
+from incomplete surviving outputs. Keep core readings visible with `nothing` for
+unavailable values, displayed as `--`; valid zero stays zero. Missing pressure
+also remains unavailable. Matching derived/MNA snapshots are borrowed and must
+not be mutated or retained beyond the frame.
+
+Use the shared physical-presentation helpers instead of converting each component's
+readouts manually:
+
+```julia
+inspection_volume_gauge_L("Contents", charge, capacity; colour)
+inspection_flow_Lps("Flow rate", solved_current) # Accepts nothing for unavailable flow
+inspection_pressure_bar("Feed pressure", pressure)
+inspection_pressure_gauge_bar("Pressure", pressure, limit; colour)
+```
+
+These use HexFluids conversions: one internal volume unit represents 5 L and one
+internal pressure unit represents 1 bar; stored mass is already in kg. Gas flow
+uses simulation-equivalent L/s under the simplified fluid model. Renderers receive
+converted values and do not infer conversions from unit strings. Simulation,
+technical inspection and tunables retain raw analogue units.
 
 ## PipeBehavior Interface
 

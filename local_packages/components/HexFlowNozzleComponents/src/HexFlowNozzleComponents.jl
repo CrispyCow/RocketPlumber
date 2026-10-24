@@ -23,7 +23,7 @@ using HexFlowRendering, RenderEngine
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 
 # `ComponentBehavior` optional methods
-import HexComponentsAPI: on_click, get_thrust, get_component_temperature, update_flowbehav, render_map_elem!
+import HexComponentsAPI: on_click, get_thrust, get_component_temperature, update_flowbehav, render_map_elem!, get_inspection_items
 import HexComponentsAPI: placement_valid, collect_effect_particles!, get_actions, do_action
 import HexComponentsAPI: produce_rel_fluid_declarations, map_mirroring
 
@@ -116,6 +116,37 @@ function produce_rel_elements(nozzle::NozzleBehavFrag)::NTuple{1, RelativeElemen
     return (rel_elem,)
 end
 
+function get_inspection_items(nozzle::NozzleBehavFrag; tile::TileCoord, rotation::HexAxis, mna_state::Union{MNA_State, MNA_StateSnapshot}, derivedmapstate::DerivedMapState, mirrored::Bool = false, controls::Tuple = (), kwargs...)
+    id = ElementID(tile, nozzle_element_index)
+    stopped = is_inactive(nozzle) || is_damaged(nozzle) || !has_solved_element(mna_state, id)
+    current = stopped ? 0.0 : solved_element_current(mna_state, id)
+    inlet = map_element(nozzle.connected_node, tile, rotation, mirrored)
+    pressure = get(mna_state.node_voltages, inlet, nothing)
+    fluid = get(derivedmapstate.nodeactualfluids, inlet, nothing)
+    temperature = get(derivedmapstate.node_temperatures, inlet, nothing)
+
+    # The physics helper needs complete inlet properties; a stopped path needs none
+    thrust = if stopped || (!isnothing(current) && iszero(current))
+        0.0
+    elseif isnothing(current) || isnothing(pressure) || isnothing(fluid) || isnothing(temperature)
+        nothing
+    elseif !isfinite(pressure) || !isfinite(temperature) || isnothing(lookup_fluid_density(fluid)) || isnothing(lookup_fluid_exhaust_velocity(fluid, temperature))
+        nothing
+    else
+        sqrt(sum(abs2, get_thrust(nozzle; tile, rotation, mna_state, derivedmapstate)))
+    end
+
+    return (
+        InspectionDivider("Operation"),
+        InspectionValue("Thrust", thrust; units = "N"),
+        inspection_flow_Lps("Flow rate", current),
+        inspection_pressure_bar("Inlet pressure", pressure),
+        controls...,
+        InspectionDivider("Condition"),
+        get_inspection_items(nozzle.overheat; temperature_label = "Nozzle temperature", kwargs...)...,
+    )
+end
+
 function get_tunables(nozzle::NozzleBehavFrag)::NTuple{4, TunableProps}
     throat_props = TunableProps(
         nozzle.throat_area,
@@ -144,7 +175,7 @@ Resolve nozzle thrust from solved inlet pressure, flow, and fluid properties.
 Nozzles always thrust along local `Q_POS`; component rotation maps that local
 direction into world space.
 """
-function get_thrust(nozzle::NozzleBehavFrag; tile::TileCoord, rotation::HexAxis, mna_state::MNA_State, derivedmapstate::DerivedMapState, kwargs...)
+function get_thrust(nozzle::NozzleBehavFrag; tile::TileCoord, rotation::HexAxis, mna_state::Union{MNA_State, MNA_StateSnapshot}, derivedmapstate::DerivedMapState, kwargs...)
     if is_inactive(nozzle) || is_damaged(nozzle)
         return SVector{2, Float64}(0.0, 0.0)
     end
@@ -432,6 +463,9 @@ set_tunables(comp::BasicNozzleCompBehav, tunables::NTuple{4, Real}) = @set comp.
 function produce_rel_fluid_declarations(comp::BasicNozzleCompBehav)
     return (RelativeFluidDeclaration(comp.nozzle.connected_node, HexFluids.FluidConstraintRule(HexFluids.IS_GAS)),)
 end
+
+get_inspection_items(comp::BasicNozzleCompBehav; kwargs...) = get_inspection_items(comp.nozzle; kwargs...)
+
 get_thrust(comp::BasicNozzleCompBehav; kwargs...) = get_thrust(comp.nozzle; kwargs...)
 get_component_temperature(comp::BasicNozzleCompBehav; kwargs...) = get_component_temperature(comp.nozzle)
 get_actions(comp::BasicNozzleCompBehav; kwargs...) = get_actions(comp.nozzle; kwargs...)
@@ -542,6 +576,11 @@ function produce_rel_fluid_declarations(comp::SwitchedNozzleCompBehav)
         RelativeFluidDeclaration(HexFrame.NODE_INTERNAL_1, HexFluids.FluidConstraintRule(HexFluids.IS_GAS)),
     )
 end
+
+function get_inspection_items(comp::SwitchedNozzleCompBehav; kwargs...)
+    return get_inspection_items(comp.nozzle; controls = get_inspection_items(comp.switch; kwargs...), kwargs...)
+end
+
 get_thrust(comp::SwitchedNozzleCompBehav; kwargs...) = get_thrust(comp.nozzle; kwargs...)
 get_component_temperature(comp::SwitchedNozzleCompBehav; kwargs...) = get_component_temperature(comp.nozzle)
 collect_effect_particles!(manager, comp::SwitchedNozzleCompBehav; kwargs...) = collect_effect_particles!(manager, comp.nozzle; kwargs...)
@@ -675,6 +714,16 @@ function produce_rel_fluid_declarations(comp::DecompChamberCompBehav)
     return (
         RelativeFluidDeclaration(HexFrame.NODE_Q_POS, HexFluids.FluidTypeRule(HexFluids.MONOPROP_LIQUID)),
         RelativeFluidDeclaration(HexFrame.NODE_Q_NEG, HexFluids.FluidSource(HexFluids.MONOPROP_GAS, comp.output_temperature)),
+    )
+end
+
+function get_inspection_items(comp::DecompChamberCompBehav; tile::TileCoord, mna_state::Union{MNA_State, MNA_StateSnapshot}, kwargs...)
+    id = ElementID(tile, decomp_voltage_element_index)
+    current = has_solved_element(mna_state, id) ? solved_element_current(mna_state, id) : 0.0
+    return (
+        InspectionDivider("Operation"),
+        inspection_flow_Lps("Propellant flow", current),
+        InspectionValue("Output temperature", comp.output_temperature; units = "K"),
     )
 end
 
@@ -841,6 +890,32 @@ function produce_rel_fluid_declarations(comp::BipropChamberCompBehav)
         RelativeFluidDeclaration(HexFrame.NODE_R_NEG, HexFluids.FluidTypeRule(HexFluids.FUEL_LIQUID)),
         RelativeFluidDeclaration(HexFrame.NODE_S_NEG, HexFluids.FluidTypeRule(HexFluids.OXIDISER_LIQUID)),
         RelativeFluidDeclaration(HexFrame.NODE_Q_NEG, HexFluids.FluidSource(HexFluids.BIPROP_EXHAUST, comp.state.output_temperature_k)),
+    )
+end
+
+function get_inspection_items(comp::BipropChamberCompBehav; tile::TileCoord, mna_state::Union{MNA_State, MNA_StateSnapshot}, kwargs...)
+    fuel_id, oxidiser_id = ElementID(tile, biprop_fuel_vcvs_index), ElementID(tile, biprop_oxid_vcvs_index)
+    fuel = has_solved_element(mna_state, fuel_id) ? solved_element_current(mna_state, fuel_id) : 0.0
+    oxidiser = has_solved_element(mna_state, oxidiser_id) ? solved_element_current(mna_state, oxidiser_id) : 0.0
+    complete = !isnothing(fuel) && !isnothing(oxidiser) && isfinite(fuel) && isfinite(oxidiser)
+    flow = complete ? max(fuel, 0.0) + max(oxidiser, 0.0) : nothing
+    ratio = complete && fuel > 0.0 ? max(oxidiser, 0.0) / fuel : nothing
+    maximum = lookup_fluid_reference_temperature(HexFluids.BIPROP_EXHAUST)
+    temperature = if !isnothing(maximum) && isfinite(maximum) && maximum > 0.0
+        exhaust_colour = get_fluid_colour(HexFluids.BIPROP_EXHAUST, comp.state.output_temperature_k)
+        # Lift cold exhaust towards grey so the temperature-dependent hue stays visible
+        colour = 0.7f0 .* exhaust_colour + 0.3f0 .* ColourType(0.55, 0.55, 0.55, 1.0)
+        InspectionGauge("Output temperature", comp.state.output_temperature_k, maximum; units = "K", colour)
+    else
+        InspectionValue("Output temperature", comp.state.output_temperature_k; units = "K")
+    end
+
+    return (
+        InspectionDivider("Operation"),
+        temperature,
+        inspection_flow_Lps("Propellant flow", flow),
+        InspectionValue("Oxidiser / fuel", ratio),
+        InspectionValue("Target ratio", comp.r_optimal),
     )
 end
 

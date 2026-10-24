@@ -51,6 +51,8 @@ end
     snapshot.node_voltages[turbine_node] = 5.0
     mna.vsource_currents[ElementID(tile, 1)] = -0.2
     snapshot.vsource_currents[ElementID(tile, 1)] = -0.2
+    pump_source = first(produce_abs_elements(placed[1], tile))
+    snapshot.vsources[pump_source.id] = pump_source
 
     @compile_workload begin
         for component in placed
@@ -59,6 +61,7 @@ end
             produce_abs_elements(component, tile)
             produce_rel_fluid_declarations(component)
             get_tunables(component)
+            get_inspection_items(component; derivedmapstate = derived, mna_state = snapshot, tile)
             get_component_mass(component)
             get_actions(component)
             render_base_elem!(queue, component; glmap = glmap, position = tile, gameticks = 1, pos_offset = AxialCoord(0.0, 0.0), render_height_offset = Int32(0))

@@ -14,14 +14,14 @@ Exported concrete `PipeBehavior` implementations:
 module HexFlowBasicPipes
 
 using FlowEngine
-using HexFluids, HexFrame
+using HexElements, HexFluids, HexFrame
 using HexComponentsAPI
 using HexFlowRendering, RenderEngine
 
 # `PipeBehavior` mandatory methods
 import HexComponentsAPI: get_conductance, get_pipe_tunables, set_pipe_tunables, render_pipe_base!, get_pipe_click_radius
 # `PipeBehavior` optional methods
-import HexComponentsAPI: render_pipe_map!
+import HexComponentsAPI: render_pipe_map!, get_inspection_items
 
 # Concrete Pipe Behaviour Exports
 export ScrapPipeBehav, BigPipeBehav
@@ -150,6 +150,27 @@ function render_pipe_map!(queue::AbstractVector, behav::BigPipeBehav; glmap::GLO
     push!(queue, render_basic_pipe(glmap, base_sprite, position; scale = scale, transparency = transparency, draw_height = pipe_height, pos_offset = pos_offset))
 
     return nothing
+end
+
+function get_inspection_items(::Union{ScrapPipeBehav, BigPipeBehav}; position::PipeCoord, mna_state::Union{MNA_State, MNA_StateSnapshot}, derivedmapstate::DerivedMapState, kwargs...)
+    first_node, second_node = to_nodecoord(position.v1), to_nodecoord(position.v2)
+    first_fluid = get(derivedmapstate.nodeactualfluids, first_node, nothing)
+    second_fluid = get(derivedmapstate.nodeactualfluids, second_node, nothing)
+    fluid = first_fluid == second_fluid ? first_fluid : nothing
+
+    id = ElementID(position)
+    current = has_solved_element(mna_state, id) ? solved_element_current(mna_state, id) : 0.0
+    first_pressure = get(mna_state.node_voltages, first_node, nothing)
+    second_pressure = get(mna_state.node_voltages, second_node, nothing)
+    drop = isnothing(first_pressure) || isnothing(second_pressure) ? nothing : abs(first_pressure - second_pressure)
+
+    # TODO: Consider showing flow direction with an arrow on the selected pipe.
+    return (
+        InspectionDivider("Operation"),
+        inspection_flow_Lps("Flow rate", isnothing(current) ? nothing : abs(current)),
+        inspection_pressure_bar("Pressure drop", drop),
+        InspectionStatus("Fluid", fluid),
+    )
 end
 
 include("precompile_workload.jl")

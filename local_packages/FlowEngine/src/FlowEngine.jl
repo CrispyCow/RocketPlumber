@@ -16,7 +16,7 @@ export DerivedMapState, CalculatorScratchpad, MNA_State, MNA_StateSnapshot, AMat
 export RelativeFluidDeclaration, AbsoluteFluidDeclaration, RelFluidDecl, AbsFluidDecl
 export FluidCompatibilityError
 # Function Exports
-export add_pipes_abs_element!, abs_element_get_current, update_components!, index_grounded_source_elements!
+export add_pipes_abs_element!, abs_element_get_current, solved_element_current, has_solved_element, update_components!, index_grounded_source_elements!
 export list_elements, list_elements!, list_nodes, list_nodes!, prune!, ground_search!, clear_dangling_dependants!
 export filter_no_shrink!, clear_calculator_scratchpad!
 export list_fluid_declarations!, push_mapped_declarations!, map_declaration
@@ -210,7 +210,7 @@ end
 
 "Read-only subset of MNA_State for snapshot publishing. Excludes A-matrix cache, solve buffers, and index mappings."
 @kwdef mutable struct MNA_StateSnapshot
-    # Element lookups (included for logical completeness even if not all currently read on render thread)
+    # Elements from the published solve
     resistors::Dict{ElementID, AbsoluteElement} = Dict{ElementID, AbsoluteElement}()
     csources::Dict{ElementID, AbsoluteElement} = Dict{ElementID, AbsoluteElement}()
     vsources::Dict{ElementID, AbsoluteElement} = Dict{ElementID, AbsoluteElement}()
@@ -619,40 +619,52 @@ function clear_dangling_dependants!(elements::Vector{AbsoluteElement}, element_i
     return nothing
 end
 
-"Returns the current through an absolute element, or nothing if element was pruned"
+"Return an element's current, or `nothing` if pruned or its solved outputs are unavailable."
 function abs_element_get_current(element::AbsoluteElement, derivedmapstate::DerivedMapState, mna_state::Union{MNA_State, MNA_StateSnapshot})
-    if !(element in derivedmapstate.filteredelements)
-        return nothing
-    end
+    element in derivedmapstate.filteredelements || return nothing
+    return _element_current(element, mna_state)
+end
 
-    # for csource, current is their value
+"Calculate current using the supplied element's values and available MNA outputs."
+function _element_current(element::AbsoluteElement, mna_state::Union{MNA_State, MNA_StateSnapshot})
     if element.type == CONST_CURRENT
         return element.value
-    end
-
-    # for vsource, current is looked up directly from MNA results
-    if element.type == CONST_VOLTAGE || element.type == V_DEP_VOLTAGE
-        return mna_state.vsource_currents[element.id]
-    end
-
-    # for resistors, current calculated from voltage difference and resistance
-    if element.type == CONST_RESISTOR
-        volt1 = is_grounded(element.connections.v1) ? 0.0 : mna_state.node_voltages[element.connections.v1]
-        volt2 = is_grounded(element.connections.v2) ? 0.0 : mna_state.node_voltages[element.connections.v2]
+    elseif element.type == CONST_VOLTAGE || element.type == V_DEP_VOLTAGE
+        return get(mna_state.vsource_currents, element.id, nothing)
+    elseif element.type == CONST_RESISTOR
+        volt1 = is_grounded(element.connections.v1) ? 0.0 : get(mna_state.node_voltages, element.connections.v1, nothing)
+        volt2 = is_grounded(element.connections.v2) ? 0.0 : get(mna_state.node_voltages, element.connections.v2, nothing)
+        (isnothing(volt1) || isnothing(volt2)) && return nothing
         return (volt1 - volt2) * element.value
+    elseif element.type == C_DEP_CURRENT
+        # A surviving dependent source must have a voltage-source controller
+        haskey(mna_state.vsources, element.dependent_id) || error("Dependent current source depends on a source absent from the solved voltage sources")
+        current = get(mna_state.vsource_currents, element.dependent_id, nothing)
+        return isnothing(current) ? nothing : current * element.value
     end
 
-    # for dependant current sources, current is dependant on another vsource current
-    if element.type == C_DEP_CURRENT
-        dep_element_id = element.dependent_id
-        if haskey(mna_state.vsource_lookup, dep_element_id)
-            return mna_state.vsource_currents[dep_element_id] * element.value
-        else
-            error("Dependent current source depends on a source that is not in the MNA vsource lookup")
-        end
-    end
+    error("Tried to get current for unimplemented element type $(element.type)")
+end
 
-    error("Tried to get current for unimplemented element type")
+"""
+Return current through an element from the supplied solve, or `nothing` when absent
+or required solved outputs are unavailable. Zero current remains `0.0`.
+Unsupported element types and invalid surviving dependencies raise errors.
+
+Use the stored solved element values, including conductance, rather than values
+reconstructed from runtime behaviours that may have advanced since the solve.
+"""
+function solved_element_current(mna_state::Union{MNA_State, MNA_StateSnapshot}, id::ElementID)
+    for elements in (mna_state.resistors, mna_state.vsources, mna_state.csources)
+        element = get(elements, id, nothing)
+        isnothing(element) || return _element_current(element, mna_state)
+    end
+    return nothing
+end
+
+"Whether an element survived the supplied solve, independently of available outputs."
+function has_solved_element(mna_state::Union{MNA_State, MNA_StateSnapshot}, id::ElementID)
+    return haskey(mna_state.resistors, id) || haskey(mna_state.vsources, id) || haskey(mna_state.csources, id)
 end
 
 # ===============================================================

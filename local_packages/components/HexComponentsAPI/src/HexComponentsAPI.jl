@@ -35,6 +35,11 @@ export collect_effect_particles!
 export get_actions, do_action
 export get_default_component_mass, set_default_component_mass!
 
+# Inspection Exports
+export InspectionItem, InspectionValue, InspectionGauge, InspectionStatus, InspectionDivider, InspectionAlert
+export inspection_volume_gauge_L, inspection_flow_Lps, inspection_pressure_bar, inspection_pressure_gauge_bar
+export InspectionTone, INSPECTION_NORMAL, INSPECTION_WARNING, INSPECTION_ERROR, get_inspection_items
+
 # Reactivation Probe Exports
 export ReactivationProbe, ReactivationProbeOutcome, PROBE_HARMFUL, PROBE_NEUTRAL, PROBE_USEFUL
 export get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe
@@ -131,7 +136,7 @@ MANDATORY METHODS:
     set_tunables(behav::T, tunables::Tuple)::T
     render_base_elem!(queue::AbstractVector, behav::T; glmap, rotation, position, pos_offset = nothing, scale = 1.0, transparency = 1.0, render_height_offset::Integer = 0, kwargs...)::Nothing
 
-Tunables expose current values to the placement editor and runtime inspector through scalar
+Tunables expose current values to the placement editor and read-only technical inspector through scalar
 `TunableProps` and enum-backed `EnumTunableProps`. `set_tunables` accepts the corresponding
 tuple of selected/current values and returns a replacement behaviour.
 
@@ -147,6 +152,7 @@ OPTIONAL METHODS:
     get_component_dry_mass(behav::T; kwargs...)::Float64
     get_component_wet_mass(behav::T; fluid::Union{FluidType, Nothing} = nothing, kwargs...)::Float64
     get_component_mass(behav::T; kwargs...)::Float64
+    get_inspection_items(behav::T; kwargs...)::Tuple
     get_actions(behav::T; kwargs...)
     collect_effect_particles!(manager, behav::T; kwargs...)::Nothing
     map_rotation(behav::T, rotation::HexAxis)::HexAxis
@@ -463,6 +469,7 @@ There are suitable defaults, but concrete PipeBehavior types T can also implemen
 OPTIONAL METHODS:
 
     render_pipe_map!(queue::AbstractVector, behav::T; glmap, rotation, position::PipeCoord, pos_offset = nothing, render_height_offset::Integer = 0, kwargs...)::Nothing
+    get_inspection_items(behav::T; kwargs...)::Tuple
     can_pipe_be_moved(behav::T; kwargs...)::RequestStatus
     produce_abs_elements(behav::T, coord::PipeCoord)::NTuple{N, AbsoluteElement}
 
@@ -548,5 +555,100 @@ end
 
 "Convenience wrapper allowing set_tunables to be called on PipeBehavior"
 set_tunables(behav::T, tunables::NTuple{N, Real}) where {N, T <: PipeBehavior} = set_pipe_tunables(behav, tunables)
+
+# ===============================================================
+# Read-only Inspection
+# ===============================================================
+
+"Read-only player-facing information, independent of any UI toolkit."
+abstract type InspectionItem end
+
+"A labelled, already-converted measurement; `nothing` means unavailable and empty units mean dimensionless."
+struct InspectionValue <: InspectionItem
+    label::String
+    value::Union{Nothing, Float64}
+    units::String
+end
+
+InspectionValue(label::String, value::Real; units::String = "") = InspectionValue(label, Float64(value), units)
+InspectionValue(label::String, ::Nothing; units::String = "") = InspectionValue(label, nothing, units)
+
+"A bounded measurement with an optional commanded target. Clamp visuals only; colour is optional RGBA."
+struct InspectionGauge <: InspectionItem
+    label::String
+    value::Float64
+    minimum::Float64
+    maximum::Float64
+    units::String
+    colour::Union{Nothing, SVector{4, Float32}}
+    target::Union{Nothing, Float64}
+end
+
+function InspectionGauge(label::String, value::Real, maximum::Real; minimum::Real = 0.0, units::String = "", colour = nothing, target::Union{Nothing, Real} = nothing)
+    return InspectionGauge(label, Float64(value), Float64(minimum), Float64(maximum), units, colour, isnothing(target) ? nothing : Float64(target))
+end
+
+"Construct a contents gauge in litres from internal volume and capacity."
+inspection_volume_gauge_L(label::String, amount::Real, capacity::Real; colour = nothing) =
+    InspectionGauge(label, volume_to_litres(amount), volume_to_litres(capacity); units = "L", colour)
+
+"Construct a flow readout in litres per second from internal circuit flow."
+inspection_flow_Lps(label::String, flow::Union{Nothing, Real}) =
+    InspectionValue(label, isnothing(flow) ? nothing : flow_to_litres_per_second(flow); units = "L/s")
+
+"Construct a pressure readout in bar from internal pressure."
+inspection_pressure_bar(label::String, pressure::Union{Nothing, Real}) =
+    InspectionValue(label, isnothing(pressure) ? nothing : pressure_to_bar(pressure); units = "bar")
+
+"Construct a pressure gauge in bar from internal pressure and its operating limit."
+inspection_pressure_gauge_bar(label::String, pressure::Real, maximum::Real; colour = nothing) =
+    InspectionGauge(label, pressure_to_bar(pressure), pressure_to_bar(maximum); units = "bar", colour)
+
+"Status presentation: ordinary text, a caution, or a fault. Fluid identities retain their domain type."
+@enum InspectionTone::UInt8 INSPECTION_NORMAL INSPECTION_WARNING INSPECTION_ERROR
+
+"An ordinary separator, or a labelled separator introducing a group of readouts."
+struct InspectionDivider <: InspectionItem
+    label::String
+end
+
+InspectionDivider() = InspectionDivider("")
+
+"A prominent informational message, operating warning, or persistent fault."
+struct InspectionAlert <: InspectionItem
+    message::String
+    tone::InspectionTone
+end
+
+InspectionAlert(message::String; tone::InspectionTone = INSPECTION_NORMAL) = InspectionAlert(message, tone)
+
+"A labelled status or standalone message (empty label). Fluid values use the game's fluid names and colours."
+struct InspectionStatus{T <: Union{String, FluidType, Nothing}} <: InspectionItem
+    label::String
+    value::T
+    tone::InspectionTone
+end
+
+InspectionStatus(label::String, value::Union{String, FluidType, Nothing}; tone::InspectionTone = INSPECTION_NORMAL) = InspectionStatus(label, value, tone)
+
+"""
+Return UI-independent, read-only inspection descriptors as a tuple; the default is empty.
+Behaviour fragments may compose readouts by splatting their tuples.
+
+Implementations declare required typed position and simulation keywords. Placed
+components forward `rotation` and `mirrored`; callers supply `tile` for components
+or `position::PipeCoord` for pipes. Placed pipes forward keywords unchanged.
+Matching derived/MNA snapshots are borrowed: never mutate or retain them beyond
+the frame.
+
+Keep unavailable measurements distinct from valid zero. A pruned flow path may
+report zero where appropriate; incomplete outputs for surviving elements remain
+unavailable. Use the shared unit-specific helpers for physical presentation;
+renderers receive converted values and do not infer conversions from unit strings.
+"""
+get_inspection_items(::Union{ComponentBehavior, PipeBehavior}; kwargs...) = ()
+
+get_inspection_items(comp::PlacedComponent; kwargs...) = get_inspection_items(comp.component; rotation = comp.rotation, mirrored = comp.mirrored, kwargs...)
+get_inspection_items(pipe::PlacedPipe; kwargs...) = get_inspection_items(pipe.pipe; kwargs...)
 
 end # module HexComponentsAPI

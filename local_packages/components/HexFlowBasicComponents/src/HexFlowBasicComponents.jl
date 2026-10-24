@@ -22,7 +22,7 @@ using HexFlowRendering, RenderEngine
 # `ComponentBehavior` mandatory methods
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # `ComponentBehavior` optional methods
-import HexComponentsAPI: render_map_elem!, map_rotation, get_actions, do_action, get_component_temperature
+import HexComponentsAPI: render_map_elem!, map_rotation, get_actions, do_action, get_component_temperature, get_inspection_items
 
 # Behaviour Fragment Exports
 export HorizontalFlipOnlyBehavFrag, NoRotationBehavFrag
@@ -266,6 +266,15 @@ function OverheatLimitBehavFrag(
 end
 
 get_overheat_limit_temperature(frag::OverheatLimitBehavFrag)::Float64 = frag.limit_temperature_k
+
+function get_inspection_items(frag::OverheatLimitBehavFrag; temperature_label::String = "Temperature", kwargs...)
+    faults = is_damaged(frag) ? (InspectionAlert("Damaged - repair required"; tone = INSPECTION_ERROR),) : ()
+    return (
+        InspectionGauge(temperature_label, get_component_temperature(frag), get_overheat_limit_temperature(frag); units = "K", colour = get_overheat_tint(frag)),
+        faults...,
+    )
+end
+
 get_component_temperature(frag::OverheatLimitBehavFrag)::Float64 = get_component_temperature(frag.temperature)
 set_component_temperature(frag::OverheatLimitBehavFrag, temperature_k::Real) = @set frag.temperature = set_component_temperature(frag.temperature, temperature_k)
 damage(frag::OverheatLimitBehavFrag) = @set frag.damage = damage(frag.damage)

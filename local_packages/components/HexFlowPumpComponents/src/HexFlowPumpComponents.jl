@@ -21,7 +21,7 @@ using HexFlowRendering, RenderEngine
 # `ComponentBehavior` mandatory methods
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # `ComponentBehavior` optional methods
-import HexComponentsAPI: on_click, update_flowbehav, render_map_elem!, get_actions, do_action, produce_rel_fluid_declarations, map_mirroring, get_component_temperature
+import HexComponentsAPI: on_click, update_flowbehav, render_map_elem!, get_actions, do_action, produce_rel_fluid_declarations, map_mirroring, get_component_temperature, get_inspection_items
 # Reactivation probe interface
 import HexComponentsAPI: get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe
 
@@ -91,6 +91,10 @@ end
 
 get_current_energy(store::EnergyStore)::Float64 = store.state.stored_energy
 get_max_energy(store::EnergyStore)::Float64 = store.max_energy
+
+function get_inspection_items(store::EnergyStore; kwargs...)
+    return (InspectionGauge("Energy", get_current_energy(store), get_max_energy(store); units = "EU", colour = ColourType(1.0, 0.8, 0.2, 1.0)),)
+end
 
 "Change stored energy by a delta, clamped to the configured capacity."
 function update_energy(store::EnergyStore, delta_energy::Float64)
@@ -360,6 +364,33 @@ function produce_rel_elements(comp::TurboPumpCompBehav)::NTuple{3, RelativeEleme
     )
 
     return (pump_source, series_resistor, turbine_resistor)
+end
+
+"Read the signed external outlet-minus-inlet pressure, after placement transforms."
+function inspection_pump_pressure_rise(mna_state::Union{MNA_State, MNA_StateSnapshot}, tile::TileCoord, rotation::HexAxis, mirrored::Bool)
+    inlet = map_element(HexFrame.NODE_Q_POS, tile, rotation, mirrored)
+    outlet = map_element(HexFrame.NODE_Q_NEG, tile, rotation, mirrored)
+    inlet_pressure = get(mna_state.node_voltages, inlet, nothing)
+    outlet_pressure = get(mna_state.node_voltages, outlet, nothing)
+    return isnothing(inlet_pressure) || isnothing(outlet_pressure) ? nothing : outlet_pressure - inlet_pressure
+end
+
+function get_inspection_items(comp::TurboPumpCompBehav; tile::TileCoord, rotation::HexAxis, mna_state::Union{MNA_State, MNA_StateSnapshot}, mirrored::Bool = false, kwargs...)
+    overspeed = get_current_rpm(comp.rotor) > get_rated_rpm(comp) ? (InspectionAlert("Overspeed"; tone = INSPECTION_WARNING),) : ()
+    id = ElementID(tile, pump_element_index)
+    current = has_solved_element(mna_state, id) ? solved_element_current(mna_state, id) : 0.0
+    temperature, faults... = get_inspection_items(comp.overheat; temperature_label = "Turbine temperature", kwargs...)
+
+    return (
+        InspectionDivider("Operation"),
+        inspection_flow_Lps("Pump flow", isnothing(current) ? nothing : -current),
+        inspection_pressure_bar("Pressure rise", inspection_pump_pressure_rise(mna_state, tile, rotation, mirrored)),
+        InspectionGauge("Rotor speed", get_current_rpm(comp.rotor), get_rated_rpm(comp); units = "rpm", colour = turbopump_speed_indicator(comp).colour),
+        InspectionDivider("Condition"),
+        temperature,
+        overspeed...,
+        faults...,
+    )
 end
 
 function get_tunables(comp::TurboPumpCompBehav)::NTuple{13, TunableProps}
@@ -667,6 +698,23 @@ function produce_rel_elements(comp::ElectricPumpCompBehav)::NTuple{2, RelativeEl
     pump_rels = produce_rel_elements(comp.pump, has_energy)
     switch_rels = produce_rel_elements(comp.switch)
     return (pump_rels[1], switch_rels[1])
+end
+
+function get_inspection_items(comp::ElectricPumpCompBehav; tile::TileCoord, rotation::HexAxis, mna_state::Union{MNA_State, MNA_StateSnapshot}, mirrored::Bool = false, kwargs...)
+    id = ElementID(tile, pump_element_index)
+    current = has_solved_element(mna_state, id) ? solved_element_current(mna_state, id) : 0.0
+    faults = get_current_energy(comp.energy) <= 0.0 ? (
+            InspectionDivider("Condition"), InspectionAlert("Energy depleted"; tone = INSPECTION_WARNING),
+        ) : ()
+
+    return (
+        InspectionDivider("Operation"),
+        inspection_flow_Lps("Pump flow", isnothing(current) ? nothing : -current),
+        inspection_pressure_bar("Pressure rise", inspection_pump_pressure_rise(mna_state, tile, rotation, mirrored)),
+        get_inspection_items(comp.switch; opening_label = "Pump setting", kwargs...)...,
+        get_inspection_items(comp.energy; kwargs...)...,
+        faults...,
+    )
 end
 
 function get_tunables(comp::ElectricPumpCompBehav)::NTuple{5, TunableProps}

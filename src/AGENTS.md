@@ -32,6 +32,16 @@ launching, input, UI, rendering, persistence, and game-session flow.
   package; `RocketPlumber.jl` must not choose a process-wide GLFW backend.
 - `interactions.jl` translates keyboard and mouse input into view-only changes
   or calculator commands.
+- `ui_inspection.jl` owns generic player-facing descriptor rendering and optional,
+  read-only technical inspection. Component packages own measurement meanings and
+  descriptor ordering; keep the renderer independent of concrete readout semantics.
+  Use the current render snapshot throughout inspection; never mutate or retain
+  borrowed derived/MNA data. Missing solver readings must remain distinct from zero.
+  Hover previews are temporary and non-interactive; selection takes precedence and
+  enables persistent inspection with expandable `Technical details (Debug)`.
+  `ui_game.jl` owns the permanent Properties panel and placement controls, including
+  viewport constraints and scrolling. Properties remains independent of Developer
+  Utilities; hidden UI and Space Map suppress it.
 - `ui_*.jl` contains the CImGui interface. `recording.jl` and `timelapse.jl`
   handle capture concerns.
 - `components.jl` defines application-level component instances and
@@ -103,6 +113,9 @@ new mutation, add a command rather than bypassing that boundary.
 - Normal UI text uses the default embedded ProggyClean bitmap font at 13 px; do not push a font for normal-sized text.
 - Text rendered at an explicit non-default size should use `CImGui.PushFont(UI_VECTOR_FONT, size)` so the embedded scalable ProggyForever font is used.
 - Do not use `CImGui.PushFont(C_NULL, size)` to scale the default bitmap font.
+- `initialise_ui_fonts!()` registers both embedded fonts in the current context;
+  headless UI tests must initialise their own fonts and restore `UI_VECTOR_FONT`
+  before returning to another context.
 
 ## Verification
 

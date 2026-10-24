@@ -115,6 +115,7 @@ end
             produce_abs_elements(placed, tile)
             produce_rel_fluid_declarations(placed)
             get_tunables(placed)
+            get_inspection_items(placed)
             get_component_wet_mass(placed)
             get_component_mass(placed)
             map_rotation(placed, HexFrame.S_POS)

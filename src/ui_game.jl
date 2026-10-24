@@ -78,198 +78,6 @@ function edit_tunables!(tunables_tuple)
     return Tuple(result)
 end
 
-"Text description for a tile coordinate."
-coord_description(tile::TileCoord) = "($(tile.q), $(tile.r))"
-
-"Text description for a vertex coordinate."
-function coord_description(vert::VertexCoord)
-    direction = if vert.dir == HexFrame.Q_POS
-        "Right"
-    elseif vert.dir == HexFrame.Q_NEG
-        "Left"
-    else
-        "(ERR: improper vertex)"
-    end
-    return "$direction node of $(coord_description(vert.tile))"
-end
-
-"Display component tunables in read-only format. Handles both scalar and enum tunable descriptors."
-function display_component_values!(tunables_tuple)
-    if isempty(tunables_tuple)
-        CImGui.Text("No configurable values")
-        return nothing
-    end
-
-    for (index, props) in enumerate(tunables_tuple)
-        CImGui.PushID(index)
-
-        if props isa TunableProps
-            CImGui.Text("$(props.type_desc) [$index]")
-            CImGui.Text("$(format_value(props.current_val)) $(props.unit_desc)")
-        elseif props isa EnumTunableProps
-            idx = findfirst(==(props.current_val), props.options)
-            val_label = !isnothing(idx) ? props.option_labels[idx] : string(props.current_val)
-            CImGui.Text("$(props.type_desc): $(val_label)")
-        end
-        CImGui.Separator()
-
-        CImGui.PopID()
-    end
-
-    return nothing
-end
-
-"Display circuit element details in the property inspector."
-function display_element_details!(elements::Vector{AbsoluteElement}, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot)
-    if isempty(elements)
-        CImGui.Text("No elements")
-        return nothing
-    end
-
-    for (index, element) in enumerate(elements)
-        CImGui.PushID(index)
-
-        props = get_tunables(element)
-
-        CImGui.Text("$(props.type_desc) [$index]")
-        CImGui.Text("Value: $(format_value(props.current_val)) $(props.unit_desc)")
-
-        current = abs_element_get_current(element, derivedmapstate, mna_state)
-        if isnothing(current)
-            CImGui.Text("Current: Not Connected")
-        else
-            CImGui.Text("Current: $(format_value(current)) A")
-        end
-
-        CImGui.Separator()
-        CImGui.PopID()
-    end
-
-    return nothing
-end
-
-"Inspect nothing: placeholder text."
-inspect_ui!(::Nothing, ::GameMap, ::DerivedMapState, ::MNA_StateSnapshot) = CImGui.Text("Nothing.")
-
-"Inspect a tile coordinate, displaying component values and element details."
-function inspect_ui!(tile::TileCoord, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot)
-    CImGui.Text("Hex Tile at $(coord_description(tile))")
-    for (slot, dir) in ((1, HexFrame.NODE_INTERNAL_1), (2, HexFrame.NODE_INTERNAL_2), (3, HexFrame.NODE_INTERNAL_3))
-        internalnode = NodeCoord(tile, dir)
-        if haskey(mna_state.node_voltages, internalnode)
-            CImGui.Text("Internal Node $slot Voltage: $(format_value(mna_state.node_voltages[internalnode])) V")
-        end
-    end
-
-    comp = get_component(gamemap, tile)
-    if !isnothing(comp)
-        tilecomp = comp
-        component_temperature = get_component_temperature(tilecomp)
-        temperature_str = isnothing(component_temperature) ? "None" : "$(format_value(component_temperature)) K"
-        CImGui.Text("Temperature: $(temperature_str)")
-        CImGui.Text("Type: $(String(nameof(typeof(tilecomp.component))))")
-        CImGui.Text("Ship: $(tilecomp.ship)")
-
-        # Component Values
-        CImGui.Text("\nValues:")
-        CImGui.Separator()
-        CImGui.Indent()
-        tunables = get_tunables(tilecomp)
-        display_component_values!(tunables)
-        CImGui.Unindent()
-
-        # Element Details
-        CImGui.Text("\nDerived Elements:")
-        CImGui.Separator()
-        CImGui.Indent()
-        elements = produce_abs_elements(tilecomp, tile)
-        display_element_details!(collect(elements), derivedmapstate, mna_state)
-        CImGui.Unindent()
-    else
-        CImGui.Text("No component on this tile.")
-    end
-
-    return nothing
-end
-
-"Inspect a vertex coordinate, displaying node voltage and fluid tag."
-function inspect_ui!(vert::VertexCoord, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot)
-    CImGui.Text(coord_description(vert))
-    node = to_nodecoord(vert)
-
-    # Exit early if node has no voltage defined
-    if !haskey(mna_state.node_voltages, node)
-        return nothing
-    end
-
-    CImGui.Text("Node Voltage: $(format_value(mna_state.node_voltages[node])) V\n")
-
-    fluidtag = get(derivedmapstate.nodeactualfluids, node, nothing)
-    fluidstr = !isnothing(fluidtag) ? fluid_type_label(fluidtag) : "None"
-    CImGui.Text("Fluid Type: $(fluidstr)")
-
-    region_id = get(derivedmapstate.node_to_region, node, nothing)
-    region_str = !isnothing(region_id) ? string(region_id) : "None"
-    CImGui.Text("Fluid Region: $(region_str)")
-
-    region_temp = !isnothing(region_id) ? get(derivedmapstate.region_temperatures, region_id, nothing) : nothing
-    region_temp_str = !isnothing(region_temp) ? "$(format_value(region_temp)) K" : "None"
-    CImGui.Text("Region Temperature: $(region_temp_str)")
-
-    # Display fluid declarations affecting this node
-    if haskey(derivedmapstate.node_declarations, node)
-        decl = derivedmapstate.node_declarations[node]
-        if decl isa HexFluids.FluidSource
-            CImGui.Text("Declaration: Source ($(fluid_type_label(decl.fluid_type)), T=$(format_value(decl.temperature)) K)")
-        elseif decl isa HexFluids.FluidTypeRule
-            CImGui.Text("Declaration: TypeRule ($(fluid_type_label(decl.fluid_type)))")
-        elseif decl isa HexFluids.FluidConstraintRule
-            CImGui.Text("Declaration: Constraint ($(fluid_constraint_label(decl.constraint)))")
-        end
-    end
-
-    # Display temperature if available
-    temp = get(derivedmapstate.node_temperatures, node, nothing)
-    temp_str = !isnothing(temp) ? "$(format_value(temp)) K" : "None"
-    CImGui.Text("Node Temperature: $(temp_str)")
-
-    return nothing
-end
-
-"Inspect a pipe coordinate, displaying pipe information."
-function inspect_ui!(pipe_coord::PipeCoord, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot)
-    CImGui.Text("Pipe Between:")
-    CImGui.Text("$(coord_description(pipe_coord.v1)) and $(coord_description(pipe_coord.v2))")
-
-    # Check for pipe behaviours
-    pipe = get_pipe(gamemap, pipe_coord)
-    if !isnothing(pipe)
-        pipe_behav = pipe
-        CImGui.Text("Type: $(nameof(typeof(pipe_behav.pipe)))")
-        CImGui.Text("Ship: $(pipe_behav.ship)")
-
-        # Pipe Values
-        CImGui.Text("\nPipe Values:")
-        CImGui.Separator()
-        CImGui.Indent()
-        tunables = get_pipe_tunables(pipe_behav)
-        display_component_values!(tunables)
-        CImGui.Unindent()
-
-        # Element Details
-        CImGui.Text("\nElement Details:")
-        CImGui.Separator()
-        CImGui.Indent()
-        elements = produce_abs_elements(pipe_behav, pipe_coord)
-        display_element_details!(collect(elements), derivedmapstate, mna_state)
-        CImGui.Unindent()
-    else
-        CImGui.Text("No pipe at this location.")
-    end
-
-    return nothing
-end
-
 #= ---------- Helper Functions ---------- =#
 
 "Map an angle in degrees to the nearest `HexAxis` direction (60-degree quantisation)."
@@ -799,29 +607,62 @@ function ui_notifications_render!(
     return nothing
 end
 
-"""
-Renders the property box on the right side of the window.
-Must be called within ui_renderwrap.
-"""
+# Fit selected standard tanks, including Operation and the collapsed Debug header.
+const PROPERTY_INSPECTOR_MIN_HEIGHT = 220.0
+
+"Render the permanent, constrained Properties inspector at the top-right."
 function ui_propertybox_render!(
         inputstate::InputState, gamemap::GameMap, derivedmapstate::DerivedMapState, mna_state::MNA_StateSnapshot,
-        winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}}, flowcalc_ipc::FlowCalculatorIPC
+        winsize::NamedTuple{(:width, :height), Tuple{Int32, Int32}}
     )
     state = placement_state(inputstate)
+    # Public capture checks use the preceding frame's windows. Previews accept no
+    # input, so they cannot block their own world hover on the following frame.
+    world_hover_allowed = !unsafe_load(CImGui.GetIO().WantCaptureMouse) &&
+        !CImGui.IsWindowHovered(CImGui.ImGuiHoveredFlags_AnyWindow) &&
+        !inputstate.escape_menu_active && isnothing(inputstate.action_popup)
+    content = property_panel_content(inputstate, gamemap; world_hover_allowed)
+    content.visibility == :hidden && return nothing
+    selected_count = state isa PlacementReadyState ? selected_element_count(inputstate) : 0
+
     win_float = to_float(winsize)
+    width = min(PROPERTY_INSPECTOR_WIDTH, max(1.0, win_float.width))
+    max_height = max(1.0, 0.75 * win_float.height)
+    flags = DEFAULT_WINDOW_FLAGS | CImGui.ImGuiWindowFlags_AlwaysAutoResize |
+        CImGui.ImGuiWindowFlags_NoSavedSettings | CImGui.ImGuiWindowFlags_NoFocusOnAppearing
+    CImGui.SetNextWindowPos((win_float.width, 0.0), CImGui.ImGuiCond_Always, (1.0, 0.0))
+    if content.visibility == :preview
+        # No mouse input, keyboard navigation or focus; scrolling requires selection.
+        flags |= CImGui.ImGuiWindowFlags_NoInputs | CImGui.ImGuiWindowFlags_NoScrollbar | CImGui.ImGuiWindowFlags_NoScrollWithMouse
+    end
+    CImGui.SetNextWindowSizeConstraints((width, min(PROPERTY_INSPECTOR_MIN_HEIGHT, max_height)), (width, max_height))
+    CImGui.Begin("Properties", C_NULL, flags)
+    # ImGui owns the last content identity solely to reset scrolling on target/mode changes.
+    content_id = hash((content.visibility, typeof(state), content.target, selected_count)) % UInt32
+    storage = CImGui.GetStateStorage()
+    scroll_key = CImGui.GetID("##last_content")
+    previous_id = CImGui.GetInt(storage, scroll_key, 0)
+    if previous_id != reinterpret(Int32, content_id)
+        CImGui.SetScrollY(0.0f0)
+        CImGui.SetInt(storage, scroll_key, reinterpret(Int32, content_id))
+    end
 
-    ui_window("Properties", (win_float.width - propertyboxwidth, 0.0), (propertyboxwidth, win_float.height))
-
-    # Display mode description
     CImGui.PushFont(UI_VECTOR_FONT, 18.0)
-    CImGui.Text("PROPERTIES:")
+    CImGui.TextUnformatted("Properties")
     CImGui.PopFont()
+    if selected_count > 0
+        title_height = CImGui.GetItemRectSize().y
+        CImGui.SameLine()
+        CImGui.SetCursorPosY(CImGui.GetCursorPosY() + (title_height - CImGui.GetTextLineHeight()) / 2)
+        CImGui.TextColored(ImVec4(0.4, 0.75, 1.0, 1.0), "Selected")
+    end
     state_description = placement_state_description(state)
     if !isnothing(state_description)
-        CImGui.Text(state_description)
+        CImGui.TextWrapped(state_description)
     end
+    CImGui.PushStyleVar(CImGui.ImGuiStyleVar_SeparatorSize, 2.0f0)
     CImGui.Separator()
-    CImGui.NewLine()
+    CImGui.PopStyleVar()
 
     # Tile placement controls
     if state isa PlacementTileState
@@ -857,62 +698,12 @@ function ui_propertybox_render!(
 
     # Selection inspector
     if state isa PlacementReadyState
-        selected_count = selected_element_count(inputstate)
-
         if selected_count > 1
             CImGui.Text("$selected_count parts selected")
             CImGui.Text("Select one part to inspect its details.")
             CImGui.Separator()
-        elseif selected_count == 1
-            CImGui.Text("Inspecting selected part...")
-            CImGui.Separator()
-            CImGui.NewLine()
-
-            component_coords = selected_component_coords(inputstate)
-            if !isempty(component_coords)
-                selected = first(component_coords)
-                comp = get_component(gamemap, selected)
-                if isnothing(comp)
-                    CImGui.Text("Selected component no longer exists.")
-                    clear_selection!(inputstate)
-                    CImGui.End()
-                    return nothing
-                end
-                tilecomp = comp
-                CImGui.Text("Hex Tile at $(coord_description(selected))")
-                CImGui.Text("Type: $(String(nameof(typeof(tilecomp.component))))")
-                CImGui.Text("Ship: $(tilecomp.ship)")
-
-                # Values section (read-only — actions are in the popup)
-                CImGui.NewLine()
-                CImGui.Text("Values:")
-                CImGui.Separator()
-                CImGui.Indent()
-                tunables = get_tunables(tilecomp)
-                display_component_values!(tunables)
-                CImGui.Unindent()
-
-                # Element Details
-                CImGui.Text("\nDerived Elements:")
-                CImGui.Separator()
-                CImGui.Indent()
-                elements = produce_abs_elements(tilecomp, selected)
-                display_element_details!(collect(elements), derivedmapstate, mna_state)
-                CImGui.Unindent()
-            else
-                inspect_ui!(first(selected_pipe_coords(inputstate)), gamemap, derivedmapstate, mna_state)
-            end
         else
-            # No right-click selection: show hovered part info
-            clicked = get_clicked(inputstate)
-            if !(clicked isa VertexCoord)
-                cursor_cart = get_cursor_cart(inputstate)
-                if !isnothing(cursor_cart)
-                    clicked_pipe = get_clicked_pipe(cursor_cart, gamemap)
-                    !isnothing(clicked_pipe) && (clicked = clicked_pipe)
-                end
-            end
-            inspect_ui!(clicked, gamemap, derivedmapstate, mna_state)
+            inspect_ui!(content.target, gamemap, derivedmapstate, mna_state; debug = content.visibility == :interactive, minimum_height = min(PROPERTY_INSPECTOR_MIN_HEIGHT, max_height))
         end
     end
 

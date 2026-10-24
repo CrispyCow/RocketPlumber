@@ -21,7 +21,7 @@ using HexFlowRendering, RenderEngine
 # `ComponentBehavior` mandatory methods
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # `ComponentBehavior` optional methods
-import HexComponentsAPI: update_flowbehav, render_map_elem!, map_rotation, can_be_moved, get_component_wet_mass, get_actions, do_action, produce_rel_fluid_declarations
+import HexComponentsAPI: update_flowbehav, render_map_elem!, map_rotation, can_be_moved, get_component_wet_mass, get_actions, do_action, produce_rel_fluid_declarations, get_inspection_items
 # Reactivation probe interface
 import HexComponentsAPI: get_reactivation_probe, classify_reactivation_probe, commit_reactivation_probe
 
@@ -121,6 +121,10 @@ function TankBehavFrag(;
 end
 
 const tank_vsource_element_index::Int = 1 # Tank voltage source is always at index 1
+
+function get_inspection_items(tank::TankBehavFrag; kwargs...)
+    return (InspectionStatus("Seal", is_sealed(tank) ? "Sealed" : "Unsealed"),)
+end
 
 function get_tunables(tank::TankBehavFrag)::NTuple{3, TunableProps}
     max_charge_props = TunableProps(
@@ -314,6 +318,16 @@ struct GasTankBehavFrag <: AbstractTankBehavFrag
     tank::TankBehavFrag
 end
 
+const INSPECTION_EMPTY_TANK_COLOUR = ColourType(0.55, 0.55, 0.55, 1.0)
+
+function get_inspection_items(tank::GasTankBehavFrag; stored_mass::Union{Nothing, Real} = nothing, colour::ColourType = INSPECTION_EMPTY_TANK_COLOUR, kwargs...)
+    return (
+        inspection_pressure_gauge_bar("Pressure", first(produce_rel_elements(tank)).value, tank.tank.max_voltage; colour),
+        InspectionValue("Stored mass", stored_mass; units = "kg"),
+        get_inspection_items(tank.tank; kwargs...)...,
+    )
+end
+
 function produce_rel_elements(behav::GasTankBehavFrag)::NTuple{1, RelativeElement}
     tank = behav.tank
     fill_frac = tank.state.charge / tank.max_charge
@@ -377,6 +391,14 @@ LiquidTankBehavFrag(tank::TankBehavFrag, initial_fluid::Union{FluidType, Nothing
     LiquidTankBehavFrag(tank, HorizontalFlipOnlyBehavFrag(), StoredFluidState(initial_fluid))
 
 LiquidTankBehavFrag(tank::TankBehavFrag) = LiquidTankBehavFrag(tank, nothing)
+
+function get_inspection_items(tank::LiquidTankBehavFrag; stored_mass::Union{Nothing, Real} = nothing, colour::ColourType = INSPECTION_EMPTY_TANK_COLOUR, kwargs...)
+    return (
+        inspection_volume_gauge_L("Contents", tank.tank.state.charge, tank.tank.max_charge; colour),
+        InspectionValue("Stored mass", stored_mass; units = "kg"),
+        get_inspection_items(tank.tank; kwargs...)...,
+    )
+end
 
 function produce_rel_elements(behav::LiquidTankBehavFrag)::NTuple{1, RelativeElement}
     tank = behav.tank
@@ -545,6 +567,24 @@ function produce_rel_elements(tank::PressureFedTankBehavFrag)::NTuple{2, Relativ
         active = gas_active # gas source handles negative charge with negative pressure ramp
     )
     return (liquid_vsource, gas_vsource)
+end
+
+function get_inspection_items(tank::PressureFedTankBehavFrag; liquid_mass::Union{Nothing, Real} = nothing, pressurant::Union{Nothing, FluidType} = nothing, pressurant_mass::Union{Nothing, Real} = nothing, colour::ColourType = INSPECTION_EMPTY_TANK_COLOUR, kwargs...)
+    liquid = first(produce_rel_elements(tank))
+    faults = compute_gas_pressure(tank) >= tank.max_gas_pressure ? (
+            InspectionDivider("Condition"), InspectionAlert("Pressurant pressure limit reached"; tone = INSPECTION_WARNING),
+        ) : ()
+
+    return (
+        inspection_volume_gauge_L("Contents", tank.liquid_state.charge, tank.max_liquid_charge; colour),
+        InspectionValue("Stored liquid mass", liquid_mass; units = "kg"),
+        inspection_pressure_bar("Feed pressure", liquid.value),
+        InspectionStatus("Pressurant", pressurant),
+        InspectionValue("Pressurant mass", pressurant_mass; units = "kg"),
+        InspectionStatus("Liquid seal", liquid_is_sealed(tank) ? "Sealed" : "Unsealed"),
+        InspectionStatus("Gas seal", gas_is_sealed(tank) ? "Sealed" : "Unsealed"),
+        faults...,
+    )
 end
 
 function get_tunables(tank::PressureFedTankBehavFrag)::NTuple{4, TunableProps}
@@ -791,6 +831,14 @@ function produce_rel_elements(comp::ThevininTankCompBehav{T, N}) where {T, N}
     return (tank_elem..., resistors...)
 end
 
+function get_inspection_items(comp::ThevininTankCompBehav; kwargs...)
+    return (
+        InspectionDivider("Operation"),
+        InspectionStatus("Fluid", get_stored_fluid(comp)),
+        get_inspection_items(comp.tank; stored_mass = get_component_wet_mass(comp), colour = get_fluid_colour(get_stored_fluid(comp); default = INSPECTION_EMPTY_TANK_COLOUR), kwargs...)...,
+    )
+end
+
 function get_tunables(comp::ThevininTankCompBehav)
     tank_tunables = get_tunables(comp.tank)
     thev_props = TunableProps(
@@ -984,6 +1032,16 @@ function PressureFedTankCompBehav(
         float(series_conductance),
         gas_fluid,
         rotation_behav
+    )
+end
+
+function get_inspection_items(comp::PressureFedTankCompBehav; kwargs...)
+    stored = get_stored_fluid(comp)
+    liquid_mass = isnothing(stored) ? 0.0 : get_component_wet_mass(comp; fluid = stored)
+    return (
+        InspectionDivider("Operation"),
+        InspectionStatus("Liquid", stored),
+        get_inspection_items(comp.tank; colour = get_fluid_colour(stored; default = INSPECTION_EMPTY_TANK_COLOUR), liquid_mass, pressurant = comp.gas_fluid, pressurant_mass = get_component_wet_mass(comp; fluid = comp.gas_fluid), kwargs...)...,
     )
 end
 

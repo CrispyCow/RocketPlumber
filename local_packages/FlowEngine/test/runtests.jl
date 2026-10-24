@@ -1884,4 +1884,73 @@ end
     end
 end
 
+
+@testset "Solved element current" begin
+    tile = TileCoord(7, -3)
+    first_node = NodeCoord(tile, HexFrame.NODE_Q_POS)
+    second_node = NodeCoord(tile, HexFrame.NODE_Q_NEG)
+    ground = NodeCoord(tile, HexFrame.GROUND)
+    connections = AbsoluteElementConnections(first_node, second_node)
+    resistor = AbsoluteElement(connections, 4.0, CONST_RESISTOR, ElementID(tile, 1))
+    grounded = AbsoluteElement(AbsoluteElementConnections(first_node, ground), 2.0, CONST_RESISTOR, ElementID(tile, 2))
+    voltage = AbsoluteElement(connections, 8.0, CONST_VOLTAGE, ElementID(tile, 3))
+    current = AbsoluteElement(connections, 3.0, CONST_CURRENT, ElementID(tile, 4))
+    dependent_voltage = AbsoluteElement(connections, 2.0, V_DEP_VOLTAGE, ElementID(tile, 5); dependent_id = resistor.id)
+    dependent_current = AbsoluteElement(connections, 2.5, C_DEP_CURRENT, ElementID(tile, 6); dependent_id = voltage.id)
+
+    for state in (MNA_State(), MNA_StateSnapshot())
+        @test isnothing(solved_element_current(state, resistor.id))
+        @test !has_solved_element(state, resistor.id)
+        @test !has_solved_element(state, voltage.id)
+        state.vsource_currents[voltage.id] = 99.0
+        @test isnothing(solved_element_current(state, voltage.id)) # Stale outputs alone are insufficient
+
+        merge!(state.resistors, Dict(resistor.id => resistor, grounded.id => grounded))
+        merge!(state.vsources, Dict(voltage.id => voltage, dependent_voltage.id => dependent_voltage))
+        merge!(state.csources, Dict(current.id => current, dependent_current.id => dependent_current))
+        empty!(state.vsource_currents)
+        @test all(id -> has_solved_element(state, id), (resistor.id, voltage.id, current.id))
+        @test isnothing(solved_element_current(state, resistor.id))
+        @test isnothing(solved_element_current(state, voltage.id))
+        @test isnothing(solved_element_current(state, dependent_voltage.id))
+        @test isnothing(solved_element_current(state, dependent_current.id))
+        @test solved_element_current(state, current.id) == 3.0
+
+        state.node_voltages[first_node] = 5.0
+        @test isnothing(solved_element_current(state, resistor.id)) # Missing second voltage
+        @test solved_element_current(state, grounded.id) == 10.0 # Ground needs no dictionary entry
+        state.node_voltages[second_node] = 2.0
+        @test solved_element_current(state, resistor.id) == 12.0
+        state.node_voltages[second_node] = 5.0
+        @test solved_element_current(state, resistor.id) === 0.0
+        delete!(state.node_voltages, first_node)
+        @test isnothing(solved_element_current(state, resistor.id))
+
+        state.vsource_currents[voltage.id] = -2.0
+        state.vsource_currents[dependent_voltage.id] = 7.0
+        @test solved_element_current(state, voltage.id) == -2.0
+        @test solved_element_current(state, dependent_voltage.id) == 7.0
+        @test solved_element_current(state, dependent_current.id) == -5.0
+        state.vsource_currents[voltage.id] = 0.0
+        @test solved_element_current(state, voltage.id) === 0.0
+        @test solved_element_current(state, dependent_current.id) === 0.0
+        delete!(state.vsources, voltage.id)
+        @test_throws ErrorException solved_element_current(state, dependent_current.id) # Invalid surviving dependency, despite stale output
+
+        # The element-based simulation API shares the same missing-output handling
+        derived = DerivedMapState()
+        push!(derived.filteredelements, resistor)
+        @test isnothing(abs_element_get_current(resistor, derived, state))
+        state.node_voltages[first_node] = 8.0
+        @test abs_element_get_current(resistor, derived, state) == solved_element_current(state, resistor.id) == 12.0
+        empty!(derived.filteredelements)
+        @test isnothing(abs_element_get_current(resistor, derived, state))
+
+        # Unexpected element types remain programming errors
+        unsupported = AbsoluteElement(connections, 1.0, reinterpret(HexElements.ElementTypes, UInt8(99)), resistor.id)
+        state.resistors[resistor.id] = unsupported
+        @test_throws ErrorException solved_element_current(state, resistor.id)
+    end
+end
+
 println("All FlowEngine tests complete")

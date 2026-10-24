@@ -26,6 +26,15 @@ const _implot_ctx = Ref{Any}(nothing)
 "Embedded vector font for explicitly sized UI text, owned by the ImGui context."
 global UI_VECTOR_FONT::Ptr{CImGui.ImFont} = C_NULL
 
+"Register embedded bitmap and vector fonts in the current ImGui context."
+function initialise_ui_fonts!()
+    io = CImGui.GetIO()
+    fonts = unsafe_load(io.Fonts)
+    io.FontDefault = CImGui.AddFontDefaultBitmap(fonts)
+    global UI_VECTOR_FONT = CImGui.AddFontDefaultVector(fonts)
+    return nothing
+end
+
 "Perform one-time CImGui and ImPlot context and backend setup."
 function ui_setup(window::GLFW.Window)
     # Create shared UI contexts
@@ -33,10 +42,7 @@ function ui_setup(window::GLFW.Window)
     ctx = CImGui.CreateContext()
 
     # Keep bitmap text crisp at the default size; use the vector font for explicit sizes
-    io = CImGui.GetIO()
-    fonts = unsafe_load(io.Fonts)
-    io.FontDefault = CImGui.AddFontDefaultBitmap(fonts)
-    global UI_VECTOR_FONT = CImGui.AddFontDefaultVector(fonts)
+    initialise_ui_fonts!()
 
     _implot_ctx[] = ImPlot.CreateContext()
     ImPlot.SetImGuiContext(ctx)

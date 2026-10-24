@@ -226,7 +226,9 @@ function ui_rendering!(
     set_max_reachable_bounds!(flowcalc_ipc.shared_state, max_view_bounds)
 
     ui_renderwrap() do
-        inputstate.ui_hidden && return nothing
+        if inputstate.ui_hidden
+            return nothing
+        end
 
         if !isnothing(learning_state) && is_sandbox_learning(learning_state)
             active_entry = get_active_entry(learning_state)
@@ -237,13 +239,8 @@ function ui_rendering!(
 
         if !inputstate.spacemap_active
             ui_velocity_tracker_render!(snapshot.gamestate, snapshot.gamemap, inputstate, flowcalc_ipc)
-            ui_propertybox_render!(inputstate, snapshot.gamemap, snapshot.derived, snapshot.mna, GLFW.GetWindowSize(window), flowcalc_ipc)
+            ui_propertybox_render!(inputstate, snapshot.gamemap, snapshot.derived, snapshot.mna, GLFW.GetWindowSize(window))
             ui_action_popup_render!(inputstate, viewstate, flowcalc_ipc.command_queue, snapshot.gamemap)
-            ui_dev_utils_menu_render!(
-                inputstate, flowcalc_ipc, timelapse_recorder, snapshot, viewstate,
-                GLFW.GetWindowSize(window), max_view_bounds;
-                session_timing = session_timing,
-            )
         end
 
         ui_pause_menu_render!(inputstate, flowcalc_ipc, timelapse_recorder, snapshot, window, learning_state; session_timing = session_timing)
@@ -251,6 +248,15 @@ function ui_rendering!(
 
         if !isnothing(learning_state)
             ui_learning_system_render!(learning_state, inputstate, GLFW.GetWindowSize(window))
+        end
+
+        # Development tools are an independent overlay above the ordinary HUD.
+        if !inputstate.spacemap_active
+            ui_dev_utils_menu_render!(
+                inputstate, flowcalc_ipc, timelapse_recorder, snapshot, viewstate,
+                GLFW.GetWindowSize(window), max_view_bounds;
+                session_timing = session_timing,
+            )
         end
 
         ui_explorer_opening_wake_render!(snapshot.gamemap, inputstate, GLFW.GetWindowSize(window))

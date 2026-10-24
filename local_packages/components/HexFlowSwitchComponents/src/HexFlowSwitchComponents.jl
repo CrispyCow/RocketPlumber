@@ -21,7 +21,7 @@ using HexFlowRendering, RenderEngine
 # `ComponentBehavior` mandatory methods
 import HexComponentsAPI: produce_rel_elements, get_tunables, set_tunables, render_base_elem!
 # `ComponentBehavior` optional methods
-import HexComponentsAPI: update_flowbehav, on_click, render_map_elem!, get_actions, do_action
+import HexComponentsAPI: update_flowbehav, on_click, render_map_elem!, get_actions, do_action, get_inspection_items
 
 # Behaviour Fragment Exports
 export AbstractSwitchBehavFrag, BoolSwitchBehavFrag, SteppedSwitchBehavFrag, SwitchBehavFrag
@@ -123,6 +123,10 @@ function produce_rel_elements(switch::SwitchBehavFrag)::NTuple{1, RelativeElemen
 
     rel_elem = RelativeElement(connection, conductance, HexElements.CONST_RESISTOR)
     return (rel_elem,)
+end
+
+function get_inspection_items(switch::SwitchBehavFrag; opening_label::String = "Opening", kwargs...)
+    return (InspectionGauge(opening_label, 100get_switch_percentage(switch), 100.0; target = 100get_target_percentage(switch), units = "%", colour = ColourType(0.85, 0.85, 0.85, 1.0)),)
 end
 
 function get_tunables(switch::SwitchBehavFrag)::NTuple{3, TunableProps}
@@ -332,6 +336,8 @@ produce_rel_elements(behav::BoolSwitchBehavFrag) = produce_rel_elements(behav.sw
 get_tunables(behav::BoolSwitchBehavFrag) = get_tunables(behav.switch)
 set_tunables(behav::BoolSwitchBehavFrag, tunables::NTuple{3, Real}) = BoolSwitchBehavFrag(set_tunables(behav.switch, tunables))
 update_flowbehav(behav::BoolSwitchBehavFrag; kwargs...) = @set behav.switch = update_flowbehav(behav.switch; kwargs...)
+get_inspection_items(switch::AbstractSwitchBehavFrag; kwargs...) = get_inspection_items(switch.switch; kwargs...)
+
 get_switch_percentage(behav::BoolSwitchBehavFrag) = get_switch_percentage(behav.switch)
 get_target_percentage(behav::BoolSwitchBehavFrag) = get_target_percentage(behav.switch)
 
@@ -620,6 +626,11 @@ controlbox_sprite(::StandardValveCompBehav{BoolSwitchBehavFrag}) = :Valves_OnOff
 produce_rel_elements(comp::StandardValveCompBehav) = produce_rel_elements(comp.switch)
 update_flowbehav(comp::StandardValveCompBehav; kwargs...) = @set comp.switch = update_flowbehav(comp.switch; kwargs...)
 
+function get_inspection_items(comp::StandardValveCompBehav; tile::TileCoord, mna_state::Union{MNA_State, MNA_StateSnapshot}, kwargs...)
+    id = ElementID(tile, 1)
+    current = has_solved_element(mna_state, id) ? solved_element_current(mna_state, id) : 0.0
+    return (InspectionDivider("Operation"), inspection_flow_Lps("Flow rate", isnothing(current) ? nothing : abs(current)), get_inspection_items(comp.switch; kwargs...)...)
+end
 get_tunables(comp::StandardValveCompBehav) = get_tunables(comp.switch)
 
 function set_tunables(comp::StandardValveCompBehav{SteppedSwitchBehavFrag}, tunables::NTuple{4, Real})

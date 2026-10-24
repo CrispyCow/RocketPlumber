@@ -14,7 +14,10 @@ const LEARNING_HINT_PANE_WIDTH = 455.0
 const LEARNING_HINT_PANE_MIN_HEIGHT = 180.0
 
 "Get the right-hand gutter for default Learning Helper placement."
-get_learning_right_gutter(inputstate::InputState)::Float32 = inputstate.spacemap_active ? 0.0f0 : Float32(propertyboxwidth)
+function get_learning_right_gutter(inputstate::InputState)::Float32
+    inputstate.spacemap_active && return 0.0f0
+    return Float32(PROPERTY_INSPECTOR_WIDTH)
+end
 
 "Determine whether the Learning Helper list itself should be shown."
 _should_render_learning_helper(state::LearningSystemState)::Bool = state.learning_helper_visible && !is_sandbox_learning(state)
@@ -22,7 +25,7 @@ _should_render_learning_helper(state::LearningSystemState)::Bool = state.learnin
 "Calculate the default Learning Helper position."
 function _get_default_helper_pos(inputstate::InputState, win_float::NamedTuple)::NTuple{2, Float32}
     pos_x = Float32(win_float.width) - get_learning_right_gutter(inputstate) - Float32(LEARNING_HELPER_WIDTH)
-    return (pos_x, 0.0f0)
+    return (max(0.0f0, pos_x), 0.0f0)
 end
 
 "Determine which entries to show based on expanded state."
@@ -129,14 +132,21 @@ end
 
 "Render the draggable Learning Helper list."
 function _render_learning_helper!(state::LearningSystemState, inputstate::InputState, win_float::NamedTuple)
-    if isnothing(state.current_helper_pos)
-        CImGui.SetNextWindowPos(_get_default_helper_pos(inputstate, win_float), CImGui.ImGuiCond_Always)
+    width = min(LEARNING_HELPER_WIDTH, max(1.0, win_float.width))
+    max_height = min(LEARNING_HELPER_MAX_HEIGHT, max(1.0, win_float.height))
+    preferred_pos = isnothing(state.current_helper_pos) ? _get_default_helper_pos(inputstate, win_float) : state.current_helper_pos
+    pos = (
+        clamp(preferred_pos[1], 0.0f0, Float32(max(0.0, win_float.width - width))),
+        clamp(preferred_pos[2], 0.0f0, Float32(max(0.0, win_float.height - min(LEARNING_HELPER_MIN_HEIGHT, max_height)))),
+    )
+    if isnothing(state.current_helper_pos) || pos != state.current_helper_pos
+        CImGui.SetNextWindowPos(pos, CImGui.ImGuiCond_Always)
     end
 
     flags = CImGui.ImGuiWindowFlags_NoResize | CImGui.ImGuiWindowFlags_AlwaysAutoResize
     CImGui.SetNextWindowSizeConstraints(
-        (LEARNING_HELPER_WIDTH, LEARNING_HELPER_MIN_HEIGHT),
-        (LEARNING_HELPER_WIDTH, LEARNING_HELPER_MAX_HEIGHT),
+        (width, min(LEARNING_HELPER_MIN_HEIGHT, max_height)),
+        (width, max_height),
     )
 
     CImGui.PushFont(UI_VECTOR_FONT, 18.0)
@@ -254,7 +264,8 @@ function _render_learning_hint_pane!(state::LearningSystemState, inputstate::Inp
     p_open = Ref(true)
 
     CImGui.SetNextWindowPos(pane_pos, CImGui.ImGuiCond_Always)
-    CImGui.SetNextWindowSizeConstraints((LEARNING_HINT_PANE_WIDTH, pane_min_height), (LEARNING_HINT_PANE_WIDTH, max_h))
+    width = min(LEARNING_HINT_PANE_WIDTH, max(1.0, win_float.width))
+    CImGui.SetNextWindowSizeConstraints((width, pane_min_height), (width, max_h))
     CImGui.Begin("Tutorial: $(entry.definition.title)", show_close_button ? p_open : C_NULL, flags)
 
     try

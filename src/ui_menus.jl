@@ -227,7 +227,7 @@ function ui_dev_utils_menu_render!(
     end
 
     win_float = to_float(winsize)
-    ui_window("Developer Utilities", (win_float.width - propertyboxwidth, 0.0), (propertyboxwidth, win_float.height))
+    ui_window("Developer Utilities", (win_float.width - DEVELOPER_UTILITIES_WIDTH, 0.0), (DEVELOPER_UTILITIES_WIDTH, win_float.height))
 
     # Debug counters at top of menu
     CImGui.Text("UPS: $(@sprintf("%.3f", @atomic flowcalc_ipc.shared_state.actual_ups))")
@@ -235,7 +235,7 @@ function ui_dev_utils_menu_render!(
     CImGui.Text("Frames: $(viewstate.frame_count)")
     CImGui.Separator()
 
-    button_width = propertyboxwidth - 50.0
+    button_width = DEVELOPER_UTILITIES_WIDTH - 50.0
     button_height = 20.0
 
     if CImGui.CollapsingHeader("Editor")

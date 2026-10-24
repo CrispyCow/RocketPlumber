@@ -34,6 +34,7 @@ using StaticArrays: SVector
         produce_rel_elements(placed)
         produce_abs_elements(placed, tile)
         get_tunables(placed)
+        get_inspection_items(placed)
         placed = set_tunables(placed, ())
         get_component_mass(placed)
         map_rotation(placed, HexFrame.S_POS)

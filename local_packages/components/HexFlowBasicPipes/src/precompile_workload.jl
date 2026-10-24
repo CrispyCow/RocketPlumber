@@ -36,10 +36,17 @@ using StaticArrays: SVector
     liquid = DerivedMapState()
     liquid.nodeactualfluids[to_nodecoord(coord.v1)] = HexFluids.MONOPROP_LIQUID
 
+    snapshot = MNA_StateSnapshot()
+    element = only(produce_abs_elements(big, coord))
+    snapshot.resistors[element.id] = element
+    snapshot.node_voltages[element.connections.v1] = 2.0
+    snapshot.node_voltages[element.connections.v2] = 1.0
+
     @compile_workload begin
         for pipe in (scrap, big)
             get_conductance(pipe)
             get_pipe_tunables(pipe)
+            get_inspection_items(pipe; derivedmapstate = gas, mna_state = snapshot, position = coord)
             set_pipe_tunables(pipe, (5.0,))
             get_pipe_click_radius(pipe)
             can_pipe_be_moved(pipe)
