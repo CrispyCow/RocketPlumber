@@ -379,7 +379,7 @@ function get_inspection_items(comp::TurboPumpCompBehav; tile::TileCoord, rotatio
     overspeed = get_current_rpm(comp.rotor) > get_rated_rpm(comp) ? (InspectionAlert("Overspeed"; tone = INSPECTION_WARNING),) : ()
     id = ElementID(tile, pump_element_index)
     current = has_solved_element(mna_state, id) ? solved_element_current(mna_state, id) : 0.0
-    temperature, faults... = get_inspection_items(comp.overheat; temperature_label = "Turbine temperature", kwargs...)
+    temperature, faults... = get_inspection_items(comp.overheat; temperature_label = "Turbine temp", kwargs...)
 
     return (
         InspectionDivider("Operation"),

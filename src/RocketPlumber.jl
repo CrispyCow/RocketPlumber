@@ -10,6 +10,7 @@ using LinearAlgebra, StaticArrays, GeometryBasics
 using ModernGL, GLFW, CSyntax.CRef
 using TimerOutputs, Accessors, Printf, CSyntax
 using FilePathsBase, NativeFileDialog, FFMPEG
+using RelocatableFolders
 import BaseDirs
 import CImGui, CImGui.lib
 using ImPlot
@@ -42,6 +43,7 @@ crashes_dir(; create::Bool = false) = output_dir("logs", "crashes"; create)
 # ===============================================================
 
 include("initial_window_setup.jl")
+include("app_state.jl")
 include("recording.jl")
 include("interactions.jl")
 include("components.jl")
@@ -84,6 +86,7 @@ function launch(; telemetry::Bool = false, gc_log::Bool = false)
     GC.enable_logging(gc_log)
     configure_threads()
     start_telemetry!(telemetry)
+    initialise_app_state!()
     window = start_window()
     enter_start_menu(window)
     finish_telemetry!(; directory = telemetry_dir())

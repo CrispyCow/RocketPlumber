@@ -24,6 +24,10 @@ junctions for temporary operating readouts; select a part for persistent inspect
 and expandable, read-only **Technical details (Debug)**. Larger inspections expand
 and scroll as needed.
 
+Settings in the main menu and in-game Escape menu offer Fullscreen (F11), VSync,
+UI Scale (also Numpad Plus/Minus) and Background Dust. Preferences last across games
+and tutorials until the application closes; hiding dust keeps nozzle exhaust visible.
+
 Once in-game, have a look at the 'Teaser' to get a feel for what's possible, then start a new 'Explorer Mode' game to get into the real gameplay.
 
 Saved files are kept in `RocketPlumber-saves` under your system's Documents directory: maps and exported ships in `maps/`, screenshots in `pictures/`, and recordings in `videos/`.

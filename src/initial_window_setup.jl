@@ -23,15 +23,113 @@ end
 "Global storage for the ImPlot context pointer, managed by `ui_setup` and `ui_teardown`."
 const _implot_ctx = Ref{Any}(nothing)
 
-"Embedded vector font for explicitly sized UI text, owned by the ImGui context."
-global UI_VECTOR_FONT::Ptr{CImGui.ImFont} = C_NULL
+"Six shared typography and layout scales: 100%, 133⅓%, 166⅔%, 200%, 233⅓% and 266⅔%."
+@enum UIScale UIScale100 = 1 UIScale133 UIScale166 UIScale200 UIScale233 UIScale266
+@enum UIFontClass FontStandard = 1 FontLarge FontExtraLarge FontDisplay
 
-"Register embedded bitmap and vector fonts in the current ImGui context."
+const UI_MODULE_PIXELS = (3, 4, 5, 6, 7, 8)
+
+"Return the physical pixel size of one logical UI module without a live UI context."
+ui_module_size(scale::UIScale) = UI_MODULE_PIXELS[Int(scale)]
+
+"Convert integer logical modules to exact physical-pixel Float64 dimensions without a UI context."
+ui_px(modules::Integer, scale::UIScale = current_ui_scale()) = Float64(modules * ui_module_size(scale))
+
+const UI_FONT_SIZES = (
+    (12, 16, 20, 24),
+    (16, 20, 24, 32),
+    (20, 24, 28, 40),
+    (24, 28, 32, 48),
+    (28, 32, 40, 56),
+    (32, 40, 48, 64),
+)
+const UI_FONT_SOURCES = Dict(12 => 12, 16 => 16, 20 => 20, 24 => 12, 28 => 14, 32 => 16, 40 => 20, 48 => 12, 56 => 14, 64 => 16)
+const TAMZEN_NATIVE_SIZES = (12, 14, 16, 20)
+const TAMZEN_FONT_DIR = @path joinpath(@__DIR__, "..", "assets", "fonts", "tamzen")
+
+"Resolve a typography class without accessing a live UI context."
+ui_font_size(scale::UIScale, class::UIFontClass) = UI_FONT_SIZES[Int(scale)][Int(class)]
+
+"Resolve the native Tamzen design; unsupported effective sizes fail explicitly."
+function ui_font_source(size::Int)
+    haskey(UI_FONT_SOURCES, size) || throw(ArgumentError("Unsupported UI font size: $size"))
+    return UI_FONT_SOURCES[size]
+end
+
+"Native Tamzen fonts indexed by design height and Bold flag, owned by the UI context."
+const UI_FONTS = Dict{Tuple{Int, Bool}, Ptr{CImGui.ImFont}}()
+const UI_FONT_CONTEXT = Ref{Ptr{CImGui.ImGuiContext}}(C_NULL)
+
+"Unscaled style value owned by the font context; captured after theme setup."
+const UI_STYLE_BASELINE = Ref{Union{Nothing, CImGui.ImGuiStyle}}(nothing)
+
+"Select the current scale's class and weight; balance with `CImGui.PopFont()`."
+function push_ui_font(class::UIFontClass = FontStandard; bold::Bool = false)
+    context = CImGui.GetCurrentContext()
+    context != C_NULL && context == UI_FONT_CONTEXT[] || error("UI fonts are not initialised in the current ImGui context")
+    size = ui_font_size(current_ui_scale(), class)
+    CImGui.PushFont(UI_FONTS[(ui_font_source(size), bold)], size)
+    return nothing
+end
+
+"Invalidate fonts and the style baseline before destroying their owning UI context."
+function clear_ui_fonts!()
+    empty!(UI_FONTS)
+    UI_FONT_CONTEXT[] = C_NULL
+    UI_STYLE_BASELINE[] = nothing
+    return nothing
+end
+
+"Register eight native designs for on-demand integer enlargement; discard the context on failure."
 function initialise_ui_fonts!()
+    context = CImGui.GetCurrentContext()
+    context == C_NULL && error("UI fonts require a current ImGui context")
+    context == UI_FONT_CONTEXT[] && return nothing
+    clear_ui_fonts!()
     io = CImGui.GetIO()
-    fonts = unsafe_load(io.Fonts)
-    io.FontDefault = CImGui.AddFontDefaultBitmap(fonts)
-    global UI_VECTOR_FONT = CImGui.AddFontDefaultVector(fonts)
+    atlas = unsafe_load(io.Fonts)
+    directory = String(TAMZEN_FONT_DIR)
+    config = CImGui.ImFontConfig()
+    try
+        config.PixelSnapH = true
+        config.OversampleH = 1
+        config.OversampleV = 1
+        config.FontLoaderFlags = CImGui.ImGuiFreeTypeLoaderFlags_NoHinting # Preserve exact pixel outlines
+        for native in TAMZEN_NATIVE_SIZES, bold in (false, true)
+            weight = bold ? "b" : "r"
+            path = joinpath(directory, "Tamzen$(native ÷ 2)x$(native)$(weight).ttf")
+            isfile(path) || error("Missing bundled Tamzen font: $path")
+            font = CImGui.AddFontFromFileTTF(atlas, path, native, config)
+            font == C_NULL && error("Could not load Tamzen font: $path")
+            UI_FONTS[(native, bold)] = font
+        end
+    finally
+        CImGui.Destroy(config)
+    end
+    UI_FONT_CONTEXT[] = context
+    UI_STYLE_BASELINE[] = unsafe_load(CImGui.GetStyle())
+    apply_ui_scale!(current_ui_scale())
+    return nothing
+end
+
+"Restore and scale the original layout, selecting registered fonts between ImGui frames."
+function apply_ui_scale!(scale::UIScale)
+    context = CImGui.GetCurrentContext()
+    context != C_NULL && context == UI_FONT_CONTEXT[] || error("UI fonts are not initialised in the current ImGui context")
+    style = CImGui.GetStyle()
+    baseline = UI_STYLE_BASELINE[]::CImGui.ImGuiStyle
+    colours = unsafe_load(style.Colors)
+    unsafe_store!(style, baseline) # ScaleAllSizes truncates pixels; never rescale rounded sizes
+    unsafe_store!(style.Colors, colours)
+    CImGui.ScaleAllSizes(style, ui_module_size(scale) / ui_module_size(UIScale100))
+    # Keep fine window and control outlines in physical pixels
+    for field in (:WindowBorderSize, :ChildBorderSize, :PopupBorderSize, :FrameBorderSize)
+        unsafe_store!(getproperty(style, field), getfield(baseline, field))
+    end
+
+    size = ui_font_size(scale, FontStandard)
+    CImGui.GetIO().FontDefault = UI_FONTS[(ui_font_source(size), false)]
+    style.FontSizeBase = size
     return nothing
 end
 
@@ -40,13 +138,19 @@ function ui_setup(window::GLFW.Window)
     # Create shared UI contexts
     CImGui.set_backend(:GlfwOpenGL3)
     ctx = CImGui.CreateContext()
+    CImGui.StyleColorsDark()
 
-    # Keep bitmap text crisp at the default size; use the vector font for explicit sizes
-    initialise_ui_fonts!()
+    # Keep all typography on native or integer-enlarged Tamzen designs
+    try
+        initialise_ui_fonts!()
+    catch
+        clear_ui_fonts!()
+        CImGui.DestroyContext(ctx)
+        rethrow()
+    end
 
     _implot_ctx[] = ImPlot.CreateContext()
     ImPlot.SetImGuiContext(ctx)
-    CImGui.StyleColorsDark()
 
     # Initialise platform and renderer backends
     CImGui.lib.ImGui_ImplGlfw_InitForOpenGL(Ptr{CImGui.lib.GLFWwindow}(window.handle), true)
@@ -65,8 +169,8 @@ function ui_teardown()
         ImPlot.DestroyContext(_implot_ctx[])
         _implot_ctx[] = nothing
     end
+    clear_ui_fonts!()
     CImGui.DestroyContext()
-    global UI_VECTOR_FONT = C_NULL
     return nothing
 end
 
@@ -91,12 +195,14 @@ checkpoints during startup; assumes ImGui + GL context already initialised.
 """
 function ui_loadingscreen_render(window::GLFW.Window, status::AbstractString = "Initialising")
     GLFW.WindowShouldClose(window) && return # Honour close requests during startup
+    fbsize = GLFW.GetFramebufferSize(window)
+    glViewport(0, 0, fbsize.width, fbsize.height)
     glClear(GL_COLOR_BUFFER_BIT)
 
     # Centre loading box in window
     winsize = GLFW.GetWindowSize(window)
     win_w, win_h = Float64(winsize.width), Float64(winsize.height)
-    box_w, box_h = 340.0, 110.0
+    box_w, box_h = ui_px(85), ui_px(28)
     pos = ((win_w - box_w) / 2, (win_h - box_h) / 2)
 
     # Draw startup status
@@ -108,15 +214,19 @@ function ui_loadingscreen_render(window::GLFW.Window, status::AbstractString = "
             CImGui.ImGuiWindowFlags_NoCollapse |
             CImGui.ImGuiWindowFlags_NoTitleBar
         CImGui.Begin("LoadingScreen", C_NULL, flags)
-        CImGui.Dummy((0.0, 8.0))
+        CImGui.Dummy((0.0, ui_px(2)))
+        push_ui_font(; bold = true)
         CImGui.Text("Loading...")
+        CImGui.PopFont()
         CImGui.Separator()
         CImGui.TextUnformatted(String(status))
         CImGui.End()
     end
 
     GLFW.SwapBuffers(window)
+    apply_pending_settings!(window)
     GLFW.PollEvents()
+    poll_application_shortcuts!(window)
     return nothing
 end
 
@@ -127,14 +237,13 @@ end
 const INITIAL_WINDOW_WIDTH = 1920
 const INITIAL_WINDOW_HEIGHT = 1080
 
-"Windowed geometry and F11 edge tracking, shared for the lifetime of a window."
+"Windowed geometry and restoration information, shared for the lifetime of a window."
 @kwdef mutable struct WindowModeState
     windowed_x::Int = 0
     windowed_y::Int = 0
     windowed_width::Int = INITIAL_WINDOW_WIDTH
     windowed_height::Int = INITIAL_WINDOW_HEIGHT
     was_maximised::Bool = false
-    f11_pressed::Bool = false
 end
 
 "Return the monitor containing the window's centre, falling back to the primary monitor."
@@ -161,34 +270,43 @@ function window_monitor(window::GLFW.Window)
     return primary
 end
 
-"Toggle native full-screen mode on an F11 press, independently of ImGui capture."
-function poll_window_mode!(state::WindowModeState, window::GLFW.Window)
-    pressed = GLFW.GetKey(window, GLFW.KEY_F11)
-    toggle = pressed && !state.f11_pressed
-    state.f11_pressed = pressed
-    toggle || return nothing
+"Read the actual native fullscreen mode from GLFW rather than caching it."
+window_is_fullscreen(window::GLFW.Window) = GLFW.GetWindowMonitor(window).handle != C_NULL
 
-    if GLFW.GetWindowMonitor(window).handle != C_NULL
+"Apply the configured swap interval to the current OpenGL context."
+apply_vsync!(enabled::Bool) = GLFW.SwapInterval(enabled ? 1 : 0)
+
+"Apply native fullscreen, preserving windowed restoration data; return the actual resulting mode."
+function apply_fullscreen!(state::WindowModeState, window::GLFW.Window, enabled::Bool)
+    window_is_fullscreen(window) == enabled && return enabled
+
+    if enabled
+        monitor = window_monitor(window)
+        mode = GLFW.GetVideoMode(monitor)
+        state.was_maximised = GLFW.GetWindowAttrib(window, GLFW.MAXIMIZED) != 0
+        size = GLFW.GetWindowSize(window)
+        state.windowed_width, state.windowed_height = size.width, size.height
+        # Native Wayland leaves placement to the compositor
+        if GLFW.GetPlatform() != GLFW.PLATFORM_WAYLAND
+            position = GLFW.GetWindowPos(window)
+            state.windowed_x, state.windowed_y = position.x, position.y
+        end
+    end
+
+    if enabled
+        GLFW.SetWindowMonitor(window, monitor, 0, 0, mode.width, mode.height, mode.refreshrate)
+    else
         GLFW.SetWindowMonitor(window, GLFW.Monitor(C_NULL), state.windowed_x, state.windowed_y, state.windowed_width, state.windowed_height, GLFW.DONT_CARE)
         if state.was_maximised
             GLFW.MaximizeWindow(window)
         end
-        return nothing
     end
 
-    monitor = window_monitor(window)
-    mode = GLFW.GetVideoMode(monitor)
-    state.was_maximised = GLFW.GetWindowAttrib(window, GLFW.MAXIMIZED) != 0
-    size = GLFW.GetWindowSize(window)
-    state.windowed_width, state.windowed_height = size.width, size.height
-    # Native Wayland leaves placement to the compositor
-    if GLFW.GetPlatform() != GLFW.PLATFORM_WAYLAND
-        position = GLFW.GetWindowPos(window)
-        state.windowed_x, state.windowed_y = position.x, position.y
+    actual = window_is_fullscreen(window)
+    if actual != enabled
+        @warn "Window mode differs from the fullscreen request" requested = enabled actual
     end
-
-    GLFW.SetWindowMonitor(window, monitor, 0, 0, mode.width, mode.height, mode.refreshrate)
-    return nothing
+    return actual
 end
 
 "Log errors reported through GLFW's callback interface."
@@ -224,6 +342,7 @@ function startgl_minimal(width, height)
     @assert window != C_NULL "Could not open window with GLFW3"
 
     GLFW.MakeContextCurrent(window)
+    apply_vsync!(app_state().settings.vsync)
 
     return window
 end

@@ -55,14 +55,14 @@ function edit_tunables!(tunables_tuple)
         if props isa TunableProps
             float_buf[index] = Cfloat(props.current_val)
             CImGui.Text("$(props.type_desc) [$index]")
-            CImGui.SetNextItemWidth(100.0)
+            CImGui.SetNextItemWidth(ui_px(25))
             @c CImGui.InputFloat(props.unit_desc, pointer(float_buf, index), 0.0, 100.0, "%.3f")
             result[index] = float_buf[index]
 
         elseif props isa EnumTunableProps
             current_idx = Cint(something(findfirst(==(props.current_val), props.options), 1) - 1)
             CImGui.Text("$(props.type_desc):")
-            CImGui.SetNextItemWidth(200.0)
+            CImGui.SetNextItemWidth(ui_px(50))
             @cref CImGui.ListBox("##enum_$index", &current_idx, props.option_labels)
             clamped_idx = clamp(Int(current_idx), 0, length(props.options) - 1)
             result[index] = props.options[clamped_idx + 1]
@@ -175,6 +175,22 @@ end
 "Clear the current space-map selection and its cached preview state."
 clear_spacemap_selection!(inputstate::InputState) = set_spacemap_selection!(inputstate, 0, 0)
 
+"Return the nearest indexed pixel position within the circular hit radius, or zero."
+function nearest_spacemap_encounter(pixel_positions, mouse::ImVec2, radius::Float64)::Int
+    best_idx = 0
+    best_dist_sq = radius^2
+    for (idx, position) in pixel_positions
+        dx = position.x - mouse.x
+        dy = position.y - mouse.y
+        dist_sq = dx * dx + dy * dy
+        if dist_sq < best_dist_sq
+            best_dist_sq = dist_sq
+            best_idx = idx
+        end
+    end
+    return best_idx
+end
+
 "Return the validated selected encounter index, adopting any active manoeuvre target."
 function validate_spacemap_selection!(inputstate::InputState, gamemap::GameMap)::Int
     encounter_points = get_encounter_points(gamemap)
@@ -271,9 +287,9 @@ end
 
 #= ---------- Space Map Constants ---------- =#
 
-const SPACEMAP_LEFT_PANEL_WIDTH = 280.0
-const SPACEMAP_ESCAPE_PANEL_HEIGHT = 82.0
-const SPACEMAP_CLICK_RADIUS_SQ = 400.0   # Squared distance in plot units for click detection
+const SPACEMAP_LEFT_PANEL_WIDTH_MODULES = 70
+const SPACEMAP_ESCAPE_PANEL_HEIGHT_MODULES = 21
+const SPACEMAP_CLICK_RADIUS_MODULES = 6
 
 const GALAXY_ESCAPE_BUTTON_COLOUR = ImVec4(0.95, 0.72, 0.14, 1.0)
 const GALAXY_ESCAPE_BUTTON_HOVERED_COLOUR = ImVec4(1.0, 0.82, 0.22, 1.0)
@@ -301,85 +317,94 @@ end
 
 #= ---------- Velocity Tracker Constants ---------- =#
 
-const VELOCITY_TRACKER_WIDTH = 300.0
+const VELOCITY_TRACKER_WIDTH_MODULES = 54
+const VELOCITY_CONTEXT_WIDTH_MODULES = 60
 const DV_COLOUR = ImVec4(1.0, 0.7, 0.2, 1.0)       # amber
 
 "Render the shared simulation speed and pause controls."
 function render_simulation_controls!(inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC)
     is_paused = @atomic :monotonic flowcalc_ipc.shared_state.is_paused
     is_paused && CImGui.BeginDisabled()
-    for speed in (SIM_1X, SIM_2X, SIM_4X, SIM_MAX)
-        label = sim_speed_label(speed)
-        is_current = inputstate.sim_speed === speed
-        is_current && CImGui.BeginDisabled()
-        if CImGui.Button(label, (60.0, 0.0))
-            inputstate.sim_speed = speed
-            @atomic :monotonic flowcalc_ipc.shared_state.target_ups = sim_speed_to_ups(speed)
+    table_flags = CImGui.ImGuiTableFlags_SizingStretchSame | CImGui.ImGuiTableFlags_NoPadOuterX
+    if CImGui.BeginTable("##simulation_speed", 4, table_flags)
+        for speed in (SIM_1X, SIM_2X, SIM_4X, SIM_MAX)
+            CImGui.TableNextColumn()
+            label = sim_speed_label(speed)
+            is_current = inputstate.sim_speed === speed
+            is_current && CImGui.BeginDisabled()
+            if CImGui.Button(label, ImVec2(-1, 0))
+                inputstate.sim_speed = speed
+                @atomic :monotonic flowcalc_ipc.shared_state.target_ups = sim_speed_to_ups(speed)
+            end
+            is_current && CImGui.EndDisabled()
         end
-        is_current && CImGui.EndDisabled()
-        speed !== SIM_MAX && CImGui.SameLine()
+        CImGui.EndTable()
     end
     is_paused && CImGui.EndDisabled()
 
     pause_label = is_paused ? "Un-Pause" : "Pause"
-    if CImGui.Button(pause_label, ImVec2(CImGui.GetContentRegionAvail().x, 0.0))
+    if CImGui.Button(pause_label, ImVec2(-1, 0))
         @atomic :monotonic flowcalc_ipc.shared_state.is_paused = !is_paused
     end
 
     return nothing
 end
 
-"Draw and reserve a rocket pointing along non-zero ship-local remaining delta-V."
+"Reserve a consistent instrument area, drawing a rocket along non-zero ship-local delta-V."
 function _render_required_thrust_rocket!(remaining_dv::SVector{2, Float64})
     magnitude = norm(remaining_dv)
-    magnitude <= 1.0e-10 && return nothing  # No required direction when the burn is complete
-
     cursor = CImGui.GetCursorScreenPos()
     width = CImGui.GetContentRegionAvail().x
-    height = 112.0f0
+    height = ui_px(28)
+    if !isfinite(magnitude) || magnitude <= 1.0e-10
+        CImGui.Dummy(ImVec2(width, height))
+        return nothing  # No usable required direction
+    end
+
     centre = ImVec2(cursor.x + width * 0.5f0, cursor.y + height * 0.5f0)
     drawlist = CImGui.GetWindowDrawList()
 
-    # Nozzle burn coordinates use +Y down relative to the rendered ship
+    # Integer module coordinates in the ship's burn frame (+Y down)
     forward = SVector(Float32(remaining_dv[1] / magnitude), Float32(remaining_dv[2] / magnitude))
     side = SVector(-forward[2], forward[1])
-    point(along, across) = ImVec2(
-        centre.x + along * forward[1] + across * side[1],
-        centre.y + along * forward[2] + across * side[2],
+    point(along::Integer, across::Integer) = ImVec2(
+        centre.x + ui_px(along) * forward[1] + ui_px(across) * side[1],
+        centre.y + ui_px(along) * forward[2] + ui_px(across) * side[2],
     )
 
-    # Fixed instrument dial and eight reference notches
-    CImGui.AddCircleFilled(drawlist, centre, 44.0f0, CImGui.GetColorU32(ImVec4(0.07, 0.09, 0.11, 1.0)), 64)
-    CImGui.AddCircle(drawlist, centre, 44.0f0, CImGui.GetColorU32(ImVec4(0.36, 0.41, 0.46, 1.0)), 64, 1.5f0)
+    # Instrument dial and eight reference notches; outlines stay one physical pixel
+    CImGui.AddCircleFilled(drawlist, centre, ui_px(11), CImGui.GetColorU32(ImVec4(0.07, 0.09, 0.11, 1.0)), 64)
+    CImGui.AddCircle(drawlist, centre, ui_px(11), CImGui.GetColorU32(ImVec4(0.36, 0.41, 0.46, 1.0)), 64, 1.0f0)
     tick_colour = CImGui.GetColorU32(ImVec4(0.27, 0.31, 0.35, 1.0))
     for index in 0:7
         angle = Float32(index * pi / 4)
-        inner_radius = iseven(index) ? 37.0f0 : 39.0f0
+        inner_radius = ui_px(iseven(index) ? 9 : 10)
         inner = ImVec2(centre.x + inner_radius * cos(angle), centre.y + inner_radius * sin(angle))
-        outer = ImVec2(centre.x + 42.0f0 * cos(angle), centre.y + 42.0f0 * sin(angle))
+        outer = ImVec2(centre.x + ui_px(11) * cos(angle), centre.y + ui_px(11) * sin(angle))
         CImGui.AddLine(drawlist, inner, outer, tick_colour, 1.0f0)
     end
 
-    # Burn-axis signs sit clear of the ring; pixel-aligned bars keep the arms symmetric
+    # Pixel-aligned one-pixel bars keep the direction signs crisp and symmetric
     sign_colour = CImGui.GetColorU32(ImVec4(0.65, 0.69, 0.73, 1.0))
+    sign_halfwidth = ui_px(1) - 0.5
     for (x, y, positive) in ((1, 0, true), (0, 1, true), (-1, 0, false), (0, -1, false))
-        sign_centre = ImVec2(floor(centre.x + 52.0f0 * x) + 0.5f0, floor(centre.y + 52.0f0 * y) + 0.5f0)
-        CImGui.AddRectFilled(drawlist, ImVec2(sign_centre.x - 3.5f0, sign_centre.y - 0.5f0), ImVec2(sign_centre.x + 3.5f0, sign_centre.y + 0.5f0), sign_colour)
+        sign_centre = ImVec2(floor(centre.x + ui_px(13) * x) + 0.5f0, floor(centre.y + ui_px(13) * y) + 0.5f0)
+        CImGui.AddRectFilled(drawlist, ImVec2(sign_centre.x - sign_halfwidth, sign_centre.y - 0.5f0), ImVec2(sign_centre.x + sign_halfwidth, sign_centre.y + 0.5f0), sign_colour)
         if positive
-            CImGui.AddRectFilled(drawlist, ImVec2(sign_centre.x - 0.5f0, sign_centre.y - 3.5f0), ImVec2(sign_centre.x + 0.5f0, sign_centre.y + 3.5f0), sign_colour)
+            CImGui.AddRectFilled(drawlist, ImVec2(sign_centre.x - 0.5f0, sign_centre.y - sign_halfwidth), ImVec2(sign_centre.x + 0.5f0, sign_centre.y + sign_halfwidth), sign_colour)
         end
     end
 
     # Direction notch shares the rocket's transform for precise alignment
     direction_colour = CImGui.GetColorU32(ImVec4(1.0, 0.2, 0.2, 1.0))
-    CImGui.AddLine(drawlist, point(37, 0), point(42, 0), direction_colour, 1.5f0)
+    CImGui.AddLine(drawlist, point(9, 0), point(10, 0), direction_colour, 1.0f0)
 
-    # Finless hull, tapered nose and engine bell; nose and rear sit equally far from the pivot
+    # Finless hull, tapered nose and engine bell, centred on the pivot
     for (colour, vertices) in (
-            (ImVec4(0.48, 0.54, 0.6, 1.0), ((-17, -5), (-17, 5), (-29, 8), (-29, -8))),
-            (ImVec4(0.82, 0.87, 0.92, 1.0), ((13, -9), (13, 9), (-17, 9), (-17, -9))),
-            (DV_COLOUR, ((29, 0), (13, 9), (13, -9))),
-            (ImVec4(0.12, 0.16, 0.2, 1.0), ((-25, -5), (-25, 5), (-28, 5), (-28, -5))),
+            (ImVec4(0.48, 0.54, 0.6, 1.0), ((-4, -1), (-4, 1), (-7, 2), (-7, -2))),
+            (ImVec4(0.82, 0.87, 0.92, 1.0), ((3, -2), (3, 2), (-4, 2), (-4, -2))),
+            (DV_COLOUR, ((7, 0), (3, 2), (3, -2))),
+            (ImVec4(0.12, 0.16, 0.2, 1.0), ((-6, -1), (-6, 1), (-7, 1), (-7, -1))),
         )
         CImGui.PathClear(drawlist)
         for (along, across) in vertices
@@ -388,126 +413,189 @@ function _render_required_thrust_rocket!(remaining_dv::SVector{2, Float64})
         CImGui.PathFillConvex(drawlist, CImGui.GetColorU32(colour))
     end
 
-    # Engine mounting collar and a recessed longitudinal hull seam
+    # One-pixel mounting collar and recessed longitudinal hull seam
     detail_colour = CImGui.GetColorU32(ImVec4(0.3, 0.36, 0.42, 1.0))
-    CImGui.AddLine(drawlist, point(-12, -9), point(-12, 9), detail_colour, 2.0f0)
-    CImGui.AddLine(drawlist, point(-7, 0), point(10, 0), detail_colour, 1.5f0)
+    CImGui.AddLine(drawlist, point(-3, -2), point(-3, 2), detail_colour, 1.0f0)
+    CImGui.AddLine(drawlist, point(-2, 0), point(2, 0), detail_colour, 1.0f0)
 
     CImGui.Dummy(ImVec2(width, height))
     return nothing
 end
 
-"Render ship information and required thrust during manoeuvre burns, or galaxy-escape status."
+"Render simulation controls and the ship's flight statistics in the available width."
+function render_velocity_ship_section!(gamestate::GameState, gamemap::GameMap, inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC)
+    render_simulation_controls!(inputstate, flowcalc_ipc)
+
+    ui_bold_separator("Ship Info")
+
+    CImGui.Text(@sprintf("Velocity:     %.2f", norm(get_velocity(gamemap))))
+    CImGui.Text(@sprintf("Acceleration: %.4f", norm(gamestate.acceleration_space_map_frame)))
+    CImGui.Text(@sprintf("Mass:         %.1f", get_mass(gamemap)))
+    CImGui.Text(@sprintf("Ship delta-V: %.1f", gamestate.estimated_min_delta_v))
+
+    return nothing
+end
+
+"Format a delta-V component compactly, reducing precision at rounded magnitude boundaries."
+function _format_remaining_delta_v(value::Float64)
+    if !isfinite(value) || abs(round(value)) >= 1.0e6
+        return @sprintf("%.3g", value)
+    end
+
+    digits = if abs(round(value; digits = 2)) < 100
+        2
+    elseif abs(round(value; digits = 1)) < 1000
+        1
+    else
+        0
+    end
+    rounded = round(value; digits)
+    rounded = iszero(rounded) ? 0.0 : rounded
+    return @sprintf("%.*f", digits, rounded)
+end
+
+"Render read-only manoeuvre status with burn components beside the compass."
+function render_velocity_manoeuvre_section!(manoeuvre::ManoeuvreData)
+    # Manoeuvre status is read-only; all phase transitions happen in the calculator.
+    ui_bold_separator("Manoeuvre Info")
+    phase = manoeuvre.phase
+
+    if phase == PHASE_APPROACH_BURN || phase == PHASE_CAPTURE_BURN
+        rem_dv = manoeuvre.burn_remaining_dv
+        CImGui.PushStyleVar(CImGui.ImGuiStyleVar_CellPadding, ImVec2(0, 0))
+        if CImGui.BeginTable("##remaining_delta_v", 2, CImGui.ImGuiTableFlags_NoPadOuterX)
+            CImGui.TableSetupColumn("Components", CImGui.ImGuiTableColumnFlags_WidthStretch)
+            CImGui.TableSetupColumn("Compass", CImGui.ImGuiTableColumnFlags_WidthFixed, ui_px(28))
+            CImGui.TableNextColumn()
+            CImGui.Text("Remaining\ndelta-V:")
+
+            dv_text = "X: $(_format_remaining_delta_v(rem_dv[1]))\nY: $(_format_remaining_delta_v(rem_dv[2]))"
+            available_width = CImGui.GetContentRegionAvail().x
+            push_ui_font(FontLarge)
+            if CImGui.CalcTextSize(dv_text).x > available_width
+                CImGui.PopFont()
+                push_ui_font(FontStandard)
+                x, y = map(value -> iszero(value) ? 0.0 : value, rem_dv)
+                for digits in 2:-1:0
+                    CImGui.CalcTextSize(dv_text).x <= available_width && break
+                    dv_text = @sprintf("X: %.*e\nY: %.*e", digits, x, digits, y)
+                end
+            end
+            CImGui.TextColored(DV_COLOUR, dv_text)
+            CImGui.PopFont()
+
+            CImGui.TableNextColumn()
+            _render_required_thrust_rocket!(rem_dv)
+            CImGui.EndTable()
+        end
+        CImGui.PopStyleVar()
+        CImGui.Separator()
+        CImGui.TextWrapped(phase_description(phase))
+
+    else
+        CImGui.TextWrapped(phase_description(phase))
+        CImGui.NewLine()
+
+        if phase == PHASE_COAST
+            CImGui.TextWrapped("Open Space Map (M) and progress time until intercept.")
+        elseif phase == PHASE_ENCOUNTER_READY
+            CImGui.TextWrapped("Encounter triggering...")
+        end
+    end
+
+    return nothing
+end
+
+"Render galaxy-escape progress and completion controls in the contextual column."
+function render_velocity_escape_section!(gamemap::GameMap, inputstate::InputState, bottom_y::Float32 = 0.0f0)
+    progress = get_galaxy_escape_progress(gamemap)::Float64
+    tier_number = Int(galaxy_escape_tier(progress))
+
+    ui_bold_separator("Escape Progress")
+    CImGui.Text(@sprintf("Achieved delta-V: %.1f", progress))
+    CImGui.PushTextWrapPos(0.0)
+    if tier_number == 0
+        CImGui.TextColored(DV_COLOUR, "Escape not achieved")
+    elseif tier_number == 1
+        CImGui.TextColored(DV_COLOUR, "Minimum escape achieved - 1 Star")
+    elseif tier_number < length(GALAXY_ESCAPE_TIER_DELTA_V)
+        CImGui.TextColored(DV_COLOUR, "$tier_number-Star escape achieved")
+    else
+        CImGui.TextColored(DV_COLOUR, "$tier_number-Star escape achieved (maximum rating)")
+    end
+
+    if tier_number < length(GALAXY_ESCAPE_TIER_DELTA_V)
+        next_rating = tier_number + 1
+        next_rating_label = next_rating == 1 ? "1 Star" : "$next_rating Stars"
+        next_threshold = GALAXY_ESCAPE_TIER_DELTA_V[next_rating]
+        CImGui.Text(@sprintf("Next Target: %s at %.0f delta-V", next_rating_label, next_threshold))
+    else
+        CImGui.Text("Next Target: None")
+    end
+    CImGui.PopTextWrapPos()
+
+    # Align with the ship section, allowing wrapped progress to extend below it
+    button_height = ui_px(9)
+    CImGui.SetCursorPosY(max(CImGui.GetCursorPosY(), bottom_y - button_height))
+
+    eligible = can_complete_galaxy_escape(progress)
+    if eligible
+        CImGui.PushStyleColor(CImGui.ImGuiCol_Text, GALAXY_ESCAPE_BUTTON_TEXT_COLOUR)
+        CImGui.PushStyleColor(CImGui.ImGuiCol_Button, GALAXY_ESCAPE_BUTTON_COLOUR)
+        CImGui.PushStyleColor(CImGui.ImGuiCol_ButtonHovered, GALAXY_ESCAPE_BUTTON_HOVERED_COLOUR)
+    end
+    complete_clicked = button_with_disable(
+        "Complete Escape", ImVec2(-1.0, button_height), !eligible;
+        tooltip = "Achieve a 1-Star escape before completing the attempt.",
+    )
+    eligible && CImGui.PopStyleColor(3)
+    if complete_clicked
+        inputstate.galaxy_escape_completion_requested = true
+    end
+
+    return nothing
+end
+
+"Render ship information beside active manoeuvre or galaxy-escape progress."
 function ui_velocity_tracker_render!(
         gamestate::GameState, gamemap::GameMap,
         inputstate::InputState, flowcalc_ipc::FlowCalculatorIPC,
     )
-    velocity = get_velocity(gamemap)
-    vel_mag = norm(velocity)
-    accel_mag = norm(gamestate.acceleration_space_map_frame)
-
     escape_active = is_galaxy_escape_active(gamemap)
-    has_manoeuvre = has_active_manoeuvre(gamemap)
-    manoeuvre = get_active_manoeuvre(gamemap)
+    show_context = escape_active || has_active_manoeuvre(gamemap)
 
     # Fixed width, with height fitted to the current flight status
-    CImGui.SetNextWindowSizeConstraints(ImVec2(VELOCITY_TRACKER_WIDTH, 0.0), ImVec2(VELOCITY_TRACKER_WIDTH, Inf))
+    width_modules = if show_context
+        VELOCITY_TRACKER_WIDTH_MODULES + VELOCITY_CONTEXT_WIDTH_MODULES
+    else
+        VELOCITY_TRACKER_WIDTH_MODULES
+    end
+    width = ui_px(width_modules)
+    CImGui.SetNextWindowSizeConstraints(ImVec2(width, 0.0), ImVec2(width, Inf))
     ui_window(
-        "Velocity Tracker", (0.0, 0.0), (VELOCITY_TRACKER_WIDTH, 0.0);
+        "Velocity Tracker", (0.0, 0.0), (width, 0.0);
         flags = DEFAULT_WINDOW_FLAGS | CImGui.ImGuiWindowFlags_AlwaysAutoResize,
     )
 
-    render_simulation_controls!(inputstate, flowcalc_ipc)
+    if show_context
+        table_flags = CImGui.ImGuiTableFlags_BordersInnerV | CImGui.ImGuiTableFlags_NoPadOuterX
+        if CImGui.BeginTable("##velocity_sections", 2, table_flags)
+            CImGui.TableSetupColumn("Ship", CImGui.ImGuiTableColumnFlags_WidthStretch, VELOCITY_TRACKER_WIDTH_MODULES)
+            CImGui.TableSetupColumn("Context", CImGui.ImGuiTableColumnFlags_WidthStretch, VELOCITY_CONTEXT_WIDTH_MODULES)
+            CImGui.TableNextColumn()
+            render_velocity_ship_section!(gamestate, gamemap, inputstate, flowcalc_ipc)
+            ship_bottom = CImGui.GetCursorPosY() - unsafe_load(CImGui.GetStyle().ItemSpacing).y
 
-    CImGui.SeparatorText("Ship Info")
-
-    CImGui.Text(@sprintf("Velocity:     %.2f", vel_mag))
-    CImGui.Text(@sprintf("Acceleration: %.4f", accel_mag))
-    CImGui.Text(@sprintf("Mass:         %.1f", get_mass(gamemap)))
-    CImGui.Text(@sprintf("Ship delta-V: %.1f", gamestate.estimated_min_delta_v))
-
-    if escape_active
-        progress = get_galaxy_escape_progress(gamemap)::Float64
-        tier_number = Int(galaxy_escape_tier(progress))
-
-        CImGui.SeparatorText("Escape Progress")
-        CImGui.Text(@sprintf("Achieved delta-V: %.1f", progress))
-        if tier_number == 0
-            CImGui.TextColored(DV_COLOUR, "Escape not achieved")
-        elseif tier_number == 1
-            CImGui.TextColored(DV_COLOUR, "Minimum escape achieved - 1 Star")
-        elseif tier_number < length(GALAXY_ESCAPE_TIER_DELTA_V)
-            CImGui.TextColored(DV_COLOUR, "$tier_number-Star escape achieved")
-        else
-            CImGui.TextColored(DV_COLOUR, "$tier_number-Star escape achieved (maximum rating)")
-        end
-
-        if tier_number < length(GALAXY_ESCAPE_TIER_DELTA_V)
-            next_rating = tier_number + 1
-            next_rating_label = next_rating == 1 ? "1 Star" : "$next_rating Stars"
-            next_threshold = GALAXY_ESCAPE_TIER_DELTA_V[next_rating]
-            CImGui.Text(@sprintf("Next Target: %s at %.0f delta-V", next_rating_label, next_threshold))
-        else
-            CImGui.Text("Next Target: None")
-        end
-
-        CImGui.Spacing()
-        eligible = can_complete_galaxy_escape(progress)
-        if eligible
-            CImGui.PushStyleColor(CImGui.ImGuiCol_Text, GALAXY_ESCAPE_BUTTON_TEXT_COLOUR)
-            CImGui.PushStyleColor(CImGui.ImGuiCol_Button, GALAXY_ESCAPE_BUTTON_COLOUR)
-            CImGui.PushStyleColor(CImGui.ImGuiCol_ButtonHovered, GALAXY_ESCAPE_BUTTON_HOVERED_COLOUR)
-        end
-        complete_clicked = button_with_disable(
-            "Complete Escape", ImVec2(-1.0, 35.0), !eligible;
-            tooltip = "Achieve a 1-Star escape before completing the attempt.",
-        )
-        eligible && CImGui.PopStyleColor(3)
-        if complete_clicked
-            inputstate.galaxy_escape_completion_requested = true
-        end
-    elseif has_manoeuvre
-        # Manoeuvre status is read-only; all phase transitions happen in the calculator.
-        CImGui.SeparatorText("Manoeuvre Info")
-        phase = manoeuvre.phase
-
-        if phase == PHASE_APPROACH_BURN || phase == PHASE_CAPTURE_BURN
-            rem_dv = manoeuvre.burn_remaining_dv
-            table_flags = CImGui.ImGuiTableFlags_SizingStretchSame | CImGui.ImGuiTableFlags_BordersInnerV
-            if CImGui.BeginTable("##manoeuvre_burn", 2, table_flags)
-                CImGui.TableNextColumn()
-                CImGui.TextWrapped(phase_description(phase))
-                CImGui.NewLine()
-                CImGui.Text("Remaining delta-V:")
-                dv_text = @sprintf("(%.2f, %.2f)", rem_dv[1], rem_dv[2])
-                column_width = CImGui.GetContentRegionAvail().x
-                normal_font_size = CImGui.GetFontSize()
-                dv_font_size = 24.0
-                dv_font_size > normal_font_size && CImGui.PushFont(UI_VECTOR_FONT, dv_font_size)
-                # Keep the value prominent while fitting signed values in the column
-                while dv_font_size > normal_font_size && CImGui.CalcTextSize(dv_text).x > column_width
-                    CImGui.PopFont()
-                    dv_font_size = max(normal_font_size, dv_font_size - 1.0)
-                    dv_font_size > normal_font_size && CImGui.PushFont(UI_VECTOR_FONT, dv_font_size)
-                end
-                CImGui.TextColored(DV_COLOUR, dv_text)
-                dv_font_size > normal_font_size && CImGui.PopFont()
-
-                CImGui.TableNextColumn()
-                _render_required_thrust_rocket!(rem_dv)
-                CImGui.EndTable()
+            CImGui.TableNextColumn()
+            if escape_active
+                render_velocity_escape_section!(gamemap, inputstate, ship_bottom)
+            else
+                render_velocity_manoeuvre_section!(get_active_manoeuvre(gamemap))
             end
-
-        else
-            CImGui.TextWrapped(phase_description(phase))
-            CImGui.NewLine()
-
-            if phase == PHASE_COAST
-                CImGui.TextWrapped("Open Space Map (M) and progress time until intercept.")
-            elseif phase == PHASE_ENCOUNTER_READY
-                CImGui.TextWrapped("Encounter triggering...")
-            end
+            CImGui.EndTable()
         end
+    else
+        render_velocity_ship_section!(gamestate, gamemap, inputstate, flowcalc_ipc)
     end
 
     CImGui.End()
@@ -526,8 +614,9 @@ function ui_explorer_opening_wake_render!(
     (is_explorer_opening_capture(gamemap) && !acknowledged) || return nothing
 
     # Centred window
-    width = 540.0
+    width = ui_px(140)
     win_float = to_float(winsize)
+    width = min(width, max(1.0, win_float.width))
     CImGui.SetNextWindowPos(
         ImVec2(win_float.width / 2.0, win_float.height / 2.0),
         CImGui.ImGuiCond_Always,
@@ -540,7 +629,7 @@ function ui_explorer_opening_wake_render!(
     CImGui.Begin("##explorer_opening_wake", C_NULL, flags)
 
     # Wake message
-    CImGui.PushFont(UI_VECTOR_FONT, 20.0)
+    push_ui_font(FontLarge; bold = true)
     CImGui.PushStyleColor(CImGui.ImGuiCol_Text, ImVec4(1.0, 0.75, 0.25, 1.0))
     CImGui.Text("PROXIMITY ALERT")
     CImGui.PopStyleColor()
@@ -554,9 +643,9 @@ function ui_explorer_opening_wake_render!(
     CImGui.Spacing()
 
     # Centred acknowledgement
-    button_width = 140.0
+    button_width = ui_px(35)
     CImGui.SetCursorPosX(CImGui.GetCursorPosX() + (CImGui.GetContentRegionAvail().x - button_width) / 2.0)
-    if CImGui.Button("Acknowledge", ImVec2(button_width, 36.0))
+    if CImGui.Button("Acknowledge", ImVec2(button_width, ui_px(9)))
         inputstate.gui_inputs[:explorer_opening_wake_acknowledged] = true
     end
 
@@ -579,8 +668,8 @@ function ui_notifications_render!(
     flashing = age < NOTIFICATION_FLASH_DURATION
 
     win_float = to_float(winsize)
-    margin = 12.0
-    width = min(480.0, max(1.0, win_float.width - 2 * margin))
+    margin = ui_px(3)
+    width = min(ui_px(120), max(1.0, win_float.width - 2 * margin))
     CImGui.SetNextWindowPos(ImVec2(margin, win_float.height - margin), CImGui.ImGuiCond_Always, ImVec2(0.0, 1.0))
     CImGui.SetNextWindowSize(ImVec2(width, 0.0), CImGui.ImGuiCond_Always)
     CImGui.SetNextWindowBgAlpha(0.95)
@@ -588,12 +677,11 @@ function ui_notifications_render!(
         CImGui.ImGuiWindowFlags_NoCollapse | CImGui.ImGuiWindowFlags_NoSavedSettings |
         CImGui.ImGuiWindowFlags_NoScrollbar | CImGui.ImGuiWindowFlags_NoScrollWithMouse |
         CImGui.ImGuiWindowFlags_NoInputs | CImGui.ImGuiWindowFlags_NoFocusOnAppearing
-    CImGui.PushFont(unsafe_load(CImGui.GetIO().FontDefault), 13.0)
     flashing && CImGui.PushStyleColor(CImGui.ImGuiCol_Border, DV_COLOUR)
     CImGui.Begin("##notifications", C_NULL, flags)
     flashing && CImGui.PopStyleColor()
 
-    CImGui.PushFont(UI_VECTOR_FONT, 20.0)
+    push_ui_font(FontLarge; bold = true)
     CImGui.TextColored(DV_COLOUR, "System Message")
     CImGui.PopFont()
     CImGui.Spacing()
@@ -603,12 +691,11 @@ function ui_notifications_render!(
 
     CImGui.PopTextWrapPos()
     CImGui.End()
-    CImGui.PopFont()
     return nothing
 end
 
-# Fit selected standard tanks, including Operation and the collapsed Debug header.
-const PROPERTY_INSPECTOR_MIN_HEIGHT = 220.0
+# Fits common hover readouts with a small rounding margin; longer inspections can grow.
+const PROPERTY_INSPECTOR_MIN_HEIGHT_MODULES = 59
 
 "Render the permanent, constrained Properties inspector at the top-right."
 function ui_propertybox_render!(
@@ -626,8 +713,9 @@ function ui_propertybox_render!(
     selected_count = state isa PlacementReadyState ? selected_element_count(inputstate) : 0
 
     win_float = to_float(winsize)
-    width = min(PROPERTY_INSPECTOR_WIDTH, max(1.0, win_float.width))
+    width = min(ui_px(PROPERTY_INSPECTOR_WIDTH_MODULES), max(1.0, win_float.width))
     max_height = max(1.0, 0.75 * win_float.height)
+    min_height = min(ui_px(PROPERTY_INSPECTOR_MIN_HEIGHT_MODULES), max_height)
     flags = DEFAULT_WINDOW_FLAGS | CImGui.ImGuiWindowFlags_AlwaysAutoResize |
         CImGui.ImGuiWindowFlags_NoSavedSettings | CImGui.ImGuiWindowFlags_NoFocusOnAppearing
     CImGui.SetNextWindowPos((win_float.width, 0.0), CImGui.ImGuiCond_Always, (1.0, 0.0))
@@ -635,7 +723,7 @@ function ui_propertybox_render!(
         # No mouse input, keyboard navigation or focus; scrolling requires selection.
         flags |= CImGui.ImGuiWindowFlags_NoInputs | CImGui.ImGuiWindowFlags_NoScrollbar | CImGui.ImGuiWindowFlags_NoScrollWithMouse
     end
-    CImGui.SetNextWindowSizeConstraints((width, min(PROPERTY_INSPECTOR_MIN_HEIGHT, max_height)), (width, max_height))
+    CImGui.SetNextWindowSizeConstraints((width, min_height), (width, max_height))
     CImGui.Begin("Properties", C_NULL, flags)
     # ImGui owns the last content identity solely to reset scrolling on target/mode changes.
     content_id = hash((content.visibility, typeof(state), content.target, selected_count)) % UInt32
@@ -647,7 +735,7 @@ function ui_propertybox_render!(
         CImGui.SetInt(storage, scroll_key, reinterpret(Int32, content_id))
     end
 
-    CImGui.PushFont(UI_VECTOR_FONT, 18.0)
+    push_ui_font(; bold = true)
     CImGui.TextUnformatted("Properties")
     CImGui.PopFont()
     if selected_count > 0
@@ -660,13 +748,15 @@ function ui_propertybox_render!(
     if !isnothing(state_description)
         CImGui.TextWrapped(state_description)
     end
-    CImGui.PushStyleVar(CImGui.ImGuiStyleVar_SeparatorSize, 2.0f0)
+    CImGui.PushStyleVar(CImGui.ImGuiStyleVar_SeparatorSize, 2.0)
     CImGui.Separator()
     CImGui.PopStyleVar()
 
     # Tile placement controls
     if state isa PlacementTileState
+        push_ui_font(; bold = true)
         CImGui.Text("Tile Tunable Values:")
+        CImGui.PopFont()
         CImGui.Separator()
         CImGui.Indent()
         new_tunables = edit_tunables!(get_tunables(state.pendingcomponent))
@@ -676,7 +766,9 @@ function ui_propertybox_render!(
 
     # Pipe placement controls
     if state isa PlacementPipeChainState && editor_capabilities_enabled(inputstate)
+        push_ui_font(; bold = true)
         CImGui.Text("Select Pipe Type:")
+        CImGui.PopFont()
         for (label, pipe_type) in PIPE_TYPES
             if CImGui.Button(label)
                 state.pipe_behavior = pipe_type()
@@ -687,7 +779,9 @@ function ui_propertybox_render!(
         CImGui.NewLine()
 
         # Selected pipe properties
+        push_ui_font(; bold = true)
         CImGui.Text("Pipe Properties:")
+        CImGui.PopFont()
         CImGui.Separator()
 
         CImGui.Indent()
@@ -703,7 +797,7 @@ function ui_propertybox_render!(
             CImGui.Text("Select one part to inspect its details.")
             CImGui.Separator()
         else
-            inspect_ui!(content.target, gamemap, derivedmapstate, mna_state; debug = content.visibility == :interactive, minimum_height = min(PROPERTY_INSPECTOR_MIN_HEIGHT, max_height))
+            inspect_ui!(content.target, gamemap, derivedmapstate, mna_state; debug = content.visibility == :interactive, minimum_height = min_height)
         end
     end
 
@@ -754,7 +848,9 @@ function render_spacemap_active_manoeuvre_panel!(
 
     phase = manoeuvre.phase
 
+    push_ui_font(; bold = true)
     CImGui.TextColored(ImVec4(1.0, 0.7, 0.2, 1.0), "Manoeuvre Active")
+    CImGui.PopFont()
     CImGui.Spacing()
 
     CImGui.Text(phase_description(phase))
@@ -770,12 +866,12 @@ function render_spacemap_active_manoeuvre_panel!(
     else
         timewarp_status
     end
-    if button_with_disable("Wait for Capture Burn", ImVec2(-1, 30), wait_status)
+    if button_with_disable("Wait for Capture Burn", ImVec2(-1, ui_px(8)), wait_status)
         @atomic :monotonic flowcalc_ipc.shared_state.target_spacemap_time = manoeuvre.intercept_time
     end
 
     CImGui.Spacing()
-    if CImGui.Button("Cancel Manoeuvre", ImVec2(-1, 25))
+    if CImGui.Button("Cancel Manoeuvre", ImVec2(-1, ui_px(6)))
         modified_map = deepcopy(gamemap)
         clear_active_manoeuvre!(modified_map)
         enqueue_map_override!(flowcalc_ipc, modified_map)
@@ -830,7 +926,9 @@ function render_spacemap_manoeuvre_planning_panel!(
     ep = encounter_points[selected_idx]
     min_dv = calculate_minimum_intercept_dv(player_vel, ep.velocity)
 
+    push_ui_font(; bold = true)
     CImGui.TextColored(ImVec4(0.6, 0.8, 1.0, 1.0), "Intercept Calculated")
+    CImGui.PopFont()
     CImGui.Spacing()
 
     delta_v_slider = get!(inputstate.gui_inputs, :spacemap_delta_v, Cfloat(min_dv))::Cfloat
@@ -856,7 +954,7 @@ function render_spacemap_manoeuvre_planning_panel!(
     can_plan = !isnothing(preview_manoeuvre)
 
     button_tooltip = !can_plan ? "No manoeuvre preview available" : nothing
-    if button_with_disable("Plan Manoeuvre", ImVec2(-1, 35), !can_plan; tooltip = button_tooltip)
+    if button_with_disable("Plan Manoeuvre", ImVec2(-1, ui_px(9)), !can_plan; tooltip = button_tooltip)
         modified_map = deepcopy(gamemap)
         set_target_time!(modified_map, current_time)
         set_active_manoeuvre!(modified_map, preview_manoeuvre)
@@ -877,7 +975,7 @@ function render_galaxy_escape_discovery!(inputstate::InputState)
     minimum_delta_v = first(GALAXY_ESCAPE_TIER_DELTA_V)
     requirement = @sprintf("Requires %.0f delta-V", minimum_delta_v)
 
-    CImGui.PushFont(UI_VECTOR_FONT, 20.0)
+    push_ui_font(FontLarge; bold = true)
     CImGui.PushStyleColor(CImGui.ImGuiCol_Text, GALAXY_ESCAPE_BUTTON_TEXT_COLOUR)
     CImGui.PushStyleColor(CImGui.ImGuiCol_Button, GALAXY_ESCAPE_BUTTON_COLOUR)
     CImGui.PushStyleColor(CImGui.ImGuiCol_ButtonHovered, GALAXY_ESCAPE_BUTTON_HOVERED_COLOUR)
@@ -905,8 +1003,9 @@ function render_galaxy_escape_confirmation!(
     get(inputstate.gui_inputs, :galaxy_escape_confirmation, false)::Bool || return nothing
 
     minimum_delta_v = first(GALAXY_ESCAPE_TIER_DELTA_V)
-    width = 560.0
+    width = ui_px(140)
     win_float = to_float(winsize)
+    width = min(width, max(1.0, win_float.width))
     CImGui.SetNextWindowPos(
         ImVec2(win_float.width / 2.0, win_float.height / 2.0),
         CImGui.ImGuiCond_Always,
@@ -948,8 +1047,8 @@ function render_galaxy_escape_confirmation!(
     CImGui.Spacing()
     available_width = CImGui.GetContentRegionAvail().x
     item_spacing = unsafe_load(CImGui.GetStyle().ItemSpacing).x
-    button_width = (available_width - item_spacing) / 2.0
-    if CImGui.Button("Not Yet", ImVec2(button_width, 40.0))
+    button_width = max(1.0, (available_width - item_spacing) / 2.0)
+    if CImGui.Button("Not Yet", ImVec2(button_width, ui_px(10)))
         inputstate.gui_inputs[:galaxy_escape_confirmation] = false
     end
     CImGui.SameLine()
@@ -959,7 +1058,7 @@ function render_galaxy_escape_confirmation!(
     !below_minimum_escape_delta_v && CImGui.PushStyleColor(CImGui.ImGuiCol_Text, GALAXY_ESCAPE_BUTTON_TEXT_COLOUR)
     CImGui.PushStyleColor(CImGui.ImGuiCol_Button, button_colour)
     CImGui.PushStyleColor(CImGui.ImGuiCol_ButtonHovered, hovered_colour)
-    begin_clicked = CImGui.Button(begin_label, ImVec2(button_width, 40.0))
+    begin_clicked = CImGui.Button(begin_label, ImVec2(button_width, ui_px(10)))
     CImGui.PopStyleColor(below_minimum_escape_delta_v ? 2 : 3)
     if begin_clicked
         command = create_start_galaxy_escape_command(flowcalc_ipc.command_queue)
@@ -981,8 +1080,6 @@ function render_spacemap_left_panel!(
         flowcalc_ipc::FlowCalculatorIPC,
         gamemap::GameMap,
         gamestate::GameState,
-        left_width::Float32,
-        panel_height::Float32,
     )
     player_pos = get_position(gamemap)
     player_vel = get_velocity(gamemap)
@@ -991,25 +1088,32 @@ function render_spacemap_left_panel!(
     time_progressing = is_time_progressing(gamemap)
     show_galaxy_escape = is_galaxy_escape_unlocked(get_peak_estimated_delta_v(gamemap))
 
-    CImGui.BeginChild("spacemap_left_column", ImVec2(left_width, panel_height), false)
+    CImGui.BeginChild("spacemap_left_column", ImVec2(0, 0), false)
 
-    main_panel_height = show_galaxy_escape ? -SPACEMAP_ESCAPE_PANEL_HEIGHT : 0.0
+    main_panel_height = show_galaxy_escape ? -ui_px(SPACEMAP_ESCAPE_PANEL_HEIGHT_MODULES) : 0.0
     CImGui.BeginChild("spacemap_main_panel", ImVec2(0.0, main_panel_height), true)
 
     #= ---------- Header ----------- =#
-    CImGui.PushFont(UI_VECTOR_FONT, 18.0)
-    CImGui.TextColored(ImVec4(0.7, 0.9, 1.0, 1.0), "SPACE MAP")
-    CImGui.PopFont()
-    CImGui.SameLine(left_width - 80.0)
-    if CImGui.Button("Close [M]")
-        inputstate.spacemap_active = false
+    if CImGui.BeginTable("##spacemap_header", 2, CImGui.ImGuiTableFlags_NoPadOuterX)
+        CImGui.TableSetupColumn("Heading", CImGui.ImGuiTableColumnFlags_WidthStretch)
+        CImGui.TableSetupColumn("Close", CImGui.ImGuiTableColumnFlags_WidthFixed)
+        CImGui.TableNextColumn()
+        CImGui.AlignTextToFramePadding()
+        push_ui_font(; bold = true)
+        CImGui.TextColored(ImVec4(0.7, 0.9, 1.0, 1.0), "SPACE MAP")
+        CImGui.PopFont()
+        CImGui.TableNextColumn()
+        if CImGui.Button("Close [M]")
+            inputstate.spacemap_active = false
+        end
+        CImGui.EndTable()
     end
 
     #= ---------- Time section ----------- =#
-    CImGui.SeparatorText("TIME")
+    ui_bold_separator("TIME")
 
     CImGui.Text("Current Time:")
-    CImGui.PushFont(UI_VECTOR_FONT, 24.0)
+    push_ui_font(FontExtraLarge)
     time_colour = time_progressing ? ImVec4(1.0, 0.65, 0.1, 1.0) : ImVec4(0.7, 0.9, 1.0, 1.0)
     CImGui.TextColored(time_colour, @sprintf("%.3f years", current_time))
     CImGui.PopFont()
@@ -1036,7 +1140,7 @@ function render_spacemap_left_panel!(
     end
 
     #= ---------- Position & velocity section ----------- =#
-    CImGui.SeparatorText("POSITION & VELOCITY")
+    ui_bold_separator("POSITION & VELOCITY")
 
     CImGui.Text(@sprintf("Position: (%.0f, %.0f)", player_pos[1], player_pos[2]))
     CImGui.Text(@sprintf("Velocity: %.1f", norm(player_vel)))
@@ -1046,12 +1150,12 @@ function render_spacemap_left_panel!(
     selected_idx = validate_spacemap_selection!(inputstate, gamemap)
 
     #= ---------- Target information section ----------- =#
-    CImGui.SeparatorText("TARGET INFORMATION")
+    ui_bold_separator("TARGET INFORMATION")
     render_spacemap_target_info!(gamemap, selected_idx)
 
     #= ---------- Manoeuvre planning section ----------- =#
     if has_manoeuvre || selected_idx > 0
-        CImGui.SeparatorText("MANOEUVRE PLANNING")
+        ui_bold_separator("MANOEUVRE PLANNING")
         if has_manoeuvre
             render_spacemap_active_manoeuvre_panel!(flowcalc_ipc, gamemap, gamestate)
         else
@@ -1094,7 +1198,7 @@ function render_spacemap_trajectory_previews!(inputstate::InputState, gamemap::G
     )
     target_pos = get_encounter_position(ep, current_time)
 
-    # Line style: committed manoeuvres are thicker and more opaque
+    # Committed paths stand out from the one-pixel previews
     if has_manoeuvre
         player_path_colour = ImVec4(1.0, 0.7, 0.2, 0.8)
         target_colour = ImVec4(1.0, 0.45, 0.35, 0.8)
@@ -1127,30 +1231,26 @@ function render_spacemap_trajectory_previews!(inputstate::InputState, gamemap::G
         "##intercept_marker",
         Float64[predicted_intercept_position[1]],
         Float64[predicted_intercept_position[2]];
-        spec = ImPlot.ImPlotSpec(Marker = ImPlot.ImPlotMarker_Asterisk, MarkerSize = 7.0, MarkerFillColor = burn_marker_colour),
+        spec = ImPlot.ImPlotSpec(Marker = ImPlot.ImPlotMarker_Asterisk, MarkerSize = ui_px(2) + 2, MarkerFillColor = burn_marker_colour),
     )
 
     return nothing
 end
 
 "Render the encounter plot area for the space-map overlay."
-function render_spacemap_plot_area!(
-        inputstate::InputState,
-        gamemap::GameMap,
-        right_width::Float32,
-        panel_height::Float32,
-    )
+function render_spacemap_plot_area!(inputstate::InputState, gamemap::GameMap)
     sm = gamemap.space_map::SpaceMapState
     player_pos = get_position(gamemap)
     player_vel = get_velocity(gamemap)
     current_time = get_time_years(gamemap)::Float64
     encounter_points = get_encounter_points(gamemap)
 
-    CImGui.BeginChild("spacemap_plot_area", ImVec2(right_width, panel_height))
+    CImGui.BeginChild("spacemap_plot_area", ImVec2(0, 0))
 
     plot_flags = ImPlot.ImPlotFlags_Equal | ImPlot.ImPlotFlags_NoLegend |
         ImPlot.ImPlotFlags_NoTitle | ImPlot.ImPlotFlags_NoMouseText
-    axis_flags = ImPlot.ImPlotAxisFlags_NoMenus
+    axis_flags = ImPlot.ImPlotAxisFlags_NoMenus | ImPlot.ImPlotAxisFlags_NoLabel |
+        ImPlot.ImPlotAxisFlags_NoTickLabels | ImPlot.ImPlotAxisFlags_NoTickMarks
 
     half_w = sm.viewport_half_width
     half_h = sm.viewport_half_height
@@ -1160,6 +1260,7 @@ function render_spacemap_plot_area!(
         CImGui.ImGuiCond_Always
     )
 
+    ImPlot.PushStyleVar(ImPlot.ImPlotStyleVar_PlotPadding, ImVec2(ui_px(3), ui_px(3)))
     ImPlot.PushStyleColor(ImPlot.ImPlotCol_PlotBg, ImVec4(0.03, 0.03, 0.08, 1.0))
 
     if ImPlot.BeginPlot("##spacemap_plot", ImVec2(-1, -1), plot_flags)
@@ -1168,7 +1269,7 @@ function render_spacemap_plot_area!(
         # Player marker: yellow diamond
         ImPlot.PlotScatter(
             "##player", Float64[player_pos[1]], Float64[player_pos[2]];
-            spec = ImPlot.ImPlotSpec(Marker = ImPlot.ImPlotMarker_Diamond, MarkerSize = 8.0, MarkerFillColor = ImVec4(0.8, 0.8, 0.0, 1.0)),
+            spec = ImPlot.ImPlotSpec(Marker = ImPlot.ImPlotMarker_Diamond, MarkerSize = ui_px(2) + 2, MarkerFillColor = ImVec4(0.8, 0.8, 0.0, 1.0)),
         )
 
         n_enc = length(encounter_points)
@@ -1189,22 +1290,13 @@ function render_spacemap_plot_area!(
 
             # Resolve clicks before drawing the current target
             if ImPlot.IsPlotHovered() && CImGui.IsMouseClicked(0)
-                mouse = ImPlot.GetPlotMousePos()
+                mouse = CImGui.GetMousePos()
                 viewport = ImPlot.GetPlotLimits()
-                best_idx = 0
-                best_dist_sq = SPACEMAP_CLICK_RADIUS_SQ
-                for i in 1:n_enc
-                    if !(viewport.X.Min <= enc_xs[i] <= viewport.X.Max && viewport.Y.Min <= enc_ys[i] <= viewport.Y.Max)
-                        continue
-                    end
-                    dx = enc_xs[i] - mouse.x
-                    dy = enc_ys[i] - mouse.y
-                    dist_sq = dx * dx + dy * dy
-                    if dist_sq < best_dist_sq
-                        best_dist_sq = dist_sq
-                        best_idx = i
-                    end
-                end
+                pixel_positions = (
+                    (i, ImPlot.PlotToPixels(enc_xs[i], enc_ys[i])) for i in 1:n_enc
+                        if viewport.X.Min <= enc_xs[i] <= viewport.X.Max && viewport.Y.Min <= enc_ys[i] <= viewport.Y.Max
+                )
+                best_idx = nearest_spacemap_encounter(pixel_positions, mouse, ui_px(SPACEMAP_CLICK_RADIUS_MODULES))
                 select_spacemap_encounter!(inputstate, gamemap, best_idx)
                 selected_idx = validate_spacemap_selection!(inputstate, gamemap, viewport)
             end
@@ -1238,7 +1330,7 @@ function render_spacemap_plot_area!(
                     @sprintf("##enc_tip_%d", i),
                     Float64[vel_tip[1]],
                     Float64[vel_tip[2]];
-                    spec = ImPlot.ImPlotSpec(Marker = ImPlot.ImPlotMarker_Circle, MarkerSize = 3.0, MarkerLineColor = line_colour, MarkerFillColor = line_colour, LineWeight = 0.0),
+                    spec = ImPlot.ImPlotSpec(Marker = ImPlot.ImPlotMarker_Circle, MarkerSize = ui_px(1), MarkerLineColor = line_colour, MarkerFillColor = line_colour, LineWeight = 0.0),
                 )
             end
 
@@ -1258,11 +1350,11 @@ function render_spacemap_plot_area!(
             for ((class, tag), (xs, ys)) in marker_buckets
                 isempty(xs) && continue
                 marker, size = if class == ENCOUNTER_SHIP
-                    (ImPlot.ImPlotMarker_Circle, 6.0)
+                    (ImPlot.ImPlotMarker_Circle, ui_px(2))
                 elseif class == ENCOUNTER_FUEL_CACHE
-                    (ImPlot.ImPlotMarker_Square, 8.0)
+                    (ImPlot.ImPlotMarker_Square, ui_px(2) + 2)
                 else
-                    (ImPlot.ImPlotMarker_Cross, 7.0)
+                    (ImPlot.ImPlotMarker_Cross, ui_px(2) + 1)
                 end
                 colour = fluid_tag_to_imvec4(tag)
                 fuel_label = fluid_type_label(tag)
@@ -1278,7 +1370,7 @@ function render_spacemap_plot_area!(
                 ImPlot.PlotScatter(
                     "##selected",
                     Float64[enc_xs[selected_idx]], Float64[enc_ys[selected_idx]];
-                    spec = ImPlot.ImPlotSpec(Marker = ImPlot.ImPlotMarker_Diamond, MarkerSize = 9.0, MarkerFillColor = ImVec4(1.0, 0.9, 0.3, 1.0)),
+                    spec = ImPlot.ImPlotSpec(Marker = ImPlot.ImPlotMarker_Diamond, MarkerSize = ui_px(2) + 3, MarkerFillColor = ImVec4(1.0, 0.9, 0.3, 1.0)),
                 )
             end
         end
@@ -1290,6 +1382,7 @@ function render_spacemap_plot_area!(
     end
 
     ImPlot.PopStyleColor(1)
+    ImPlot.PopStyleVar()
     CImGui.EndChild()
 
     return nothing
@@ -1349,16 +1442,21 @@ function ui_spacemap_render!(
 
     inputstate.gui_inputs[:time_progressing] = is_time_progressing(gamemap)
 
-    avail = CImGui.GetContentRegionAvail()
-    left_width = Float32(SPACEMAP_LEFT_PANEL_WIDTH)
-    right_width = avail.x - left_width - 12.0f0
+    CImGui.PushStyleVarY(CImGui.ImGuiStyleVar_CellPadding, 0.0)
+    table_visible = CImGui.BeginTable("##spacemap_columns", 2, CImGui.ImGuiTableFlags_NoPadOuterX)
+    CImGui.PopStyleVar()
+    if table_visible
+        CImGui.TableSetupColumn("Controls", CImGui.ImGuiTableColumnFlags_WidthFixed, ui_px(SPACEMAP_LEFT_PANEL_WIDTH_MODULES))
+        CImGui.TableSetupColumn("Plot", CImGui.ImGuiTableColumnFlags_WidthStretch)
+        CImGui.TableNextRow()
 
-    # Resolve plot limits and selection before offering planning controls
-    panel_position = CImGui.GetCursorPos()
-    CImGui.SetCursorPos(ImVec2(panel_position.x + left_width + 12.0f0, panel_position.y))
-    render_spacemap_plot_area!(inputstate, gamemap, right_width, avail.y)
-    CImGui.SetCursorPos(panel_position)
-    render_spacemap_left_panel!(inputstate, flowcalc_ipc, gamemap, snapshot.gamestate, left_width, avail.y)
+        # Resolve plot limits and selection before offering planning controls
+        CImGui.TableSetColumnIndex(1)
+        render_spacemap_plot_area!(inputstate, gamemap)
+        CImGui.TableSetColumnIndex(0)
+        render_spacemap_left_panel!(inputstate, flowcalc_ipc, gamemap, snapshot.gamestate)
+        CImGui.EndTable()
+    end
 
     CImGui.End()
     CImGui.PopStyleColor()

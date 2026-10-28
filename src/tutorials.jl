@@ -10,14 +10,14 @@ struct TutorialMapgen{F <: Function}
     generator::F
 end
 
-const _tutorial_mapgen_teaser = TutorialMapgen("Teaser Showcase — mapgen_teasership()", mapgen_teasership)
-const _tutorial_mapgen_basic_plumbing = TutorialMapgen("Basic Controls: Cold Gas — mapgen_basicplumbing()", mapgen_basicplumbing)
-const _tutorial_mapgen_big_pipe_plumbing = TutorialMapgen("Basic Controls: Larger Pipes — mapgen_bigpipeplumbing()", mapgen_bigpipeplumbing)
-const _tutorial_mapgen_flow_demo = TutorialMapgen("Basic Controls: Flow Demo — mapgen_flowdemo()", mapgen_flowdemo)
-const _tutorial_mapgen_biprop_demo = TutorialMapgen("BiProp Demo — mapgen_bipropdemo()", mapgen_bipropdemo)
-const _tutorial_mapgen_liquid_transfer = TutorialMapgen("Moving Liquid with Transfer Pumps — mapgen_liquidtransfer()", mapgen_liquidtransfer)
-const _tutorial_mapgen_pressure_fed = TutorialMapgen("Pressure-Fed Tanks — mapgen_pressurefedintro()", mapgen_pressurefedintro)
-const _tutorial_mapgen_turbo_pump = TutorialMapgen("Turbo-Pumps and Tap-Off Cycle — mapgen_turbopumpintro2()", mapgen_turbopumpintro2)
+const _tutorial_mapgen_teaser = TutorialMapgen("Teaser Showcase - mapgen_teasership()", mapgen_teasership)
+const _tutorial_mapgen_basic_plumbing = TutorialMapgen("Basic Controls: Cold Gas - mapgen_basicplumbing()", mapgen_basicplumbing)
+const _tutorial_mapgen_big_pipe_plumbing = TutorialMapgen("Basic Controls: Larger Pipes - mapgen_bigpipeplumbing()", mapgen_bigpipeplumbing)
+const _tutorial_mapgen_flow_demo = TutorialMapgen("Basic Controls: Flow Demo - mapgen_flowdemo()", mapgen_flowdemo)
+const _tutorial_mapgen_biprop_demo = TutorialMapgen("BiProp Demo - mapgen_bipropdemo()", mapgen_bipropdemo)
+const _tutorial_mapgen_liquid_transfer = TutorialMapgen("Moving Liquid with Transfer Pumps - mapgen_liquidtransfer()", mapgen_liquidtransfer)
+const _tutorial_mapgen_pressure_fed = TutorialMapgen("Pressure-Fed Tanks - mapgen_pressurefedintro()", mapgen_pressurefedintro)
+const _tutorial_mapgen_turbo_pump = TutorialMapgen("Turbo-Pumps and Tap-Off Cycle - mapgen_turbopumpintro2()", mapgen_turbopumpintro2)
 
 const TUTORIAL_MAPGENS = (
     _tutorial_mapgen_teaser,

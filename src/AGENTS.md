@@ -24,7 +24,8 @@ launching, input, UI, rendering, persistence, and game-session flow.
   `launch(; telemetry, gc_log)` configures both before opening the window and
   saves telemetry on normal shutdown. Both flags are independent and opt-in.
   Session cleanup collects partial intervals after waiting for the calculator.
-  Runtime resources are owned by `HexFlowRendering`.
+  Shaders and atlas resources are owned by `HexFlowRendering`; bundled UI fonts
+  belong to the root package under `assets/fonts/tamzen/`.
 - `initial_window_setup.jl`, `startmenu.jl`, and `gameloop.jl` own application
   startup, session transitions, the render loop, and calculator IPC. Startup is
   invoked through the package API; importing the package must remain passive.
@@ -72,6 +73,9 @@ launching, input, UI, rendering, persistence, and game-session flow.
   read-only; operations that need independent ownership must copy it before
   retaining or mutating it. The post-loop acquisition captures final session
   state after frame processing has finished.
+- `app_state.jl` owns application-wide settings; menu and game-session transitions
+  must preserve them. Stage changes during a frame and apply them between frames
+  on the main thread, outside `ui_renderwrap()`.
 - View and other presentation-only state may remain on the main thread when it
   cannot affect simulation results.
 
@@ -110,12 +114,15 @@ new mutation, add a command rather than bypassing that boundary.
 
 ## CImGui UI
 
-- Normal UI text uses the default embedded ProggyClean bitmap font at 13 px; do not push a font for normal-sized text.
-- Text rendered at an explicit non-default size should use `CImGui.PushFont(UI_VECTOR_FONT, size)` so the embedded scalable ProggyForever font is used.
-- Do not use `CImGui.PushFont(C_NULL, size)` to scale the default bitmap font.
-- `initialise_ui_fonts!()` registers both embedded fonts in the current context;
-  headless UI tests must initialise their own fonts and restore `UI_VECTOR_FONT`
-  before returning to another context.
+- Author UI geometry in integer modules, converting once with `ui_px()`. Measured
+  text, available space and GLFW coordinates are already physical pixels; do not
+  scale them again. Preserve ImGui automatic-layout values and world/plot units.
+- Select fonts through the shared typography classes and helpers in
+  `initial_window_setup.jl`; balance font pushes with `CImGui.PopFont()`.
+- Font resources and the unscaled style baseline belong to their ImGui context.
+  Clear them before teardown and never reuse them in another context. Apply scale
+  changes between frames from the original style baseline.
+- Check bundled font coverage before adding Unicode characters.
 
 ## Verification
 

@@ -35,6 +35,65 @@ const _component_mass_editor_state = Dict{Symbol, Any}(:input_value => 0.0)
 const _tile_mass_editor_state = Dict{Symbol, Any}(:input_value => 0.0)
 const _particle_accel_editor_state = Dict{Symbol, Any}(:input_value => 0.0)
 
+#= ---------- Shared Application Settings ---------- =#
+
+const UI_SCALE_LABELS = ("100%", "133%", "167%", "200%", "233%", "267%")
+
+"Render settings controls; selections remain staged until the current frame finishes."
+function ui_settings_controls!()
+    CImGui.BeginChild("##settings_controls", (0.0, 0.0))
+    settings = requested_settings()
+    ui_bold_separator("Display")
+    CImGui.Spacing()
+
+    fullscreen = settings.fullscreen
+    if @cref CImGui.Checkbox("Fullscreen", &fullscreen)
+        set_fullscreen!(fullscreen)
+    end
+    if CImGui.IsItemHovered()
+        CImGui.SetTooltip("Toggle native fullscreen here or with F11.")
+    end
+    vsync = settings.vsync
+    if @cref CImGui.Checkbox("VSync", &vsync)
+        set_vsync!(vsync)
+    end
+    if CImGui.IsItemHovered()
+        CImGui.SetTooltip("Synchronise presentation with the display. Disable for uncapped rendering, subject to driver settings.")
+    end
+    CImGui.Spacing()
+    CImGui.TextUnformatted("UI Scale")
+    if CImGui.IsItemHovered()
+        CImGui.SetTooltip("Use Numpad + and Numpad - to adjust UI scale.")
+    end
+    selected = settings.ui_scale
+    CImGui.SetNextItemWidth(-1)
+    if CImGui.BeginCombo("##ui_scale", UI_SCALE_LABELS[Int(selected)])
+        for scale in instances(UIScale)
+            if CImGui.Selectable(UI_SCALE_LABELS[Int(scale)], scale == selected)
+                set_ui_scale!(scale)
+            end
+            if scale == selected
+                CImGui.SetItemDefaultFocus()
+            end
+        end
+        CImGui.EndCombo()
+    end
+
+    CImGui.Dummy((0.0, ui_px(3)))
+    ui_bold_separator("Graphics")
+    CImGui.Spacing()
+    dust = settings.background_dust
+    if @cref CImGui.Checkbox("Background Dust", &dust)
+        set_background_dust!(dust)
+    end
+    if CImGui.IsItemHovered()
+        CImGui.SetTooltip("Show background dust around the ship. Nozzle exhaust and component effects remain enabled.")
+    end
+
+    CImGui.EndChild()
+    return nothing
+end
+
 #= ---------- Pause Menu ---------- =#
 
 "Render the pause menu when active, including escape recovery when a departure checkpoint exists."
@@ -45,6 +104,7 @@ function ui_pause_menu_render!(
     )
     # Menu must be active
     if !inputstate.escape_menu_active
+        pop!(inputstate.gui_inputs, :escape_menu_settings, nothing)
         return nothing
     end
 
@@ -54,7 +114,8 @@ function ui_pause_menu_render!(
     # Centre the menu box
     winsize = GLFW.GetWindowSize(window)
     win_w, win_h = Float64(winsize.width), Float64(winsize.height)
-    box_w, box_h = 300.0, escape_active ? 420.0 : 350.0
+    box_w = min(ui_px(75), max(1.0, win_w))
+    box_h = min(ui_px(escape_active ? 127 : 110), max(1.0, win_h))
     pos = ((win_w - box_w) / 2, (win_h - box_h) / 2)
 
     CImGui.SetNextWindowPos(pos, CImGui.ImGuiCond_Always)
@@ -64,31 +125,40 @@ function ui_pause_menu_render!(
         CImGui.ImGuiWindowFlags_NoMove |
         CImGui.ImGuiWindowFlags_NoCollapse
 
+    CImGui.PushStyleVarX(CImGui.ImGuiStyleVar_WindowPadding, ui_px(5))
     CImGui.Begin("Escape Menu", C_NULL, flags)
+    CImGui.PopStyleVar()
 
     # Title spacing
-    CImGui.Dummy((0.0, 20.0))
+    CImGui.Dummy((0.0, ui_px(5)))
 
-    # Calculate button width (fill most of window width with padding)
-    button_width = box_w - 40.0
-    button_height = 50.0
+    button_height = ui_px(13)
 
-    # Center buttons horizontally
-    CImGui.SetCursorPosX((box_w - button_width) / 2)
+    if get(inputstate.gui_inputs, :escape_menu_settings, false)
+        if CImGui.Button("< Back", (ui_px(20), ui_px(8)))
+            pop!(inputstate.gui_inputs, :escape_menu_settings, nothing)
+        end
+        CImGui.Dummy((0.0, ui_px(2)))
+        push_ui_font(; bold = true)
+        CImGui.TextUnformatted("Settings")
+        CImGui.PopFont()
+        ui_settings_controls!()
+        CImGui.End()
+        return nothing
+    end
 
     # Close menu button
-    if CImGui.Button("Close Menu", (button_width, button_height))
+    if CImGui.Button("Close Menu", ImVec2(-1, button_height))
         inputstate.escape_menu_active = false
     end
-    CImGui.Dummy((0.0, 10.0))
-    CImGui.SetCursorPosX((box_w - button_width) / 2)
+    CImGui.Dummy((0.0, ui_px(2)))
 
     # Save map button (hidden in sandbox mode)
     if !is_sandbox
         save_label = escape_active ? "Save Escape Attempt" : "Save Map"
         save_disabled = haskey(inputstate.gui_inputs, :timelapse_original_map)
         save_disabled && CImGui.BeginDisabled()
-        if CImGui.Button(save_label, (button_width, button_height))
+        if CImGui.Button(save_label, ImVec2(-1, button_height))
             save_path = map_save_dialog(flowcalc_ipc.console_push)
             if !isnothing(save_path)
                 try
@@ -104,14 +174,13 @@ function ui_pause_menu_render!(
         if save_disabled && CImGui.IsItemHovered(CImGui.ImGuiHoveredFlags_AllowWhenDisabled)
             CImGui.SetTooltip("Saving is disabled while browsing time-lapse snapshots. Cancel browsing or start a game from a snapshot to save.")
         end
-        CImGui.Dummy((0.0, 10.0))
-        CImGui.SetCursorPosX((box_w - button_width) / 2)
+        CImGui.Dummy((0.0, ui_px(2)))
     end
 
     if escape_active
         abort_available = can_abort_galaxy_escape(snapshot.gamemap)
         !abort_available && CImGui.BeginDisabled()
-        if CImGui.Button("Abort Escape Attempt and Restore Backup", (button_width, button_height))
+        if CImGui.Button("Abort Escape Attempt and Restore Backup", ImVec2(-1, button_height))
             inputstate.exit_reason = EXIT_RESTART
             inputstate.escape_menu_active = false
         end
@@ -122,20 +191,23 @@ function ui_pause_menu_render!(
                 "No pre-departure backup is available for this save."
             CImGui.SetTooltip(tooltip)
         end
-        CImGui.Dummy((0.0, 10.0))
-        CImGui.SetCursorPosX((box_w - button_width) / 2)
+        CImGui.Dummy((0.0, ui_px(2)))
     end
+
+    if CImGui.Button("Settings", ImVec2(-1, button_height))
+        inputstate.gui_inputs[:escape_menu_settings] = true
+    end
+    CImGui.Dummy((0.0, ui_px(2)))
 
     # Exit to menu button
     exit_label = is_sandbox ? "Leave Tutorial" : "Exit to Menu"
-    if CImGui.Button(exit_label, (button_width, button_height))
+    if CImGui.Button(exit_label, ImVec2(-1, button_height))
         inputstate.exit_reason = EXIT_MENU
     end
-    CImGui.Dummy((0.0, 20.0))
-    CImGui.SetCursorPosX((box_w - button_width) / 2)
+    CImGui.Dummy((0.0, ui_px(5)))
 
     # Quit button
-    if CImGui.Button("Quit", (button_width, button_height))
+    if CImGui.Button("Quit", ImVec2(-1, button_height))
         @info "Quitting Game..."
         inputstate.exit_reason = EXIT_QUIT
         GLFW.SetWindowShouldClose(window, true)
@@ -227,7 +299,8 @@ function ui_dev_utils_menu_render!(
     end
 
     win_float = to_float(winsize)
-    ui_window("Developer Utilities", (win_float.width - DEVELOPER_UTILITIES_WIDTH, 0.0), (DEVELOPER_UTILITIES_WIDTH, win_float.height))
+    width = min(ui_px(DEVELOPER_UTILITIES_WIDTH_MODULES), max(1.0, win_float.width))
+    ui_window("Developer Utilities", (win_float.width - width, 0.0), (width, win_float.height))
 
     # Debug counters at top of menu
     CImGui.Text("UPS: $(@sprintf("%.3f", @atomic flowcalc_ipc.shared_state.actual_ups))")
@@ -235,8 +308,8 @@ function ui_dev_utils_menu_render!(
     CImGui.Text("Frames: $(viewstate.frame_count)")
     CImGui.Separator()
 
-    button_width = DEVELOPER_UTILITIES_WIDTH - 50.0
-    button_height = 20.0
+    button_width = max(1.0, width - ui_px(13))
+    button_height = ui_px(5)
 
     if CImGui.CollapsingHeader("Editor")
         editor_state = placement_state(inputstate)
@@ -341,7 +414,7 @@ function ui_dev_utils_menu_render!(
             end
 
             if !browsing
-                CImGui.SeparatorText("Snapshot Browser")
+                ui_bold_separator("Snapshot Browser")
                 CImGui.Spacing()
                 CImGui.TextWrapped("Inspect earlier stages of this playthrough.")
                 CImGui.Spacing()
@@ -807,7 +880,7 @@ function ui_dev_utils_menu_render!(
             CImGui.Text(@sprintf("Target components: %d", target))
 
             encounter_set_options = _encounter_set_options(class_config, enc_fuel, enc_richness)
-            CImGui.SeparatorText("Encounter Set Options")
+            ui_bold_separator("Encounter Set Options")
             if isempty(encounter_set_options)
                 if class_config.component_source isa DirectEncounterComponents
                     CImGui.TextWrapped("No component sets are registered for this direct encounter class.")
@@ -824,7 +897,7 @@ function ui_dev_utils_menu_render!(
                 end
             end
 
-            if CImGui.Button("Generate & Dock", ImVec2(-1, 30))
+            if CImGui.Button("Generate & Dock", ImVec2(-1, ui_px(8)))
                 encounter_blueprint = generate_encounter(
                     enc_class, enc_fuel, enc_richness,
                     enc_seed, class_config
@@ -838,7 +911,7 @@ function ui_dev_utils_menu_render!(
                 @info "Dev: generated encounter" name = display_name class = enc_class richness = enc_richness
             end
 
-            if CImGui.Button("Generate & Dock (Optimal)", ImVec2(-1, 30))
+            if CImGui.Button("Generate & Dock (Optimal)", ImVec2(-1, ui_px(8)))
                 encounter_blueprint = generate_encounter(
                     enc_class, enc_fuel, enc_richness,
                     enc_seed, class_config
@@ -854,7 +927,7 @@ function ui_dev_utils_menu_render!(
                 @info "Dev: generated encounter (optimal dir)" name = display_name class = enc_class richness = enc_richness
             end
 
-            if CImGui.Button("Generate (No Dock)", ImVec2(-1, 30))
+            if CImGui.Button("Generate (No Dock)", ImVec2(-1, ui_px(8)))
                 blueprint = generate_encounter(
                     enc_class, enc_fuel, enc_richness,
                     enc_seed, class_config
@@ -870,8 +943,8 @@ function ui_dev_utils_menu_render!(
 
 
     if CImGui.CollapsingHeader("Rendering")
-        button_width = 200.0
-        button_height = 30.0
+        button_width = ui_px(50)
+        button_height = ui_px(8)
 
         if CImGui.TreeNode("Docking Status")
             for (ship_name, ship) in snapshot.gamemap.ships
@@ -907,19 +980,19 @@ function ui_action_popup_render!(inputstate::InputState, viewstate::ViewState, c
 
     screen_x, screen_y = world_to_screen(popup.world_position.x, popup.world_position.y, viewstate)
 
-    popup_width = 240.0
+    popup_width = ui_px(60)
     flags = CImGui.ImGuiWindowFlags_NoResize |
         CImGui.ImGuiWindowFlags_NoCollapse |
         CImGui.ImGuiWindowFlags_AlwaysAutoResize
 
     CImGui.SetNextWindowPos((screen_x, screen_y), CImGui.ImGuiCond_Always)
-    CImGui.SetNextWindowSizeConstraints((popup_width, 0.0), (popup_width, 400.0))
+    CImGui.SetNextWindowSizeConstraints((popup_width, 0.0), (popup_width, ui_px(100)))
 
     p_open = Ref(true)
     CImGui.Begin("$(popup.window_title)##action_popup", p_open, flags)
 
     if !isnothing(popup.pending_confirmation)
-        _render_confirmation_pane!(popup, inputstate, command_queue, gamemap, viewstate, popup_width)
+        _render_confirmation_pane!(popup, inputstate, command_queue, gamemap, viewstate)
     else
         _render_action_list!(popup, inputstate, command_queue, gamemap, viewstate)
     end
@@ -933,13 +1006,11 @@ function ui_action_popup_render!(inputstate::InputState, viewstate::ViewState, c
 end
 
 "Render the confirmation sub-pane for an action requiring player confirmation."
-function _render_confirmation_pane!(popup::ActionPopupState, inputstate::InputState, command_queue::CommandQueue, gamemap::GameMap, viewstate::ViewState, popup_width::Float64)
+function _render_confirmation_pane!(popup::ActionPopupState, inputstate::InputState, command_queue::CommandQueue, gamemap::GameMap, viewstate::ViewState)
     action = popup.pending_confirmation
     CImGui.TextWrapped(action.confirmation_message)
-    CImGui.Dummy((0.0, 4.0))
-    button_width = popup_width - 16.0
-    CImGui.SetCursorPosX((popup_width - button_width) / 2.0)
-    return if CImGui.Button("Confirm", (button_width, 28.0))
+    CImGui.Dummy((0.0, ui_px(1)))
+    return if CImGui.Button("Confirm", ImVec2(-1, ui_px(7)))
         _execute_action!(inputstate, popup, action, command_queue, gamemap, viewstate)
     end
 end

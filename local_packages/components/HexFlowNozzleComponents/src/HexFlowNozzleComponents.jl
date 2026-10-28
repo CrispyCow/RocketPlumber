@@ -143,7 +143,7 @@ function get_inspection_items(nozzle::NozzleBehavFrag; tile::TileCoord, rotation
         inspection_pressure_bar("Inlet pressure", pressure),
         controls...,
         InspectionDivider("Condition"),
-        get_inspection_items(nozzle.overheat; temperature_label = "Nozzle temperature", kwargs...)...,
+        get_inspection_items(nozzle.overheat; temperature_label = "Nozzle temp", kwargs...)...,
     )
 end
 
@@ -723,7 +723,7 @@ function get_inspection_items(comp::DecompChamberCompBehav; tile::TileCoord, mna
     return (
         InspectionDivider("Operation"),
         inspection_flow_Lps("Propellant flow", current),
-        InspectionValue("Output temperature", comp.output_temperature; units = "K"),
+        InspectionValue("Output temp", comp.output_temperature; units = "K"),
     )
 end
 
@@ -905,9 +905,9 @@ function get_inspection_items(comp::BipropChamberCompBehav; tile::TileCoord, mna
         exhaust_colour = get_fluid_colour(HexFluids.BIPROP_EXHAUST, comp.state.output_temperature_k)
         # Lift cold exhaust towards grey so the temperature-dependent hue stays visible
         colour = 0.7f0 .* exhaust_colour + 0.3f0 .* ColourType(0.55, 0.55, 0.55, 1.0)
-        InspectionGauge("Output temperature", comp.state.output_temperature_k, maximum; units = "K", colour)
+        InspectionGauge("Output temp", comp.state.output_temperature_k, maximum; units = "K", colour)
     else
-        InspectionValue("Output temperature", comp.state.output_temperature_k; units = "K")
+        InspectionValue("Output temp", comp.state.output_temperature_k; units = "K")
     end
 
     return (
@@ -920,8 +920,8 @@ function get_inspection_items(comp::BipropChamberCompBehav; tile::TileCoord, mna
 end
 
 function get_tunables(comp::BipropChamberCompBehav)::NTuple{3, TunableProps}
-    fuel_cond_props = TunableProps(comp.fuel_conductance, "Fuel Conductance", "s²")
-    oxid_cond_props = TunableProps(comp.oxid_conductance, "Oxidiser Conductance", "s²")
+    fuel_cond_props = TunableProps(comp.fuel_conductance, "Fuel Conductance", "s^2")
+    oxid_cond_props = TunableProps(comp.oxid_conductance, "Oxidiser Conductance", "s^2")
     r_optimal_props = TunableProps(comp.r_optimal, "Optimal Flow Ratio", "")
     return (fuel_cond_props, oxid_cond_props, r_optimal_props)
 end

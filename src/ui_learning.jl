@@ -7,24 +7,24 @@ Formatter: Runic
 # Learning System UI: Learning Helper and Tutorial Detail
 # ===============================================================
 
-const LEARNING_HELPER_WIDTH = 250.0
-const LEARNING_HELPER_MIN_HEIGHT = 80.0
-const LEARNING_HELPER_MAX_HEIGHT = 400.0
-const LEARNING_HINT_PANE_WIDTH = 455.0
-const LEARNING_HINT_PANE_MIN_HEIGHT = 180.0
+const LEARNING_HELPER_WIDTH_MODULES = 63
+const LEARNING_HELPER_MIN_HEIGHT_MODULES = 20
+const LEARNING_HELPER_MAX_HEIGHT_MODULES = 100
+const LEARNING_HINT_PANE_WIDTH_MODULES = 114
+const LEARNING_HINT_PANE_MIN_HEIGHT_MODULES = 45
 
-"Get the right-hand gutter for default Learning Helper placement."
+"Get the right-hand gutter for Learning Helper placement."
 function get_learning_right_gutter(inputstate::InputState)::Float32
     inputstate.spacemap_active && return 0.0f0
-    return Float32(PROPERTY_INSPECTOR_WIDTH)
+    return Float32(ui_px(PROPERTY_INSPECTOR_WIDTH_MODULES))
 end
 
 "Determine whether the Learning Helper list itself should be shown."
 _should_render_learning_helper(state::LearningSystemState)::Bool = state.learning_helper_visible && !is_sandbox_learning(state)
 
-"Calculate the default Learning Helper position."
-function _get_default_helper_pos(inputstate::InputState, win_float::NamedTuple)::NTuple{2, Float32}
-    pos_x = Float32(win_float.width) - get_learning_right_gutter(inputstate) - Float32(LEARNING_HELPER_WIDTH)
+"Calculate the fixed Learning Helper position."
+function _get_learning_helper_pos(inputstate::InputState, win_float::NamedTuple)::NTuple{2, Float32}
+    pos_x = Float32(win_float.width) - get_learning_right_gutter(inputstate) - Float32(ui_px(LEARNING_HELPER_WIDTH_MODULES))
     return (max(0.0f0, pos_x), 0.0f0)
 end
 
@@ -85,11 +85,12 @@ function ui_tutorial_banner_render!(title::String, winsize::NamedTuple{(:width, 
     win_float = to_float(winsize)
     drawlist = CImGui.GetBackgroundDrawList()
 
-    banner_height = 30.0f0
+    push_ui_font(; bold = true)
+    banner_height = Float32(ui_px(8))
     banner_text = "TUTORIAL: $title"
     text_size = CImGui.CalcTextSize(banner_text)
     text_pos_x = (Float32(win_float.width) - text_size.x) / 2.0f0
-    text_pos_y = 7.0f0
+    text_pos_y = floor((banner_height - text_size.y) / 2)
 
     CImGui.AddRectFilled(
         drawlist,
@@ -98,6 +99,7 @@ function ui_tutorial_banner_render!(title::String, winsize::NamedTuple{(:width, 
         IM_COL32(26, 51, 102, 220),
     )
     CImGui.AddText(drawlist, ImVec2(text_pos_x, text_pos_y), IM_COL32(255, 230, 77, 255), banner_text)
+    CImGui.PopFont()
     return nothing
 end
 
@@ -130,31 +132,23 @@ end
 # Learning Helper Widget
 # ===============================================================
 
-"Render the draggable Learning Helper list."
+"Render the fixed Learning Helper list."
 function _render_learning_helper!(state::LearningSystemState, inputstate::InputState, win_float::NamedTuple)
-    width = min(LEARNING_HELPER_WIDTH, max(1.0, win_float.width))
-    max_height = min(LEARNING_HELPER_MAX_HEIGHT, max(1.0, win_float.height))
-    preferred_pos = isnothing(state.current_helper_pos) ? _get_default_helper_pos(inputstate, win_float) : state.current_helper_pos
-    pos = (
-        clamp(preferred_pos[1], 0.0f0, Float32(max(0.0, win_float.width - width))),
-        clamp(preferred_pos[2], 0.0f0, Float32(max(0.0, win_float.height - min(LEARNING_HELPER_MIN_HEIGHT, max_height)))),
-    )
-    if isnothing(state.current_helper_pos) || pos != state.current_helper_pos
-        CImGui.SetNextWindowPos(pos, CImGui.ImGuiCond_Always)
-    end
+    width = min(ui_px(LEARNING_HELPER_WIDTH_MODULES), max(1.0, win_float.width))
+    max_height = min(ui_px(LEARNING_HELPER_MAX_HEIGHT_MODULES), max(1.0, win_float.height))
+    min_height = min(ui_px(LEARNING_HELPER_MIN_HEIGHT_MODULES), max_height)
+    CImGui.SetNextWindowPos(_get_learning_helper_pos(inputstate, win_float), CImGui.ImGuiCond_Always)
 
-    flags = CImGui.ImGuiWindowFlags_NoResize | CImGui.ImGuiWindowFlags_AlwaysAutoResize
+    flags = CImGui.ImGuiWindowFlags_NoMove | CImGui.ImGuiWindowFlags_NoSavedSettings |
+        CImGui.ImGuiWindowFlags_NoResize | CImGui.ImGuiWindowFlags_AlwaysAutoResize
     CImGui.SetNextWindowSizeConstraints(
-        (width, min(LEARNING_HELPER_MIN_HEIGHT, max_height)),
+        (width, min_height),
         (width, max_height),
     )
 
-    CImGui.PushFont(UI_VECTOR_FONT, 18.0)
+    push_ui_font(; bold = true)
     CImGui.Begin("LEARNING HELPER###Learning Helper", C_NULL, flags)
     CImGui.PopFont()
-
-    helper_pos = CImGui.GetWindowPos()
-    state.current_helper_pos = (helper_pos.x, helper_pos.y)
 
     toggle_label = state.learning_helper_expanded ? "Show Less" : "Show All"
     if CImGui.SmallButton(toggle_label)
@@ -229,25 +223,16 @@ end
 # Tutorial Detail Window
 # ===============================================================
 
-"Clamp the tutorial detail pane position to the visible window."
-function _clamp_learning_hint_pane_pos(pos::NTuple{2, Float32}, win_float::NamedTuple)::NTuple{2, Float32}
-    pane_min_height = min(LEARNING_HINT_PANE_MIN_HEIGHT, Float64(win_float.height))
-    max_x = Float32(max(0.0, win_float.width - LEARNING_HINT_PANE_WIDTH))
-    max_y = Float32(max(0.0, win_float.height - pane_min_height))
-    return (clamp(pos[1], 0.0f0, max_x), clamp(pos[2], 0.0f0, max_y))
-end
-
 "Calculate the tutorial detail pane position relative to the Learning Helper."
 function _get_learning_hint_pane_pos(state::LearningSystemState, inputstate::InputState, win_float::NamedTuple)::NTuple{2, Float32}
-    preferred_pos = if !_should_render_learning_helper(state)
-        pos_x = Float32(win_float.width) - get_learning_right_gutter(inputstate) - Float32(LEARNING_HINT_PANE_WIDTH)
-        (pos_x, 0.0f0)
+    right_edge = if _should_render_learning_helper(state)
+        _get_learning_helper_pos(inputstate, win_float)[1]
     else
-        helper_pos = isnothing(state.current_helper_pos) ? _get_default_helper_pos(inputstate, win_float) : state.current_helper_pos
-        (helper_pos[1] - Float32(LEARNING_HINT_PANE_WIDTH), helper_pos[2])
+        Float32(win_float.width) - get_learning_right_gutter(inputstate)
     end
-
-    return _clamp_learning_hint_pane_pos(preferred_pos, win_float)
+    pos_x = right_edge - Float32(ui_px(LEARNING_HINT_PANE_WIDTH_MODULES))
+    max_x = Float32(max(0.0, win_float.width - ui_px(LEARNING_HINT_PANE_WIDTH_MODULES)))
+    return (clamp(pos_x, 0.0f0, max_x), 0.0f0)
 end
 
 "Render the selected tutorial detail pane."
@@ -256,16 +241,15 @@ function _render_learning_hint_pane!(state::LearningSystemState, inputstate::Inp
     isnothing(entry) && return nothing
 
     pane_pos = _get_learning_hint_pane_pos(state, inputstate, win_float)
-    pane_min_height = min(LEARNING_HINT_PANE_MIN_HEIGHT, Float64(win_float.height))
-    max_h = max(pane_min_height, win_float.height - Float64(pane_pos[2]))
+    pane_min_height = min(ui_px(LEARNING_HINT_PANE_MIN_HEIGHT_MODULES), Float64(win_float.height))
 
     flags = CImGui.ImGuiWindowFlags_NoResize | CImGui.ImGuiWindowFlags_AlwaysAutoResize
     show_close_button = !is_sandbox_learning(state)
     p_open = Ref(true)
 
     CImGui.SetNextWindowPos(pane_pos, CImGui.ImGuiCond_Always)
-    width = min(LEARNING_HINT_PANE_WIDTH, max(1.0, win_float.width))
-    CImGui.SetNextWindowSizeConstraints((width, pane_min_height), (width, max_h))
+    width = min(ui_px(LEARNING_HINT_PANE_WIDTH_MODULES), max(1.0, win_float.width))
+    CImGui.SetNextWindowSizeConstraints((width, pane_min_height), (width, win_float.height))
     CImGui.Begin("Tutorial: $(entry.definition.title)", show_close_button ? p_open : C_NULL, flags)
 
     try
@@ -287,11 +271,10 @@ function _render_learning_hint_pane!(state::LearningSystemState, inputstate::Inp
         end
     finally
         CImGui.End()
-    end
-
-    if show_close_button && !p_open[]
-        state.active_hint_id = nothing
-        state.viewing_step = 1
+        if show_close_button && !p_open[]
+            state.active_hint_id = nothing
+            state.viewing_step = 1
+        end
     end
 
     return nothing
@@ -304,13 +287,13 @@ function _render_sandbox_preview_window!(state::LearningSystemState, inputstate:
 
     tutorial_status = get_tutorial_status(state.map_learning, entry.id)
     num_levels = length(definition.levels)
-    button_width = (LEARNING_HINT_PANE_WIDTH - 20.0) / 2.0
+    button_width = max(1.0, (CImGui.GetContentRegionAvail().x - unsafe_load(CImGui.GetStyle().ItemSpacing).x) / 2)
 
     _render_progress_status(tutorial_status)
     CImGui.Text("Levels: $num_levels")
 
     CImGui.Spacing()
-    if CImGui.Button("Play Tutorial", (button_width, 28.0))
+    if CImGui.Button("Play Tutorial", (button_width, ui_px(7)))
         inputstate.pending_sandbox_id = entry.id
         inputstate.exit_reason = EXIT_SANDBOX_STARTED
     end
@@ -320,7 +303,7 @@ function _render_sandbox_preview_window!(state::LearningSystemState, inputstate:
 
     CImGui.SameLine()
 
-    if CImGui.Button("Skip", (button_width, 28.0))
+    if CImGui.Button("Skip", (button_width, ui_px(7)))
         complete_tutorial!(state.map_learning, entry.id)
         state.active_hint_id = nothing
         state.viewing_step = 1
@@ -366,8 +349,8 @@ function render_tutorial_steps_window!(
 
     # Skip button
     CImGui.SameLine()
-    skip_width = 45.0f0
-    skip_height = 20.0f0
+    skip_width = ui_px(12)
+    skip_height = ui_px(5)
     cursor_x = CImGui.GetCursorPosX()
     avail_width = CImGui.GetContentRegionAvail().x
     CImGui.SetCursorPosX(cursor_x + max(0.0f0, avail_width - skip_width))
@@ -389,7 +372,7 @@ function render_tutorial_steps_window!(
     if CImGui.BeginTable("##tutorial_nav", 3, CImGui.ImGuiTableFlags_SizingStretchSame)
         CImGui.TableNextColumn()
         at_first_step && CImGui.BeginDisabled()
-        if CImGui.Button("< Previous", ImVec2(-1.0f0, 24.0f0))
+        if CImGui.Button("< Previous", ImVec2(-1.0f0, ui_px(6)))
             state.viewing_step = max(1, viewing - 1)
         end
         at_first_step && CImGui.EndDisabled()
@@ -397,17 +380,19 @@ function render_tutorial_steps_window!(
         CImGui.TableNextColumn()
         step_kind = is_info_step ? "INFO" : "TASK"
         step_kind_colour = is_info_step ? ImVec4(0.4, 0.7, 1.0, 1.0) : ImVec4(1.0, 0.65, 0.1, 1.0)
+        push_ui_font(; bold = true)
         text_width = CImGui.CalcTextSize(step_kind).x
         column_width = CImGui.GetContentRegionAvail().x
         if text_width < column_width
             CImGui.SetCursorPosX(CImGui.GetCursorPosX() + (column_width - text_width) * 0.5)
         end
         CImGui.TextColored(step_kind_colour, step_kind)
+        CImGui.PopFont()
 
         CImGui.TableNextColumn()
         !can_proceed && CImGui.BeginDisabled()
         next_label = is_last_step ? "Finish" : "Next >"
-        if CImGui.Button(next_label, ImVec2(-1.0f0, 24.0f0))
+        if CImGui.Button(next_label, ImVec2(-1.0f0, ui_px(6)))
             if is_last_step
                 on_complete!()
             else
@@ -428,7 +413,7 @@ function render_tutorial_steps_window!(
 
     CImGui.Spacing()
     if !isempty(current_step.heading)
-        CImGui.SeparatorText(current_step.heading)
+        ui_bold_separator(current_step.heading)
     else
         CImGui.Separator()
     end

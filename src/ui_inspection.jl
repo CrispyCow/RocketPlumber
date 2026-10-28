@@ -272,19 +272,18 @@ function render_inspection_item!(item::InspectionGauge)
     reading = inspection_gauge_reading(item)
     inspection_row!(item.label, reading)
 
-    # Reserve the pointer above the bar, using the active font's screen scale
+    # Reserve the module-sized pointer above the bar
     has_target = !isnothing(item.target) && isfinite(item.target)
-    scale = CImGui.GetFontSize() / 13.0f0
-    overhang, pointer_height, pointer_halfwidth = 2scale, 4scale, 3scale
+    overhang, pointer_height, pointer_halfwidth = ui_px(1), ui_px(1), ui_px(1)
     if has_target
         CImGui.SetCursorPosY(CImGui.GetCursorPosY() + overhang + pointer_height)
     end
     !isnothing(item.colour) && CImGui.PushStyleColor(CImGui.ImGuiCol_PlotHistogram, ImVec4(item.colour...))
-    CImGui.ProgressBar(inspection_fraction(item), ImVec2(-1.0, max(4.0f0, CImGui.GetFontSize() * 0.6f0)), "")
+    CImGui.ProgressBar(inspection_fraction(item), ImVec2(-1.0, ui_px(3)), "")
     !isnothing(item.colour) && CImGui.PopStyleColor()
     if has_target
         lower, upper = CImGui.GetItemRectMin(), CImGui.GetItemRectMax()
-        thickness = 2scale
+        thickness = 1.0f0
         x = inspection_target_position(item, lower.x, upper.x)
         top, bottom = ImVec2(x, lower.y - overhang), ImVec2(x, upper.y + overhang)
         left = ImVec2(x - pointer_halfwidth, top.y - pointer_height)
@@ -292,10 +291,10 @@ function render_inspection_item!(item::InspectionGauge)
         draw = CImGui.GetWindowDrawList()
         colour = CImGui.GetColorU32(CImGui.ImGuiCol_Text)
         outline = CImGui.GetColorU32(CImGui.ImGuiCol_WindowBg)
-        CImGui.AddLine(draw, top, bottom, outline, thickness + 2scale)
+        CImGui.AddLine(draw, top, bottom, outline, thickness + 2.0f0)
         CImGui.AddLine(draw, top, bottom, colour, thickness)
         CImGui.AddTriangleFilled(draw, left, right, top, colour)
-        CImGui.AddTriangle(draw, left, right, top, outline, scale)
+        CImGui.AddTriangle(draw, left, right, top, outline, 1.0f0)
         CImGui.SetCursorPosY(CImGui.GetCursorPosY() + overhang)
     end
     CImGui.Spacing()
@@ -314,27 +313,30 @@ function render_inspection_item!(item::InspectionAlert)
     colour = inspection_tone_colour(item.tone)
     packed = isnothing(colour) ? CImGui.GetColorU32(CImGui.ImGuiCol_Text) : CImGui.GetColorU32(ImVec4(colour...))
     origin = CImGui.GetCursorScreenPos()
-    size = CImGui.GetTextLineHeight()
-    scale = size / 13.0f0
-    x, y = origin.x + size / 2, origin.y + size / 2
-    radius, thickness = 5.0f0 * scale, max(1.0f0, scale)
+    size = ui_px(4)
+    line_height = CImGui.GetTextLineHeight()
+    x, y = origin.x + size / 2, origin.y + line_height / 2
+    radius = size * 0.4
+    # Proportional interior details, with one-pixel strokes and dots
+    detail = radius * 0.4
+    thickness = 1.0f0
     draw = CImGui.GetWindowDrawList()
     if item.tone == INSPECTION_WARNING
         CImGui.AddTriangle(draw, ImVec2(x, y - radius), ImVec2(x + radius, y + radius), ImVec2(x - radius, y + radius), packed, thickness)
-        CImGui.AddLine(draw, ImVec2(x, y - 2scale), ImVec2(x, y + scale), packed, thickness)
-        CImGui.AddCircleFilled(draw, ImVec2(x, y + 3scale), 0.7f0 * scale, packed)
+        CImGui.AddLine(draw, ImVec2(x, y - detail), ImVec2(x, y + detail * 0.5), packed, thickness)
+        CImGui.AddCircleFilled(draw, ImVec2(x, y + detail * 1.5), 1.0f0, packed)
     else
         CImGui.AddCircle(draw, ImVec2(x, y), radius, packed, 16, thickness)
         if item.tone == INSPECTION_ERROR
-            CImGui.AddLine(draw, ImVec2(x - 2scale, y - 2scale), ImVec2(x + 2scale, y + 2scale), packed, thickness)
-            CImGui.AddLine(draw, ImVec2(x + 2scale, y - 2scale), ImVec2(x - 2scale, y + 2scale), packed, thickness)
+            CImGui.AddLine(draw, ImVec2(x - detail, y - detail), ImVec2(x + detail, y + detail), packed, thickness)
+            CImGui.AddLine(draw, ImVec2(x + detail, y - detail), ImVec2(x - detail, y + detail), packed, thickness)
         else
-            CImGui.AddCircleFilled(draw, ImVec2(x, y - 2scale), 0.7f0 * scale, packed)
-            CImGui.AddLine(draw, ImVec2(x, y), ImVec2(x, y + 3scale), packed, thickness)
+            CImGui.AddCircleFilled(draw, ImVec2(x, y - detail), 1.0f0, packed)
+            CImGui.AddLine(draw, ImVec2(x, y), ImVec2(x, y + detail * 1.5), packed, thickness)
         end
     end
-    CImGui.Dummy(ImVec2(size, size))
-    CImGui.SameLine(0.0f0, 4scale)
+    CImGui.Dummy(ImVec2(size, line_height))
+    CImGui.SameLine(0.0f0, ui_px(1))
     !isnothing(colour) && CImGui.PushStyleColor(CImGui.ImGuiCol_Text, ImVec4(colour...))
     inspection_text!(item.message)
     !isnothing(colour) && CImGui.PopStyleColor()
@@ -449,13 +451,11 @@ inspection_heading(::ThevininTankCompBehav{LiquidTankBehavFrag}) = "Liquid tank"
 inspection_heading(::PressureFedTankCompBehav) = "Pressure-fed liquid tank"
 inspection_heading(::PipeBehavior) = "Pipe"
 
-"Identify the inspected object with a secondary scalable heading."
+"Identify the inspected object with a compact Bold heading."
 function inspection_heading!(heading::String)
-    CImGui.Spacing()
-    CImGui.PushFont(UI_VECTOR_FONT, 16.0)
+    push_ui_font(; bold = true)
     CImGui.TextUnformatted(heading)
     CImGui.PopFont()
-    CImGui.Spacing()
     return nothing
 end
 

@@ -57,16 +57,23 @@ function custom_rendering!(
     set_view_ubo(glmap, get_viewtransform(viewstate))
 
     # Background particles behind the ship
-    if !isnothing(viewstate.background_particles)
-        @timeit render_loop_timer "Particle Systems" begin
-            @timeit render_loop_timer "Background Particles" begin
-                if !shared_state.is_paused
-                    thrust_dust_particle_effect!(viewstate.background_particles, snapshot.gamestate, snapshot.gamemap, snapshot.derived)
-                    update_particle_physics!(viewstate.background_particles, snapshot.gamestate)
+    background = viewstate.background_particles
+    if !isnothing(background)
+        if app_state().settings.background_dust
+            @timeit render_loop_timer "Particle Systems" begin
+                @timeit render_loop_timer "Background Particles" begin
+                    if !shared_state.is_paused
+                        thrust_dust_particle_effect!(background, snapshot.gamestate, snapshot.gamemap, snapshot.derived)
+                        update_particle_physics!(background, snapshot.gamestate)
+                    end
+                    # Passing the map enables ship-surface culling
+                    render_particles!(glmap, background, viewstate, snapshot.timestamp, shared_state.actual_ups, snapshot.gamemap)
                 end
-                # Passing the map enables ship-surface culling
-                render_particles!(glmap, viewstate.background_particles, viewstate, snapshot.timestamp, shared_state.actual_ups, snapshot.gamemap)
             end
+        else
+            empty!(background.particles)
+            background.last_spawn_tick = snapshot.gamestate.ticks
+            background.last_update_tick = snapshot.gamestate.ticks
         end
     end
 
@@ -407,7 +414,6 @@ function enter_gameloop(
         initial_bundle::Union{Nothing, GameMapBundle} = nothing,
         initial_active_tutorial_id::Union{Nothing, Symbol} = nothing,
         frame_hook::Union{Nothing, Function} = nothing,
-        window_mode::WindowModeState = WindowModeState(),
     )::GameLoopResult
 
     # Initialise session state
@@ -415,9 +421,6 @@ function enter_gameloop(
     ui_loadingscreen_render(window, "Instantiating game state")
     attach_glfw_callbacks!(window)
     g_inputstate, g_viewstate = init_input_viewstates(window)
-
-    # The window may have been resized before entering the game loop
-    glViewport(0, 0, g_viewstate.fb_width, g_viewstate.fb_height)
 
     ui_loadingscreen_render(window, "Loading map")
     loaded_bundle = isnothing(initial_bundle) ? loadmap_bundle_from_source(map_source) : initial_bundle
@@ -443,7 +446,6 @@ function enter_gameloop(
     g_viewstate.background_particles = ParticleManager(0.03f0)  # Small dust particles
     g_viewstate.foreground_particles = ParticleManager(0.06f0)  # Larger exhaust particles
 
-    GLFW.SwapInterval(1)  # Enable VSync
     glClearColor(0.114, 0.161, 0.318, 1.0)  # Space cadet blue
 
     g_recording = RecordingState()
@@ -458,6 +460,9 @@ function enter_gameloop(
 
     # MAIN LOOP
     ui_loadingscreen_render(window, "Entering main loop")
+    poll_windowstate!(g_viewstate, window)
+    # Loading frames update the viewport independently of the cached view dimensions
+    glViewport(0, 0, g_viewstate.fb_width, g_viewstate.fb_height)
 
     while isnothing(g_inputstate.exit_reason) && !GLFW.WindowShouldClose(window)
         # Guard against the render loop changing threads, which can cause GLFW/OpenGL issues
@@ -544,10 +549,11 @@ function enter_gameloop(
         end
         recording_tick!(g_recording, g_inputstate, g_viewstate, window, g_flowcalc_ipc.console_push)
         GLFW.SwapBuffers(window)
+        apply_pending_settings!(window)
 
         # Process input against the displayed snapshot
         GLFW.PollEvents()
-        poll_window_mode!(window_mode, window)
+        poll_application_shortcuts!(window)
 
         if isnothing(completed_gamemap) && isnothing(restart_bundle)
             @timeit render_loop_timer "User Input Handling" user_handler!(g_flowcalc_ipc, g_inputstate, g_viewstate, g_snapshot, window)

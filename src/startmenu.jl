@@ -19,6 +19,7 @@ using Random: RandomDevice
     PAGE_NEW_GAME
     PAGE_EXPLORER_SETTINGS
     PAGE_TUTORIAL_SELECT
+    PAGE_SETTINGS
 end
 
 "Deferred action to execute outside the ImGui frame"
@@ -62,7 +63,6 @@ end
 
 "Mutable state for the start menu loop"
 @kwdef mutable struct StartMenuState
-    window_mode::WindowModeState = WindowModeState()
     page::StartMenuPage = PAGE_INITIAL
     action::StartMenuAction = ACTION_NONE
     menu_inputs::Dict{Symbol, Any} = Dict{Symbol, Any}()
@@ -76,15 +76,17 @@ end
 # Layout Constants
 # ===============================================================
 
-const MENU_BOX_W = 350.0
-const MENU_INITIAL_BOX_W = 850.0
-const MENU_BOX_H = 420.0
-const MENU_INITIAL_BOX_H = 500.0
-const MENU_TUTORIAL_BOX_H = 520.0
-const MENU_BUTTON_HEIGHT = 50.0
-const MENU_BUTTON_PADDING = 40.0
-const MENU_BACK_BUTTON_W = 80.0
-const MENU_BACK_BUTTON_H = 30.0
+const MENU_BOX_WIDTH_MODULES = 88
+const MENU_INITIAL_BOX_WIDTH_MODULES = 212
+const MENU_TUTORIAL_BOX_WIDTH_MODULES = 96
+const MENU_BOX_HEIGHT_MODULES = 105
+const MENU_INITIAL_BOX_HEIGHT_MODULES = 140
+const MENU_EXPLORER_BOX_HEIGHT_MODULES = 112
+const MENU_TUTORIAL_BOX_HEIGHT_MODULES = 130
+const MENU_BUTTON_HEIGHT_MODULES = 13
+const MENU_BUTTON_PADDING_MODULES = 10
+const MENU_BACK_BUTTON_WIDTH_MODULES = 20
+const MENU_BACK_BUTTON_HEIGHT_MODULES = 8
 const MENU_MUTED_TEXT = ImVec4(0.75, 0.77, 0.8, 1.0)
 
 # ===============================================================
@@ -92,26 +94,27 @@ const MENU_MUTED_TEXT = ImVec4(0.75, 0.77, 0.8, 1.0)
 # ===============================================================
 
 "Render the initial start-menu page."
-function render_page_initial!(state::StartMenuState, box_w::Float64, button_width::Float64, button_height::Float64)
+function render_page_initial!(state::StartMenuState, box_w::Float64, button_height::Float64)
     table_flags = CImGui.ImGuiTableFlags_BordersInnerV | CImGui.ImGuiTableFlags_NoPadOuterX
-    CImGui.PushStyleVar(CImGui.ImGuiStyleVar_CellPadding, ImVec2(12.0, 0.0))
+    CImGui.PushStyleVar(CImGui.ImGuiStyleVar_CellPadding, ImVec2(ui_px(3), 0.0))
     table_visible = CImGui.BeginTable("##start_menu_columns", 2, table_flags)
     CImGui.PopStyleVar()
     table_visible || return nothing
-    CImGui.TableSetupColumn("Actions", CImGui.ImGuiTableColumnFlags_WidthFixed, box_w + 12.0)
+    CImGui.TableSetupColumn("Actions", CImGui.ImGuiTableColumnFlags_WidthFixed, box_w + ui_px(3))
     CImGui.TableSetupColumn("Contact", CImGui.ImGuiTableColumnFlags_WidthStretch)
     CImGui.TableNextColumn()
 
     # Original game controls in the left column
-    CImGui.BeginChild("##start_menu_actions", (box_w, 0.0))
+    CImGui.PushStyleVar(CImGui.ImGuiStyleVar_WindowPadding, ImVec2(ui_px(5), 0))
+    CImGui.BeginChild("##start_menu_actions", (box_w, 0.0), CImGui.ImGuiChildFlags_AlwaysUseWindowPadding)
+    CImGui.PopStyleVar()
     if isempty(state.load_error)
-        CImGui.Dummy((0.0, 20.0))
+        CImGui.Dummy((0.0, ui_px(5)))
     else
         CImGui.TextWrapped(state.load_error)
     end
 
-    CImGui.SetCursorPosX((box_w - button_width) / 2)
-    if CImGui.Button("Launch Teaser", (button_width, button_height))
+    if CImGui.Button("Launch Teaser", ImVec2(-1, button_height))
         @info "Launch Teaser selected"
         state.selected_tutorial_id = :teaser
         state.action = ACTION_LAUNCH_SANDBOX
@@ -119,41 +122,40 @@ function render_page_initial!(state::StartMenuState, box_w::Float64, button_widt
     if CImGui.IsItemHovered()
         CImGui.SetTooltip("Explore a showcase ship and get a tease of what's possible in Rocket Plumber. A good place to start if you're new to the game!")
     end
-    CImGui.Dummy((0.0, 10.0))
+    CImGui.Dummy((0.0, ui_px(2)))
 
-    CImGui.SetCursorPosX((box_w - button_width) / 2)
-    if CImGui.Button("New Game", (button_width, button_height))
+    if CImGui.Button("New Game", ImVec2(-1, button_height))
         @info "New Game selected"
         state.page = PAGE_NEW_GAME
     end
     if CImGui.IsItemHovered()
         CImGui.SetTooltip("Start Explorer Mode for the main game, with guidance as you play, or create a blank ship to experiment.")
     end
-    CImGui.Dummy((0.0, 10.0))
+    CImGui.Dummy((0.0, ui_px(2)))
 
-    CImGui.SetCursorPosX((box_w - button_width) / 2)
-    if CImGui.Button("Load Game", (button_width, button_height))
+    if CImGui.Button("Load Game", ImVec2(-1, button_height))
         @info "Load Game selected"
         state.action = ACTION_LOAD_MAP
     end
     if CImGui.IsItemHovered()
         CImGui.SetTooltip("Load a saved game from a save file.")
     end
-    CImGui.Dummy((0.0, 10.0))
+    CImGui.Dummy((0.0, ui_px(2)))
 
-    CImGui.SetCursorPosX((box_w - button_width) / 2)
-    if CImGui.Button("Tutorials", (button_width, button_height))
+    if CImGui.Button("Tutorials", ImVec2(-1, button_height))
         @info "Tutorials selected"
         state.page = PAGE_TUTORIAL_SELECT
     end
     if CImGui.IsItemHovered()
         CImGui.SetTooltip("Replay tutorials and demos at any time outside of Explorer Mode's Learning System.")
     end
-    CImGui.Dummy((0.0, 10.0))
+    CImGui.Dummy((0.0, ui_px(2)))
 
-    CImGui.Dummy((0.0, 10.0))
-    CImGui.SetCursorPosX((box_w - button_width) / 2)
-    if CImGui.Button("Quit", (button_width, button_height))
+    if CImGui.Button("Settings", ImVec2(-1, button_height))
+        state.page = PAGE_SETTINGS
+    end
+    CImGui.Dummy((0.0, ui_px(4)))
+    if CImGui.Button("Quit", ImVec2(-1, button_height))
         @info "Quit selected"
         state.action = ACTION_QUIT
     end
@@ -163,44 +165,40 @@ function render_page_initial!(state::StartMenuState, box_w::Float64, button_widt
     CImGui.TableNextColumn()
     contact_start_x = CImGui.GetCursorPosX()
     contact_width = CImGui.GetContentRegionAvail().x
-    CImGui.Dummy((0.0, 20.0))
-    CImGui.PushFont(UI_VECTOR_FONT, 21.0)
-    CImGui.SeparatorText("Stay Updated")
-    CImGui.PopFont()
+    CImGui.Dummy((0.0, ui_px(5)))
+    ui_bold_separator("Stay Updated")
     CImGui.Spacing()
 
     CImGui.PushStyleColor(CImGui.ImGuiCol_Text, MENU_MUTED_TEXT)
     CImGui.TextWrapped("Get game updates, development blog posts, and exclusive content straight to your inbox.")
     CImGui.PopStyleColor()
-    CImGui.Dummy((0.0, 20.0))
+    CImGui.Dummy((0.0, ui_px(5)))
 
-    CImGui.PushFont(UI_VECTOR_FONT, 18.0)
+    push_ui_font(; bold = true)
     mailing_list_label = "Join the Mailing List!"
     CImGui.SetCursorPosX(contact_start_x + (contact_width - CImGui.CalcTextSize(mailing_list_label).x) / 2)
     CImGui.TextLinkOpenURL(mailing_list_label * "##mailing_list", "https://rocketplumbergame.com/mailing-list/")
     CImGui.PopFont()
-    CImGui.Dummy((0.0, 56.0))
+    CImGui.Dummy((0.0, ui_px(14)))
 
-    CImGui.PushFont(UI_VECTOR_FONT, 21.0)
-    CImGui.SeparatorText("Get in Touch")
-    CImGui.PopFont()
-    CImGui.Dummy((0.0, 8.0))
+    ui_bold_separator("Get in Touch")
+    CImGui.Dummy((0.0, ui_px(2)))
 
     CImGui.PushStyleColor(CImGui.ImGuiCol_Text, MENU_MUTED_TEXT)
     CImGui.TextWrapped("Found a bug?\nHave a suggestion?\nWant to show off your ship?\n\nSend me an email, I'm keen to hear what you think!")
     CImGui.PopStyleColor()
-    CImGui.Dummy((0.0, 12.0))
+    CImGui.Dummy((0.0, ui_px(3)))
 
     # Reserve the same button width for Copy and Copied! to keep the group centred
-    copy_button_width = 65.0
-    feedback_width = CImGui.CalcTextSize("feedback@rocketplumbergame.com").x + 10.0 + copy_button_width
+    copy_button_width = ui_px(18)
+    feedback_width = CImGui.CalcTextSize("feedback@rocketplumbergame.com").x + ui_px(2) + copy_button_width
     CImGui.SetCursorPosX(contact_start_x + (contact_width - feedback_width) / 2)
     CImGui.AlignTextToFramePadding()
     CImGui.TextLinkOpenURL("feedback@rocketplumbergame.com", "mailto:feedback@rocketplumbergame.com?subject=Rocket%20Plumber%20Feedback")
-    CImGui.SameLine(0.0, 10.0)
+    CImGui.SameLine(0.0, ui_px(2))
 
     copied = CImGui.GetTime() < get(state.menu_inputs, :email_copied_until, 0.0)
-    if CImGui.Button(copied ? "Copied!###copy_email" : "Copy###copy_email", (copy_button_width, 22.0))
+    if CImGui.Button(copied ? "Copied!###copy_email" : "Copy###copy_email", (copy_button_width, ui_px(6)))
         CImGui.SetClipboardText("feedback@rocketplumbergame.com")
         state.menu_inputs[:email_copied_until] = CImGui.GetTime() + 2.0
     end
@@ -211,14 +209,14 @@ end
 
 "Render the new-game mode selection page."
 function render_page_new_game!(state::StartMenuState, box_w::Float64, button_width::Float64, button_height::Float64, escape_rising::Bool)
-    if CImGui.Button("< Back", (MENU_BACK_BUTTON_W, MENU_BACK_BUTTON_H)) || escape_rising
+    if CImGui.Button("< Back", (ui_px(MENU_BACK_BUTTON_WIDTH_MODULES), ui_px(MENU_BACK_BUTTON_HEIGHT_MODULES))) || escape_rising
         state.page = PAGE_INITIAL
         return nothing
     end
-    CImGui.Dummy((0.0, 10.0))
+    CImGui.Dummy((0.0, ui_px(2)))
 
     CImGui.TextWrapped("New to Rocket Plumber? Start with Explorer Mode. The Learning System will introduce tips and tutorials as you play.")
-    CImGui.Dummy((0.0, 20.0))
+    CImGui.Dummy((0.0, ui_px(5)))
 
     CImGui.SetCursorPosX((box_w - button_width) / 2)
     explorer_clicked = CImGui.Button("##explorer_mode", (button_width, button_height))
@@ -228,8 +226,10 @@ function render_page_new_game!(state::StartMenuState, box_w::Float64, button_wid
     line_height = CImGui.GetTextLineHeight()
     text_y = button_min.y + (button_size.y - 2 * line_height) / 2
     for (line_index, line) in enumerate(("Explorer Mode", "(Recommended)"))
+        push_ui_font(; bold = line_index == 1)
         text_x = button_min.x + (button_size.x - CImGui.CalcTextSize(line).x) / 2
         CImGui.AddText(CImGui.GetWindowDrawList(), ImVec2(text_x, text_y + (line_index - 1) * line_height), CImGui.GetColorU32(CImGui.ImGuiCol_Text), line)
+        CImGui.PopFont()
     end
     if explorer_clicked
         @info "Explorer Mode settings selected"
@@ -239,7 +239,7 @@ function render_page_new_game!(state::StartMenuState, box_w::Float64, button_wid
     if CImGui.IsItemHovered()
         CImGui.SetTooltip("Repair your ship, salvage parts and fuel, and work towards escaping the galaxy.")
     end
-    CImGui.Dummy((0.0, 10.0))
+    CImGui.Dummy((0.0, ui_px(2)))
 
     CImGui.SetCursorPosX((box_w - button_width) / 2)
     if CImGui.Button("New Blank Ship", (button_width, button_height))
@@ -255,40 +255,41 @@ end
 
 "Render the explorer-mode settings page."
 function render_page_explorer_settings!(state::StartMenuState, box_w::Float64, button_width::Float64, button_height::Float64, escape_rising::Bool)
-    if CImGui.Button("< Back", (MENU_BACK_BUTTON_W, MENU_BACK_BUTTON_H)) || escape_rising
+    if CImGui.Button("< Back", (ui_px(MENU_BACK_BUTTON_WIDTH_MODULES), ui_px(MENU_BACK_BUTTON_HEIGHT_MODULES))) || escape_rising
         state.page = PAGE_NEW_GAME
         return nothing
     end
-    CImGui.Dummy((0.0, 10.0))
+    CImGui.Dummy((0.0, ui_px(2)))
 
     CImGui.TextWrapped("Repair your ship, explore space, and work towards escaping the galaxy.")
-    CImGui.Dummy((0.0, 12.0))
+    CImGui.Dummy((0.0, ui_px(3)))
 
     # Explorer parameters
     CImGui.Text("World Seed")
     if CImGui.IsItemHovered()
         CImGui.SetTooltip("Controls the generated starting conditions. Use the same seed to recreate the same world.")
     end
-    seed_input_width = CImGui.GetContentRegionAvail().x - 80.0 - 8.0
-    CImGui.SetNextItemWidth(seed_input_width)
+    randomise_button_width = ui_px(21)
+    seed_control_gap = ui_px(2)
+    CImGui.SetNextItemWidth(-randomise_button_width - seed_control_gap)
     seed = UInt32(state.menu_inputs[:explorer_seed])
     @cref CImGui.InputScalar("##explorer_seed", CImGui.ImGuiDataType_U32, &seed)
     state.menu_inputs[:explorer_seed] = seed
     if CImGui.IsItemHovered()
         CImGui.SetTooltip("Controls the generated starting conditions. Use the same seed to recreate the same world.")
     end
-    CImGui.SameLine(0.0, 8.0)
-    if CImGui.Button("Randomise", (80.0, 0.0))
+    CImGui.SameLine(0.0, seed_control_gap)
+    if CImGui.Button("Randomise", (randomise_button_width, 0.0))
         state.menu_inputs[:explorer_seed] = rand(RandomDevice(), UInt32)
     end
-    CImGui.Dummy((0.0, 16.0))
+    CImGui.Dummy((0.0, ui_px(4)))
 
     learning_enabled = Bool(get!(state.menu_inputs, :explorer_learning_enabled, true))
     @cref CImGui.Checkbox("Enable Learning System", &learning_enabled)
     state.menu_inputs[:explorer_learning_enabled] = learning_enabled
     CImGui.TextWrapped("(Tips and tutorials will appear as you progress through the game, if enabled)")
 
-    CImGui.Dummy((0.0, 16.0))
+    CImGui.Dummy((0.0, ui_px(4)))
 
     CImGui.SetCursorPosX((box_w - button_width) / 2)
     if CImGui.Button("Start Explorer Mode", (button_width, button_height))
@@ -300,18 +301,18 @@ function render_page_explorer_settings!(state::StartMenuState, box_w::Float64, b
 end
 
 "Render the standalone tutorial and demo selector."
-function render_page_tutorial_select!(state::StartMenuState, box_w::Float64, button_width::Float64, button_height::Float64, escape_rising::Bool)
-    if CImGui.Button("< Back", (MENU_BACK_BUTTON_W, MENU_BACK_BUTTON_H)) || escape_rising
+function render_page_tutorial_select!(state::StartMenuState, button_width::Float64, escape_rising::Bool)
+    if CImGui.Button("< Back", (ui_px(MENU_BACK_BUTTON_WIDTH_MODULES), ui_px(MENU_BACK_BUTTON_HEIGHT_MODULES))) || escape_rising
         state.page = PAGE_INITIAL
         return nothing
     end
 
-    CImGui.Dummy((0.0, 10.0))
+    CImGui.Dummy((0.0, ui_px(2)))
     CImGui.TextWrapped("Tutorials are introduced naturally as you progress through Explorer Mode. You don't need to complete them here before starting a game!")
     CImGui.Spacing()
     CImGui.TextWrapped("This page lets you replay individual tutorials and demos whenever you like.")
-    CImGui.Dummy((0.0, 4.0))
-    CImGui.SeparatorText("Individual Tutorials")
+    CImGui.Dummy((0.0, ui_px(1)))
+    ui_bold_separator("Individual Tutorials")
     CImGui.Spacing()
 
     CImGui.BeginChild("##tutorial_list", (0.0, 0.0))
@@ -322,7 +323,7 @@ function render_page_tutorial_select!(state::StartMenuState, box_w::Float64, but
         def = entry.definition
 
         CImGui.SetCursorPosX(list_start_x + (list_width - tutorial_button_width) / 2)
-        if CImGui.Button(def.title, (tutorial_button_width, 35.0))
+        if CImGui.Button(def.title, (tutorial_button_width, ui_px(9)))
             state.selected_tutorial_id = entry.id
             state.action = ACTION_LAUNCH_SANDBOX
         end
@@ -336,6 +337,17 @@ function render_page_tutorial_select!(state::StartMenuState, box_w::Float64, but
     return nothing
 end
 
+"Render the shared settings with start-menu navigation."
+function render_page_settings!(state::StartMenuState, escape_rising::Bool)
+    if CImGui.Button("< Back", (ui_px(MENU_BACK_BUTTON_WIDTH_MODULES), ui_px(MENU_BACK_BUTTON_HEIGHT_MODULES))) || escape_rising
+        state.page = PAGE_INITIAL
+        return nothing
+    end
+    CImGui.Dummy((0.0, ui_px(2)))
+    ui_settings_controls!()
+    return nothing
+end
+
 # ===============================================================
 # Main UI Dispatch
 # ===============================================================
@@ -345,13 +357,20 @@ function ui_start_menu_render!(state::StartMenuState, window::GLFW.Window)
     # Centre the menu window
     winsize = GLFW.GetWindowSize(window)
     win_w, win_h = Float64(winsize.width), Float64(winsize.height)
-    box_w = state.page == PAGE_INITIAL ? MENU_INITIAL_BOX_W : MENU_BOX_W
+    page_box_width = ui_px(state.page == PAGE_TUTORIAL_SELECT ? MENU_TUTORIAL_BOX_WIDTH_MODULES : MENU_BOX_WIDTH_MODULES)
+    box_w = state.page == PAGE_INITIAL ? ui_px(MENU_INITIAL_BOX_WIDTH_MODULES) : page_box_width
     box_h = if state.page == PAGE_INITIAL
-        MENU_INITIAL_BOX_H
+        ui_px(MENU_INITIAL_BOX_HEIGHT_MODULES)
     elseif state.page == PAGE_TUTORIAL_SELECT
-        MENU_TUTORIAL_BOX_H
+        ui_px(MENU_TUTORIAL_BOX_HEIGHT_MODULES)
+    elseif state.page == PAGE_EXPLORER_SETTINGS
+        ui_px(MENU_EXPLORER_BOX_HEIGHT_MODULES)
     else
-        MENU_BOX_H
+        ui_px(MENU_BOX_HEIGHT_MODULES)
+    end
+    if state.page == PAGE_SETTINGS
+        box_w = min(box_w, max(1.0, win_w))
+        box_h = min(box_h, max(1.0, win_h))
     end
     pos = ((win_w - box_w) / 2, (win_h - box_h) / 2)
 
@@ -373,43 +392,48 @@ function ui_start_menu_render!(state::StartMenuState, window::GLFW.Window)
         "New Game"
     elseif state.page == PAGE_EXPLORER_SETTINGS
         "Explorer Mode"
+    elseif state.page == PAGE_SETTINGS
+        "Settings"
     elseif state.page == PAGE_TUTORIAL_SELECT
         "Tutorials"
     else
         error("Unhandled start menu page for title: $(state.page)")
     end
 
-    horizontal_padding = state.page == PAGE_INITIAL ? 20.0 : 8.0
-    CImGui.PushStyleVar(CImGui.ImGuiStyleVar_WindowPadding, ImVec2(horizontal_padding, 18.0))
+    horizontal_padding = ui_px(state.page == PAGE_INITIAL ? 5 : 2)
+    CImGui.PushStyleVar(CImGui.ImGuiStyleVar_WindowPadding, ImVec2(horizontal_padding, ui_px(4)))
     CImGui.Begin("Rocket Plumber###start_menu", C_NULL, flags)
     CImGui.PopStyleVar()
 
-    CImGui.PushFont(UI_VECTOR_FONT, 29.0)
+    push_ui_font(FontDisplay; bold = true)
     CImGui.SetCursorPosX((box_w - CImGui.CalcTextSize("Rocket Plumber").x) / 2)
     CImGui.TextColored(DV_COLOUR, "Rocket Plumber")
     CImGui.PopFont()
     if !isempty(subtitle)
-        CImGui.PushFont(UI_VECTOR_FONT, 16.0)
+        push_ui_font(; bold = true)
         CImGui.SetCursorPosX((box_w - CImGui.CalcTextSize(subtitle).x) / 2)
         CImGui.TextColored(MENU_MUTED_TEXT, subtitle)
         CImGui.PopFont()
     end
     CImGui.Spacing()
     CImGui.Separator()
-    CImGui.Dummy((0.0, 12.0))
+    CImGui.Dummy((0.0, ui_px(3)))
 
-    button_width = MENU_BOX_W - MENU_BUTTON_PADDING
+    button_width = page_box_width - ui_px(MENU_BUTTON_PADDING_MODULES)
+    button_height = ui_px(MENU_BUTTON_HEIGHT_MODULES)
     escape_rising = get_inrising!(state.last_keystates, GLFW.KEY_ESCAPE, window)
 
     # Render the selected page
     if state.page == PAGE_INITIAL
-        render_page_initial!(state, MENU_BOX_W, button_width, MENU_BUTTON_HEIGHT)
+        render_page_initial!(state, page_box_width, button_height)
     elseif state.page == PAGE_NEW_GAME
-        render_page_new_game!(state, MENU_BOX_W, button_width, MENU_BUTTON_HEIGHT, escape_rising)
+        render_page_new_game!(state, page_box_width, button_width, button_height, escape_rising)
     elseif state.page == PAGE_EXPLORER_SETTINGS
-        render_page_explorer_settings!(state, MENU_BOX_W, button_width, MENU_BUTTON_HEIGHT, escape_rising)
+        render_page_explorer_settings!(state, page_box_width, button_width, button_height, escape_rising)
+    elseif state.page == PAGE_SETTINGS
+        render_page_settings!(state, escape_rising)
     elseif state.page == PAGE_TUTORIAL_SELECT
-        render_page_tutorial_select!(state, MENU_BOX_W, button_width, MENU_BUTTON_HEIGHT, escape_rising)
+        render_page_tutorial_select!(state, button_width, escape_rising)
     else
         error("Unhandled start menu page: $(state.page)")
     end
@@ -436,19 +460,19 @@ function _find_sandbox_definition(id::Symbol)::Union{Nothing, SandboxTutorialDef
 end
 
 "Run a map session by entering the main game loop with its map source."
-function run_session(window::GLFW.Window, session::MapSession; window_mode::WindowModeState)::GameLoopResult
-    return enter_gameloop(window; initial_bundle = session.bundle, initial_active_tutorial_id = session.initial_active_tutorial_id, window_mode)
+function run_session(window::GLFW.Window, session::MapSession)::GameLoopResult
+    return enter_gameloop(window; initial_bundle = session.bundle, initial_active_tutorial_id = session.initial_active_tutorial_id)
 end
 
 "Run a sandbox tutorial session for the current level."
-function run_session(window::GLFW.Window, session::SandboxSession; window_mode::WindowModeState)::GameLoopResult
+function run_session(window::GLFW.Window, session::SandboxSession)::GameLoopResult
     level = session.definition.levels[session.current_level]
     sandbox_map = level.map_generator()
     set_learning_system!(
         sandbox_map,
         SandboxLearningState(tutorial_id = session.tutorial_id, level_index = session.current_level),
     )
-    return enter_gameloop(window; initial_bundle = GameMapBundle(sandbox_map), window_mode)
+    return enter_gameloop(window; initial_bundle = GameMapBundle(sandbox_map))
 end
 
 "Determine the next session after a map session exits."
@@ -577,7 +601,7 @@ function handle_start_menu_action!(state::StartMenuState, window::GLFW.Window)
     isnothing(session) && return nothing
 
     while !isnothing(session) && !GLFW.WindowShouldClose(window)
-        result = run_session(window, session; window_mode = state.window_mode)
+        result = run_session(window, session)
         session = next_session(session, result)
     end
 
@@ -588,16 +612,15 @@ end
 # Start Menu Loop
 # ===============================================================
 
-"Run the vsynced start menu until the window closes."
+"Run the start menu until the window closes, preserving application preferences."
 function enter_start_menu(window::GLFW.Window)
     state = StartMenuState()
     GLFW.SetWindowTitle(window, "Rocket Plumber")
-    GLFW.SwapInterval(1)
     glClearColor(0.2, 0.2, 0.2, 1.0)
 
     while !GLFW.WindowShouldClose(window)
         GLFW.PollEvents()
-        poll_window_mode!(state.window_mode, window)
+        poll_application_shortcuts!(window)
         fbsize = GLFW.GetFramebufferSize(window)
         glViewport(0, 0, fbsize.width, fbsize.height)
         glClear(GL_COLOR_BUFFER_BIT)
@@ -609,6 +632,7 @@ function enter_start_menu(window::GLFW.Window)
         end
 
         GLFW.SwapBuffers(window)
+        apply_pending_settings!(window)
 
         # Snapshot post-poll state for the next frame's rising-edge checks
         update_lastinstate!(state.last_keystates, window)

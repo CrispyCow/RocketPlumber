@@ -240,9 +240,11 @@ function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedSt
         end
     end
 
-    # Escape prioritises world interactions over application overlays
+    # Settings consumes Escape; otherwise world interactions retain priority
     if get_inrising!(inputstate, GLFW.KEY_ESCAPE, window)
-        if handle_world_escape!(inputstate)
+        if inputstate.escape_menu_active && get(inputstate.gui_inputs, :escape_menu_settings, false)
+            pop!(inputstate.gui_inputs, :escape_menu_settings, nothing)
+        elseif handle_world_escape!(inputstate)
             # World interactions consume Escape before space-map and pause-menu handling.
         elseif inputstate.spacemap_active
             time_prog = get(inputstate.gui_inputs, :time_progressing, false)::Bool
@@ -253,6 +255,7 @@ function poll_keys!(inputstate::InputState, shared_state::FlowCalculatorSharedSt
                 inputstate.spacemap_active = false
             end
         else
+            pop!(inputstate.gui_inputs, :escape_menu_settings, nothing)
             inputstate.escape_menu_active = !inputstate.escape_menu_active
         end
     end

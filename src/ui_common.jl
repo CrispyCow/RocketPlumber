@@ -14,10 +14,18 @@ using Printf
 using HexFrame, FlowEngine, FlowMap, HexComponentsAPI
 using HexFlowCalculator
 
+"Render a Standard Bold separator heading, balancing the font stack."
+function ui_bold_separator(text::AbstractString)
+    push_ui_font(; bold = true)
+    CImGui.SeparatorText(text)
+    CImGui.PopFont()
+    return nothing
+end
+
 #= ---------- UI Layout Constants ---------- =#
 
-const PROPERTY_INSPECTOR_WIDTH = 320.0
-const DEVELOPER_UTILITIES_WIDTH = 350.0
+const PROPERTY_INSPECTOR_WIDTH_MODULES = 80
+const DEVELOPER_UTILITIES_WIDTH_MODULES = 88
 
 #= ---------- Window Configuration ---------- =#
 

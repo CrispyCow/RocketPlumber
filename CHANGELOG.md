@@ -4,13 +4,25 @@ Notable player-facing changes to Rocket Plumber are recorded here, in loose adhe
 
 ## Unreleased
 
-- Redesigned Properties into a compact, permanently visible inspector for components,
-  pipes and junctions. Hover for temporary operating readouts, or select a part for
-  persistent inspection and expandable, read-only Technical details (Debug).
+- Added a scalable UI with crisp Tamzen bitmap typography across menus, instruments
+  and panels. Choose six scales from 100% to 267% in Settings or with Numpad
+  Plus/Minus; the default is 133%.
 
-- Clearer gauges, fluid-coloured contents and condition warnings make ship systems
-  easier to understand. Readouts use player-friendly physical units, show current
-  and commanded settings together, and distinguish missing measurements from zero.
+- Added shared main-menu and in-game Settings for Fullscreen (also F11), VSync,
+  UI Scale and Background Dust. Preferences last across games and tutorials until
+  the application closes.
+
+- Redesigned Properties as a permanent inspector for components, pipes and
+  junctions. Hover for temporary operating readouts or select a part for persistent
+  inspection and read-only Technical details (Debug), with clearer measurements,
+  units and gauges that distinguish missing measurements from zero.
+
+- Improved the velocity tracker and manoeuvre readouts, with ship controls beside
+  the manoeuvre instrument or galaxy escape progress, and a compact Galaxy Escape
+  report with flight statistics and sharing actions.
+
+- Gave Space Map more plot space and scale-aware encounter selection, and kept
+  the Learning Helper beside Properties or at the top-right in Space Map.
 
 ## 0.1.0
 

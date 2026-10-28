@@ -110,7 +110,6 @@ end
     learning_helper_expanded::Bool = false
     frames_since_last_eval::Int = 0
     eval_interval::Int = 5
-    current_helper_pos::Union{Nothing, NTuple{2, Float32}} = nothing
 end
 
 # ===============================================================
