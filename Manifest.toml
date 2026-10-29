@@ -2,7 +2,7 @@
 
 julia_version = "1.13.1"
 manifest_format = "2.1"
-project_hash = "f03e3977f0f5fc730045b9e4b7bf73c1faa5287d"
+project_hash = "ae0eaa11c137dd74d0929a6d24fa2d0b4575d4d1"
 
 [[deps.ATK_jll]]
 deps = ["Artifacts", "Glib_jll", "JLLWrappers", "Libdl"]
@@ -1061,7 +1061,7 @@ version = "3.17.2"
     Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 
 [[deps.RocketPlumber]]
-deps = ["Accessors", "BaseDirs", "CImGui", "CSyntax", "ColorSchemes", "ColorTypes", "DataStructures", "Dates", "FFMPEG", "FilePathsBase", "FlowEngine", "FlowMap", "GLFW", "GeometryBasics", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowBasicPipes", "HexFlowCalculator", "HexFlowControl", "HexFlowLearningSystem", "HexFlowNozzleComponents", "HexFlowPersistence", "HexFlowProcGen", "HexFlowPumpComponents", "HexFlowRendering", "HexFlowSwitchComponents", "HexFlowTankComponents", "HexFlowTelemetry", "HexFluids", "HexFrame", "ImPlot", "JLD2", "LinearAlgebra", "ModernGL", "NativeFileDialog", "PNGFiles", "PrecompileTools", "Printf", "Random", "RelocatableFolders", "RenderEngine", "SmallCollections", "SquirrelNoise", "StaticArrays", "StructEquality", "TimerOutputs"]
+deps = ["Accessors", "BaseDirs", "CImGui", "CSyntax", "ColorSchemes", "ColorTypes", "DataStructures", "Dates", "FFMPEG", "FilePathsBase", "FlowEngine", "FlowMap", "GLFW", "GeometryBasics", "HexComponentsAPI", "HexElements", "HexFlowBasicComponents", "HexFlowBasicPipes", "HexFlowCalculator", "HexFlowControl", "HexFlowLearningSystem", "HexFlowNozzleComponents", "HexFlowPersistence", "HexFlowProcGen", "HexFlowPumpComponents", "HexFlowRendering", "HexFlowSwitchComponents", "HexFlowTankComponents", "HexFlowTelemetry", "HexFluids", "HexFrame", "ImPlot", "JLD2", "LinearAlgebra", "ModernGL", "NativeFileDialog", "PNGFiles", "PrecompileTools", "Printf", "Random", "RelocatableFolders", "RenderEngine", "SmallCollections", "SquirrelNoise", "StaticArrays", "StructEquality", "TOML", "TimerOutputs"]
 path = "."
 uuid = "49293a16-84b5-4c04-b023-19c4eddda1c7"
 version = "0.1.1-dev"

@@ -1,5 +1,5 @@
 #=
-Scope: Application settings defaults, staging, scale steps, and session lifetime
+Scope: Application settings persistence, staging, scale steps, and session lifetime
 Formatter: Runic
 =#
 
@@ -11,6 +11,136 @@ function with_test_app_state(test::Function)
         return test()
     finally
         RocketPlumber._APP_STATE[] = previous
+    end
+end
+
+@testset "Settings persistence" begin
+    with_test_app_state() do
+        mktempdir() do directory
+            state = RocketPlumber.app_state()
+            defaults = RocketPlumber.AppSettings()
+            path = joinpath(directory, "output", "settings.toml")
+
+            @testset "Missing file" begin
+                state.settings = RocketPlumber.AppSettings(fullscreen = true)
+                @test RocketPlumber.load_app_settings!(path)
+                @test state.settings == defaults
+                @test isnothing(state.pending_settings)
+                @test isempty(readdir(directory))
+            end
+
+            @testset "Committed settings round trip" begin
+                expected = RocketPlumber.AppSettings(ui_scale = RocketPlumber.UIScale233, fullscreen = true, vsync = false, background_dust = false, last_monitor = "DELL U2724D")
+                state.settings = expected
+                RocketPlumber.set_fullscreen!(false)
+                RocketPlumber.save_app_settings(path)
+                @test RocketPlumber.TOML.parsefile(path) == Dict(
+                    "ui_scale" => "UIScale233", "fullscreen" => true,
+                    "vsync" => false, "background_dust" => false,
+                    "last_monitor" => "DELL U2724D",
+                )
+                @test RocketPlumber.load_app_settings!(path)
+                @test state.settings == expected
+                @test isnothing(state.pending_settings)
+            end
+
+            @testset "Unset monitor is omitted" begin
+                state.settings = defaults
+                RocketPlumber.save_app_settings(path)
+                @test !haskey(RocketPlumber.TOML.parsefile(path), "last_monitor")
+            end
+
+            @testset "Partial and unknown fields" begin
+                write(path, "fullscreen = true\nfuture_preference = 42\n")
+                @test RocketPlumber.load_app_settings!(path)
+                @test state.settings == RocketPlumber.AppSettings(fullscreen = true)
+            end
+
+            @testset "Invalid fields retain defaults" begin
+                write(path, "ui_scale = \"UIScale999\"\nfullscreen = true\nvsync = \"false\"\nbackground_dust = false\nlast_monitor = 42\n")
+                @test RocketPlumber.load_app_settings!(path)
+                @test state.settings == RocketPlumber.AppSettings(fullscreen = true, background_dust = false)
+            end
+
+            @testset "Malformed file is preserved" begin
+                contents = "fullscreen = ["
+                write(path, contents)
+                @test !RocketPlumber.load_app_settings!(path)
+                @test state.settings == defaults
+                @test read(path, String) == contents
+            end
+
+            @testset "Unreadable settings" begin
+                # A directory cannot be parsed as a settings file on any platform.
+                unreadable = mkpath(joinpath(directory, "unreadable.toml"))
+                state.settings = RocketPlumber.AppSettings(fullscreen = true)
+                @test !RocketPlumber.load_app_settings!(unreadable)
+                @test state.settings == defaults
+                @test isdir(unreadable)
+            end
+
+            @testset "Save failures" begin
+                blocked = joinpath(directory, "blocked")
+                write(blocked, "keep this file")
+                @test isnothing(RocketPlumber.save_app_settings(joinpath(blocked, "settings.toml")))
+                @test read(blocked, String) == "keep this file"
+            end
+        end
+    end
+end
+
+@testset "Monitor hints and observation on the headless backend" begin
+    with_test_app_state() do
+        glfw = RocketPlumber.GLFW
+        state = RocketPlumber.app_state()
+        monitor = glfw.GetPrimaryMonitor()
+        glfw.WindowHint(glfw.CLIENT_API, glfw.NO_API)
+        window = glfw.CreateWindow(640, 480, "Monitor hints and observation")
+        try
+            restored = RocketPlumber.restore_last_monitor!(window, glfw.GetMonitorName(monitor))
+            @test restored.handle == monitor.handle
+            @test !RocketPlumber.window_is_fullscreen(window)
+            @test isnothing(RocketPlumber.restore_last_monitor!(window, "Unavailable display"))
+            @test RocketPlumber.window_monitor(window).handle == monitor.handle
+
+            @test RocketPlumber.apply_fullscreen!(state.window_mode, window, true, restored)
+            RocketPlumber.remember_last_monitor!(window)
+            @test state.settings == RocketPlumber.AppSettings(last_monitor = glfw.GetMonitorName(monitor))
+            @test isnothing(state.pending_settings)
+
+            # The null backend cannot locate windowed displays; retain the observed name.
+            glfw.SetWindowMonitor(window, glfw.Monitor(C_NULL), 0, 0, 640, 480, glfw.DONT_CARE)
+            settings = state.settings
+            RocketPlumber.remember_last_monitor!(window)
+            @test state.settings == settings
+        finally
+            glfw.DestroyWindow(window)
+            glfw.DefaultWindowHints()
+        end
+    end
+end
+
+@testset "Fullscreen restores the current windowed geometry" begin
+    glfw = RocketPlumber.GLFW
+    glfw.WindowHint(glfw.CLIENT_API, glfw.NO_API)
+    window = glfw.CreateWindow(640, 480, "Fullscreen restoration")
+    try
+        mode = RocketPlumber.WindowModeState()
+        for (x, y, width, height) in ((100, 150, 640, 480), (900, 250, 800, 600))
+            glfw.SetWindowPos(window, x, y)
+            glfw.SetWindowSize(window, width, height)
+            @test RocketPlumber.apply_fullscreen!(mode, window, true)
+
+            # Reapplying fullscreen must not overwrite the captured windowed geometry.
+            @test RocketPlumber.apply_fullscreen!(mode, window, true)
+            @test !RocketPlumber.apply_fullscreen!(mode, window, false)
+            position = glfw.GetWindowPos(window)
+            size = glfw.GetWindowSize(window)
+            @test (position.x, position.y, size.width, size.height) == (x, y, width, height)
+        end
+    finally
+        glfw.DestroyWindow(window)
+        glfw.DefaultWindowHints()
     end
 end
 

@@ -12,6 +12,7 @@ using TimerOutputs, Accessors, Printf, CSyntax
 using FilePathsBase, NativeFileDialog, FFMPEG
 using RelocatableFolders
 import BaseDirs
+import TOML
 import CImGui, CImGui.lib
 using ImPlot
 
@@ -42,6 +43,7 @@ crashes_dir(; create::Bool = false) = output_dir("logs", "crashes"; create)
 # Application Assembly
 # ===============================================================
 
+include("window.jl")
 include("initial_window_setup.jl")
 include("app_state.jl")
 include("recording.jl")
@@ -87,8 +89,10 @@ function launch(; telemetry::Bool = false, gc_log::Bool = false)
     configure_threads()
     start_telemetry!(telemetry)
     initialise_app_state!()
+    should_save_settings = load_app_settings!()
     window = start_window()
     enter_start_menu(window)
+    should_save_settings && save_app_settings()
     finish_telemetry!(; directory = telemetry_dir())
     return nothing
 end

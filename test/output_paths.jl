@@ -11,6 +11,7 @@ end
     root = joinpath(documents, "RocketPlumber-saves")
     @test !ispath(root)  # Importing the full application must remain passive
     @test RocketPlumber.output_dir() == root
+    @test RocketPlumber.settings_path() == joinpath(root, "settings.toml")
     directories = (
         RocketPlumber.maps_dir => "maps",
         RocketPlumber.pictures_dir => "pictures",
@@ -177,6 +178,7 @@ end
         write(joinpath(ENV["XDG_CONFIG_HOME"], "user-dirs.dirs"), "XDG_DOCUMENTS_DIR=\"$changed_documents\"\n")
         BaseDirs.reload()
         @test RocketPlumber.output_dir() == joinpath(changed_documents, "RocketPlumber-saves")
+        @test RocketPlumber.settings_path() == joinpath(changed_documents, "RocketPlumber-saves", "settings.toml")
         @test !ispath(RocketPlumber.output_dir())
     end
 end

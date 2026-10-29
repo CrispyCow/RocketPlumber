@@ -9,8 +9,8 @@ Notable player-facing changes to Rocket Plumber are recorded here, in loose adhe
   Plus/Minus; the default is 133%.
 
 - Added shared main-menu and in-game Settings for Fullscreen (also F11), VSync,
-  UI Scale and Background Dust. Preferences last across games and tutorials until
-  the application closes.
+  UI Scale and Background Dust. Preferences persist between application launches,
+  and the game remembers the last-used monitor and tries to restore it on launch.
 
 - Redesigned Properties as a permanent inspector for components, pipes and
   junctions. Hover for temporary operating readouts or select a part for persistent

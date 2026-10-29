@@ -25,8 +25,10 @@ and expandable, read-only **Technical details (Debug)**. Larger inspections expa
 and scroll as needed.
 
 Settings in the main menu and in-game Escape menu offer Fullscreen (F11), VSync,
-UI Scale (also Numpad Plus/Minus) and Background Dust. Preferences last across games
-and tutorials until the application closes; hiding dust keeps nozzle exhaust visible.
+UI Scale (also Numpad Plus/Minus) and Background Dust. Preferences are saved on normal
+shutdown and restored on the next launch; hiding dust keeps nozzle exhaust visible.
+They are stored in `Documents/RocketPlumber-saves/settings.toml`, using your system's
+Documents directory.
 
 Once in-game, have a look at the 'Teaser' to get a feel for what's possible, then start a new 'Explorer Mode' game to get into the real gameplay.
 

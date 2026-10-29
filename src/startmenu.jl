@@ -643,6 +643,7 @@ function enter_start_menu(window::GLFW.Window)
 
     @info "Exiting start menu"
     ui_teardown()
+    remember_last_monitor!(window)
     GLFW.DestroyWindow(window)
     return nothing
 end

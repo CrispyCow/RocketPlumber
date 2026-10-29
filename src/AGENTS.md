@@ -26,7 +26,11 @@ launching, input, UI, rendering, persistence, and game-session flow.
   Session cleanup collects partial intervals after waiting for the calculator.
   Shaders and atlas resources are owned by `HexFlowRendering`; bundled UI fonts
   belong to the root package under `assets/fonts/tamzen/`.
-- `initial_window_setup.jl`, `startmenu.jl`, and `gameloop.jl` own application
+- `window.jl` owns GLFW window creation, monitor handling, fullscreen transitions,
+  input callbacks, and related window operations.
+  `initial_window_setup.jl` assembles the window and graphical UI contexts and
+  owns typography, UI scaling, and loading-screen rendering.
+- `startmenu.jl` and `gameloop.jl` own application
   startup, session transitions, the render loop, and calculator IPC. Startup is
   invoked through the package API; importing the package must remain passive.
   Headless callers must set `JULIA_GLFW_PLATFORM=null` before importing the
@@ -74,8 +78,9 @@ launching, input, UI, rendering, persistence, and game-session flow.
   retaining or mutating it. The post-loop acquisition captures final session
   state after frame processing has finished.
 - `app_state.jl` owns application-wide settings; menu and game-session transitions
-  must preserve them. Stage changes during a frame and apply them between frames
-  on the main thread, outside `ui_renderwrap()`.
+  must preserve them. Stage changes during frames and apply them between frames,
+  outside `ui_renderwrap()`. Load and save settings at application lifetime
+  boundaries; never overwrite unreadable or malformed existing settings files.
 - View and other presentation-only state may remain on the main thread when it
   cannot affect simulation results.
 
