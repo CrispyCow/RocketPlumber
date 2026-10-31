@@ -1,4 +1,5 @@
 using Test, BaseDirs, RocketPlumber, HexFlowPersistence, HexFlowTelemetry, FlowMap
+import JLD2
 
 documents, workdir = ARGS
 
@@ -152,10 +153,58 @@ end
 
     @testset "Application diagnostics" begin
         @test !ispath(RocketPlumber.crashes_dir())
-        path = RocketPlumber.write_game_crash_dump((stored_gamemap = GameMap(),))
+        @test dirname(RocketPlumber.crash_report_path()) == RocketPlumber.crashes_dir()
+        @test !ispath(RocketPlumber.crashes_dir())
+
+        trace = "calculator diagnostic failure — test\nStacktrace:\n [1] test crash site"
+        gamemap = GameMap()
+        increment_simulated_ticks!(gamemap)
+        payload = (stored_gamemap = gamemap, exception_message = "calculator diagnostic failure — test", exception_backtrace = trace)
+        path = RocketPlumber.write_game_crash_dump(payload)
         @test dirname(path) == joinpath(root, "logs", "crashes")
-        @test isfile(path)
-        @test HexFlowPersistence.load_game_version(path) == string(Base.pkgversion(RocketPlumber))
+        @test endswith(path, ".txt")
+        report = read(path, String)
+        for expected in (
+                "Rocket Plumber crash report", "Version: $(Base.pkgversion(RocketPlumber))",
+                "Operating system: $(Sys.KERNEL)", "Julia version: $VERSION",
+                "Failure source: FlowCalculator", trace,
+            )
+            @test occursin(expected, report)
+        end
+        dump_path = splitext(path)[1] * ".jld2"
+        @test HexFlowPersistence.load_game_version(dump_path) == string(Base.pkgversion(RocketPlumber))
+        @test get_simulated_ticks(loadmap(dump_path)) == 1
+
+        # Repeated writes must preserve earlier reports, even within one second
+        @test RocketPlumber.write_game_crash_dump(payload) != path
+        @test read(path, String) == report
+
+        # Either output can fail while the other remains readable
+        blocked_text = RocketPlumber.crash_report_path()
+        mkdir(blocked_text)
+        @test_logs (:warn, "Failed to write crash report") min_level = Base.CoreLogging.Warn begin
+            @test RocketPlumber.write_game_crash_dump(payload; report_path = blocked_text) == splitext(blocked_text)[1] * ".jld2"
+        end
+        @test JLD2.load(splitext(blocked_text)[1] * ".jld2", "exception_backtrace") == trace
+
+        surviving_text = RocketPlumber.crash_report_path()
+        mkdir(splitext(surviving_text)[1] * ".jld2")
+        @test_logs (:warn, "Failed to write crash dump") min_level = Base.CoreLogging.Warn begin
+            @test RocketPlumber.write_game_crash_dump(payload; report_path = surviving_text) == surviving_text
+        end
+        @test occursin(trace, read(surviving_text, String))
+
+        # Exercise the production catch path without opening a graphical session
+        before = readdir(RocketPlumber.crashes_dir())
+        logger = Test.TestLogger()
+        Base.CoreLogging.with_logger(logger) do
+            @test RocketPlumber.main(["--invalid-crash-report-test"]) == 1
+        end
+        application_path = joinpath(RocketPlumber.crashes_dir(), only(setdiff(readdir(RocketPlumber.crashes_dir()), before)))
+        application_report = read(application_path, String)
+        @test occursin("Failure source: Application", application_report)
+        @test occursin("Unrecognised argument: --invalid-crash-report-test", application_report)
+        @test occursin("parse_launch_args", application_report)
 
         @test !ispath(RocketPlumber.telemetry_dir())
         start_telemetry!(false)

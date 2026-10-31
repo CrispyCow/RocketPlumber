@@ -24,6 +24,10 @@ Notable player-facing changes to Rocket Plumber are recorded here, in loose adhe
 - Gave Space Map more plot space and scale-aware encounter selection, and kept
   the Learning Helper beside Properties or at the top-right in Space Map.
 
+- Added automatic diagnostic reports for catchable application errors, with
+  additional game-state diagnostics for calculator failures. The last available
+  map remains open for inspection and saving after a calculator failure.
+
 ## 0.1.0
 
 First release tracked by this changelog, and it is considered the origin state for change tracking. At this stage the game includes:

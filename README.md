@@ -32,7 +32,7 @@ Documents directory.
 
 Once in-game, have a look at the 'Teaser' to get a feel for what's possible, then start a new 'Explorer Mode' game to get into the real gameplay.
 
-Saved files are kept in `RocketPlumber-saves` under your system's Documents directory: maps and exported ships in `maps/`, screenshots in `pictures/`, and recordings in `videos/`.
+Saved files are kept in `RocketPlumber-saves` under your system's Documents directory: maps and exported ships in `maps/`, screenshots in `pictures/`, and recordings in `videos/`. Catchable application errors attempt to save readable reports under `logs/crashes/`; calculator failures may also produce a matching `.jld2` game-state diagnostic. Include these files when reporting a bug.
 
 If you like the project and want to stay up to date then join the [mailing list](https://rocketplumbergame.com/mailing-list/)!
 

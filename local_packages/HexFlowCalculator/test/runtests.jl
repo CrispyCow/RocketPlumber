@@ -1923,6 +1923,38 @@ end
     @test payload.exception_backtrace == trace_str
 end
 
+@testset "flowcalculator_loop! handles a developer crash request while paused" begin
+    snapshot = FlowCalculatorSnapshot(gamemap = make_gamemap())
+    ipc = FlowCalculatorIPC(
+        shared_state = FlowCalculatorSharedState(crash_requested = true, is_paused = true),
+        command_queue = create_command_queue(),
+        publish_snapshot = (args...) -> nothing,
+        get_snapshot = () -> snapshot,
+        console_push = message -> nothing,
+        console_see = () -> nothing,
+    )
+    command = create_click_tile_command(ipc.command_queue, TileCoord(1, 0), CartesianCoord(0.0, 0.0))
+    @test try_enqueue_command!(ipc.command_queue, command)
+    exception_message = Ref("")
+    writer = payload -> begin
+        @test !isopen(ipc.command_queue.command_channel)
+        @test only(payload.pending_command_diagnostics) == HexFlowCalculator.command_diagnostic(command)
+        exception_message[] = payload.exception_message
+        return nothing
+    end
+
+    Base.CoreLogging.with_logger(Test.TestLogger()) do
+        flowcalculator_loop!(ipc, snapshot; crash_dump_writer = writer)
+    end
+
+    @test exception_message[] == "Developer-triggered calculator loop crash"
+    @test @atomic ipc.shared_state.should_exit
+    @test !isopen(ipc.command_queue.command_channel)
+    @test_logs (:warn, "Failed to enqueue map edit command") begin
+        @test !try_enqueue_command!(ipc.command_queue, command)
+    end
+end
+
 @testset "flowcalculator_loop! contains crash-writer failure" begin
     snapshot = FlowCalculatorSnapshot(gamemap = make_gamemap())
     exception = ErrorException("test publication failure")
@@ -1943,10 +1975,8 @@ end
     end
 
     logger = Test.TestLogger(min_level = Base.CoreLogging.Info)
-    redirect_stderr(devnull) do
-        Base.CoreLogging.with_logger(logger) do
-            flowcalculator_loop!(ipc, snapshot; crash_dump_writer = writer)
-        end
+    Base.CoreLogging.with_logger(logger) do
+        flowcalculator_loop!(ipc, snapshot; crash_dump_writer = writer)
     end
 
     @test @atomic ipc.shared_state.should_exit
@@ -1954,7 +1984,29 @@ end
     @test crash_log.kwargs[:exception][1] === exception
     dump_log = only(filter(log -> log.message == "Failed to write crash dump", logger.logs))
     @test dump_log.kwargs[:exception][1] === writer_exception
-    @test only(console_messages) == "FlowCalculator loop crashed; see terminal log for details"
+    @test only(console_messages) == "Simulation encountered an error."
+end
+
+@testset "flowcalculator_loop! reports only saved crash reports" begin
+    for result in ("report.txt", nothing)
+        snapshot = FlowCalculatorSnapshot(gamemap = make_gamemap())
+        console_messages, console_push = make_log_console()
+        ipc = FlowCalculatorIPC(
+            shared_state = FlowCalculatorSharedState(),
+            command_queue = create_command_queue(),
+            publish_snapshot = (args...) -> error("test publication failure"),
+            get_snapshot = () -> snapshot,
+            console_push = console_push,
+            console_see = () -> nothing,
+        )
+        logger = Test.TestLogger()
+        Base.CoreLogging.with_logger(logger) do
+            flowcalculator_loop!(ipc, snapshot; crash_dump_writer = payload -> result)
+        end
+        @test @atomic ipc.shared_state.should_exit
+        expected = !isnothing(result) ? "Simulation encountered an error; a crash report was saved." : "Simulation encountered an error."
+        @test only(console_messages) == expected
+    end
 end
 
 # ===============================================================
@@ -2369,6 +2421,7 @@ end
     ss = FlowCalculatorSharedState()
 
     @test (@atomic ss.should_exit) == false
+    @test (@atomic ss.crash_requested) == false
     @test (@atomic ss.is_paused) == false
     @test (@atomic ss.target_ups) == BASE_UPS
     @test (@atomic ss.actual_ups) == 0.0

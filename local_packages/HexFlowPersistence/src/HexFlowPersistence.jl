@@ -6,7 +6,6 @@ Formatter: Runic
 module HexFlowPersistence
 
 using JLD2
-import Dates
 using FlowMap
 using HexComponentsAPI
 using HexFlowProcGen
@@ -112,16 +111,14 @@ savemap(gamemap::GameMap, mappath::String; game_version::VersionNumber) = savema
 Write a calculator crash payload as JLD2 datasets and return the file path.
 
 Called synchronously on the calculator thread; the payload's live map and solver
-outputs are read without mutation or retention. The caller supplies the game version;
-this package owns timestamp, path, and JLD2 writing.
+outputs are read without mutation or retention. The caller supplies the game version
+and destination path.
 """
-function write_crash_dump(payload::NamedTuple; game_version::VersionNumber, directory::String = "maps")::String
-    timestamp = Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
-    crashpath = joinpath(directory, "crash_$(timestamp).jld2")
-    mkpath(dirname(crashpath))
-    JLD2.jldsave(crashpath; game_version = string(game_version), payload...)
+function write_crash_dump(payload::NamedTuple, path::String; game_version::VersionNumber)::String
+    mkpath(dirname(path))
+    JLD2.jldsave(path; game_version = string(game_version), payload...)
 
-    return crashpath
+    return path
 end
 
 end # module HexFlowPersistence

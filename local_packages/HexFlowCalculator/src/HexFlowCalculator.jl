@@ -70,6 +70,7 @@ end
 "Shared control state between render and logic threads. All fields must be accessed atomically."
 mutable struct FlowCalculatorSharedState
     @atomic should_exit::Bool
+    @atomic crash_requested::Bool
     @atomic is_paused::Bool
     @atomic target_ups::Float64
     @atomic actual_ups::Float64
@@ -83,6 +84,7 @@ end
 "Keyword constructor for FlowCalculatorSharedState with defaults"
 function FlowCalculatorSharedState(;
         should_exit::Bool = false,
+        crash_requested::Bool = false,
         is_paused::Bool = false,
         target_ups::Float64 = BASE_UPS,
         actual_ups::Float64 = 0.0,
@@ -94,6 +96,7 @@ function FlowCalculatorSharedState(;
     )
     return FlowCalculatorSharedState(
         should_exit,
+        crash_requested,
         is_paused,
         target_ups,
         actual_ups,
@@ -2339,7 +2342,8 @@ end
 Run deterministic game simulation on a fixed timestep.
 
 An optional `crash_dump_writer(payload)` runs synchronously on the calculator
-thread after a loop failure and returns the written path. Its payload contains
+thread after a loop failure and returns a saved report path, or `nothing` if no
+diagnostic file was saved. Its payload contains
 `stored_gamemap`, `pending_command_diagnostics`, `node_voltages`, `vsource_currents`,
 `exception_message`, and `exception_backtrace`. Writer failures are logged before
 orderly shutdown. Without a writer, failures are reported only to the log and console.
@@ -2384,6 +2388,10 @@ function flowcalculator_loop!(
                 break
             end
 
+            if @atomic(:monotonic, shared_state.crash_requested)
+                error("Developer-triggered calculator loop crash")
+            end
+
             # Check if paused
             is_paused = @atomic shared_state.is_paused
 
@@ -2411,25 +2419,25 @@ function flowcalculator_loop!(
 
             handle_diagnostics(flowcalc_loop_diagnostic_config, gamestate.ticks)
         catch e
+            close(command_queue.command_channel)
             bt = catch_backtrace()
             @error "FlowCalculator loop exception" exception = (e, bt)
-            threadsafe_console_push("FlowCalculator loop crashed; see terminal log for details")
-
-            # Print full backtrace to stderr for terminal visibility
-            trace_str = sprint(showerror, e, bt)
-            println(stderr, trace_str)
+            message = "Simulation encountered an error."
 
             # Keep dump failures from masking the original exception
             if !isnothing(crash_dump_writer)
                 try
+                    trace_str = sprint(showerror, e, bt)
                     payload = _capture_crash_dump!(command_queue, gamemap, mna_state, e, trace_str)
                     crashpath = crash_dump_writer(payload)
-                    @info "Crash dump written to $crashpath"
-                    threadsafe_console_push("Crash dump: $crashpath")
+                    if !isnothing(crashpath)
+                        message = "Simulation encountered an error; a crash report was saved."
+                    end
                 catch dump_err
                     @error "Failed to write crash dump" exception = (dump_err, catch_backtrace())
                 end
             end
+            threadsafe_console_push(message)
 
             # Request orderly shutdown so the error is visible and the main thread can react
             @atomic shared_state.should_exit = true

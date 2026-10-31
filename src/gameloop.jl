@@ -298,11 +298,6 @@ function save_game(map::Union{GameMap, GameMapBundle}, save_path::String)
     return nothing
 end
 
-"Write calculator crash diagnostics with the root package version."
-function write_game_crash_dump(payload::NamedTuple)
-    return HexFlowPersistence.write_crash_dump(payload; game_version = Base.pkgversion(@__MODULE__), directory = crashes_dir())
-end
-
 # Map-source dispatch
 
 "Dispatch map loading from multiple source types."
@@ -322,6 +317,8 @@ end
 # ===============================================================
 # Game Main Loop
 # ===============================================================
+
+const CALCULATOR_STOPPED_REMINDER_INTERVAL = 15.0
 
 "Result of `enter_gameloop`, including the map and its optional time-lapse."
 @kwdef struct GameLoopResult
@@ -502,6 +499,15 @@ function enter_gameloop(
             )
         end
         escape_save_pending = !isnothing(escape_save_state.pending_path)
+
+        # Remind players while retaining the last published map for inspection and saving
+        if isnothing(completed_gamemap) && istaskdone(g_flowcalc_task)
+            message = g_flowcalc_ipc.console_see()
+            if isnothing(message) || Float64(time_ns()) / 1.0e9 - message.timestamp >= CALCULATOR_STOPPED_REMINDER_INTERVAL
+                g_flowcalc_ipc.console_push("Simulation stopped due to an error. The map is no longer updating but you can still inspect and save it.")
+            end
+        end
+
         @timeit render_loop_timer "UI Rendering" ui_rendering!(
             g_inputstate, g_flowcalc_ipc, timelapse_recorder, g_snapshot, g_viewstate, window;
             learning_state = learning_state,

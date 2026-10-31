@@ -86,11 +86,8 @@ end
     )
 
     mktempdir() do directory
-        dump_directory = joinpath(directory, "maps")
-        path = HexFlowPersistence.write_crash_dump(payload; game_version = v"0.1.0-dev", directory = dump_directory)
-        @test dirname(path) == dump_directory
-        @test occursin(r"^crash_\d{8}_\d{6}\.jld2$", basename(path))
-        @test isfile(path)
+        path = joinpath(directory, "diagnostics", "crash.jld2")
+        @test HexFlowPersistence.write_crash_dump(payload, path; game_version = v"0.1.0-dev") == path
         dump = JLD2.load(path)
         @test dump["game_version"] == "0.1.0-dev"
         @test HexFlowPersistence.load_game_version(path) == "0.1.0-dev"
@@ -98,10 +95,6 @@ end
         @test dump["exception_message"] == "calculator test failure"
         @test occursin("test crash site", dump["exception_backtrace"])
         @test get_simulated_ticks(loadmap(path)) == 1
-
-        blocked_directory = joinpath(directory, "file")
-        write(blocked_directory, "blocks directory creation")
-        @test_throws Exception HexFlowPersistence.write_crash_dump(payload; game_version = v"0.1.0-dev", directory = blocked_directory)
     end
 end
 

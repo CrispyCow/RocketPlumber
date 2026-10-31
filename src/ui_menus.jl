@@ -965,6 +965,19 @@ function ui_dev_utils_menu_render!(
         end
     end
 
+    if CImGui.CollapsingHeader("Crash Testing")
+        button_width = max(1.0, width - ui_px(13))
+        button_height = ui_px(5)
+        CImGui.TextWrapped("These buttons deliberately trigger errors. A main-loop crash loses unsaved progress. A calculator crash leaves the last published map available to inspect and save.")
+
+        if CImGui.Button("Crash Main Loop", (button_width, button_height))
+            error("Developer-triggered main loop crash")
+        end
+        if CImGui.Button("Crash Calculator Loop", (button_width, button_height))
+            @atomic :monotonic flowcalc_ipc.shared_state.crash_requested = true
+        end
+    end
+
     CImGui.End()
     return nothing
 end

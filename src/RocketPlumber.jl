@@ -11,6 +11,7 @@ using ModernGL, GLFW, CSyntax.CRef
 using TimerOutputs, Accessors, Printf, CSyntax
 using FilePathsBase, NativeFileDialog, FFMPEG
 using RelocatableFolders
+import Dates
 import BaseDirs
 import TOML
 import CImGui, CImGui.lib
@@ -38,6 +39,55 @@ pictures_dir(; create::Bool = false) = output_dir("pictures"; create)
 videos_dir(; create::Bool = false) = output_dir("videos"; create)
 telemetry_dir(; create::Bool = false) = output_dir("logs", "telemetry"; create)
 crashes_dir(; create::Bool = false) = output_dir("logs", "crashes"; create)
+
+# ===============================================================
+# Crash Reporting
+# ===============================================================
+
+"Choose a timestamped crash-report path without creating its directory."
+function crash_report_path()::String
+    timestamp = Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
+    return joinpath(crashes_dir(), "crash_$(timestamp)_$(time_ns()).txt")
+end
+
+"Write a readable crash report from already formatted exception and backtrace text."
+function write_crash_report(source::String, trace::String; path::String = crash_report_path())::String
+    mkpath(dirname(path))
+    open(path, "w") do io
+        println(io, "Rocket Plumber crash report")
+        println(io, "Version: ", Base.pkgversion(@__MODULE__))
+        println(io, "Date and time (local): ", Dates.now())
+        println(io, "Operating system: ", Sys.KERNEL)
+        println(io, "Architecture: ", Sys.ARCH)
+        println(io, "Julia version: ", VERSION)
+        println(io, "Failure source: ", source)
+        println(io)
+        println(io, trace)
+    end
+    @info "Crash report written" path
+    return path
+end
+
+"Attempt paired calculator reports independently; prefer the text path, or return `nothing` if neither was saved."
+function write_game_crash_dump(payload::NamedTuple; report_path::String = crash_report_path())::Union{Nothing, String}
+    text_path = try
+        write_crash_report("FlowCalculator", payload.exception_backtrace; path = report_path)
+    catch err
+        @warn "Failed to write crash report" exception = (err, catch_backtrace())
+        nothing
+    end
+
+    dump_path = splitext(report_path)[1] * ".jld2"
+    saved_dump = try
+        HexFlowPersistence.write_crash_dump(payload, dump_path; game_version = Base.pkgversion(@__MODULE__))
+        @info "Crash dump written" path = dump_path
+        dump_path
+    catch err
+        @warn "Failed to write crash dump" exception = (err, catch_backtrace())
+        nothing
+    end
+    return isnothing(text_path) ? saved_dump : text_path
+end
 
 # ===============================================================
 # Application Assembly
@@ -103,7 +153,13 @@ function (@main)(args::Vector{String})::Cint
         launch(; parse_launch_args(args)...)
         return 0
     catch err
-        @error "Rocket Plumber failed" exception = (err, catch_backtrace())
+        bt = catch_backtrace()
+        try
+            write_crash_report("Application", sprint(showerror, err, bt))
+        catch report_err
+            @warn "Failed to write crash report" exception = (report_err, catch_backtrace())
+        end
+        @error "Rocket Plumber failed" exception = (err, bt)
         return 1
     end
 end

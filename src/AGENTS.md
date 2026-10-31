@@ -90,9 +90,8 @@ new mutation, add a command rather than bypassing that boundary.
 
 ## Persistence
 
-- The game session supplies `write_game_crash_dump` through the calculator loop's
-  `crash_dump_writer` keyword. It adds the root package version and delegates
-  timestamp/path/JLD2 writing to `HexFlowPersistence` synchronously before shutdown.
+- `RocketPlumber.jl` owns application crash reporting. `HexFlowCalculator`
+  captures diagnostics; `HexFlowPersistence` serialises them to JLD2.
 - Route application saves through `save_game` in `gameloop.jl`; it passes the
   root package version from `Base.pkgversion` to `HexFlowPersistence.savemap`.
   Save failures propagate through these wrappers; interactive UI actions catch
