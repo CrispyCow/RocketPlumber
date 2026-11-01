@@ -46,17 +46,22 @@ function main()
         "JULIA_NUM_PRECOMPILE_TASKS" => "1",
         "JULIA_IMAGE_THREADS" => "6",
     ) do
-        JuliaC.main(
-            [
-                "--output-exe",
-                executable_name,
-                "--bundle",
-                bundle_dir,
-                "--jl-option",
-                "threads=2,1",
-                ROOT_DIR,
-            ]
+        image_recipe = ImageRecipe(
+            output_type = "--output-exe",
+            file = ROOT_DIR,
+            jl_options = Dict("threads" => "2,1"),
         )
+        link_recipe = LinkRecipe(
+            image_recipe = image_recipe,
+            outname = executable_name,
+            rpath = "@bundle",
+            ld_flags = Sys.iswindows() ? ["-mwindows"] : String[],
+        )
+        bundle_recipe = BundleRecipe(link_recipe = link_recipe, output_dir = bundle_dir)
+
+        compile_products(image_recipe)
+        link_products(link_recipe)
+        bundle_products(bundle_recipe)
     end
 
     return nothing
