@@ -19,20 +19,9 @@ Rocket Plumber is a WIP rocket engine and space ship simulation game, using circ
 
 Follow the guidance in [Get The Game](#get-the-game) to download an executable, or run the game from source.
 
-Properties stays visible during ship gameplay. Hover over components, pipes or
-junctions for temporary operating readouts; select a part for persistent inspection
-and expandable, read-only **Technical details (Debug)**. Larger inspections expand
-and scroll as needed.
-
-Settings in the main menu and in-game Escape menu offer Fullscreen (F11), VSync,
-UI Scale (also Numpad Plus/Minus) and Background Dust. Preferences are saved on normal
-shutdown and restored on the next launch; hiding dust keeps nozzle exhaust visible.
-They are stored in `Documents/RocketPlumber-saves/settings.toml`, using your system's
-Documents directory.
-
 Once in-game, have a look at the 'Teaser' to get a feel for what's possible, then start a new 'Explorer Mode' game to get into the real gameplay.
 
-Saved files are kept in `RocketPlumber-saves` under your system's Documents directory: maps and exported ships in `maps/`, screenshots in `pictures/`, and recordings in `videos/`. Catchable application errors attempt to save readable reports under `logs/crashes/`; calculator failures may also produce a matching `.jld2` game-state diagnostic. Include these files when reporting a bug.
+Rocket Plumber saves its files in `RocketPlumber-saves` under your system's Documents directory. In Explorer Mode, your progress is automatically saved during play and when you exit to the main menu or quit the game. Use **Resume** on the main menu to continue from your latest autosave.
 
 If you like the project and want to stay up to date then join the [mailing list](https://rocketplumbergame.com/mailing-list/)!
 
@@ -78,6 +67,8 @@ If you are looking for a finished game I'd wait a bit, but if any of this sounds
 ### Self-Contained Executables (The easy way!)
 
 If you are just interested in playing around, **I have built some stand-alone 'app' executables that can just be downloaded and run**. You will find those in the [release assets](../../releases) on the right-hand side of the repository. Just download the one for your operating system, there are Windows and Linux builds!
+
+If the game crashes, it may save a diagnostic report under `RocketPlumber-saves/logs/crashes/`, sometimes accompanied by a `.jld2` game-state file. Please include these files when reporting a bug.
 
 **Windows users:** Windows may display a "Windows protected your PC" warning when launching Rocket Plumber. This is because the game is a small independent project that hasn't yet established a reputation with Microsoft SmartScreen, rather than a specific detection of malware.
 If you're comfortable proceeding, select More info → Run anyway. Otherwise, you can [run the game from source](#running-from-source-the-hard-way), with the code available to inspect before running it.
@@ -199,7 +190,7 @@ The rendering is performed in stages to ensure correct render heights. First the
 
 User inputs are also handled in this loop. These can affect rendering-only things like the viewport directly, but any desired map edits are converted into edit commands to be handled by the calculator loop.
 
-This loop currently targets running in vsync and thus will match the frame rate of your monitor. As previously mentioned, frame rate doesn't impact simulation speed as the calculator loop runs independently at its current UPS target.
+By default, VSync synchronises rendering with the display's refresh rate, but this can be disabled in Settings. The frame rate does not affect simulation speed, as the calculator loop runs independently at its current UPS target.
 
 ### Reference Frames/Coordinate Systems
 

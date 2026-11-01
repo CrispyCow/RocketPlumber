@@ -111,8 +111,7 @@ function get_entry_teaser()::LearningEntry
                                 The basics of the gameplay loop are also there in explorer mode, where you have to perform manoeuvres to salvage parts and fuel from randomly generated ships. \
                                 You will build up the capabilities of your ship as you go, and eventually you can perform one massive burn to escape the galaxy and win the game!\n
                                 However there is still a long way to go, with many features and components yet to be implemented. \
-                                There is no real way to lose (unless you run out of fuel), and there are no threats forcing you to explore and improve.
-                                The UI is also still a work in progress, with a lot of internal debug info still being displayed.\n
+                                There is no real way to lose (unless you run out of fuel), and there are no threats forcing you to explore and improve.\n
                                 These are all things I want to work on in the future, but hopefully what's already here is enough to be interesting and give you an idea of where this game could go!"
                             ),
                         ),
@@ -164,7 +163,8 @@ function get_entry_basic_controls()::LearningEntry
                 - CLICK A NODE to start placing or deleting scrap pipes.\n
                 - ESC to open the pause menu, or to exit modes like pipe placement.\n
                 - RIGHT-CLICK on components to access their actions, including an action to delete them.\n
-                - SHIFT + CLICK to select multiple components at once."
+                - SHIFT + CLICK to select multiple components at once.\n
+                The pause menu also includes a Settings menu where you can adjust things like V-sync or UI scaling!"
             ),
             levels = [
                 SandboxTutorialLevel(
@@ -303,8 +303,7 @@ function get_entry_basic_controls()::LearningEntry
                             text = tutorial_dedent(
                                 "This map is built to show this off! \n
                                 Complete the already rather chaotic pipe network between the tanks and the nozzle with a few more pipes, then take a look at the colours! \n
-                                You can hover over nodes to see their pressure, or hover over pipes and nozzles to see their flow rates. \
-                                The units might not be what you expect, but that will be explained shortly."
+                                Hover over nodes, pipes and nozzles to inspect their pressure and flow information in the Properties panel."
                             ),
                             step_blocker = function(inputs::LearningInputs)
                                 norm(inputs.gamestate.thrust) > 0.0 && return nothing
@@ -326,7 +325,7 @@ function get_entry_basic_controls()::LearningEntry
                                 This all might seem a bit familiar for anyone with an electronics background (Ohm's law!). \
                                 That is not a coincidence. In addition to this being a decent approximation of fluid flow in the real world, this is because the game is actually based around a circuit analogy of fluid flow. \
                                 Your pipes and pumps are converted into circuit elements, and the circuit is solved using circuit simulation algorithms that would not be out of place in a SPICE tool to give you your pressures (voltages) and flow rates (current). \
-                                You can get a peek at the actual numbers by hovering over the components, and pipes to see what circuit elements they correspond to! (at least until I hide that in a debug menu)"
+                                You can get a peek at the circuit representation by selecting a component and expanding the 'Technical details (Debug)' section in the Properties panel."
                             ),
                         ),
                     ],
@@ -356,7 +355,7 @@ function get_entry_first_burn()::LearningEntry
                 TutorialStep(
                     heading = "ASSEMBLE YOUR SHIP",
                     text = tutorial_dedent(
-                        "This manoeuvre requires you to accelerate towards the right (as indicated by the compass in the top left) so you will need at least one nozzle pointing to the left. \n
+                        "This manoeuvre requires you to accelerate towards the right (as indicated by the rocket compass near the top left) so you will need at least one nozzle pointing to the left. \n
                         Now make sure your nozzles are piped up to gas. These are switched nozzles so you don't need to worry about them turning on straight away. \n
                         If you aren't sure how to do any of this, make sure you've completed the 'Basic Controls and Plumbing' tutorial first for guidance on that."
                     ),
@@ -410,7 +409,7 @@ function get_entry_first_burn()::LearningEntry
                     heading = "EXECUTE THE MANOEUVRE",
                     text = tutorial_dedent(
                         "Now you have everything set up to complete the capture burn.\n
-                        In the manoeuvre info on the left you can see the required velocity change remaining, switch your nozzles on until that reaches zero. \
+                        In the manoeuvre info near the top left you can see the required velocity change remaining, switch your nozzles on until that reaches zero. \
                         It can be helpful to pulse the nozzles in short bursts as you approach the target to avoid overshooting. \
                         If you do overshoot, don't stress. You can just move a nozzle over to the right and fire in the opposite direction!\n
                         Once you have reached the target velocity, you will dock with the new ship automatically!"
@@ -1192,6 +1191,7 @@ function get_entry_screenshots_and_recordings()::LearningEntry
                         It's a great way to share your gameplay moments or capture any bugs you run into.\n
                          - Press F12 to capture a screenshot.\n
                          - Press SHIFT + F12 to start recording a clip, and F12 again to stop.\n
+                         - Press F10 to hide the GUI for a cleaner view of your gameplay.\n
                         "
                     ),
                 ),
