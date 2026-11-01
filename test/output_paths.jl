@@ -107,6 +107,25 @@ end
         end
     end
 
+    @testset "Resume uses only the fixed autosave" begin
+        path = RocketPlumber.autosave_path()
+        @test path == joinpath(root, "maps", "_autosave.jld2")
+        @test !isfile(path)
+        state = RocketPlumber.StartMenuState()
+        window = RocketPlumber.GLFW.Window(C_NULL)
+        bundle = GameMapBundle(GameMap(), TimelapseHistory(frames = [GameMap()]))
+        increment_simulated_ticks!(bundle.gamemap)
+        RocketPlumber.write_autosave(bundle)
+        @test isfile(path)
+        session = RocketPlumber._create_session_for_action(state, RocketPlumber.ACTION_RESUME, window)
+        @test session isa RocketPlumber.MapSession
+        @test get_simulated_ticks(session.bundle.gamemap) == 1
+        @test length(session.bundle.timelapse.frames) == 1
+
+        rm(path)
+        @test !isfile(path)
+    end
+
     @testset "Output-directory failures" begin
         maps = RocketPlumber.maps_dir()
         rm(maps)

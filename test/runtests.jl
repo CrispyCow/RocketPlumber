@@ -435,6 +435,7 @@ end
 end
 
 include("timelapse.jl")
+include("autosave.jl")
 
 @testset "galaxy-escape restart owns a mutable checkpoint copy" begin
     checkpoint = GameMap(

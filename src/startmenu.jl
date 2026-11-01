@@ -26,6 +26,7 @@ end
 @enum StartMenuAction begin
     ACTION_NONE
     ACTION_NEW_BLANK_MAP
+    ACTION_RESUME
     ACTION_LOAD_MAP
     ACTION_START_EXPLORER
     ACTION_LAUNCH_SANDBOX
@@ -80,7 +81,7 @@ const MENU_BOX_WIDTH_MODULES = 88
 const MENU_INITIAL_BOX_WIDTH_MODULES = 212
 const MENU_TUTORIAL_BOX_WIDTH_MODULES = 96
 const MENU_BOX_HEIGHT_MODULES = 105
-const MENU_INITIAL_BOX_HEIGHT_MODULES = 140
+const MENU_INITIAL_BOX_HEIGHT_MODULES = 154
 const MENU_EXPLORER_BOX_HEIGHT_MODULES = 112
 const MENU_TUTORIAL_BOX_HEIGHT_MODULES = 130
 const MENU_BUTTON_HEIGHT_MODULES = 13
@@ -122,6 +123,13 @@ function render_page_initial!(state::StartMenuState, box_w::Float64, button_heig
     if CImGui.IsItemHovered()
         CImGui.SetTooltip("Explore a showcase ship and get a tease of what's possible in Rocket Plumber. A good place to start if you're new to the game!")
     end
+    CImGui.Dummy((0.0, ui_px(2)))
+
+    CImGui.BeginDisabled(!isfile(autosave_path()))
+    if CImGui.Button("Resume", ImVec2(-1, button_height))
+        state.action = ACTION_RESUME
+    end
+    CImGui.EndDisabled()
     CImGui.Dummy((0.0, ui_px(2)))
 
     if CImGui.Button("New Game", ImVec2(-1, button_height))
@@ -535,6 +543,9 @@ function _create_session_for_action(state::StartMenuState, action::StartMenuActi
         set_learning_system!(gamemap, learning_system)
         activate_tutorial!(learning_system, :editor_intro)
         return MapSession(gamemap, :editor_intro)
+
+    elseif action == ACTION_RESUME
+        return _load_map_session!(state, autosave_path())
 
     elseif action == ACTION_LOAD_MAP
         file_path = try

@@ -17,7 +17,7 @@ using HexFlowBasicComponents, HexFlowTankComponents, HexFlowSwitchComponents
 using HexFlowNozzleComponents, HexFlowPumpComponents, HexFlowBasicPipes
 
 export TimelapseHistory, GameMapBundle
-export loadmap, loadmap_bundle, savemap
+export loadmap, loadmap_bundle, savemap, savemap_atomic
 
 # ===============================================================
 # Persisted Types
@@ -104,6 +104,18 @@ end
 
 "Save a map without a time-lapse using the caller's game version."
 savemap(gamemap::GameMap, mappath::String; game_version::VersionNumber) = savemap(GameMapBundle(gamemap), mappath; game_version)
+
+"Replace a save only after a complete, closed save exists in the destination directory."
+function savemap_atomic(map::Union{GameMap, GameMapBundle}, mappath::String; game_version::VersionNumber)
+    directory = dirname(mappath)
+    mkpath(directory)
+    mktemp(directory) do temporary_path, io
+        close(io)  # JLD2 opens its own handle; Windows requires this one to be closed
+        savemap(map, temporary_path; game_version)
+        Base.Filesystem.rename(temporary_path, mappath)
+    end
+    return nothing
+end
 
 #= ---------- Crash Dumps ---------- =#
 

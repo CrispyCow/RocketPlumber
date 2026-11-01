@@ -4,6 +4,8 @@ Notable player-facing changes to Rocket Plumber are recorded here, in loose adhe
 
 ## Unreleased
 
+- Added background autosaving and a main-menu Resume button to continue your last game.
+
 - Added a scalable UI with crisp Tamzen bitmap typography across menus, instruments
   and panels. Choose six scales from 100% to 267% in Settings or with Numpad
   Plus/Minus; the default is 133%.

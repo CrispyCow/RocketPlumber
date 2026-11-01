@@ -276,6 +276,28 @@ end
     end
 end
 
+# Fail during serialisation after JLD2 has opened the temporary file.
+struct FailingSaveLearningState <: FlowMap.AbstractLearningSystem end
+JLD2.writeas(::Type{FailingSaveLearningState}) = error("simulated write failure")
+
+@testset "atomic save replacement" begin
+    mktempdir() do directory
+        path = joinpath(directory, "maps", "_autosave.jld2")
+        gamemap = GameMap()
+        savemap_atomic(gamemap, path; game_version = v"0.1.0")
+        increment_simulated_ticks!(gamemap)
+        savemap_atomic(GameMapBundle(gamemap), path; game_version = v"0.1.1")
+        @test get_simulated_ticks(loadmap(path)) == 1
+        @test HexFlowPersistence.load_game_version(path) == "0.1.1"
+        previous = read(path)
+
+        set_learning_system!(gamemap, FailingSaveLearningState())
+        @test_throws ErrorException savemap_atomic(gamemap, path; game_version = v"0.1.1")
+        @test read(path) == previous
+        @test readdir(dirname(path)) == ["_autosave.jld2"]
+    end
+end
+
 @testset "save failures propagate" begin
     mktempdir() do directory
         path = joinpath(directory, "missing_directory", "map.jld2")

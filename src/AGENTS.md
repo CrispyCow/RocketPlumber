@@ -100,6 +100,8 @@ new mutation, add a command rather than bypassing that boundary.
   These interactive boundaries propagate interrupts; calculator crash-dump writer
   failures remain contained so shutdown proceeds.
 - Keep `GameMap` and saved domain types independent of UI/OpenGL state.
+- Autosave writers receive detached current maps and shallow history snapshots;
+  recorded historical maps must remain immutable after capture.
 - Demo maps are Julia generators under `demo_maps/`; keep tutorial registration
   in `tutorials.jl` aligned when adding, removing, or renaming one.
 

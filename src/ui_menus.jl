@@ -466,6 +466,8 @@ function ui_dev_utils_menu_render!(
                 if CImGui.Button("Cancel Browsing")
                     original_map = inputstate.gui_inputs[:timelapse_original_map]::GameMap
                     enqueue_map_override!(flowcalc_ipc, original_map)
+                    # Autosaving must wait for a calculator step begun after this restore request
+                    inputstate.gui_inputs[:timelapse_restore_requested_at] = time()
                     empty!(viewstate.background_particles.particles)
                     empty!(viewstate.foreground_particles.particles)
                     delete!(inputstate.gui_inputs, :timelapse_original_map)

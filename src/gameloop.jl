@@ -298,6 +298,102 @@ function save_game(map::Union{GameMap, GameMapBundle}, save_path::String)
     return nothing
 end
 
+# ===============================================================
+# Autosaving
+# ===============================================================
+
+"Resolve the single recovery save without creating output directories."
+autosave_path()::String = joinpath(maps_dir(), "_autosave.jld2")
+
+"Interactive-thread-owned deadline and single outstanding autosave writer."
+mutable struct AutosaveState
+    next_save_time_seconds::Float64
+    writer_task::Union{Nothing, Task}
+end
+
+AutosaveState(; now::Real = _monotonic_time_seconds()) = AutosaveState(Float64(now) + 30.0, nothing)
+
+"Write the recovery bundle with the root package's version metadata."
+write_autosave(bundle::GameMapBundle, save_path::String = autosave_path()) =
+    HexFlowPersistence.savemap_atomic(bundle, save_path; game_version = Base.pkgversion(@__MODULE__))
+
+"Observe an outstanding writer, then optionally persist the detached final session bundle."
+function finish_autosave!(
+        state::AutosaveState, console_push::Function, final_bundle::Union{Nothing, GameMapBundle} = nothing;
+        save_path::String = autosave_path(),
+    )
+    task = state.writer_task
+    if !isnothing(task)
+        try
+            fetch(task)
+        catch e
+            e isa InterruptException && rethrow()
+            task.exception isa InterruptException && throw(task.exception)
+            @warn "Autosave failed" path = save_path exception = (e, catch_backtrace())
+            console_push("Autosave failed. See the terminal log for details.")
+        finally
+            state.writer_task = nothing
+        end
+    end
+
+    if !isnothing(final_bundle)
+        try
+            write_autosave(final_bundle, save_path)
+        catch e
+            e isa InterruptException && rethrow()
+            @warn "Autosave failed" path = save_path exception = (e, catch_backtrace())
+            console_push("Autosave failed. See the terminal log for details.")
+        end
+    end
+    return nothing
+end
+
+"Exclude tutorial maps, temporary previews and departing internal-restart sessions."
+function autosave_allowed(inputstate::InputState, gamemap::GameMap; snapshot_timestamp::Float64 = Inf)::Bool
+    return !is_sandbox_learning(gamemap) &&
+        !haskey(inputstate.gui_inputs, :timelapse_original_map) &&
+        snapshot_timestamp > get(inputstate.gui_inputs, :timelapse_restore_requested_at, -Inf) &&
+        inputstate.exit_reason in (nothing, EXIT_MENU, EXIT_QUIT, EXIT_SANDBOX_STARTED)
+end
+
+"Select the final recovery point, carrying completed-session metadata onto an independent checkpoint."
+function final_autosave_bundle(bundle::GameMapBundle, inputstate::InputState; completed::Bool, snapshot_timestamp::Float64 = Inf)::Union{Nothing, GameMapBundle}
+    autosave_allowed(inputstate, bundle.gamemap; snapshot_timestamp) || return nothing
+    completed || return bundle
+    can_abort_galaxy_escape(bundle.gamemap) || return nothing
+    checkpoint = deepcopy(get_pre_escape_map(bundle.gamemap))
+    set_recorded_play_time_seconds!(checkpoint, get_recorded_play_time_seconds(bundle.gamemap))
+    set_learning_system!(checkpoint, deepcopy(get_learning_system(bundle.gamemap)))
+    return GameMapBundle(checkpoint, bundle.timelapse)
+end
+
+"Capture only the current map on the interactive thread and write its detached bundle in the background."
+function maybe_autosave!(
+        state::AutosaveState, recorder::TimelapseRecorder, snapshot::FlowCalculatorSnapshot,
+        session_timing::PlaySessionTiming, learning_state::Union{Nothing, LearningSystemState}, console_push::Function;
+        suppressed::Bool = false, now::Real = _monotonic_time_seconds(), save_path::String = autosave_path(),
+    )::Bool
+    if !isnothing(state.writer_task) && istaskdone(state.writer_task)
+        finish_autosave!(state, console_push; save_path)
+    end
+    suppressed && return false
+    now < state.next_save_time_seconds && return false
+    state.next_save_time_seconds = Float64(now) + 60.0
+    isnothing(state.writer_task) || return false
+
+    try
+        gamemap = capture_session_gamemap(snapshot.gamemap, session_timing, learning_state)
+        bundle = GameMapBundle(gamemap, snapshot_timelapse_history(recorder))
+        state.writer_task = Threads.@spawn write_autosave($bundle, $save_path)
+    catch e
+        e isa InterruptException && rethrow()
+        @warn "Autosave capture failed" path = save_path exception = (e, catch_backtrace())
+        console_push("Autosave failed. See the terminal log for details.")
+        return false
+    end
+    return true
+end
+
 # Map-source dispatch
 
 "Dispatch map loading from multiple source types."
@@ -460,6 +556,8 @@ function enter_gameloop(
     poll_windowstate!(g_viewstate, window)
     # Loading frames update the viewport independently of the cached view dimensions
     glViewport(0, 0, g_viewstate.fb_width, g_viewstate.fb_height)
+    autosave_state = AutosaveState()
+    autosave_save_path = autosave_path()
 
     while isnothing(g_inputstate.exit_reason) && !GLFW.WindowShouldClose(window)
         # Guard against the render loop changing threads, which can cause GLFW/OpenGL issues
@@ -579,6 +677,14 @@ function enter_gameloop(
             )
         end
 
+        autosave_suppressed = !isnothing(completed_gamemap) || !isnothing(g_inputstate.exit_reason) ||
+            GLFW.WindowShouldClose(window) || !autosave_allowed(g_inputstate, g_snapshot.gamemap; snapshot_timestamp = g_snapshot.timestamp)
+        maybe_autosave!(
+            autosave_state, timelapse_recorder, g_snapshot, session_timing, learning_state, g_flowcalc_ipc.console_push;
+            suppressed = autosave_suppressed,
+            save_path = autosave_save_path,
+        )
+
         handle_diagnostics(render_loop_diagnostic_config, g_viewstate.frame_count)
 
         # Let Julia service pending tasks and timer wake-ups between frames.
@@ -604,6 +710,12 @@ function enter_gameloop(
         tutorial_id = g_inputstate.pending_sandbox_id,
         saved_bundle = saved_bundle,
     )
+
+    # Finish the periodic writer before replacing it with the final recovery point
+    final_autosave = final_autosave_bundle(
+        result.saved_bundle, g_inputstate; completed = !isnothing(completed_gamemap), snapshot_timestamp = result_snapshot.timestamp,
+    )
+    finish_autosave!(autosave_state, g_flowcalc_ipc.console_push, final_autosave; save_path = autosave_save_path)
 
     # Shut down session resources
     if g_recording.is_recording
