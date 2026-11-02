@@ -26,7 +26,6 @@ const PIPE_TYPES = (
 "Property-panel description for the current placement state."
 function placement_state_description(state::AbstractPlacementState)::Union{Nothing, String}
     state isa PlacementReadyState && return nothing
-    state isa PlacementPressedState && return "Move pending."
     state isa PlacementMoveState && return "Move active. Drag to place."
     state isa PlacementMovePendingState && return "Applying move."
     state isa PlacementPipeChainState && return "Pipe chain active. Left-click to place or delete."
@@ -710,7 +709,9 @@ function ui_propertybox_render!(
         !inputstate.escape_menu_active && isnothing(inputstate.action_popup)
     content = property_panel_content(inputstate, gamemap; world_hover_allowed)
     content.visibility == :hidden && return nothing
-    selected_count = state isa PlacementReadyState ? selected_element_count(inputstate) : 0
+    normal_inspection = state isa Union{PlacementReadyState, PlacementPressedState}
+    selected_count = normal_inspection ? selected_element_count(inputstate) : 0
+    state_description = placement_state_description(state)
 
     win_float = to_float(winsize)
     width = min(ui_px(PROPERTY_INSPECTOR_WIDTH_MODULES), max(1.0, win_float.width))
@@ -726,7 +727,9 @@ function ui_propertybox_render!(
     CImGui.SetNextWindowSizeConstraints((width, min_height), (width, max_height))
     CImGui.Begin("Properties", C_NULL, flags)
     # ImGui owns the last content identity solely to reset scrolling on target/mode changes.
-    content_id = hash((content.visibility, typeof(state), content.target, selected_count)) % UInt32
+    # Treat ready and pressed states as equivalent to keep the identity stable during clicks.
+    scroll_state = normal_inspection ? PlacementReadyState : typeof(state)
+    content_id = hash((content.visibility, scroll_state, content.target, selected_count)) % UInt32
     storage = CImGui.GetStateStorage()
     scroll_key = CImGui.GetID("##last_content")
     previous_id = CImGui.GetInt(storage, scroll_key, 0)
@@ -744,7 +747,6 @@ function ui_propertybox_render!(
         CImGui.SetCursorPosY(CImGui.GetCursorPosY() + (title_height - CImGui.GetTextLineHeight()) / 2)
         CImGui.TextColored(ImVec4(0.4, 0.75, 1.0, 1.0), "Selected")
     end
-    state_description = placement_state_description(state)
     if !isnothing(state_description)
         CImGui.TextWrapped(state_description)
     end
@@ -791,7 +793,7 @@ function ui_propertybox_render!(
     end
 
     # Selection inspector
-    if state isa PlacementReadyState
+    if normal_inspection
         if selected_count > 1
             CImGui.Text("$selected_count parts selected")
             CImGui.Text("Select one part to inspect its details.")

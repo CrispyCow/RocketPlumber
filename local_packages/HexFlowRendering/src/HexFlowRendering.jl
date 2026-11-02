@@ -705,7 +705,7 @@ end
 # ===============================================================
 
 const PARTICLE_VAO_MAX_COUNT = 10000
-const MAX_CATCHUP_TICKS::Int = 8 # Maximum back-fill ticks after a GC pause or sim speed burst
+const MAX_CATCHUP_TICKS::Int = 24 # Maximum back-fill ticks after a GC pause or sim speed burst
 
 "Immutable particle with Float32 position and colour, Float64 velocity, and expiry tick."
 struct Particle
@@ -765,9 +765,26 @@ end
     return SVector{2, Float32}(new_pos)
 end
 
+"Convert ship-frame acceleration to scaled render-coordinate acceleration per tick."
+function _particle_accel_per_tick(gamestate::GameState, base_ups::Float64)
+    accel = gamestate.acceleration_ship_frame
+    accel_corrected = SVector{2, Float64}(-accel[1], accel[2]) # x-axis inverted for render coords
+    return accel_corrected * (get_particle_accel_scale() / base_ups)
+end
+
+"Advance a particle as if velocity-first Euler updates ran for each elapsed tick."
+@inline function _advance_particle(particle::Particle, ticks::Int, accel_per_tick::SVector{2, Float64})
+    tick_count = Float64(ticks)
+    # Mean velocity across the discrete velocity-first updates
+    mean_velocity = particle.velocity + accel_per_tick * ((tick_count + 1.0) / 2.0)
+    position = _advance_pos(particle.position, mean_velocity, ticks)
+    velocity = particle.velocity + accel_per_tick * tick_count
+    return Particle(position, velocity, particle.colour, particle.vanishing_time)
+end
+
 """
 Expire and advance particles once per game tick, applying scaled ship-frame acceleration.
-Velocity is updated before position, using all ticks since the previous update.
+Uses the discrete velocity-first trajectory across all ticks since the previous update.
 """
 function update_particle_physics!(manager::ParticleManager, gamestate::GameState; base_ups::Float64 = BASE_UPS)
     current_tick = gamestate.ticks
@@ -784,19 +801,15 @@ function update_particle_physics!(manager::ParticleManager, gamestate::GameState
     manager.last_update_tick = current_tick
 
     @timeit render_loop_timer "update_physics" begin
-        accel = gamestate.acceleration_ship_frame
-        accel_corrected = SVector{2, Float64}(-accel[1], accel[2]) # x-axis inverted for render coords
-        velocity_change = accel_corrected * (get_particle_accel_scale() / base_ups) * delta_ticks
+        accel_per_tick = _particle_accel_per_tick(gamestate, base_ups)
 
         write_idx = 0
         particles = manager.particles
         @inbounds for particle in particles
             particle.vanishing_time <= current_tick && continue
 
-            velocity = particle.velocity + velocity_change
-            position = _advance_pos(particle.position, velocity, delta_ticks)
             write_idx += 1
-            particles[write_idx] = Particle(position, velocity, particle.colour, particle.vanishing_time)
+            particles[write_idx] = _advance_particle(particle, delta_ticks, accel_per_tick)
         end
         resize!(particles, write_idx)
     end
@@ -878,7 +891,7 @@ end
 """
 Spawn dust with random velocities from the corresponding snapshot's derived ship-surface edge tiles.
 Gated to spawn only once per game tick, with catch-up spawning for missed ticks (GC pauses, sim speed > 1x).
-Catch-up particles are pre-advanced along their velocity to avoid clumping at the spawn point.
+Catch-up particles are pre-advanced with current snapshot acceleration to fill the trail.
 """
 function thrust_dust_particle_effect!(
         manager::ParticleManager,
@@ -905,6 +918,7 @@ function thrust_dust_particle_effect!(
         manager.last_spawn_tick = current_tick
 
         ticks_to_spawn = 1 + missed_ticks # current tick + back-fill
+        accel_per_tick = _particle_accel_per_tick(gamestate, BASE_UPS)
 
         @timeit render_loop_timer "generate_particles" begin
             edge_tiles = derivedmapstate.ship_surface_edge
@@ -931,7 +945,7 @@ function thrust_dust_particle_effect!(
 
                 # Pre-advance catch-up particles to correct trail position (skip current tick)
                 if tick_offset > 0
-                    _pre_advance_catchup_particles!(manager, prev_len, tick_offset)
+                    _pre_advance_catchup_particles!(manager, prev_len, tick_offset, accel_per_tick)
                 end
             end
         end
@@ -981,12 +995,11 @@ function render_particles!(
     return nothing
 end
 
-"Pre-advance only particles appended after prev_count, retaining their velocity, colour and expiry."
-function _pre_advance_catchup_particles!(manager::ParticleManager, prev_count::Int, age_ticks::Int)
+"Pre-advance only particles appended after prev_count, retaining their colour and expiry."
+function _pre_advance_catchup_particles!(manager::ParticleManager, prev_count::Int, age_ticks::Int, accel_per_tick::SVector{2, Float64})
     @inbounds for i in (prev_count + 1):length(manager.particles)
         particle = manager.particles[i]
-        position = _advance_pos(particle.position, particle.velocity, age_ticks)
-        manager.particles[i] = Particle(position, particle.velocity, particle.colour, particle.vanishing_time)
+        manager.particles[i] = _advance_particle(particle, age_ticks, accel_per_tick)
     end
     return nothing
 end
@@ -1012,6 +1025,8 @@ function tile_particle_spawn!(
     missed_ticks = clamp(current_tick - manager.last_spawn_tick - 1, 0, MAX_CATCHUP_TICKS)
     manager.last_spawn_tick = current_tick
 
+    accel_per_tick = _particle_accel_per_tick(gamestate, BASE_UPS)
+
     # Current tick first, then pre-advanced back-fill for missed ticks
     for age_ticks in 0:missed_ticks
         prev_count = length(manager.particles)
@@ -1027,7 +1042,7 @@ function tile_particle_spawn!(
         end
 
         if age_ticks > 0
-            _pre_advance_catchup_particles!(manager, prev_count, age_ticks)
+            _pre_advance_catchup_particles!(manager, prev_count, age_ticks, accel_per_tick)
         end
     end
     return nothing

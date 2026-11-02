@@ -4,6 +4,9 @@ Notable player-facing changes to Rocket Plumber are recorded here, in loose adhe
 
 ## Unreleased
 
+- Reduced exhaust and background dust clumping at high simulation speeds and made
+  particle trajectories more consistent across frame rates.
+
 - Added background autosaving and a main-menu Resume button to continue your last game.
 
 - Added a scalable UI with crisp Tamzen bitmap typography across menus, instruments
@@ -17,18 +20,14 @@ Notable player-facing changes to Rocket Plumber are recorded here, in loose adhe
 - Redesigned Properties as a permanent inspector for components, pipes and
   junctions. Hover for temporary operating readouts or select a part for persistent
   inspection and read-only Technical details (Debug), with clearer measurements,
-  units and gauges that distinguish missing measurements from zero.
+  units and gauges that distinguish missing measurements from zero. Clicking a part
+  preserves its Properties display and scroll position until a move becomes active.
 
-- Improved the velocity tracker and manoeuvre readouts, with ship controls beside
-  the manoeuvre instrument or galaxy escape progress, and a compact Galaxy Escape
-  report with flight statistics and sharing actions.
+- Improved several in-game UI layouts to use space more efficiently and scale
+  better, including the velocity tracker, manoeuvre controls, Space Map and
+  Galaxy Escape screen.
 
-- Gave Space Map more plot space and scale-aware encounter selection, and kept
-  the Learning Helper beside Properties or at the top-right in Space Map.
-
-- Added automatic diagnostic reports for catchable application errors, with
-  additional game-state diagnostics for calculator failures. The last available
-  map remains open for inspection and saving after a calculator failure.
+- Added automatic crash reports to help diagnose and fix issues.
 
 ## 0.1.0
 

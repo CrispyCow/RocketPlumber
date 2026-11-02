@@ -209,9 +209,9 @@ function inspection_number(value::Float64, units::String = "")
         rounded = round(value, RoundNearestTiesAway)
         return iszero(rounded) ? "0" : @sprintf("%.0f", rounded)
     end
-    iszero(value) && return "0"
-
     magnitude = abs(value)
+    magnitude < 1.0e-12 && return "0"
+
     if magnitude < 1.0e-6 || magnitude >= 1.0e7
         return @sprintf("%.3g", value)
     end
@@ -220,8 +220,7 @@ function inspection_number(value::Float64, units::String = "")
     end
 
     digits = max(0, 2 - floor(Int, log10(magnitude)))
-    reading = @sprintf("%.*f", digits, round(value; sigdigits = 3))
-    return digits > 0 ? String(rstrip(rstrip(reading, '0'), '.')) : reading
+    return @sprintf("%.*f", digits, round(value; sigdigits = 3))
 end
 
 inspection_measurement(value::Float64, units::String) = !isfinite(value) || isempty(units) ? inspection_number(value, units) : string(inspection_number(value, units), units == "%" ? "" : " ", units)
@@ -423,7 +422,7 @@ function property_panel_content(inputstate::InputState, gamemap::GameMap; world_
     if inputstate.ui_hidden || inputstate.spacemap_active
         return (visibility = :hidden, target = nothing)
     end
-    if !(placement_state(inputstate) isa PlacementReadyState)
+    if !(placement_state(inputstate) isa Union{PlacementReadyState, PlacementPressedState})
         return (visibility = :interactive, target = nothing)
     end
     if selected_element_count(inputstate) > 0

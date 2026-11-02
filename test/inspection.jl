@@ -523,12 +523,16 @@ inspection_item(items::Tuple, label::String) = only(filter(item -> hasproperty(i
                 (12487.6, "N", "12488 N"), (100000.4, "EU", "100000 EU"),
                 (13.64, "L/s", "13.6 L/s"), (1250.0, "L", "1250 L"), (123456.0, "kg", "123000 kg"),
                 (0.01234, "L/s", "0.0123 L/s"), (2.345, "", "2.35"),
-                (1.2, "", "1.2"), (-13.64, "L/s", "-13.6 L/s"),
+                (1.2, "", "1.20"), (-13.64, "L/s", "-13.6 L/s"),
+                (3.1, "bar", "3.10 bar"), (10.0, "bar", "10.0 bar"), (1.2, "L/s", "1.20 L/s"),
+                (3.99, "bar", "3.99 bar"), (4.0, "bar", "4.00 bar"), (4.01, "bar", "4.01 bar"),
                 (0.0, "bar", "0 bar"), (-0.0, "K", "0 K"),
-                (1.0e-6, "bar", "0.000001 bar"), (1.234e-6, "N", "0.00000123 N"),
+                (1.0e-14, "L/s", "0 L/s"), (-1.0e-14, "L/s", "0 L/s"),
+                (prevfloat(1.0e-12), "", "0"), (1.0e-12, "", "1e-12"),
+                (1.0e-6, "bar", "0.00000100 bar"), (1.234e-6, "N", "0.00000123 N"),
                 (prevfloat(1.0e-6), "bar", "1e-06 bar"), (1.234e-7, "K", "1.23e-07 K"),
                 (1.0e7, "EU", "1e+07 EU"), (floatmax(Float64), "", "1.8e+308"),
-                (nextfloat(0.0), "", "4.94e-324"), (9876543.2, "N", "9876543 N"),
+                (nextfloat(0.0), "", "0"), (9876543.2, "N", "9876543 N"),
                 (NaN, "bar", "--"), (Inf, "K", "--"), (-Inf, "", "--"),
                 (nothing, "L/s", "--"),
             )
@@ -608,6 +612,18 @@ end
     select_elements!(inputstate, Set((tile, other)), Set((pipe,)))
     @test content() == (visibility = :interactive, target = nothing)
     clear_selection!(inputstate)
+
+    inputstate.placement_state = PlacementPressedState(; press_started_at = 0.0, press_cursor_cart = to_cartesian(other), click_tile = other, move_target = TileComponentMoveTarget(other))
+    @test isnothing(RocketPlumber.placement_state_description(inputstate.placement_state))
+    @test content() == (visibility = :preview, target = other)
+    select_single_component!(inputstate, tile)
+    @test content() == (visibility = :interactive, target = tile)
+
+    inputstate.placement_state = PlacementMoveState(; move_target = TileComponentMoveTarget(tile))
+    @test content() == (visibility = :interactive, target = nothing) # Selection is suppressed during a move
+    clear_selection!(inputstate)
+    @test content() == (visibility = :interactive, target = nothing) # Hover is also suppressed
+    inputstate.placement_state = PlacementReadyState()
     @test content() == (visibility = :preview, target = other)
     delete_component!(gamemap, other)
     @test content().visibility == :idle

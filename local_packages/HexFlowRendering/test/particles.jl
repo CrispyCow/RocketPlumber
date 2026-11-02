@@ -27,7 +27,7 @@ Formatter: Runic
         update_particle_physics!(manager, state; base_ups = 2.0)
         @test length(manager.particles) == 2 # Expiry is inclusive, including skipped ticks
         @test [p.velocity for p in manager.particles] == fill(SVector(-0.5, -3.0), 2)
-        @test [p.position for p in manager.particles] == fill(SVector(0.0f0, -4.0f0), 2)
+        @test [p.position for p in manager.particles] == fill(SVector(0.5f0, -3.0f0), 2)
         @test [p.colour for p in manager.particles] == [blue, red]
         @test [p.vanishing_time for p in manager.particles] == [10, 8]
 
@@ -39,6 +39,32 @@ Formatter: Runic
         @test isempty(manager.particles)
     finally
         set_particle_accel_scale!(old_scale)
+    end
+end
+
+@testset "Batched particle integration matches individual ticks" begin
+    for ticks in (1, 2, 8, 24)
+        batched, individual = ParticleManager(), ParticleManager()
+        particle = Particle(SVector(1.3f0, -2.7f0), SVector(0.17, -0.23), ColourType(1, 0, 0, 1), 100)
+        push!(batched.particles, particle)
+        push!(individual.particles, particle)
+        state = GameState(ticks = 0, acceleration_ship_frame = SVector(0.7, -0.4))
+        update_particle_physics!(batched, state)
+        update_particle_physics!(individual, state)
+
+        for tick in 1:ticks
+            state.ticks = tick
+            update_particle_physics!(individual, state)
+        end
+        update_particle_physics!(batched, state)
+        result = only(batched.particles)
+        reference = only(individual.particles)
+        @test result.position ≈ reference.position rtol = 2.0e-6 atol = 1.0e-6
+        @test result.velocity ≈ reference.velocity
+        @test result.colour == reference.colour
+        @test result.vanishing_time == reference.vanishing_time
+        @test result.position isa SVector{2, Float32}
+        @test result.velocity isa SVector{2, Float64}
     end
 end
 
@@ -133,11 +159,11 @@ end
         @test [p.vanishing_time for p in particles] == [20, 23, 22, 21]
     end
 
-    # Long pauses back-fill at most eight ticks per component
+    # Long pauses back-fill at most 24 ticks per component
     state.ticks = 100
     tile_particle_spawn!(manager, glmap, gamemap, derived, mna, state)
-    @test length(manager.particles) == 8 + 2 * 9
-    @test minimum(p.vanishing_time for p in manager.particles[9:end]) == 102
+    @test length(manager.particles) == 8 + 2 * 25
+    @test minimum(p.vanishing_time for p in manager.particles[9:end]) == 86
 end
 
 @testset "Dust catch-up and ship offsets" begin
@@ -182,5 +208,49 @@ end
 
     state.ticks = 100
     thrust_dust_particle_effect!(manager, state, gamemap, derived; num_particles_per_tile = 2)
-    @test length(manager.particles) == (4 + 9) * batch_count
+    @test length(manager.particles) == (4 + 25) * batch_count
+end
+
+@testset "Physics before spawning preserves current and accelerated catch-up positions" begin
+    gamemap = GameMap()
+    tile = TileCoord(0, 0)
+    position = glvec(tile)
+    comp = TestParticleComp(SVector(0.3, -0.2), ColourType(1, 0, 0, 1))
+    set_surface_tile!(gamemap, tile)
+    set_component!(gamemap, tile, PlacedComponent(comp, HexFrame.Q_POS, :primary))
+    glmap, derived, mna = GLObjectMap(), DerivedMapState(), MNA_StateSnapshot()
+    collect_surface_edge_tiles!(derived, gamemap)
+    acceleration = SVector(0.6, -0.3)
+    accel_per_tick = SVector(-acceleration[1], acceleration[2]) * (get_particle_accel_scale() / BASE_UPS)
+
+    for dust in (false, true)
+        manager = ParticleManager()
+        state = GameState(ticks = 10, acceleration_ship_frame = acceleration)
+        for tick in (10, 13)
+            state.ticks = tick
+            update_particle_physics!(manager, state)
+            if dust
+                thrust_dust_particle_effect!(manager, state, gamemap, derived)
+            else
+                tile_particle_spawn!(manager, glmap, gamemap, derived, mna, state)
+            end
+        end
+
+        @test length(manager.particles) == 4
+        # The existing particle ages three ticks; new batches age zero, one and two ticks
+        for (particle, age) in zip(manager.particles, (3, 0, 1, 2))
+            initial_velocity = particle.velocity - accel_per_tick * age
+            expected_position = SVector{2, Float32}(position + initial_velocity * age + accel_per_tick * (age * (age + 1) / 2))
+            @test particle.position ≈ expected_position atol = 1.0e-6
+            if !dust
+                @test particle.velocity ≈ comp.velocity + accel_per_tick * age
+            else
+                @test all(abs.(initial_velocity) .<= 0.1)
+            end
+        end
+        @test manager.particles[2].position == position # Current-tick particles stay at the emitter
+        original = copy(manager.particles)
+        update_particle_physics!(manager, state)
+        @test manager.particles == original
+    end
 end

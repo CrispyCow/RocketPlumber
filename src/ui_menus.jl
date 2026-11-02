@@ -47,7 +47,7 @@ function ui_settings_controls!()
     CImGui.Spacing()
 
     fullscreen = settings.fullscreen
-    if @cref CImGui.Checkbox("Fullscreen", &fullscreen)
+    if @cref CImGui.Checkbox("Fullscreen (F11)", &fullscreen)
         set_fullscreen!(fullscreen)
     end
     if CImGui.IsItemHovered()
@@ -61,7 +61,7 @@ function ui_settings_controls!()
         CImGui.SetTooltip("Synchronise presentation with the display. Disable for uncapped rendering, subject to driver settings.")
     end
     CImGui.Spacing()
-    CImGui.TextUnformatted("UI Scale")
+    CImGui.TextUnformatted("UI Scale (Numpad +/-)")
     if CImGui.IsItemHovered()
         CImGui.SetTooltip("Use Numpad + and Numpad - to adjust UI scale.")
     end
