@@ -5,13 +5,13 @@
     <em style="color:#666">Built in Julia • Rendered with OpenGL</em>
   </p>
   <p>
-    <img src="readme_assets/new-intercept.webp" alt="Ship encounter demo" />
+    <img src="readme_assets/readme-intercept.webp" alt="Ship encounter demo" />
   </p>
   <p>
     <img src="readme_assets/biprop-spinup-close.webp" alt="Biprop engine demo" />
   </p>
   <p>
-    <img src="readme_assets/approach-finish.webp" alt="Manoeuvre to intercept demo" />
+    <img src="readme_assets/readme-approach.webp" alt="Manoeuvre to intercept demo" />
   </p>
 </div>
 
