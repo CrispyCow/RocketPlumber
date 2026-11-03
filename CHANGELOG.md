@@ -4,6 +4,8 @@ Notable player-facing changes to Rocket Plumber are recorded here, in loose adhe
 
 ## Unreleased
 
+## 0.1.1
+
 - Reduced exhaust and background dust clumping at high simulation speeds and made
   particle trajectories more consistent across frame rates.
 
