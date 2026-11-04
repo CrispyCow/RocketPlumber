@@ -29,7 +29,7 @@ function main()
 
     distribution_name = "RocketPlumber-" * build_label
     bundle_dir = joinpath(OUTPUTS_DIR, distribution_name)
-    executable_name = Sys.iswindows() ? distribution_name * ".exe" : distribution_name
+    executable_name = distribution_name * (Sys.iswindows() ? "-windows.exe" : "-linux")
     if ispath(bundle_dir) || islink(bundle_dir)
         error("Distribution already exists: $bundle_dir. Choose a different ROCKETPLUMBER_BUILD_LABEL or wait for a new timestamp.")
     end
